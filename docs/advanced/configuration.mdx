@@ -1,0 +1,105 @@
+---
+title: "Configuration"
+description: "Environment variables for phantom"
+---
+
+Configure phantom using environment variables or a config file.
+
+## LLM Configuration
+
+<ParamField path="phantom_LLM" type="string" required>
+  Model name in LiteLLM format (e.g., `openai/gpt-5`, `anthropic/claude-sonnet-4-5`).
+</ParamField>
+
+<ParamField path="LLM_API_KEY" type="string">
+  API key for your LLM provider. Not required for local models or cloud provider auth (Vertex AI, AWS Bedrock).
+</ParamField>
+
+<ParamField path="LLM_API_BASE" type="string">
+  Custom API base URL. Also accepts `OPENAI_API_BASE`, `LITELLM_BASE_URL`, or `OLLAMA_API_BASE`.
+</ParamField>
+
+<ParamField path="LLM_TIMEOUT" default="300" type="integer">
+  Request timeout in seconds for LLM calls.
+</ParamField>
+
+<ParamField path="phantom_LLM_MAX_RETRIES" default="5" type="integer">
+  Maximum number of retries for LLM API calls on transient failures.
+</ParamField>
+
+<ParamField path="phantom_REASONING_EFFORT" default="high" type="string">
+  Control thinking effort for reasoning models. Valid values: `none`, `minimal`, `low`, `medium`, `high`, `xhigh`. Defaults to `medium` for quick scan mode.
+</ParamField>
+
+<ParamField path="phantom_MEMORY_COMPRESSOR_TIMEOUT" default="30" type="integer">
+  Timeout in seconds for memory compression operations (context summarization).
+</ParamField>
+
+## Optional Features
+
+<ParamField path="PERPLEXITY_API_KEY" type="string">
+  API key for Perplexity AI. Enables real-time web search during scans for OSINT and vulnerability research.
+</ParamField>
+
+<ParamField path="phantom_DISABLE_BROWSER" default="false" type="boolean">
+  Disable browser automation tools.
+</ParamField>
+
+## Docker Configuration
+
+<ParamField path="phantom_IMAGE" default="ghcr.io/0000phantom0000/phantom-sandbox:latest" type="string">
+  Docker image to use for the sandbox container.
+</ParamField>
+
+<ParamField path="DOCKER_HOST" type="string">
+  Docker daemon socket path. Use for remote Docker hosts or custom configurations.
+</ParamField>
+
+<ParamField path="phantom_RUNTIME_BACKEND" default="docker" type="string">
+  Runtime backend for the sandbox environment.
+</ParamField>
+
+## Sandbox Configuration
+
+<ParamField path="phantom_SANDBOX_EXECUTION_TIMEOUT" default="120" type="integer">
+  Maximum execution time in seconds for sandbox operations.
+</ParamField>
+
+<ParamField path="phantom_SANDBOX_CONNECT_TIMEOUT" default="10" type="integer">
+  Timeout in seconds for connecting to the sandbox container.
+</ParamField>
+
+## Config File
+
+phantom stores configuration in `~/.phantom/cli-config.json`. You can also specify a custom config file:
+
+```bash
+phantom --target ./app --config /path/to/config.json
+```
+
+**Config file format:**
+
+```json
+{
+  "env": {
+    "phantom_LLM": "openai/gpt-5",
+    "LLM_API_KEY": "sk-...",
+    "phantom_REASONING_EFFORT": "high"
+  }
+}
+```
+
+## Example Setup
+
+```bash
+# Required
+export phantom_LLM="openai/gpt-5"
+export LLM_API_KEY="sk-..."
+
+# Optional: Enable web search
+export PERPLEXITY_API_KEY="pplx-..."
+
+# Optional: Custom timeouts
+export LLM_TIMEOUT="600"
+export phantom_SANDBOX_EXECUTION_TIMEOUT="300"
+```
