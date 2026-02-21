@@ -4,7 +4,7 @@
 
 ### Autonomous Offensive Security Intelligence
 
-*" Why So Serious ?! "*
+* Why So Serious ?! *
 
 <br>
 
