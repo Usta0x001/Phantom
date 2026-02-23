@@ -1,6 +1,6 @@
 ﻿% ============================================================
 % PHANTOM: Autonomous AI Penetration Testing Agent
-% Technical Report — v0.8.1
+% Technical Report  v0.8.1
 % ============================================================
 \documentclass[12pt,a4paper]{article}
 
@@ -35,6 +35,7 @@
 \tcbuselibrary{skins}
 \usepackage{tabularx}
 \usepackage{multirow}
+\usepackage{graphicx}
 
 % -- Geometry ----------------------------------------------
 \geometry{a4paper, top=2.5cm, bottom=2.5cm, left=2.8cm, right=2.8cm}
@@ -50,6 +51,7 @@
 \definecolor{lightyellow}{RGB}{255,253,230}
 \definecolor{lightblue}{RGB}{230,240,255}
 \definecolor{warnorange}{RGB}{200,100,0}
+\definecolor{tealcolor}{RGB}{0,128,128}
 
 % -- Hyperlinks --------------------------------------------
 \hypersetup{
@@ -57,10 +59,10 @@
   linkcolor=phantomviolet,
   urlcolor=steelblue,
   citecolor=phantomdark,
-  pdftitle={Phantom: Autonomous AI Penetration Testing Agent — Technical Report},
+  pdftitle={Phantom: Autonomous AI Penetration Testing Agent --- Technical Report},
   pdfauthor={Gadouri Redwan},
   pdfsubject={Autonomous AI Security Agent v0.8.1},
-  pdfkeywords={penetration testing, AI agents, LLM, cybersecurity, automation},
+  pdfkeywords={penetration testing, AI agents, LLM, cybersecurity},
 }
 
 % -- Header / Footer ---------------------------------------
@@ -98,12 +100,13 @@
 % -- Info boxes --------------------------------------------
 \newtcolorbox{infobox}{colback=lightblue,colframe=steelblue,arc=4pt,boxrule=1.5pt,left=6pt,right=6pt,top=6pt,bottom=6pt}
 \newtcolorbox{warnbox}{colback=lightyellow,colframe=warnorange,arc=4pt,boxrule=1.5pt,left=6pt,right=6pt,top=6pt,bottom=6pt}
+\newtcolorbox{execbox}{colback=codebg,colframe=phantomviolet,arc=4pt,boxrule=1.5pt,left=6pt,right=6pt,top=6pt,bottom=6pt}
 
 % -- TOC ---------------------------------------------------
 \setlength{\cftsecnumwidth}{2.5em}
 \setlength{\cftsubsecnumwidth}{3.2em}
 
-% ══════════════════════════════════════════════════════════
+% ============================================================
 \begin{document}
 \onehalfspacing
 
@@ -118,33 +121,29 @@
         minimum width=14cm, minimum height=3.5cm,
         font=\Huge\bfseries, drop shadow] (title)
         {\phantom{xx}\textbf{PHANTOM}\phantom{xx}};
-  \node[below=0.2cm of title,
-        font=\large\itshape, text=phantomdark]
+  \node[below=0.2cm of title, font=\large\itshape, text=phantomdark]
         {Autonomous AI Penetration Testing Agent};
 \end{tikzpicture}
 
 \vspace{1.5cm}
-
 {\Large\bfseries Technical Report}\\[0.4cm]
 {\large Version 0.8.1 \textemdash{} February 2026}
 
 \vspace{2cm}
-
 \begin{tabular}{ll}
-\textbf{Author:}       & Gadouri Redwan \\[4pt]
-\textbf{Repository:}   & \href{https://github.com/Usta0x001/Phantom}{\texttt{github.com/Usta0x001/Phantom}} \\[4pt]
-\textbf{Package:}      & \href{https://pypi.org/project/phantom-agent/}{\texttt{pip install phantom-agent}} \\[4pt]
-\textbf{Docker:}       & \texttt{ghcr.io/usta0x001/phantom-sandbox:latest} \\[4pt]
-\textbf{License:}      & Apache 2.0 \\
+\textbf{Author:}     & Gadouri Redwan \\[4pt]
+\textbf{Repository:} & \href{https://github.com/Usta0x001/Phantom}{\texttt{github.com/Usta0x001/Phantom}} \\[4pt]
+\textbf{Package:}    & \href{https://pypi.org/project/phantom-agent/}{\texttt{pip install phantom-agent}} \\[4pt]
+\textbf{Sandbox:}    & \texttt{ghcr.io/usta0x001/phantom-sandbox:latest} \\[4pt]
+\textbf{License:}    & Apache 2.0 \\
 \end{tabular}
 
 \vfill
-
 \begin{tikzpicture}
   \draw[phantomviolet, line width=1.5pt] (0,0) -- (\textwidth,0);
 \end{tikzpicture}
 \vspace{0.3cm}
-{\small\color{gray} This document provides a complete technical description of the Phantom system: its architecture, components, operational flow, capabilities, and verified test results.}
+{\small\color{gray} Complete technical description of the Phantom system: architecture, components, operational flow, execution layers, and verified test results.}
 
 \end{titlepage}
 
@@ -157,68 +156,64 @@ Phantom is an autonomous AI-powered penetration testing agent that performs full
 \tableofcontents
 \newpage
 
-% ══════════════════════════════════════════════════════════
+% ============================================================
 \section{System Overview}
-% ══════════════════════════════════════════════════════════
+% ============================================================
 
-Phantom is a complete, self-contained penetration testing platform. It consists of two parts:
+Phantom is a complete, self-contained penetration testing platform consisting of two parts:
 
 \begin{enumerate}
   \item \textbf{Phantom CLI} \textemdash{} the Python package installed by the user (\texttt{pip install phantom-agent}). Handles configuration, LLM communication, agent orchestration, and reporting.
-  \item \textbf{Phantom Sandbox Image} \textemdash{} a Docker image (\texttt{ghcr.io/usta0x001/phantom-sandbox:latest}) containing the tool server and all security tools (nmap, sqlmap, nuclei, ffuf, etc.). Launched automatically per scan.
+  \item \textbf{Phantom Sandbox Image} \textemdash{} a Docker image (\texttt{ghcr.io/usta0x001/phantom-sandbox:latest}) containing the tool server and all security tools. Pulled and launched automatically per scan.
 \end{enumerate}
 
-The two components communicate over an encrypted HTTP channel. The user never touches the sandbox directly.
+The two components communicate over an authenticated HTTP channel. The user never manages the sandbox directly.
 
 \subsection{High-Level Operational Flow}
 
 \begin{figure}[H]
 \centering
+\resizebox{\textwidth}{!}{%
 \begin{tikzpicture}[
-  box/.style={rectangle, rounded corners=5pt, draw, fill=#1, text=white, minimum width=3.2cm, minimum height=1cm, align=center, font=\small\bfseries},
+  box/.style={rectangle, rounded corners=5pt, draw, fill=#1, text=white,
+              minimum width=2.8cm, minimum height=0.9cm, align=center,
+              font=\small\bfseries},
   arrow/.style={-Stealth, thick, color=phantomviolet},
-  label/.style={font=\scriptsize, color=gray},
-  node distance=1.4cm and 0.6cm
+  lbl/.style={font=\scriptsize, color=gray},
+  node distance=1.4cm
 ]
-  % Row 1
-  \node[box=phantomdark]                    (user)    {User\\(CLI / TUI)};
-  \node[box=steelblue,   right=1.6cm of user]  (cfg)     {Config\\Loader};
-  \node[box=phantomviolet, right=1.6cm of cfg]  (orch)    {Agent\\Orchestrator};
-  \node[box=darkgreen,   right=1.6cm of orch] (llm)     {LLM Layer\\(LiteLLM)};
+  \node[box=phantomdark]                         (user)   {User\\(CLI / TUI)};
+  \node[box=steelblue,   right=1.4cm of user]    (cfg)    {Config\\Loader};
+  \node[box=phantomviolet, right=1.4cm of cfg]   (orch)   {Agent\\Orchestrator};
+  \node[box=darkgreen,   right=1.4cm of orch]    (llm)    {LLM Layer\\(LiteLLM)};
 
-  % Row 2
-  \node[box=phantomred,  below=1.6cm of orch]   (tree)    {Agent\\Tree};
-  \node[box=warnorange,  left=1.6cm of tree]    (kg)      {Knowledge\\Graph};
-  \node[box=steelblue,   right=1.6cm of tree]   (ts)      {Tool\\Server};
-  \node[box=phantomdark, right=1.6cm of ts]     (sandbox) {Docker\\Sandbox};
+  \node[box=warnorange,  below=1.4cm of cfg]     (kg)     {Knowledge\\Graph};
+  \node[box=phantomred,  below=1.4cm of orch]    (tree)   {Agent\\Tree};
+  \node[box=steelblue,   below=1.4cm of llm]     (ts)     {Tool Server\\(:48081)};
 
-  % Row 3
-  \node[box=darkgreen,   below=1.6cm of tree]   (report)  {Report\\Engine};
+  \node[box=darkgreen,   below=1.6cm of tree]    (report) {Report\\Engine};
+  \node[box=phantomdark, below=1.6cm of ts]      (sandbox){Docker\\Sandbox};
 
-  % Arrows row 1
-  \draw[arrow] (user)  -- node[above,label]{scan cmd} (cfg);
-  \draw[arrow] (cfg)   -- node[above,label]{target/key} (orch);
-  \draw[arrow] (orch)  -- node[above,label]{prompts} (llm);
-  \draw[arrow] (llm)   -- node[below,label,xshift=-0.3cm]{decisions} (orch);
-
-  % Arrows row 1 to 2
-  \draw[arrow] (orch) -- (tree);
-  \draw[arrow] (tree) -- (kg);
-  \draw[arrow] (kg)   -- node[below,label]{context} (tree);
-  \draw[arrow] (tree) -- (ts);
-  \draw[arrow] (ts)   -- (sandbox);
-  \draw[arrow] (sandbox) to[bend left=20] node[below,label]{results} (ts);
-  \draw[arrow] (ts)   to[bend left=20] node[above,label]{output} (tree);
-
-  % Arrows to report
+  \draw[arrow] (user)  -- node[above,lbl]{scan cmd}   (cfg);
+  \draw[arrow] (cfg)   -- node[above,lbl]{target/key} (orch);
+  \draw[arrow] (orch)  -- node[above,lbl]{prompts}    (llm);
+  \draw[arrow] (llm)   to[bend right=20] node[below,lbl]{decisions} (orch);
+  \draw[arrow] (orch)  -- (tree);
+  \draw[arrow] (tree)  -- node[above,lbl]{write}  (kg);
+  \draw[arrow] (kg)    to[bend right=20] node[below,lbl]{context} (tree);
+  \draw[arrow] (tree)  -- node[above,lbl]{call}   (ts);
+  \draw[arrow] (ts)    -- node[right,lbl]{dispatch}  (sandbox);
+  \draw[arrow] (sandbox) to[bend left=35] node[left,lbl]{results} (ts);
+  \draw[arrow] (ts)    to[bend left=20] node[right,lbl,xshift=0.1cm]{output} (tree);
   \draw[arrow] (tree)  -- (report);
-  \draw[arrow] (kg)    to[bend right=30] (report);
+  \draw[arrow] (kg)    to[bend right=25] (report);
 
-  % Output
-  \node[right=0.8cm of report, text=phantomdark, font=\scriptsize, align=left] (out) {HTML, PDF\\SARIF, JSON\\Markdown};
+  \node[right=0.7cm of report, text=phantomdark, font=\scriptsize, align=left]
+        (out) {HTML, PDF\\SARIF, JSON\\Markdown};
   \draw[arrow] (report) -- (out);
 
-\end{tikzpicture}
+\end{tikzpicture}%
+}
 \caption{High-level operational flow of the Phantom system}
 \label{fig:overview}
 \end{figure}
@@ -228,34 +223,32 @@ The two components communicate over an encrypted HTTP channel. The user never to
 \begin{description}
   \item[Zero human-in-the-loop] Once launched, Phantom runs to completion without asking for input.
   \item[Proof-of-concept first] Every reported vulnerability is accompanied by a working exploit demonstration.
-  \item[Portable by design] The CLI installs via \texttt{pip}; the sandbox image is pulled automatically. No manual setup.
+  \item[Portable by design] The CLI installs via \texttt{pip}; the sandbox image is pulled automatically. No manual setup required.
   \item[Provider-agnostic] Any LLM supported by LiteLLM (OpenAI, Anthropic, Google, Groq, Ollama, \ldots) works out of the box.
   \item[Sandboxed execution] All tool invocations run inside an isolated Docker container. The host system is never touched.
 \end{description}
 
-% ══════════════════════════════════════════════════════════
+% ============================================================
 \section{System Architecture}
-% ══════════════════════════════════════════════════════════
+% ============================================================
 
 \subsection{Package Structure}
 
-The Phantom Python package follows a clean modular layout:
-
 \begin{lstlisting}[language=bash, caption={Phantom package directory tree}]
 phantom/
- agents/          # Jinja2 system-prompt templates per agent type
- config/          # PhantomConfig (Pydantic); persistent JSON settings
- interface/       # cli_app.py (Typer CLI), main.py (legacy), tui.py (Textual TUI)
- models/          # Pydantic data models: Vulnerability, ScanResult, KnowledgeGraph
+ agents/       # Agent state machines, protocols, EnhancedAgentState
+ config/       # PhantomConfig (Pydantic v2); persistent JSON settings
+ interface/    # cli_app.py (Typer CLI), tui.py (Textual TUI)
+ models/       # Pydantic models: Vulnerability, ScanResult, KnowledgeGraph
  runtime/
-   docker_runtime.py  # Sandbox lifecycle (start, stop, health-check)
+   docker_runtime.py  # Sandbox lifecycle: start, health-check, stop
    tool_server.py     # FastAPI server running INSIDE the sandbox
    runtime.py         # Abstract runtime interface
- skills/          # Reusable reasoning skill modules (.md knowledge bases)
- telemetry/       # Logging, tracing, metrics
- tools/           # Tool definitions: terminal, browser, file, proxy, etc.
- utils/           # SARIF formatting, diff engine, scope validator, etc.
- workflows/       # High-level scan workflows: quick, standard, deep
+ skills/       # Reasoning skill modules (.md knowledge bases)
+ telemetry/    # Logging, tracing, metrics
+ tools/        # Tool definitions: terminal, browser, file, proxy
+ utils/        # SARIF formatter, diff engine, scope validator
+ workflows/    # High-level scan workflows: quick, standard, deep
 \end{lstlisting}
 
 \subsection{Component Responsibilities}
@@ -267,24 +260,22 @@ phantom/
 \toprule
 \textbf{Component} & \textbf{Responsibility} \\
 \midrule
-\texttt{PhantomConfig} & Stores all user settings (LLM key, image, scan defaults) in \texttt{\textasciitilde{}/.phantom/config.json}. Pydantic v2 model with full validation. \\
-\texttt{cli\_app.py} & Typer-based CLI: \texttt{phantom scan}, \texttt{phantom config}, \texttt{phantom report}. Handles argument parsing, user confirmation, and TUI/non-interactive modes. \\
-\texttt{docker\_runtime.py} & Pulls the sandbox image if absent, spawns the container with \texttt{sleep infinity}, injects credentials, polls \texttt{/health}, manages teardown. \\
-\texttt{tool\_server.py} & FastAPI HTTP server inside the sandbox. Exposes \texttt{POST /execute} and \texttt{GET /health} endpoints. Dispatches tool calls to the appropriate tool module. \\
-\texttt{AgentOrchestrator} & Spawns the root agent; manages the agent tree; mediates all LLM calls through LiteLLM; enforces scope boundaries; handles retries and fallbacks. \\
-\texttt{KnowledgeGraph} & In-memory + persistent JSON graph updated in real time as agents discover hosts, endpoints, services, and vulnerabilities. Provides context injection for agents. \\
-\texttt{ReportEngine} & Aggregates all findings from the KnowledgeGraph; renders HTML/Markdown/SARIF/JSON/PDF output; maps findings to MITRE ATT\&CK and OWASP Top 10. \\
+\texttt{PhantomConfig}      & Stores user settings in \texttt{\textasciitilde{}/.phantom/config.json}. Pydantic v2 with full validation. \\
+\texttt{cli\_app.py}        & Typer CLI: \texttt{phantom scan}, \texttt{phantom config}, \texttt{phantom report}. \\
+\texttt{docker\_runtime.py} & Pulls sandbox image if absent; spawns container; polls \texttt{/health}; manages teardown. \\
+\texttt{tool\_server.py}    & FastAPI server inside sandbox. Exposes \texttt{POST /execute} and \texttt{GET /health}. \\
+\texttt{AgentOrchestrator}  & Spawns root agent; manages tree; mediates LLM calls; enforces scope; handles retries. \\
+\texttt{KnowledgeGraph}     & Shared in-memory graph updated in real time. Provides context injection to all agents. \\
+\texttt{ReportEngine}       & Aggregates findings; renders HTML/Markdown/SARIF/JSON/PDF; maps to MITRE/OWASP. \\
 \bottomrule
 \end{tabularx}
 \end{table}
 
-% ══════════════════════════════════════════════════════════
+% ============================================================
 \section{Agent Framework}
-% ══════════════════════════════════════════════════════════
+% ============================================================
 
 \subsection{Agent Types}
-
-Phantom uses a tree-structured multi-agent architecture. All agents share the same base loop but receive different system prompts that specialize their behavior:
 
 \begin{table}[H]
 \centering
@@ -293,13 +284,13 @@ Phantom uses a tree-structured multi-agent architecture. All agents share the sa
 \toprule
 \textbf{Agent} & \textbf{Role} & \textbf{Primary Responsibilities} \\
 \midrule
-\textbf{Root / Orchestrator} & Coordinator & Receives the scan target, creates the plan, spawns specialist agents, aggregates results. \\
-\textbf{Reconnaissance} & Discovery & Port scanning, service fingerprinting, technology detection, endpoint enumeration, directory bruteforcing. \\
-\textbf{Vulnerability Analysis} & Analysis & Identifies attack surface from recon data, prioritizes candidate vulnerabilities, assigns CVSS estimates. \\
-\textbf{Exploitation} & Attack & Tests each candidate vulnerability using targeted tools (SQLmap, nuclei templates, custom payloads). Generates PoC. \\
-\textbf{Post-Exploitation} & Depth & Where exploitation succeeds, explores impact (data access, privilege, lateral movement possibilities). \\
-\textbf{Validation} & Verify & Confirms each finding is a true positive; eliminates false positives; records evidence. \\
-\textbf{Reporting} & Output & Organises confirmed findings, writes structured descriptions, assigns severity, maps to frameworks. \\
+\textbf{Root / Orchestrator} & Coordinator  & Creates plan, spawns specialist agents, aggregates results. \\
+\textbf{Reconnaissance}      & Discovery    & Port scanning, service fingerprinting, tech detection, dir brute-forcing. \\
+\textbf{Vulnerability Analysis}& Analysis   & Identifies attack surface, prioritizes candidates, assigns CVSS estimates. \\
+\textbf{Exploitation}        & Attack       & Tests candidates with sqlmap, nuclei, custom payloads. Generates PoC. \\
+\textbf{Post-Exploitation}   & Depth        & Explores impact: data access, privilege, lateral movement. \\
+\textbf{Validation}          & Verify       & Confirms true positives; eliminates false positives; records evidence. \\
+\textbf{Reporting}           & Output       & Structures findings, assigns severity, maps to OWASP/MITRE. \\
 \bottomrule
 \end{tabularx}
 \end{table}
@@ -308,45 +299,47 @@ Phantom uses a tree-structured multi-agent architecture. All agents share the sa
 
 \begin{figure}[H]
 \centering
+\resizebox{\textwidth}{!}{%
 \begin{tikzpicture}[
-  agent/.style={rectangle, rounded corners=4pt, draw=phantomviolet, fill=lightblue, minimum width=2.8cm, minimum height=0.8cm, align=center, font=\small},
-  root/.style={rectangle, rounded corners=4pt, draw=phantomred, fill=phantomviolet!20, minimum width=3.4cm, minimum height=1cm, align=center, font=\small\bfseries},
-  tool/.style={rectangle, rounded corners=2pt, draw=gray, fill=codebg, minimum width=2.2cm, minimum height=0.6cm, align=center, font=\scriptsize\ttfamily},
+  agent/.style={rectangle, rounded corners=4pt, draw=phantomviolet,
+                fill=lightblue, minimum width=3cm, minimum height=0.85cm,
+                align=center, font=\small},
+  root/.style={rectangle, rounded corners=4pt, draw=phantomred,
+               fill=phantomviolet!20, minimum width=3.6cm, minimum height=1cm,
+               align=center, font=\small\bfseries},
+  tool/.style={rectangle, rounded corners=2pt, draw=gray, fill=codebg,
+               minimum width=2.0cm, minimum height=0.6cm,
+               align=center, font=\scriptsize\ttfamily},
+  subag/.style={rectangle, rounded corners=4pt, draw=tealcolor,
+                fill=tealcolor!10, minimum width=2.6cm, minimum height=0.8cm,
+                align=center, font=\scriptsize},
   arrow/.style={-Stealth, thick, color=phantomviolet},
-  spawnarrow/.style={-Stealth, dashed, color=steelblue},
-  node distance=0.8cm and 0.3cm
+  darrow/.style={-Stealth, dashed, thick, color=steelblue}
 ]
-
-  % Root
   \node[root] (root) {Root Orchestrator};
 
-  % Level 1 agents
-  \node[agent, below left=1.2cm and 2.4cm of root]  (recon)    {Recon\\Agent};
-  \node[agent, below left=1.2cm and 0cm of root]    (vuln)     {Vuln Analysis\\Agent};
-  \node[agent, below right=1.2cm and 0cm of root]   (exploit)  {Exploitation\\Agent};
-  \node[agent, below right=1.2cm and 2.4cm of root] (report)   {Reporting\\Agent};
+  \node[agent, below left=1.3cm and 3.2cm of root]   (recon)   {Recon\\Agent};
+  \node[agent, below left=1.3cm and 0.6cm of root]   (vuln)    {Vuln Analysis\\Agent};
+  \node[agent, below right=1.3cm and 0.6cm of root]  (exploit) {Exploitation\\Agent};
+  \node[agent, below right=1.3cm and 3.2cm of root]  (report)  {Reporting\\Agent};
 
-  % Level 2 sub-agents
-  \node[agent, below=1.2cm of exploit, xshift=-1.5cm] (postex)  {Post-Exploit\\Agent};
-  \node[agent, below=1.2cm of exploit, xshift=+1.5cm] (valid)   {Validation\\Agent};
+  \node[subag, below left=1.2cm and 0.8cm of exploit]  (postex) {Post-Exploit\\Agent};
+  \node[subag, below right=1.2cm and 0.8cm of exploit] (valid)  {Validation\\Agent};
 
-  % Tool nodes
-  \node[tool, below=1cm of recon, xshift=-1cm]   (t1)  {nmap};
-  \node[tool, below=1cm of recon]                (t2)  {katana};
-  \node[tool, below=1cm of recon, xshift=+1cm]   (t3)  {ffuf};
-  \node[tool, below=1cm of exploit, xshift=-1cm] (t4)  {sqlmap};
-  \node[tool, below=1cm of exploit]              (t5)  {nuclei};
-  \node[tool, below=1cm of exploit, xshift=+1cm] (t6)  {curl};
+  \node[tool, below=1.1cm of recon, xshift=-1.1cm] (t1) {nmap};
+  \node[tool, below=1.1cm of recon]                (t2) {katana};
+  \node[tool, below=1.1cm of recon, xshift=+1.1cm] (t3) {ffuf};
 
-  % Arrows
-  \draw[arrow]      (root)    -- (recon);
-  \draw[arrow]      (root)    -- (vuln);
-  \draw[arrow]      (root)    -- (exploit);
-  \draw[arrow]      (root)    -- (report);
-  \draw[spawnarrow] (exploit) -- (postex);
-  \draw[spawnarrow] (exploit) -- (valid);
+  \node[tool, below=1.1cm of exploit, xshift=-1.1cm] (t4) {sqlmap};
+  \node[tool, below=1.1cm of exploit]                (t5) {nuclei};
+  \node[tool, below=1.1cm of exploit, xshift=+1.1cm] (t6) {curl};
 
-  % Tool arrows
+  \draw[arrow] (root) -- (recon);
+  \draw[arrow] (root) -- (vuln);
+  \draw[arrow] (root) -- (exploit);
+  \draw[arrow] (root) -- (report);
+  \draw[darrow] (exploit) -- (postex);
+  \draw[darrow] (exploit) -- (valid);
   \draw[arrow] (recon)   -- (t1);
   \draw[arrow] (recon)   -- (t2);
   \draw[arrow] (recon)   -- (t3);
@@ -354,16 +347,17 @@ Phantom uses a tree-structured multi-agent architecture. All agents share the sa
   \draw[arrow] (exploit) -- (t5);
   \draw[arrow] (exploit) -- (t6);
 
-  % Knowledge graph feedback
   \node[rectangle, draw=darkgreen, fill=darkgreen!10, rounded corners=4pt,
-        minimum width=2.2cm, minimum height=0.8cm, font=\scriptsize\bfseries,
-        align=center, right=2cm of root] (kg) {Knowledge\\Graph};
-  \draw[-Stealth, color=darkgreen, dashed] (recon)   to[bend left=30]  (kg);
-  \draw[-Stealth, color=darkgreen, dashed] (exploit) to[bend right=10] (kg);
-  \draw[-Stealth, color=darkgreen]         (kg)      to[bend left=10]  (root);
+        minimum width=2.4cm, minimum height=0.85cm, font=\scriptsize\bfseries,
+        align=center, above right=0.3cm and 1.2cm of root] (kg) {Knowledge\\Graph};
 
-\end{tikzpicture}
-\caption{Phantom agent tree: solid arrows = spawn/command, dashed = data flow}
+  \draw[-Stealth, color=darkgreen, dashed, thick] (recon)   to[bend left=30]  (kg);
+  \draw[-Stealth, color=darkgreen, dashed, thick] (exploit) to[bend right=10] (kg);
+  \draw[-Stealth, color=darkgreen, thick]         (kg)      to[bend left=10]  (root);
+
+\end{tikzpicture}%
+}
+\caption{Agent tree: solid arrows = spawn/command, dashed blue = sub-agent spawn, dashed green = KG updates}
 \label{fig:agenttree}
 \end{figure}
 
@@ -372,85 +366,78 @@ Phantom uses a tree-structured multi-agent architecture. All agents share the sa
 Each agent follows this deterministic state machine:
 
 \begin{enumerate}
-  \item \textbf{INIT} \textemdash{} Receive system prompt + current KnowledgeGraph context.
-  \item \textbf{PLAN} \textemdash{} LLM call: generate a step-by-step action plan.
-  \item \textbf{EXECUTE} \textemdash{} For each step: call tool via HTTP to sandbox, parse output, update KG.
-  \item \textbf{REFLECT} \textemdash{} LLM call: evaluate results, determine if sub-agents are needed.
-  \item \textbf{SPAWN} \textemdash{} Optionally spawn child agents with sub-tasks.
-  \item \textbf{REPORT} \textemdash{} Return structured findings to parent.
-  \item \textbf{DONE} \textemdash{} Agent terminates, resources released.
+  \item \textbf{INIT} --- Receive system prompt + current KnowledgeGraph context.
+  \item \textbf{PLAN} --- LLM call: generate a step-by-step action plan.
+  \item \textbf{EXECUTE} --- For each step: call tool via HTTP to sandbox, parse output, update KG.
+  \item \textbf{REFLECT} --- LLM call: evaluate results, determine if sub-agents are needed.
+  \item \textbf{SPAWN} --- Optionally spawn child agents with sub-tasks.
+  \item \textbf{REPORT} --- Return structured findings to parent.
+  \item \textbf{DONE} --- Agent terminates, resources released.
 \end{enumerate}
 
 \subsection{Context \& Memory Management}
 
-Agents have two types of memory:
-
 \begin{itemize}
-  \item \textbf{In-context memory}: the current LLM context window, managed by a compression module that summarises older turns when approaching token limits.
-  \item \textbf{Persistent memory}: the KnowledgeGraph JSON, which survives agent restarts and is shared across all agents in a scan session.
+  \item \textbf{In-context memory}: the current LLM context window, managed by a compression module that summarizes older turns when approaching token limits.
+  \item \textbf{Persistent memory}: the KnowledgeGraph JSON, shared across all agents in a scan session.
 \end{itemize}
 
-The memory compressor uses an LLM call to condense historical tool outputs into concise summaries without losing critical vulnerability data.
-
-% ══════════════════════════════════════════════════════════
+% ============================================================
 \section{Sandboxed Execution Environment}
-% ══════════════════════════════════════════════════════════
+% ============================================================
 
 \subsection{Architecture}
 
-The sandbox is a Docker container based on a Kali Linux security tooling image. Phantom launches it automatically at the start of each scan and tears it down at the end.
-
 \begin{figure}[H]
 \centering
+\resizebox{\textwidth}{!}{%
 \begin{tikzpicture}[
-  host/.style={rectangle, draw=phantomdark, dashed, minimum width=12cm, minimum height=5.5cm, rounded corners=8pt},
-  container/.style={rectangle, draw=phantomviolet, fill=phantomviolet!8, minimum width=9cm, minimum height=4.2cm, rounded corners=6pt},
-  component/.style={rectangle, draw=steelblue, fill=lightblue, rounded corners=4pt, minimum width=2.2cm, minimum height=0.7cm, align=center, font=\scriptsize\bfseries},
-  toolbox/.style={rectangle, draw=darkgreen, fill=darkgreen!10, rounded corners=4pt, minimum width=7cm, minimum height=1.5cm, align=center},
-  arrow/.style={-Stealth, thick, color=phantomviolet},
-  node distance=0.5cm
+  container/.style={rectangle, draw=phantomviolet, fill=phantomviolet!6,
+                    rounded corners=6pt},
+  component/.style={rectangle, draw=steelblue, fill=lightblue, rounded corners=4pt,
+                    minimum width=2.6cm, minimum height=0.75cm,
+                    align=center, font=\scriptsize\bfseries},
+  toolnode/.style={rectangle, draw=darkgreen, fill=darkgreen!8, rounded corners=3pt,
+                   minimum width=1.7cm, minimum height=0.6cm,
+                   align=center, font=\scriptsize\ttfamily},
+  arrow/.style={-Stealth, thick, color=phantomviolet}
 ]
+  \node[container, minimum width=10cm, minimum height=5.8cm] (docker) at (3.5,0) {};
+  \node[font=\small\bfseries, color=phantomviolet] at (3.5, 2.6)
+        {Docker Container (phantom-sandbox)};
 
-  % Host machine
-  \node[host, label={[font=\small\bfseries]above left:Host Machine}] (host) at (0,0) {};
+  \node[component] (ts) at (3.5, 0.9) {Tool Server\\(FastAPI :48081)};
 
-  % Docker container inside host
-  \node[container, label={[font=\small\bfseries, color=phantomviolet]above:Docker Container (phantom-sandbox)}] (docker) at (0,0.2) {};
+  \node[toolnode] (tnmap)    at (1.2,  2.0) {nmap};
+  \node[toolnode] (tsqlmap)  at (2.8,  2.0) {sqlmap};
+  \node[toolnode] (tnuclei)  at (4.4,  2.0) {nuclei};
+  \node[toolnode] (tffuf)    at (6.0,  2.0) {ffuf};
+  \node[toolnode] (tkatana)  at (1.2, -0.2) {katana};
+  \node[toolnode] (tnikto)   at (2.8, -0.2) {nikto};
+  \node[toolnode] (twhatweb) at (4.4, -0.2) {whatweb};
+  \node[toolnode] (tgob)     at (6.0, -0.2) {gobuster};
 
-  % Tool server
-  \node[component, above=0.6cm of docker.south] (ts) {Tool Server\\(FastAPI :48081)};
+  \foreach \t in {tnmap,tsqlmap,tnuclei,tffuf,tkatana,tnikto,twhatweb,tgob}
+    \draw[arrow] (ts) -- (\t);
 
-  % Tool categories
-  \node[toolbox, above=0.5cm of ts] (tools) {};
-  \node[font=\scriptsize\bfseries, above=0.82cm of ts, xshift=-2.5cm] {nmap};
-  \node[font=\scriptsize\bfseries, above=0.82cm of ts, xshift=-1.2cm] {sqlmap};
-  \node[font=\scriptsize\bfseries, above=0.82cm of ts, xshift=0cm]    {nuclei};
-  \node[font=\scriptsize\bfseries, above=0.82cm of ts, xshift=1.2cm]  {ffuf};
-  \node[font=\scriptsize\bfseries, above=0.82cm of ts, xshift=2.5cm]  {katana};
-  \node[font=\scriptsize,          above=0.45cm of ts, xshift=-2.5cm] {scan};
-  \node[font=\scriptsize,          above=0.45cm of ts, xshift=-1.3cm] {SQLi};
-  \node[font=\scriptsize,          above=0.45cm of ts, xshift=0cm]    {vulns};
-  \node[font=\scriptsize,          above=0.45cm of ts, xshift=1.2cm]  {fuzz};
-  \node[font=\scriptsize,          above=0.45cm of ts, xshift=2.5cm]  {crawl};
+  \node[rectangle, draw=phantomdark, dashed, rounded corners=8pt,
+        minimum width=15cm, minimum height=8.0cm] (host) at (3.5,-0.2) {};
+  \node[font=\small\bfseries] at (-3.2, 3.5) {Host Machine};
 
-  % Phantom CLI (outside container but inside host)
-  \node[component, left=2.2cm of ts] (cli) {Phantom CLI\\(Host)};
+  \node[component] (cli) at (-2.2, 0.9) {Phantom CLI\\(Host Process)};
 
-  % Network boundary label
-  \node[font=\scriptsize\itshape, color=gray, above=0.1cm of docker.south east, xshift=-0.2cm] {isolated network};
-
-  % Arrows
   \draw[arrow] (cli) -- node[above, font=\scriptsize]{HTTP POST /execute} (ts);
-  \draw[arrow] (ts) to[bend left=15] node[below, font=\scriptsize]{result JSON} (cli);
+  \draw[arrow] (ts)  to[bend right=20] node[below, font=\scriptsize]{JSON result} (cli);
 
-\end{tikzpicture}
-\caption{Phantom sandbox architecture: tool server mediates all tool access}
+  \node[font=\scriptsize\itshape, color=gray] at (3.5, -3.2) {isolated Docker network};
+
+\end{tikzpicture}%
+}
+\caption{Sandbox architecture: the tool server inside the container mediates all tool access}
 \label{fig:sandbox}
 \end{figure}
 
 \subsection{Tool Server API}
-
-The tool server exposes a simple HTTP API used by all agents:
 
 \begin{lstlisting}[language=bash, caption={Tool Server API endpoints}]
 # Health check
@@ -461,112 +448,103 @@ GET  /health
 POST /execute
 Authorization: Bearer <TOOL_SERVER_TOKEN>
 Content-Type: application/json
-
 {
-  "agent_id": "recon-001",
+  "agent_id":  "recon-001",
   "tool_name": "terminal_execute",
-  "kwargs": {
-    "command": "nmap -sV -p 80,443,8080 target.example.com",
-    "timeout": 120
-  }
+  "kwargs":    {"command": "nmap -sV -p 80,443 target.example.com", "timeout": 120}
 }
-
--> {
-  "content": "[recon-001]$ nmap ...\nNmap scan report ...\n",
-  "exit_code": 0
-}
+-> {"content": "Nmap scan report ...", "exit_code": 0}
 \end{lstlisting}
 
 \subsection{Security Isolation}
 
 \begin{itemize}
-  \item Tool execution is performed by the \texttt{pentester} user inside the container (not root).
-  \item The container has no persistent volumes; all data is ephemeral unless explicitly exported.
-  \item A unique per-session bearer token is generated and injected; the tool server rejects all unauthenticated requests.
-  \item The container runs with \texttt{--net=bridge} (default) and can reach the target but not the host's internal services unless explicitly configured.
+  \item Tool execution runs as the \texttt{pentester} user inside the container (not root).
+  \item The container has no persistent volumes; all data is ephemeral.
+  \item A unique per-session bearer token is generated and injected; the server rejects unauthenticated requests (HTTP 401).
+  \item The container runs on the default bridge network: reachable to the target, isolated from host internal services.
 \end{itemize}
 
 \subsection{Pre-installed Security Tools}
 
 \begin{table}[H]
 \centering
-\caption{Security Tools Available in the Phantom Sandbox}
+\caption{Security Tools in the Phantom Sandbox (v0.8.1)}
 \begin{tabularx}{\textwidth}{l l X}
 \toprule
-\textbf{Tool} & \textbf{Version*} & \textbf{Capability} \\
+\textbf{Tool} & \textbf{Version} & \textbf{Capability} \\
 \midrule
-nmap         & 7.98    & Network port scanner, service/version detection, OS fingerprinting \\
-sqlmap       & 1.10    & Automated SQL injection detection and exploitation \\
-nuclei       & 3.x     & Template-based vulnerability scanning (CVEs, misconfigs, exposures) \\
-ffuf         & 2.x     & Web fuzzer: directory/file discovery, parameter fuzzing, vhost discovery \\
-katana       & 1.x     & Fast web crawler with JavaScript rendering support \\
-wapiti       & 3.x     & Black-box web vulnerability scanner \\
-semgrep      & 1.x     & Static code analysis for injected/leaked source \\
-playwright   & 1.x     & Headless browser for JavaScript-heavy apps \\
-nikto        & 2.x     & Web server misconfiguration scanner \\
-gobuster     & 3.x     & Directory/DNS/vhost brute-forcer \\
-hydra        & 9.x     & Network authentication brute-forcer \\
-whatweb      & 0.5.x   & Web technology fingerprinter \\
-wafw00f      & 2.x     & WAF/CDN identification \\
-curl / httpx & --      & HTTP client for manual request crafting \\
-ipython      & 9.x     & Python REPL for scripting and data processing \\
+nmap         & 7.98  & Port scanner, service/version detection, OS fingerprinting \\
+sqlmap       & 1.10  & SQL injection detection and exploitation \\
+nuclei       & 3.x   & Template-based vulnerability scanning (CVEs, misconfigurations) \\
+ffuf         & 2.x   & Web fuzzer: directory discovery, parameter fuzzing, vhost brute-force \\
+katana       & 1.x   & Fast web crawler with JavaScript rendering \\
+gobuster     & 3.x   & Directory, DNS, and vhost brute-forcer \\
+nikto        & 2.x   & Web server misconfiguration scanner \\
+whatweb      & 0.5.x & Web technology fingerprinter \\
+wafw00f      & 2.x   & WAF and CDN identification \\
+hydra        & 9.x   & Network authentication brute-forcer \\
+wapiti       & 3.x   & Black-box web vulnerability scanner \\
+semgrep      & 1.x   & Static code analysis for leaked/injected source \\
+playwright   & 1.x   & Headless browser for JavaScript-heavy app testing \\
+curl / httpx & ---   & HTTP clients for manual request crafting \\
+ipython      & 9.x   & Python REPL for custom scripting inside sandbox \\
 \bottomrule
 \end{tabularx}
-{\footnotesize * As shipped in the v0.8.1 sandbox image}
 \end{table}
 
-% ══════════════════════════════════════════════════════════
+% ============================================================
 \section{LLM Integration Layer}
-% ══════════════════════════════════════════════════════════
+% ============================================================
 
 \subsection{Provider-Agnostic Design}
 
-Phantom uses \textbf{LiteLLM} as a universal LLM interface. This means the same agent code works with any supported model, and users can switch providers by changing a single environment variable.
+Phantom uses \textbf{LiteLLM} as a universal LLM interface. The same agent code works with any supported model; switch providers by changing one environment variable.
 
 \begin{figure}[H]
 \centering
+\resizebox{\textwidth}{!}{%
 \begin{tikzpicture}[
-  center/.style={ellipse, draw=phantomviolet, fill=phantomviolet!15, minimum width=3cm, minimum height=1.5cm, align=center, font=\small\bfseries},
-  provider/.style={rectangle, rounded corners=4pt, draw=steelblue, fill=lightblue, minimum width=2.4cm, minimum height=0.7cm, align=center, font=\scriptsize},
-  arrow/.style={-Stealth, thick, color=steelblue},
-  node distance=1.2cm
+  center/.style={ellipse, draw=phantomviolet, fill=phantomviolet!15,
+                 minimum width=3.2cm, minimum height=1.5cm,
+                 align=center, font=\small\bfseries},
+  provider/.style={rectangle, rounded corners=4pt, draw=steelblue, fill=lightblue,
+                   minimum width=2.6cm, minimum height=0.75cm,
+                   align=center, font=\scriptsize},
+  arrow/.style={Stealth-Stealth, thick, color=steelblue}
 ]
   \node[center] (litellm) {Phantom\\LiteLLM Layer};
 
-  \node[provider, above=1.5cm of litellm, xshift=-3.5cm] (oai)      {OpenAI\\GPT-4o, o1, \ldots};
-  \node[provider, above=1.5cm of litellm, xshift=-1.2cm] (anthropic){Anthropic\\Claude 3.x};
-  \node[provider, above=1.5cm of litellm, xshift=+1.2cm] (groq)     {Groq\\Llama-3.3-70B};
-  \node[provider, above=1.5cm of litellm, xshift=+3.5cm] (google)   {Google\\Gemini 1.5 Pro};
-  \node[provider, below=1.5cm of litellm, xshift=-2.2cm] (ollama)   {Ollama\\(local models)};
-  \node[provider, below=1.5cm of litellm, xshift=+0cm]   (openrouter){OpenRouter\\(40+ providers)};
-  \node[provider, below=1.5cm of litellm, xshift=+2.2cm] (azure)    {Azure OpenAI};
+  \node[provider] (oai)       at (-4.5,  2.5) {OpenAI\\GPT-4o, o1};
+  \node[provider] (anthropic) at (-2.0,  2.5) {Anthropic\\Claude 3.x};
+  \node[provider] (groq)      at ( 0.5,  2.5) {Groq\\Llama-3.3-70B};
+  \node[provider] (google)    at ( 3.0,  2.5) {Google\\Gemini 1.5 Pro};
+  \node[provider] (ollama)    at (-3.5, -2.5) {Ollama (local)};
+  \node[provider] (openrouter)at (-0.5, -2.5) {OpenRouter\\(40+ models)};
+  \node[provider] (azure)     at ( 2.5, -2.5) {Azure OpenAI};
 
-  \foreach \n in {oai, anthropic, groq, google} {
+  \foreach \n in {oai,anthropic,groq,google,ollama,openrouter,azure}
     \draw[arrow] (litellm) -- (\n);
-    \draw[arrow] (\n) -- (litellm);
-  }
-  \foreach \n in {ollama, openrouter, azure} {
-    \draw[arrow] (litellm) -- (\n);
-    \draw[arrow] (\n) -- (litellm);
-  }
-\end{tikzpicture}
-\caption{LiteLLM abstraction layer: swap providers without code changes}
+
+\end{tikzpicture}%
+}
+\caption{LiteLLM abstraction: swap LLM providers with a single environment variable}
 \label{fig:llm}
 \end{figure}
 
 \subsection{Configuration}
 
 \begin{lstlisting}[language=bash, caption={Configuring an LLM provider}]
-# Using environment variables
+# Via environment variables (recommended for CI/CD)
 export PHANTOM_LLM="openai/gpt-4o"
 export LLM_API_KEY="sk-..."
 phantom scan --target https://example.com
 
-# Or via CLI config (persistent)
-phantom config set llm openai/gpt-4o
-phantom config set api_key sk-...
+# Persistent CLI config
+phantom config set llm      openai/gpt-4o
+phantom config set api_key  sk-...
 
-# Using a local Ollama model (no API key needed)
+# Local Ollama model (no API key needed)
 phantom config set llm ollama/llama3.1:8b
 \end{lstlisting}
 
@@ -574,17 +552,17 @@ phantom config set llm ollama/llama3.1:8b
 
 \begin{table}[H]
 \centering
-\caption{Example LLM Provider Identifiers}
+\caption{LLM Provider Identifiers}
 \begin{tabular}{ll}
 \toprule
-\textbf{Provider} & \textbf{Model Identifier} \\
+\textbf{Provider} & \textbf{Identifier} \\
 \midrule
 OpenAI       & \texttt{openai/gpt-4o}, \texttt{openai/o1-preview} \\
-Anthropic    & \texttt{anthropic/claude-sonnet-4-5}, \texttt{anthropic/claude-3-opus} \\
+Anthropic    & \texttt{anthropic/claude-sonnet-4-5} \\
 Groq         & \texttt{groq/llama-3.3-70b-versatile} \\
 Google       & \texttt{google/gemini-1.5-pro} \\
 Ollama       & \texttt{ollama/llama3.1:8b}, \texttt{ollama/mistral:7b} \\
-OpenRouter   & \texttt{openrouter/\textlangle{}any-model\textrangle{}} \\
+OpenRouter   & \texttt{openrouter/<any-model>} \\
 Azure        & \texttt{azure/gpt-4} \\
 \bottomrule
 \end{tabular}
@@ -592,31 +570,29 @@ Azure        & \texttt{azure/gpt-4} \\
 
 \subsection{Retry \& Fallback Chain}
 
-Phantom automatically retries failed LLM calls with exponential backoff (using the \texttt{tenacity} library). If a primary model is unavailable, a configured fallback chain is tried in order. This ensures scan continuity in case of rate limits or API errors.
+Phantom retries failed LLM calls with exponential backoff (\texttt{tenacity}). A configured fallback chain tries providers in order, ensuring scan continuity through rate limits or transient errors.
 
-% ══════════════════════════════════════════════════════════
+% ============================================================
 \section{Scan Workflow}
-% ══════════════════════════════════════════════════════════
+% ============================================================
 
 \subsection{Scan Modes}
 
-Phantom supports three scan depths, selecting different agent configurations and tool parameters:
-
 \begin{table}[H]
 \centering
-\caption{Scan Modes Comparison}
+\caption{Scan Mode Comparison}
 \begin{tabular}{lccc}
 \toprule
-\textbf{Property}           & \textbf{Quick}  & \textbf{Standard} & \textbf{Deep} \\
+\textbf{Property}       & \textbf{Quick}  & \textbf{Standard} & \textbf{Deep} \\
 \midrule
-Estimated time              & 5--15 min       & 20--45 min        & 1--3 hours \\
-Recon depth                 & Surface         & Moderate          & Comprehensive \\
-Exploitation attempts       & Low             & Medium            & Exhaustive \\
-Sub-agent spawning          & Disabled        & Limited           & Full tree \\
-Directory fuzzing           & Small wordlist  & Medium            & Large + custom \\
-JavaScript rendering        & No              & Partial           & Full Playwright \\
-Post-exploitation           & No              & No                & Yes \\
-Differential mode           & Yes             & Yes               & Yes \\
+Estimated time          & 5--15 min       & 20--45 min        & 1--3 hours \\
+Recon depth             & Surface         & Moderate          & Comprehensive \\
+Exploitation attempts   & Low             & Medium            & Exhaustive \\
+Sub-agent spawning      & Disabled        & Limited           & Full tree \\
+Directory fuzzing       & Small wordlist  & Medium            & Large + custom \\
+JavaScript rendering    & No              & Partial           & Full Playwright \\
+Post-exploitation       & No              & No                & Yes \\
+Differential mode       & Yes             & Yes               & Yes \\
 \bottomrule
 \end{tabular}
 \end{table}
@@ -625,111 +601,280 @@ Differential mode           & Yes             & Yes               & Yes \\
 
 \begin{figure}[H]
 \centering
+\resizebox{\textwidth}{!}{%
 \begin{tikzpicture}[
-  phase/.style={rectangle, rounded corners=6pt, draw=#1!70, fill=#1!15, minimum width=3.5cm, minimum height=1.2cm, align=center, font=\small\bfseries\color{#1!80!black}},
+  phase/.style={rectangle, rounded corners=6pt, draw=#1!80, fill=#1!15,
+                minimum width=3.2cm, minimum height=1.2cm,
+                align=center, font=\small\bfseries\color{#1!80!black}},
   arrow/.style={-Stealth, very thick, color=phantomviolet},
-  annot/.style={font=\scriptsize, color=gray, align=center},
-  node distance=0.6cm
+  annot/.style={font=\scriptsize, color=gray, align=center}
 ]
-  \node[phase=steelblue]      (p0) {0. Configuration\\Validation};
-  \node[phase=darkgreen, right=1.2cm of p0] (p1) {1. Reconnaissance\\Port scan, crawl};
-  \node[phase=warnorange, right=1.2cm of p1] (p2) {2. Vulnerability\\Discovery};
-  \node[phase=phantomred, right=1.2cm of p2] (p3) {3. Exploitation\\\& PoC};
-  \node[phase=phantomviolet, below=1.2cm of p3] (p4) {4. Validation\\True-positive check};
-  \node[phase=darkgreen, left=1.2cm of p4] (p5) {5. Report\\Generation};
+  \node[phase=steelblue]   (p0) at (0,0)    {0.\ Config\\Validation};
+  \node[phase=darkgreen]   (p1) at (3.8,0)  {1.\ Recon\\Port scan, crawl};
+  \node[phase=warnorange]  (p2) at (7.6,0)  {2.\ Vuln\\Discovery};
+  \node[phase=phantomred]  (p3) at (11.4,0) {3.\ Exploitation\\\& PoC};
+  \node[phase=phantomviolet](p4) at (7.6,-2.8){4.\ Validation\\True-positive};
+  \node[phase=darkgreen]   (p5) at (3.8,-2.8){5.\ Report\\Generation};
 
-  \draw[arrow] (p0) -- (p1);
-  \draw[arrow] (p1) -- (p2);
-  \draw[arrow] (p2) -- (p3);
-  \draw[arrow] (p3) -- (p4);
+  \draw[arrow] (p0) -- (p1); \draw[arrow] (p1) -- (p2);
+  \draw[arrow] (p2) -- (p3); \draw[arrow] (p3) -- (p4);
   \draw[arrow] (p4) -- (p5);
 
-  % Annotations
-  \node[annot, below=0.15cm of p1] {nmap, katana,\\ffuf, whatweb};
-  \node[annot, below=0.15cm of p2] {nuclei, wapiti,\\nikto, semgrep};
-  \node[annot, below=0.15cm of p3] {sqlmap, playwright,\\custom payloads};
-  \node[annot, above=0.15cm of p4] {confirmation\\requests};
-  \node[annot, below=0.15cm of p5] {HTML, SARIF,\\PDF, JSON};
+  \node[annot, below=0.2cm of p1] {nmap, katana,\\ffuf, whatweb};
+  \node[annot, below=0.2cm of p2] {nuclei, wapiti,\\nikto, semgrep};
+  \node[annot, below=0.2cm of p3] {sqlmap, playwright,\\custom payloads};
+  \node[annot, above=0.2cm of p4] {confirmation\\requests};
+  \node[annot, above=0.2cm of p5] {HTML, SARIF,\\PDF, JSON};
 
-\end{tikzpicture}
+\end{tikzpicture}%
+}
 \caption{Sequential scan pipeline phases}
 \label{fig:pipeline}
 \end{figure}
 
 \subsection{Differential Scanning}
 
-When run against the same target multiple times, Phantom compares findings to the previous run and produces a \emph{diff report} showing:
-\begin{itemize}
-  \item \textbf{New vulnerabilities} found since the last scan;
-  \item \textbf{Fixed vulnerabilities} that no longer reproduce;
-  \item \textbf{Persistent vulnerabilities} still present.
-\end{itemize}
+When run against the same target multiple times, Phantom produces a \emph{diff report} showing new vulnerabilities, fixed vulnerabilities, and persistent vulnerabilities. This is particularly useful for CI/CD re-test verification.
 
-This is particularly useful for development pipelines and re-test verification.
+% ============================================================
+\section{Detailed System Execution Plan}
+% ============================================================
 
-% ══════════════════════════════════════════════════════════
+This section documents the complete execution flow across all system layers --- from user invocation to final report delivery --- with the exact code path, data transformations, and inter-component communication at every step.
+
+\subsection{Layer Stack}
+
+\begin{table}[H]
+\centering
+\caption{Phantom System Layer Stack}
+\begin{tabular}{clll}
+\toprule
+\textbf{Layer} & \textbf{Name} & \textbf{Location} & \textbf{Key Module} \\
+\midrule
+L0 & CLI / TUI           & Host    & \texttt{interface/cli\_app.py} \\
+L1 & Configuration       & Host    & \texttt{config/config.py} \\
+L2 & Runtime Manager     & Host    & \texttt{runtime/docker\_runtime.py} \\
+L3 & Agent Orchestrator  & Host    & \texttt{agents/PhantomAgent/} \\
+L4 & LLM Gateway         & Host    & \texttt{litellm} (via \texttt{agents/base\_agent.py}) \\
+L5 & Tool Server         & Sandbox & \texttt{runtime/tool\_server.py} \\
+L6 & Security Tools      & Sandbox & nmap, sqlmap, nuclei, ffuf, \ldots \\
+L7 & Knowledge Graph     & Host    & \texttt{models/knowledge\_graph.py} \\
+L8 & Report Engine       & Host    & \texttt{reports/} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Step-by-Step Execution Trace}
+
+\subsubsection{Step 1 --- CLI Invocation (L0)}
+
+\begin{lstlisting}[language=bash]
+phantom scan --target https://app.example.com \
+             --scan-mode quick --non-interactive
+\end{lstlisting}
+
+Typer parses arguments, validates the target URL is reachable, displays an authorization confirmation, and in interactive mode launches the Textual TUI.
+
+\subsubsection{Step 2 --- Configuration Resolution (L1)}
+
+Settings are resolved in priority order:
+\begin{enumerate}
+  \item Environment variables: \texttt{PHANTOM\_LLM}, \texttt{LLM\_API\_KEY}, \texttt{PHANTOM\_IMAGE}
+  \item Persistent config: \texttt{\textasciitilde{}/.phantom/config.json}
+  \item Built-in defaults: \texttt{scan\_mode=standard}, \texttt{max\_iterations=300}
+\end{enumerate}
+Pydantic v2 validates the final config; raises a descriptive error if the LLM model is not set.
+
+\subsubsection{Step 3 --- Sandbox Startup (L2)}
+
+\begin{lstlisting}[language=Python, caption={Container lifecycle inside docker\_runtime.py}]
+# 1. Check if the image exists locally; if not, docker pull
+# 2. Generate a random per-session token (secrets.token_urlsafe(32))
+# 3. docker run -d
+#        -e TOOL_SERVER_TOKEN=<token>
+#        -e TOOL_SERVER_PORT=48081
+#        -p <random_host_port>:48081
+#        ghcr.io/usta0x001/phantom-sandbox:latest
+# 4. Poll GET /health every 2s (timeout: 60s)
+# 5. Return SandboxInfo(container_id, host_port, token)
+\end{lstlisting}
+
+The token is never written to disk. It is injected as an environment variable and purged with the container.
+
+\subsubsection{Step 4 --- Root Agent Initialization (L3)}
+
+\begin{lstlisting}[language=Python]
+state = EnhancedAgentState(
+    agent_name    = "Phantom Root Agent",
+    task          = f"Pentest: {target}",
+    sandbox_id    = sandbox.container_id,
+    sandbox_token = sandbox.token,
+)
+orchestrator = PhantomAgent(config=config, state=state)
+orchestrator.run()   # Begins the agentic loop
+\end{lstlisting}
+
+\subsubsection{Step 5 --- Reconnaissance Phase (L3 + L4 + L5 + L6)}
+
+\begin{enumerate}
+  \item \textbf{LLM call (L4):} Root asks the LLM what to do first; LLM returns \texttt{spawn recon\_agent(target)}.
+  \item \textbf{Recon Agent} activates and begins its own planning loop.
+  \item \textbf{Tool calls (L5/L6):}
+\begin{lstlisting}[language=bash, numbers=none]
+POST /execute  {"tool_name":"terminal_execute",
+                "kwargs":{"command":"nmap -sV -p 80,443,8080 target"}}
+POST /execute  {"tool_name":"terminal_execute",
+                "kwargs":{"command":"whatweb --color=never target"}}
+POST /execute  {"tool_name":"terminal_execute",
+                "kwargs":{"command":"ffuf -u target/FUZZ -w /opt/seclists/common.txt"}}
+\end{lstlisting}
+  \item \textbf{KG update (L7):} Discovered ports, technologies, endpoints written to graph.
+  \item Recon Agent returns structured summary to Root Agent.
+\end{enumerate}
+
+\subsubsection{Step 6 --- Vulnerability Analysis Phase (L3 + L4)}
+
+The \textbf{Vulnerability Analysis Agent} receives full KG context and reasons about likely vulnerability classes given the tech stack (e.g., WordPress $\rightarrow$ plugin CVEs; PHP + direct SQL $\rightarrow$ injection risk). No tools are invoked --- this is pure LLM reasoning producing a prioritised \texttt{VulnerabilityCandidate} list.
+
+\subsubsection{Step 7 --- Exploitation Phase (L3 + L4 + L5 + L6)}
+
+For each candidate, an \textbf{Exploitation Agent} is spawned:
+
+\begin{lstlisting}[language=bash, numbers=none, caption={Example exploitation calls}]
+# SQL injection
+POST /execute {"kwargs":{"command":"sqlmap -u 'target/login?id=1' --dbs --batch"}}
+# CVE template scan
+POST /execute {"kwargs":{"command":"nuclei -u target -t cves/ -severity critical,high"}}
+# XSS probe
+POST /execute {"kwargs":{"command":"curl -s 'target/search?q=<script>alert(1)</script>'"}}
+\end{lstlisting}
+
+Confirmed findings become \texttt{Vulnerability} objects with CVSS score, evidence, and PoC. In deep mode, a \textbf{Post-Exploitation Agent} may be spawned to measure impact.
+
+\subsubsection{Step 8 --- Validation Phase (L3 + L4)}
+
+A \textbf{Validation Agent} re-executes the minimal reproducer for each finding. False positives are marked and excluded from the final report. Confirmed findings move to \texttt{KnowledgeGraph.verified\_vulns}.
+
+\subsubsection{Step 9 --- Report Generation (L8)}
+
+\begin{lstlisting}[language=Python]
+engine = ReportEngine(knowledge_graph)
+engine.render_html()     # phantom_runs/<id>/report.html
+engine.render_markdown() # phantom_runs/<id>/report.md
+engine.render_json()     # phantom_runs/<id>/report.json
+engine.render_sarif()    # phantom_runs/<id>/report.sarif
+engine.render_pdf()      # phantom_runs/<id>/report.pdf
+\end{lstlisting}
+
+\subsubsection{Step 10 --- Sandbox Teardown (L2)}
+
+\begin{lstlisting}[language=bash, numbers=none]
+docker stop  phantom-sandbox-<uuid>
+docker rm    phantom-sandbox-<uuid>
+# Token purged; all ephemeral container data destroyed
+\end{lstlisting}
+
+\subsection{Full Data Flow Diagram}
+
+\begin{figure}[H]
+\centering
+\resizebox{\textwidth}{!}{%
+\begin{tikzpicture}[
+  layer/.style={rectangle, draw=#1!60, fill=#1!8, rounded corners=4pt,
+                minimum width=3.2cm, minimum height=0.85cm,
+                align=center, font=\scriptsize\bfseries\color{#1!80!black}},
+  arr/.style={-Stealth, thick, color=phantomviolet},
+  darr/.style={-Stealth, dashed, thick, color=gray},
+  lbl/.style={font=\scriptsize, color=gray}
+]
+  \node[layer=phantomdark]   (cli)    at (0, 10) {L0: CLI / TUI};
+  \node[layer=steelblue]     (conf)   at (0,  8) {L1: Configuration};
+  \node[layer=warnorange]    (docker) at (0,  6) {L2: Docker Runtime};
+  \node[layer=phantomviolet] (orch)   at (0,  4) {L3: Agent Orchestrator};
+  \node[layer=darkgreen]     (llm)    at (5,  4) {L4: LiteLLM Gateway};
+  \node[layer=phantomred]    (ts)     at (0,  2) {L5: Tool Server};
+  \node[layer=tealcolor]     (tools)  at (0,  0) {L6: Security Tools};
+  \node[layer=warnorange]    (kg)     at (5,  2) {L7: Knowledge Graph};
+  \node[layer=darkgreen]     (report) at (5,  0) {L8: Report Engine};
+
+  \draw[arr] (cli)   -- node[right,lbl]{args}       (conf);
+  \draw[arr] (conf)  -- node[right,lbl]{config}      (docker);
+  \draw[arr] (docker)-- node[right,lbl]{sandbox info}(orch);
+  \draw[arr] (orch)  -- node[right,lbl]{HTTP call}   (ts);
+  \draw[arr] (ts)    -- node[right,lbl]{exec}        (tools);
+  \draw[arr] (tools) to[bend right=40] node[left,lbl]{output} (ts);
+  \draw[arr] (ts)    to[bend right=40] node[left,lbl]{result} (orch);
+  \draw[arr] (orch)  -- node[above,lbl]{prompts}  (llm);
+  \draw[arr] (llm)   to[bend left=20] node[below,lbl]{decisions} (orch);
+  \draw[arr] (orch)  -- node[above,lbl]{write}    (kg);
+  \draw[arr] (kg)    to[bend left=20] node[below,lbl]{context} (orch);
+  \draw[arr] (kg)    -- node[right,lbl]{aggregate}(report);
+  \draw[darr](report) to[bend right=60] node[right,lbl]{report files} (cli);
+
+\end{tikzpicture}%
+}
+\caption{Complete Phantom data flow across all 9 system layers (L0--L8)}
+\label{fig:dataflow}
+\end{figure}
+
+% ============================================================
 \section{Knowledge Representation}
-% ══════════════════════════════════════════════════════════
+% ============================================================
 
 \subsection{Knowledge Graph}
 
-All information discovered during a scan is stored in an in-memory \textbf{KnowledgeGraph} that agents read from and write to in real time.
+All information discovered during a scan is stored in a shared \textbf{KnowledgeGraph} updated in real time by all active agents:
 
-The graph captures:
 \begin{itemize}
-  \item \textbf{Hosts \& Services} \textemdash{} IP addresses, open ports, service banners, TLS certificates.
-  \item \textbf{Endpoints} \textemdash{} URLs, HTTP methods, parameters, headers, authentication requirements.
-  \item \textbf{Technologies} \textemdash{} Frameworks, CMS, server software, version numbers.
-  \item \textbf{Vulnerabilities} \textemdash{} Each as a \texttt{Vulnerability} Pydantic object with CVE ID (if applicable), CVSS score, OWASP category, MITRE TTP, evidence, PoC, remediation.
-  \item \textbf{Attack chains} \textemdash{} Directed edges between vulnerabilities that can be chained.
+  \item \textbf{Hosts \& Services} --- IPs, open ports, service banners, TLS certificates.
+  \item \textbf{Endpoints} --- URLs, HTTP methods, parameters, authentication requirements.
+  \item \textbf{Technologies} --- Frameworks, CMS, server software, version numbers.
+  \item \textbf{Vulnerabilities} --- \texttt{Vulnerability} objects with CVE, CVSS, OWASP, MITRE, evidence, PoC.
+  \item \textbf{Attack chains} --- Directed edges between chainable vulnerabilities.
 \end{itemize}
 
 \subsection{Vulnerability Data Model}
 
 \begin{lstlisting}[language=Python, caption={Simplified Vulnerability Pydantic model}]
 class Vulnerability(BaseModel):
-    id:          str            # SHA-256 fingerprint
-    title:       str            # Human-readable name
-    severity:    Severity       # CRITICAL / HIGH / MEDIUM / LOW / INFO
-    cvss_score:  float          # 0.0 -- 10.0
-    cvss_vector: str            # CVSS v3.1 vector string
-    cve_id:      Optional[str]  # CVE-YYYY-NNNN
-    owasp:       str            # e.g. "A03:2021 - Injection"
-    mitre_ttp:   str            # e.g. "T1190 - Exploit Public-Facing App"
-    endpoint:    str            # Affected URL / service
-    parameter:   Optional[str]  # Affected parameter
-    evidence:    str            # Raw tool output proving the finding
-    proof_of_concept: str       # Reproducer / curl command / payload
-    remediation: str            # Fix recommendation
-    references:  List[str]      # CVE, OWASP, NVD links
-    first_seen:  datetime
-    last_seen:   datetime
+    id:               str            # SHA-256 fingerprint
+    title:            str
+    severity:         Severity       # CRITICAL/HIGH/MEDIUM/LOW/INFO
+    cvss_score:       float          # 0.0 - 10.0
+    cvss_vector:      str            # CVSS v3.1 vector string
+    cve_id:           Optional[str]  # CVE-YYYY-NNNN
+    owasp:            str            # e.g. "A03:2021 - Injection"
+    mitre_ttp:        str            # e.g. "T1190"
+    endpoint:         str
+    parameter:        Optional[str]
+    evidence:         str            # Raw tool output
+    proof_of_concept: str            # Reproducer command/payload
+    remediation:      str
+    references:       List[str]
+    first_seen:       datetime
+    last_seen:        datetime
 \end{lstlisting}
 
-% ══════════════════════════════════════════════════════════
+% ============================================================
 \section{User Interface}
-% ══════════════════════════════════════════════════════════
+% ============================================================
 
 \subsection{Command-Line Interface}
 
-Phantom provides a \textbf{Typer-based CLI} (\texttt{phantom}) as the primary interface:
-
-\begin{lstlisting}[language=bash, caption={Phantom CLI command reference}]
+\begin{lstlisting}[language=bash, caption={Phantom CLI reference}]
 # Start a scan (interactive TUI)
 phantom scan --target https://example.com
 
-# Non-interactive (for CI/CD)
+# Non-interactive (CI/CD)
 phantom scan --target https://example.com \
-             --scan-mode quick            \
-             --non-interactive            \
-             --output ./results/
+             --scan-mode quick --non-interactive --output ./results/
 
-# Configuration management
+# Configuration
 phantom config show
-phantom config set llm groq/llama-3.3-70b-versatile
-phantom config set api_key <KEY>
+phantom config set llm      groq/llama-3.3-70b-versatile
+phantom config set api_key  <KEY>
 
-# Report management
+# Reports
 phantom report list
 phantom report show <scan-id>
 phantom report export <scan-id> --format pdf
@@ -737,25 +882,19 @@ phantom report export <scan-id> --format pdf
 
 \subsection{Text User Interface (TUI)}
 
-When running in interactive mode, Phantom launches a \textbf{Textual-based TUI} showing:
-\begin{itemize}
-  \item Live agent activity log with colour-coded severity levels;
-  \item Real-time findings panel updated as vulnerabilities are confirmed;
-  \item Progress indicators per scan phase;
-  \item Keyboard shortcuts for pausing, inspecting agents, and aborting.
-\end{itemize}
+Textual-based TUI (interactive mode) displays: live agent activity log, real-time findings panel, per-phase progress indicators, and keyboard shortcuts for pause/inspect/abort.
 
 \subsection{CI/CD Integration}
 
-\begin{lstlisting}[language=bash, caption={Example GitHub Actions integration}]
+\begin{lstlisting}[language=bash, caption={GitHub Actions integration}]
 - name: Run Phantom Security Scan
   run: |
     pip install phantom-agent
     phantom scan --target ${{ secrets.STAGING_URL }} \
                  --scan-mode quick --non-interactive
   env:
-    PHANTOM_LLM:  "openai/gpt-4o"
-    LLM_API_KEY:  ${{ secrets.OPENAI_KEY }}
+    PHANTOM_LLM: "openai/gpt-4o"
+    LLM_API_KEY: ${{ secrets.OPENAI_KEY }}
 
 - name: Upload SARIF to GitHub Security
   uses: github/codeql-action/upload-sarif@v3
@@ -763,11 +902,9 @@ When running in interactive mode, Phantom launches a \textbf{Textual-based TUI} 
     sarif_file: phantom_runs/latest/report.sarif
 \end{lstlisting}
 
-% ══════════════════════════════════════════════════════════
+% ============================================================
 \section{Reporting System}
-% ══════════════════════════════════════════════════════════
-
-Phantom generates reports in five formats automatically at scan completion:
+% ============================================================
 
 \begin{table}[H]
 \centering
@@ -776,97 +913,73 @@ Phantom generates reports in five formats automatically at scan completion:
 \toprule
 \textbf{Format} & \textbf{File} & \textbf{Purpose} \\
 \midrule
-HTML      & \texttt{report.html}   & Rich formatted report with severity charts, evidence, remediation. Viewable in any browser. \\
-Markdown  & \texttt{report.md}     & Git-friendly format; embeds in GitHub wikis, Confluence, Notion. \\
-JSON      & \texttt{report.json}   & Machine-readable; all fields structured; integrates with ticketing tools. \\
-SARIF     & \texttt{report.sarif}  & GitHub Advanced Security / code scanning standard; appears in the Security tab. \\
-PDF       & \texttt{report.pdf}    & Executive-ready printable report. Generated via headless browser rendering. \\
+HTML      & \texttt{report.html}  & Rich formatted report with severity charts and remediation. \\
+Markdown  & \texttt{report.md}    & Git-friendly; embeds in GitHub wikis, Confluence, Notion. \\
+JSON      & \texttt{report.json}  & Machine-readable; integrates with ticketing tools. \\
+SARIF     & \texttt{report.sarif} & GitHub Advanced Security standard; appears in the Security tab. \\
+PDF       & \texttt{report.pdf}   & Executive-ready printable report. \\
 \bottomrule
 \end{tabularx}
 \end{table}
 
-\subsection{Compliance Mapping}
+Every vulnerability is automatically tagged with: OWASP Top 10 2021 (A01--A10), MITRE ATT\&CK TTP, CWE identifier, and CVSS v3.1 score with vector string.
 
-Every vulnerability is automatically tagged with:
-\begin{itemize}
-  \item \textbf{OWASP Top 10 2021} category (A01--A10);
-  \item \textbf{MITRE ATT\&CK} technique identifier (e.g.\ T1190, T1059);
-  \item \textbf{CWE} identifier (e.g.\ CWE-89 for SQL injection);
-  \item \textbf{CVSS v3.1} score and vector string.
-\end{itemize}
-
-% ══════════════════════════════════════════════════════════
+% ============================================================
 \section{Installation \& Deployment}
-% ══════════════════════════════════════════════════════════
+% ============================================================
 
 \subsection{Prerequisites}
 
 \begin{itemize}
-  \item \textbf{Docker} (any recent version, running) \textemdash{} for the sandbox container.
-  \item \textbf{Python 3.12+} \textemdash{} for the Phantom CLI.
-  \item \textbf{LLM API key} \textemdash{} from any supported provider.
+  \item \textbf{Docker} --- for the sandbox container.
+  \item \textbf{Python 3.12+} --- for the Phantom CLI.
+  \item \textbf{LLM API key} --- from any supported provider.
 \end{itemize}
 
-\subsection{Installation Methods}
+\subsection{Installation}
 
-\begin{lstlisting}[language=bash, caption={Installation via pipx (recommended)}]
-# Install globally (isolated environment, no dependency conflicts)
-pipx install phantom-agent
+\begin{lstlisting}[language=bash, caption={Install via pipx (recommended)}]
+pipx install phantom-agent   # isolated env, no dependency conflicts
+# or
+pip install phantom-agent    # standard install
 
-# Or via pip
-pip install phantom-agent
-
-# Verify installation
-phantom --help
+phantom --help               # verify
+phantom config show          # check configuration
 \end{lstlisting}
 
-\subsection{Docker Images}
+\begin{infobox}
+\textbf{What gets installed:} \texttt{pip install phantom-agent} installs the full Phantom CLI with all required Python dependencies (LiteLLM, Pydantic v2, Rich, Typer, Textual, Docker SDK, etc. --- approximately 60--80 packages). Security tools (nmap, sqlmap, nuclei, etc.) are \emph{not} installed on the host; they live exclusively inside the Docker sandbox image, which is pulled automatically on the first scan.
+
+The package registers one executable: \texttt{phantom}.
+\end{infobox}
+
+\subsection{Published Images}
 
 \begin{table}[H]
 \centering
 \caption{Published Docker Images}
-\begin{tabular}{ll}
+\begin{tabular}{lll}
 \toprule
-\textbf{Image} & \textbf{Purpose} \\
+\textbf{Image} & \textbf{Purpose} & \textbf{Size} \\
 \midrule
-\texttt{redwan07/phantom:latest}                         & Phantom CLI (Python only, 743\,MB) \\
-\texttt{redwan07/phantom:0.8.1}                          & Phantom CLI pinned version \\
-\texttt{ghcr.io/usta0x001/phantom-sandbox:latest}        & Kali sandbox with all tools (14\,GB) \\
-\texttt{ghcr.io/usta0x001/phantom-sandbox:0.8.0}         & Sandbox pinned version \\
+\texttt{redwan07/phantom:latest}                  & Phantom CLI (Python only)   & 743\,MB \\
+\texttt{ghcr.io/usta0x001/phantom-sandbox:latest} & Kali sandbox with all tools & 14\,GB \\
+\texttt{ghcr.io/usta0x001/phantom-sandbox:0.8.0}  & Sandbox --- pinned version  & 14\,GB \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-The sandbox image is \emph{pulled automatically} by the CLI on first use. Users do not need to pull it manually.
+\begin{warnbox}
+\textbf{First-run note:} The sandbox image (14\,GB) is pulled automatically on the first scan. On slow connections, pre-pull it manually:
 
-\subsection{Can the Sandbox Image Be Updated?}
+\texttt{docker pull ghcr.io/usta0x001/phantom-sandbox:latest}
+\end{warnbox}
 
-Yes \textemdash{} fully. Publishing a new sandbox version is:
-\begin{lstlisting}[language=bash, caption={Updating the sandbox image}]
-# 1. Modify containers/Dockerfile.sandbox
-# 2. Build locally
-docker build -f containers/Dockerfile.sandbox \
-             -t ghcr.io/usta0x001/phantom-sandbox:latest \
-             -t ghcr.io/usta0x001/phantom-sandbox:0.8.2 .
-
-# 3. Push to ghcr.io (requires write:packages token)
-echo $GITHUB_TOKEN | docker login ghcr.io -u Usta0x001 --password-stdin
-docker push ghcr.io/usta0x001/phantom-sandbox:latest
-docker push ghcr.io/usta0x001/phantom-sandbox:0.8.2
-
-# 4. Users get the updated image on next pull
-docker pull ghcr.io/usta0x001/phantom-sandbox:latest
-\end{lstlisting}
-
-Tools can be added, removed, or upgraded at any time by editing \texttt{Dockerfile.sandbox} and republishing.
-
-% ══════════════════════════════════════════════════════════
+% ============================================================
 \section{Testing \& Verification}
-% ══════════════════════════════════════════════════════════
+% ============================================================
 
-\subsection{Unit \& Integration Test Suite}
-
-Phantom ships with \textbf{146 tests} across 9 categories, all passing at 100\%:
+\subsection{Test Suite}
 
 \begin{table}[H]
 \centering
@@ -875,31 +988,28 @@ Phantom ships with \textbf{146 tests} across 9 categories, all passing at 100\%:
 \toprule
 \textbf{Category} & \textbf{Tests} & \textbf{Pass Rate} \\
 \midrule
-Module imports                  & 25  & 100\% \\
-Configuration loading/persistence & 12 & 100\% \\
-LLM response parsing            & 18  & 100\% \\
-Vulnerability data models       & 20  & 100\% \\
-Tool argument parsing           & 42  & 100\% \\
-Scope validation                & 8   & 100\% \\
-SARIF output formatting         & 8   & 100\% \\
-Memory compression              & 7   & 100\% \\
-Agent state transitions         & 6   & 100\% \\
+Module imports                    & 25  & 100\% \\
+Configuration loading/persistence & 12  & 100\% \\
+LLM response parsing              & 18  & 100\% \\
+Vulnerability data models         & 20  & 100\% \\
+Tool argument parsing             & 42  & 100\% \\
+Scope validation                  & 8   & 100\% \\
+SARIF output formatting           & 8   & 100\% \\
+Memory compression                & 7   & 100\% \\
+Agent state transitions           & 6   & 100\% \\
 \midrule
-\textbf{Total}                  & \textbf{146} & \textbf{100\%} \\
+\textbf{Total}                    & \textbf{146} & \textbf{100\%} \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-Tests run with:
 \begin{lstlisting}[language=bash]
 pip install -e ".[dev]"
 pytest tests/ -v --tb=short
 # Result: 146 passed in ~18 seconds
 \end{lstlisting}
 
-\subsection{Sandbox Verification}
-
-End-to-end sandbox verification was performed in February 2026, confirming all critical components:
+\subsection{Sandbox Verification (February 2026)}
 
 \begin{table}[H]
 \centering
@@ -908,142 +1018,109 @@ End-to-end sandbox verification was performed in February 2026, confirming all c
 \toprule
 \textbf{Check} & \textbf{Result} & \textbf{Detail} \\
 \midrule
-Container startup           & \checkmark PASS & Starts in $<$\,30 seconds \\
-Tool server \texttt{/health} & \checkmark PASS & \texttt{\{"status":"healthy","sandbox\_mode":true\}} \\
-nmap available              & \checkmark PASS & Nmap 7.98 \\
-sqlmap available            & \checkmark PASS & sqlmap 1.10\#stable \\
-nuclei available            & \checkmark PASS & nuclei 3.x \\
-Python environment          & \checkmark PASS & FastAPI 0.121.0, uvicorn, pydantic 2.x \\
-Bearer auth enforcement     & \checkmark PASS & Unauthenticated requests return 401 \\
-Tool execution              & \checkmark PASS & Terminal tool returns stdout + exit code \\
+Container startup            & \checkmark~PASS & $<$30 seconds \\
+Tool server \texttt{/health} & \checkmark~PASS & \texttt{\{"status":"healthy","sandbox\_mode":true\}} \\
+Bearer auth enforcement      & \checkmark~PASS & Unauthenticated requests $\Rightarrow$ HTTP 401 \\
+nmap                         & \checkmark~PASS & Nmap 7.98 \\
+sqlmap                       & \checkmark~PASS & sqlmap/1.10\#stable \\
+nuclei                       & \checkmark~PASS & nuclei v3.x \\
+Python/FastAPI               & \checkmark~PASS & FastAPI 0.121.0, pydantic 2.x \\
+Tool execution               & \checkmark~PASS & Returns stdout + exit code \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-\subsection{Fresh Installation Test}
-
-A clean install from GitHub was performed to verify the complete user journey:
-
-\begin{lstlisting}[language=bash, caption={Fresh install verification (February 2026)}]
-git clone https://github.com/Usta0x001/Phantom
-cd Phantom
-pip install -e .
-pytest tests/
-# Result: 146 passed
-
-pipx install phantom-agent   # from PyPI
-phantom --help                # CLI responds correctly
-\end{lstlisting}
-
 \begin{infobox}
-\textbf{Published on PyPI:} \texttt{pip install phantom-agent} installs the latest stable release. The package is named \texttt{phantom-agent} and registers two executables: \texttt{phantom} and \texttt{phantom-legacy}.
+\textbf{Published on PyPI:} \texttt{pip install phantom-agent} installs the latest stable release and registers one executable: \texttt{phantom}. Run \texttt{phantom --help} to verify.
 \end{infobox}
 
-% ══════════════════════════════════════════════════════════
+% ============================================================
 \section{Security \& Ethical Considerations}
-% ══════════════════════════════════════════════════════════
+% ============================================================
 
 \subsection{Authorization Enforcement}
 
-Before any scan begins, Phantom:
-\begin{enumerate}
-  \item Displays a clear warning that scanning without authorization is illegal;
-  \item Requires the user to explicitly confirm authorization (interactive prompt or \texttt{--instruction} parameter);
-  \item Validates the target URL format and scope boundaries.
-\end{enumerate}
+Before any scan, Phantom: (1) displays a legal warning, (2) requires explicit confirmation, (3) validates target URL and scope.
 
 \subsection{Scope Validation}
 
-Phantom enforces a strict scope system. Agents are only permitted to interact with:
-\begin{itemize}
-  \item The explicitly specified target URL and its subdomains/paths;
-  \item IPs within the declared CIDR range (if provided).
-\end{itemize}
-Any tool call targeting an out-of-scope address is blocked before execution.
+Phantom enforces strict scope. Any tool call targeting an out-of-scope address is blocked before execution.
 
 \subsection{Data Privacy}
 
-\begin{itemize}
-  \item No scan data is transmitted to third parties (other than the LLM API for agent reasoning).
-  \item All results are stored locally in the \texttt{phantom\_runs/} directory.
-  \item The LLM receives tool outputs and target responses; the tool server token is never exposed to the LLM.
-\end{itemize}
+Scan data is stored locally only (\texttt{phantom\_runs/}). The LLM receives tool outputs and target responses; the tool server token is never included in prompts.
 
-\subsection{Responsible Disclosure}
+\subsection{Responsible Use}
 
-Phantom is intended for:
-\begin{itemize}
-  \item Security teams performing authorised internal assessments;
-  \item Bug bounty hunters on in-scope targets;
-  \item Developers testing their own applications;
-  \item Academic security research.
-\end{itemize}
+Phantom is intended for: authorised internal security assessments, bug bounty hunters on in-scope targets, developers testing their own applications, and academic research on dedicated lab environments.
 
-Use against systems without written permission is illegal under computer fraud laws in most jurisdictions.
+\begin{warnbox}
+Use against systems without written authorisation is illegal under computer fraud and abuse laws in most jurisdictions.
+\end{warnbox}
 
-% ══════════════════════════════════════════════════════════
+% ============================================================
 \section{Project Status \& Publication}
-% ══════════════════════════════════════════════════════════
+% ============================================================
 
 \begin{table}[H]
 \centering
-\caption{Phantom Project Publication Status (February 2026)}
+\caption{Phantom Publication Status (February 2026)}
 \begin{tabular}{lll}
 \toprule
-\textbf{Channel}   & \textbf{Address}                                                          & \textbf{Status} \\
+\textbf{Channel}           & \textbf{Address}                               & \textbf{Status} \\
 \midrule
-GitHub             & \texttt{github.com/Usta0x001/Phantom}                                      & \checkmark Live \\
-PyPI               & \texttt{pypi.org/project/phantom-agent/}                                  & \checkmark v0.8.1 \\
-Docker Hub         & \texttt{docker.io/redwan07/phantom}                                       & \checkmark v0.8.1 (CLI) \\
-GitHub Container   & \texttt{ghcr.io/usta0x001/phantom-sandbox}                               & \checkmark 0.8.0 \\
+GitHub                     & \texttt{github.com/Usta0x001/Phantom}           & \checkmark~Live \\
+PyPI                       & \texttt{pypi.org/project/phantom-agent/}        & \checkmark~v0.8.1 \\
+Docker Hub (CLI)           & \texttt{docker.io/redwan07/phantom}             & \checkmark~v0.8.1 \\
+GitHub Container Registry  & \texttt{ghcr.io/usta0x001/phantom-sandbox}     & \checkmark~0.8.0 \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-% ══════════════════════════════════════════════════════════
+% ============================================================
 \section{Conclusion}
-% ══════════════════════════════════════════════════════════
+% ============================================================
 
-Phantom is a complete, production-ready autonomous penetration testing agent. Its key properties are:
+Phantom is a complete, production-ready autonomous penetration testing agent with the following key properties:
 
 \begin{itemize}
-  \item \textbf{Full autonomy}: from target URL to structured report with zero human intervention.
-  \item \textbf{Real exploitation}: findings are backed by working proof-of-concept code, not theoretical assessments.
-  \item \textbf{Clean architecture}: a two-component design (CLI + sandbox) keeps the host clean while providing a full Kali Linux tooling environment.
-  \item \textbf{Provider flexibility}: LiteLLM abstraction means any LLM backend can be substituted without code changes.
-  \item \textbf{Proven correctness}: 146/146 unit tests passing; sandbox tool execution verified end-to-end.
-  \item \textbf{Easy distribution}: \texttt{pipx install phantom-agent} is the single install step; the sandbox image is auto-pulled on demand.
+  \item \textbf{Full autonomy}: target URL to structured report with zero human intervention.
+  \item \textbf{Real exploitation}: findings are backed by working PoC code, not theoretical assessments.
+  \item \textbf{Clean two-component architecture}: CLI on host; all offensive tools inside an isolated Docker sandbox.
+  \item \textbf{Provider flexibility}: LiteLLM abstraction --- any LLM provider substitutable without code changes.
+  \item \textbf{Proven correctness}: 146/146 unit tests passing; sandbox verified end-to-end in February 2026.
+  \item \textbf{Easy distribution}: \texttt{pipx install phantom-agent} is the single install step; sandbox image auto-pulled.
 \end{itemize}
 
-Future directions include: multi-target parallel scanning, authenticated application testing, mobile/API-first scan modes, and a web dashboard for managing scan sessions.
+Future directions: multi-target parallel scanning, authenticated application testing (cookies/CSRF), mobile and REST API scan modes, web dashboard for distributed scan management.
 
-% ══════════════════════════════════════════════════════════
+% ============================================================
 \appendix
-\section{Quick Reference Card}
-% ══════════════════════════════════════════════════════════
+\section{Quick Reference}
+% ============================================================
 
 \begin{lstlisting}[language=bash, caption={Complete quick reference}]
-# -- Install ----------------------------------------------
+# -- Install -----------------------------------------------
 pipx install phantom-agent
 
-# -- Configure LLM ----------------------------------------
-phantom config set llm        openai/gpt-4o
-phantom config set api_key    sk-...
-# or via environment variables:
-export PHANTOM_LLM="openai/gpt-4o"
-export LLM_API_KEY="sk-..."
+# -- Configure LLM (pick one) ------------------------------
+phantom config set llm openai/gpt-4o
+phantom config set api_key sk-...
+# Recommended free option:
+export PHANTOM_LLM="groq/llama-3.3-70b-versatile"
+export LLM_API_KEY="<GROQ_FREE_KEY>"
 
-# -- Run a Scan -------------------------------------------
+# -- Run a Scan --------------------------------------------
 phantom scan --target https://app.example.com
 phantom scan --target https://app.example.com --scan-mode quick --non-interactive
 phantom scan --target https://app.example.com --scan-mode deep
 
-# -- View Results -----------------------------------------
+# -- View Results ------------------------------------------
 phantom report list
 phantom report show <scan-id>
 phantom report export <scan-id> --format pdf
 
-# -- Update sandbox image ---------------------------------
+# -- Pre-pull sandbox image --------------------------------
 docker pull ghcr.io/usta0x001/phantom-sandbox:latest
 \end{lstlisting}
 
@@ -1054,17 +1131,30 @@ docker pull ghcr.io/usta0x001/phantom-sandbox:latest
 \caption{Environment Variables Accepted by Phantom}
 \begin{tabular}{ll}
 \toprule
-\textbf{Variable}         & \textbf{Description} \\
+\textbf{Variable}      & \textbf{Description} \\
 \midrule
 \texttt{PHANTOM\_LLM}     & LiteLLM model identifier \\
 \texttt{LLM\_API\_KEY}    & API key for the LLM provider \\
-\texttt{LLM\_API\_BASE}   & Override base URL (e.g.\ OpenRouter, proxy) \\
+\texttt{LLM\_API\_BASE}   & Override base URL (e.g.\ for OpenRouter or a local proxy) \\
 \texttt{PHANTOM\_IMAGE}   & Docker image override for the sandbox \\
-\texttt{PHANTOM\_DEBUG}   & Enable verbose debug logging (\texttt{1}/\texttt{true}) \\
-\texttt{PYTHONUTF8}       & Set to \texttt{1} on Windows for Unicode support \\
+\texttt{PHANTOM\_DEBUG}   & Enable verbose debug logging (\texttt{1} or \texttt{true}) \\
+\texttt{PYTHONUTF8}       & Set to \texttt{1} on Windows for correct Unicode output \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-% ══════════════════════════════════════════════════════════
+\section{Windows Unicode Fix}
+
+\begin{warnbox}
+\textbf{Garbled output in PowerShell?} Phantom uses Rich for terminal output with Unicode box-drawing characters. Windows PowerShell default encoding (CP850) cannot render them, producing garbage such as \texttt{Goe|GoC Goy}.
+
+\textbf{Fix --- run before every session (or add to \texttt{\$PROFILE}):}
+\begin{lstlisting}[language=bash, numbers=none]
+$env:PYTHONUTF8 = "1"
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+[Console]::InputEncoding  = [System.Text.Encoding]::UTF8
+\end{lstlisting}
+\end{warnbox}
+
+% ============================================================
 \end{document}
