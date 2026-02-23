@@ -355,7 +355,7 @@ docker run --rm -it \
 ```
 
 > [!NOTE]
-> First run automatically pulls the sandbox image (~2GB). Scan results save to `phantom_runs/`.
+> First run automatically pulls the sandbox image (`ghcr.io/usta0x001/phantom-sandbox:latest`, ~14GB, Kali-based with 20+ security tools). Scan results save to `phantom_runs/`.
 
 ## 📦 Usage
 
@@ -409,7 +409,7 @@ phantom --target https://your-app.com
 | `PHANTOM_REASONING_EFFORT` | Thinking depth: `low`, `medium`, `high` | `high` |
 | `PHANTOM_SCAN_MODE` | Default scan mode | `standard` |
 | `PERPLEXITY_API_KEY` | Enable web search OSINT | `pplx-...` |
-| `PHANTOM_IMAGE` | Custom sandbox Docker image | `usta0x001/phantom-sandbox:latest` |
+| `PHANTOM_IMAGE` | Custom sandbox Docker image | `ghcr.io/usta0x001/phantom-sandbox:latest` |
 | `PHANTOM_WEBHOOK_URL` | Webhook for critical findings | `https://hooks.slack.com/...` |
 | `PHANTOM_DISABLE_BROWSER` | Disable Playwright browser | `false` |
 
