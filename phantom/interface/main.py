@@ -6,10 +6,14 @@ phantom Agent Interface
 import argparse
 import asyncio
 import logging
+import os
 import shutil
 import sys
 from pathlib import Path
 from typing import Any
+
+# Silence litellm "Provider List:" stdout noise and debug output before any litellm import
+os.environ.setdefault("LITELLM_LOG", "ERROR")
 
 from docker.errors import DockerException
 from rich.console import Console
@@ -628,9 +632,10 @@ async def _async_main(args: argparse.Namespace) -> None:
 
 
 def main() -> None:
-    # Ensure UTF-8 output on Windows to support Unicode symbols
-    import io
+    # Windows: use SelectorEventLoop to avoid ProactorEventLoop issues
     if sys.platform == "win32":
+        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+        # Ensure UTF-8 output on Windows to support Unicode symbols
         if hasattr(sys.stdout, "reconfigure"):
             sys.stdout.reconfigure(encoding="utf-8", errors="replace")
         if hasattr(sys.stderr, "reconfigure"):

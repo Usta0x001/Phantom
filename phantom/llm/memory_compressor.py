@@ -192,9 +192,6 @@ class MemoryCompressor:
         if not messages:
             return messages
 
-        import copy
-        messages = copy.deepcopy(messages)
-
         _handle_images(messages, self.max_images)
 
         system_msgs = []

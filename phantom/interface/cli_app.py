@@ -11,10 +11,14 @@ Subcommands:
 from __future__ import annotations
 
 import asyncio
+import os
 import sys
 from enum import Enum
 from pathlib import Path
 from typing import Annotated, Optional
+
+# Silence litellm "Provider List:" stdout noise — must be before any litellm import
+os.environ.setdefault("LITELLM_LOG", "ERROR")
 
 import typer
 from rich.console import Console
@@ -257,6 +261,7 @@ def scan(
     import threading
 
     if sys.platform == "win32":
+        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
         if hasattr(sys.stdout, "reconfigure"):
             sys.stdout.reconfigure(encoding="utf-8", errors="replace")
         if hasattr(sys.stderr, "reconfigure"):

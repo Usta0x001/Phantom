@@ -346,10 +346,15 @@ class BaseAgent(metaclass=AgentMeta):
     async def _process_iteration(self, tracer: Optional["Tracer"]) -> bool:
         final_response = None
 
-        async for response in self.llm.generate(self.state.get_conversation_history()):
+        conversation_history = self.state.get_conversation_history()
+        async for response in self.llm.generate(conversation_history):
             final_response = response
             if tracer and response.content:
                 tracer.update_streaming_content(self.state.agent_id, response.content)
+
+        # Write back compressed conversation history to state
+        # (_prepare_messages may have compressed/trimmed the history)
+        self.state.messages = conversation_history
 
         if final_response is None:
             return False
