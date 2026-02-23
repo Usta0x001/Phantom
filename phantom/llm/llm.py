@@ -376,6 +376,8 @@ Work in /workspace. User: pentester (sudo available). No Docker inside sandbox.
             )
 
         compressed = await self.memory_compressor.compress_history(conversation_history)
+        conversation_history.clear()
+        conversation_history.extend(compressed)
         messages.extend(compressed)
 
         # Trim messages for providers with strict per-request token limits

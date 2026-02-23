@@ -2,6 +2,11 @@
 
 All notable changes to Phantom will be documented in this file.
 
+## [0.8.4] - 2026-02-23
+
+### Fixed
+- **Silenced litellm `Provider List:` spam** — Set `LITELLM_LOG=ERROR` at startup and `litellm.verbose=False` to suppress noisy stdout output during scans
+
 ## [0.8.3] - 2026-02-23
 
 ### Fixed
