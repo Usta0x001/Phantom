@@ -159,8 +159,19 @@ export POETRY_VIRTUALENVS_CREATE=false
 export TOOL_SERVER_TIMEOUT="${PHANTOM_SANDBOX_EXECUTION_TIMEOUT:-120}"
 TOOL_SERVER_LOG="/tmp/tool_server.log"
 
-sudo -E -u pentester \
-  poetry run python -m phantom.runtime.tool_server \
+# Prefer venv python directly (compatible with both phantom and strix sandbox images)
+# Falls back to poetry run if venv not found
+if [ -x "/app/venv/bin/python" ]; then
+  PYTHON_BIN="/app/venv/bin/python"
+elif command -v poetry &>/dev/null; then
+  PYTHON_BIN="poetry run python"
+else
+  PYTHON_BIN="python3"
+fi
+
+echo "Using Python: $PYTHON_BIN"
+sudo -E -u pentester env PATH="$PATH:/app/venv/bin" PYTHONPATH=/app PHANTOM_SANDBOX_MODE=true \
+  $PYTHON_BIN -m phantom.runtime.tool_server \
   --token="$TOOL_SERVER_TOKEN" \
   --host=0.0.0.0 \
   --port="$TOOL_SERVER_PORT" \
