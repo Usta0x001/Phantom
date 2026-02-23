@@ -45,6 +45,10 @@ class Config:
     # Config file override (set via --config CLI arg)
     _config_file_override: Path | None = None
 
+    # Variables that are tracked (readable) but NOT automatically persisted on
+    # every scan run.  They must be set explicitly via `phantom config set`.
+    _NON_PERSISTENT: frozenset[str] = frozenset({"PHANTOM_IMAGE", "PHANTOM_RUNTIME_BACKEND"})
+
     @classmethod
     def _tracked_names(cls) -> list[str]:
         return [
@@ -157,6 +161,9 @@ class Config:
         merged = dict(existing)
 
         for var_name in cls.tracked_vars():
+            if var_name in cls._NON_PERSISTENT:
+                # Never auto-persist these; they require an explicit `phantom config set`.
+                continue
             value = os.getenv(var_name)
             if value is None:
                 pass

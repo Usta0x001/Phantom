@@ -487,48 +487,85 @@ def display_completion_message(args: argparse.Namespace, results_path: Path) -> 
     console.print()
 
 
+# The canonical default image – always works as a last-resort fallback.
+_DEFAULT_SANDBOX_IMAGE = "ghcr.io/usta0x001/phantom-sandbox:latest"
+
+
+def _pull_single_image(client: object, image: str) -> None:
+    """Pull *image* from the registry, streaming progress. Raises DockerException on failure."""
+    console = Console()
+    console.print()
+    console.print(f"[dim]Pulling image[/] [bold]{image}[/]")
+    console.print("[dim yellow]This only happens on first run and may take a few minutes...[/]")
+    console.print()
+    with console.status("[bold cyan]Downloading image layers...", spinner="dots") as status:
+        layers_info: dict[str, str] = {}
+        last_update = ""
+        for line in client.api.pull(image, stream=True, decode=True):  # type: ignore[union-attr]
+            last_update = process_pull_line(line, layers_info, status, last_update)
+
+
 def pull_docker_image() -> None:
     console = Console()
     client = check_docker_connection()
 
-    if image_exists(client, Config.get("phantom_image")):  # type: ignore[arg-type]
+    configured_image: str = Config.get("phantom_image") or _DEFAULT_SANDBOX_IMAGE  # type: ignore[assignment]
+
+    if image_exists(client, configured_image):  # type: ignore[arg-type]
         return
 
-    console.print()
-    console.print(f"[dim]Pulling image[/] {Config.get('phantom_image')}")
-    console.print("[dim yellow]This only happens on first run and may take a few minutes...[/]")
-    console.print()
-
-    with console.status("[bold cyan]Downloading image layers...", spinner="dots") as status:
-        try:
-            layers_info: dict[str, str] = {}
-            last_update = ""
-
-            for line in client.api.pull(Config.get("phantom_image"), stream=True, decode=True):
-                last_update = process_pull_line(line, layers_info, status, last_update)
-
-        except DockerException as e:
+    # --- Attempt 1: configured image ---
+    try:
+        _pull_single_image(client, configured_image)
+        success_text = Text()
+        success_text.append("Docker image ready", style="#9b59b6")
+        console.print(success_text)
+        console.print()
+        return
+    except DockerException as primary_err:
+        if configured_image == _DEFAULT_SANDBOX_IMAGE:
+            # No fallback available – bail out.
             console.print()
             error_text = Text()
             error_text.append("FAILED TO PULL IMAGE", style="bold red")
-            error_text.append("\n\n", style="white")
-            error_text.append(f"Could not download: {Config.get('phantom_image')}\n", style="white")
-            error_text.append(str(e), style="dim red")
-
-            panel = Panel(
-                error_text,
-                title="[bold #9b59b6]☠ PHANTOM",
-                title_align="left",
-                border_style="red",
-                padding=(1, 2),
-            )
-            console.print(panel, "\n")
+            error_text.append("\n\n")
+            error_text.append(f"Could not download: {configured_image}\n", style="white")
+            error_text.append(str(primary_err), style="dim red")
+            console.print(Panel(error_text, title="[bold #9b59b6]☠ PHANTOM",
+                                title_align="left", border_style="red", padding=(1, 2)))
+            console.print()
             sys.exit(1)
 
-    success_text = Text()
-    success_text.append("Docker image ready", style="#9b59b6")
-    console.print(success_text)
-    console.print()
+        # Configured image is non-default and failed – warn and try the default.
+        console.print(f"[yellow]Warning:[/] Could not pull [bold]{configured_image}[/]: {primary_err}")
+        console.print(f"[dim]Falling back to default image: {_DEFAULT_SANDBOX_IMAGE}[/]")
+        # Reset config to the known-good default so it persists correctly.
+        import os
+        os.environ["PHANTOM_IMAGE"] = _DEFAULT_SANDBOX_IMAGE
+
+        if image_exists(client, _DEFAULT_SANDBOX_IMAGE):  # type: ignore[arg-type]
+            console.print("[dim]Default image already cached locally — using it.[/]")
+            return
+
+        try:
+            _pull_single_image(client, _DEFAULT_SANDBOX_IMAGE)
+            success_text = Text()
+            success_text.append("Docker image ready (default fallback)", style="#9b59b6")
+            console.print(success_text)
+            console.print()
+        except DockerException as fallback_err:
+            console.print()
+            error_text = Text()
+            error_text.append("FAILED TO PULL IMAGE", style="bold red")
+            error_text.append("\n\n")
+            error_text.append(f"Could not download: {_DEFAULT_SANDBOX_IMAGE}\n", style="white")
+            error_text.append(str(fallback_err), style="dim red")
+            error_text.append("\n\nTip: pre-pull manually with:\n", style="dim")
+            error_text.append(f"  docker pull {_DEFAULT_SANDBOX_IMAGE}", style="bold")
+            console.print(Panel(error_text, title="[bold #9b59b6]☠ PHANTOM",
+                                title_align="left", border_style="red", padding=(1, 2)))
+            console.print()
+            sys.exit(1)
 
 
 def apply_config_override(config_path: str) -> None:

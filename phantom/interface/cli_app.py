@@ -25,11 +25,75 @@ console = Console()
 
 app = typer.Typer(
     name="phantom",
-    help='☠ PHANTOM — Autonomous Offensive Security Intelligence\n\n" Why So Serious ?! "',
+    help=(
+        "[bold #9b59b6]☠ PHANTOM[/] — Autonomous Offensive Security Intelligence\n\n"
+        '[italic #e74c3c]" Why So Serious ?! "[/]\n\n'
+        "[dim]Quick start:[/]\n"
+        "  [bold]phantom scan -t https://example.com[/]\n"
+        "  [bold]phantom scan -t https://example.com -i 'test SQLi and XSS'[/]\n\n"
+        "[dim]Run [bold]phantom scan --help[/] to see all scan options including [bold]--instruction[/], "
+        "[bold]--scan-mode[/], [bold]--model[/], [bold]--output-format[/], and more.[/]"
+    ),
     no_args_is_help=True,
     rich_markup_mode="rich",
-    add_completion=True,
+    add_completion=False,
 )
+
+
+def _version_callback(value: bool) -> None:
+    if value:
+        import importlib.metadata
+        try:
+            ver = importlib.metadata.version("phantom-agent")
+        except importlib.metadata.PackageNotFoundError:
+            ver = "dev"
+        console.print(f"[bold #9b59b6]Phantom[/] [white]{ver}[/]")
+        raise typer.Exit()
+
+
+@app.callback()
+def _main(
+    version: Annotated[
+        Optional[bool],
+        typer.Option(
+            "--version", "-V",
+            help="Show version and exit.",
+            callback=_version_callback,
+            is_eager=True,
+        ),
+    ] = None,
+) -> None:
+    """Phantom — autonomous AI penetration testing agent."""
+    _auto_install_completion()
+
+
+def _auto_install_completion() -> None:
+    """Silently install shell completion on first run (never nags the user)."""
+    marker = Path.home() / ".phantom" / ".completion_installed"
+    if marker.exists():
+        return
+    try:
+        import os
+        import shellingham  # type: ignore[import]
+        shell, _ = shellingham.detect_shell()
+        # Use click's built-in completion install (typer wraps click)
+        import click
+        from click.shell_completion import add_completion_class  # noqa: F401
+        # Build a minimal env-var name used by click for completion
+        prog_name = "phantom"
+        complete_var = f"_{prog_name.upper().replace('-', '_')}_COMPLETE"
+        # Locate and write the completion script
+        from typer._completion_shared import install as _install  # type: ignore[import]
+        _install(shell=shell, prog_name=prog_name, complete_var=complete_var, echo=False)
+    except Exception:
+        # Completion install is best-effort; never crash the CLI for this.
+        pass
+    finally:
+        try:
+            marker.parent.mkdir(parents=True, exist_ok=True)
+            marker.touch()
+        except Exception:
+            pass
 
 
 # ──────────────────────────── Enums ────────────────────────────
@@ -467,8 +531,12 @@ def config_set(
         console.print(f"[yellow]Warning: '{key_upper}' is not a known config variable.[/]")
         console.print(f"[dim]Known variables: {', '.join(sorted(Config.tracked_vars()))}[/]")
 
+    # Write directly to the config JSON so that even _NON_PERSISTENT keys are
+    # saved when the user explicitly requests it via `phantom config set`.
     os.environ[key_upper] = value
-    Config.save_current()
+    existing = Config.load().get("env", {})
+    existing[key_upper] = value
+    Config.save({"env": existing})
     console.print(f"[green]Set {key_upper}[/]")
 
 
