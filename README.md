@@ -12,7 +12,7 @@
 [![Python](https://img.shields.io/badge/Python-3.12%2B-yellow.svg)](https://python.org)
 [![Docker](https://img.shields.io/badge/Docker-Ready-2496ED.svg)](https://hub.docker.com/r/redwan07/phantom)
 [![PyPI](https://img.shields.io/pypi/v/phantom-agent.svg)](https://pypi.org/project/phantom-agent/)
-[![Version](https://img.shields.io/badge/Version-0.8.1-purple.svg)](https://github.com/Usta0x001/Phantom/releases)
+[![Version](https://img.shields.io/badge/Version-0.8.2-purple.svg)](https://github.com/Usta0x001/Phantom/releases)
 
 **AI-powered multi-agent penetration testing that thinks like a hacker.**
 

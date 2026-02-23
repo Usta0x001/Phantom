@@ -2,6 +2,17 @@
 
 All notable changes to Phantom will be documented in this file.
 
+## [0.8.2] - 2026-02-23
+
+### Fixed
+- **Docker image fallback** — If a custom/invalid `PHANTOM_IMAGE` fails to pull, Phantom now automatically falls back to `ghcr.io/usta0x001/phantom-sandbox:latest` instead of crashing
+- **PHANTOM_IMAGE not auto-persisted** — Running `phantom scan` no longer saves a temporary `PHANTOM_IMAGE` env var to `~/.phantom/cli-config.json`; only explicit `phantom config set PHANTOM_IMAGE <value>` writes it to config
+
+### Changed
+- **CLI: removed `--install-completion` / `--show-completion`** — Shell completion is installed silently on first run; these flags are no longer shown in `phantom --help`
+- **CLI: added `--version` / `-V`** — Quick version check without needing `phantom version`
+- **CLI: improved top-level help** — Shows quick-start examples and directs users to `phantom scan --help` for full options (`--instruction`, `--scan-mode`, `--model`, etc.)
+
 ## [0.8.1] - 2026-02-23
 
 ### Added
