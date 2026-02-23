@@ -2,6 +2,23 @@
 
 All notable changes to Phantom will be documented in this file.
 
+## [0.8.1] - 2026-02-23
+
+### Added
+- **Published to PyPI** — `pip install phantom-agent` / `pipx install phantom-agent` now works globally
+- **GitHub Container Registry** — Sandbox image available at `ghcr.io/usta0x001/phantom-sandbox:latest`
+- **Technical Report** — Full system documentation in LaTeX (`docs/phantom_technical_report.tex`)
+
+### Fixed
+- **Windows Unicode crash** — `phantom --help` no longer crashes with `UnicodeEncodeError` on cp1252 terminals; stdout/stderr are reconfigured to UTF-8 on Windows automatically
+- **Sandbox image config** — Default sandbox image updated to `ghcr.io/usta0x001/phantom-sandbox:latest` (was `redwan07/phantom-sandbox:latest`)
+- **sleep infinity** — Docker runtime now passes `command=["sleep","infinity"]` (list form) to avoid exec-form entrypoint parsing issue
+- **Sandbox entrypoint** — `docker-entrypoint.sh` detects `/app/venv/bin/python` first before falling back to `poetry run python`
+
+### Changed
+- **Sandbox image** — Moved from Docker Hub to GitHub Container Registry (`ghcr.io/usta0x001/phantom-sandbox`)
+- **README** — Updated sandbox image references, corrected sandbox size (~14GB), fixed Docker Hub image names
+
 ## [0.8.0] - 2026-02-20
 
 ### Added
