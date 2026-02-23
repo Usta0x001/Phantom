@@ -94,7 +94,8 @@ def _convert_to_bool(value: str) -> bool:
         return True
     if value.lower() in ("false", "0", "no", "off"):
         return False
-    raise ValueError(f"Cannot convert {value!r} to bool")
+    # Empty string is falsy; any other non-empty string is truthy (standard Python semantics)
+    return bool(value)
 
 
 def _convert_to_list(value: str) -> list[Any]:

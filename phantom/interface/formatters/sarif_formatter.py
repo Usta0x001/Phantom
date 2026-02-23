@@ -65,7 +65,7 @@ class SARIFFormatter:
                         "driver": {
                             "name": "Phantom",
                             "version": self.tool_version,
-                            "informationUri": "https://github.com/0000phantom0000/phantom",
+                            "informationUri": "https://github.com/Usta0x001/Phantom",
                             "rules": rules,
                             "semanticVersion": self.tool_version,
                         }

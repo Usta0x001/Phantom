@@ -7,7 +7,7 @@ Pydantic models for tracking scan execution, phases, and aggregated results.
 from datetime import UTC, datetime
 from enum import Enum
 from typing import Any
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_serializer
 
 
 class ScanPhase(str, Enum):
@@ -152,10 +152,12 @@ class ScanResult(BaseModel):
     total_requests: int = Field(default=0)
     errors: list[str] = Field(default_factory=list)
     
-    model_config = ConfigDict(
-        json_encoders={datetime: lambda v: v.isoformat()},
-    )
-    
+    model_config = ConfigDict()
+
+    @field_serializer("started_at", "completed_at")
+    def serialize_datetimes(self, v: datetime | None) -> str | None:  # noqa: PLR6301
+        return v.isoformat() if v is not None else None
+
     def start_scan(self) -> None:
         """Initialize scan start."""
         self.status = ScanStatus.RUNNING

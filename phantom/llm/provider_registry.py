@@ -106,6 +106,60 @@ PROVIDER_PRESETS: dict[str, ProviderConfig] = {
         context_window=128_000,
         rate_limit_rpm=999,
     ),
+    # ── OpenRouter ────────────────────────────────────────────────────────
+    # Free tier models (no credits required, :free suffix)
+    "openrouter/google/gemma-3-27b-it:free": ProviderConfig(
+        model="openrouter/google/gemma-3-27b-it:free",
+        api_key_env="LLM_API_KEY",
+        api_base="https://openrouter.ai/api/v1",
+        context_window=8_192,
+        rate_limit_rpm=20,
+        supports_vision=False,
+    ),
+    "openrouter/meta-llama/llama-3.3-70b-instruct:free": ProviderConfig(
+        model="openrouter/meta-llama/llama-3.3-70b-instruct:free",
+        api_key_env="LLM_API_KEY",
+        api_base="https://openrouter.ai/api/v1",
+        context_window=131_072,
+        rate_limit_rpm=20,
+        supports_vision=False,
+    ),
+    "openrouter/deepseek/deepseek-chat-v3-0324:free": ProviderConfig(
+        model="openrouter/deepseek/deepseek-chat-v3-0324:free",
+        api_key_env="LLM_API_KEY",
+        api_base="https://openrouter.ai/api/v1",
+        context_window=163_840,
+        rate_limit_rpm=20,
+        supports_vision=False,
+    ),
+    "openrouter/qwen/qwen3-235b-a22b:free": ProviderConfig(
+        model="openrouter/qwen/qwen3-235b-a22b:free",
+        api_key_env="LLM_API_KEY",
+        api_base="https://openrouter.ai/api/v1",
+        context_window=40_960,
+        rate_limit_rpm=20,
+        supports_vision=True,
+    ),
+    # Paid OpenRouter models
+    "openrouter/anthropic/claude-sonnet-4": ProviderConfig(
+        model="openrouter/anthropic/claude-sonnet-4",
+        api_key_env="LLM_API_KEY",
+        api_base="https://openrouter.ai/api/v1",
+        context_window=200_000,
+        supports_vision=True,
+        supports_reasoning=True,
+        cost_per_1k_input=0.003,
+        cost_per_1k_output=0.015,
+    ),
+    "openrouter/openai/gpt-4o": ProviderConfig(
+        model="openrouter/openai/gpt-4o",
+        api_key_env="LLM_API_KEY",
+        api_base="https://openrouter.ai/api/v1",
+        context_window=128_000,
+        supports_vision=True,
+        cost_per_1k_input=0.0025,
+        cost_per_1k_output=0.01,
+    ),
 }
 
 # ── Context window lookup (covers models not in presets) ────────────
@@ -122,6 +176,8 @@ MODEL_CONTEXT_WINDOWS: dict[str, int] = {
     "ollama/": 128_000,
     "mistral/": 32_000,
     "deepseek/": 128_000,
+    # OpenRouter prefix (generic fallback — specific models in PROVIDER_PRESETS)
+    "openrouter/": 128_000,
 }
 
 
