@@ -3,7 +3,7 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, PrivateAttr
 
 
 def _generate_agent_id() -> str:
@@ -42,7 +42,7 @@ class AgentState(BaseModel):
 
     errors: list[str] = Field(default_factory=list)
 
-    _msg_lock: threading.Lock = threading.Lock()
+    _msg_lock: threading.Lock = PrivateAttr(default_factory=threading.Lock)
 
     def increment_iteration(self) -> None:
         self.iteration += 1
