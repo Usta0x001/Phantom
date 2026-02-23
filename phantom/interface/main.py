@@ -130,30 +130,56 @@ def validate_environment() -> None:  # noqa: PLR0912, PLR0915
                         style="white",
                     )
 
-        error_text.append("\nExample setup:\n", style="white")
-        error_text.append("export PHANTOM_LLM='openai/gpt-5'\n", style="dim white")
+        error_text.append("\nQuick setup (persistent — recommended):\n", style="white")
+        error_text.append("  phantom config set PHANTOM_LLM 'openai/gpt-4o'\n", style="bold green")
 
         if missing_optional_vars:
             for var in missing_optional_vars:
                 if var == "LLM_API_KEY":
                     error_text.append(
-                        "export LLM_API_KEY='your-api-key-here'  "
-                        "# not needed for local models, Vertex AI, AWS, etc.\n",
+                        "  phantom config set LLM_API_KEY 'your-api-key-here'\n",
                         style="dim white",
                     )
                 elif var == "LLM_API_BASE":
                     error_text.append(
-                        "export LLM_API_BASE='http://localhost:11434'  "
-                        "# needed for local models only\n",
+                        "  phantom config set LLM_API_BASE 'http://localhost:11434'"
+                        "  # local models only\n",
                         style="dim white",
                     )
                 elif var == "PERPLEXITY_API_KEY":
                     error_text.append(
-                        "export PERPLEXITY_API_KEY='your-perplexity-key-here'\n", style="dim white"
+                        "  phantom config set PERPLEXITY_API_KEY 'your-perplexity-key-here'\n",
+                        style="dim white",
                     )
                 elif var == "PHANTOM_REASONING_EFFORT":
                     error_text.append(
-                        "export PHANTOM_REASONING_EFFORT='high'\n",
+                        "  phantom config set PHANTOM_REASONING_EFFORT 'high'\n",
+                        style="dim white",
+                    )
+
+        error_text.append("\nOr export for current session only:\n", style="dim white")
+        error_text.append("  export PHANTOM_LLM='openai/gpt-4o'\n", style="dim white")
+
+        if missing_optional_vars:
+            for var in missing_optional_vars:
+                if var == "LLM_API_KEY":
+                    error_text.append(
+                        "  export LLM_API_KEY='your-api-key-here'\n",
+                        style="dim white",
+                    )
+                elif var == "LLM_API_BASE":
+                    error_text.append(
+                        "  export LLM_API_BASE='http://localhost:11434'\n",
+                        style="dim white",
+                    )
+                elif var == "PERPLEXITY_API_KEY":
+                    error_text.append(
+                        "  export PERPLEXITY_API_KEY='your-perplexity-key-here'\n",
+                        style="dim white",
+                    )
+                elif var == "PHANTOM_REASONING_EFFORT":
+                    error_text.append(
+                        "  export PHANTOM_REASONING_EFFORT='high'\n",
                         style="dim white",
                     )
 
