@@ -2,6 +2,11 @@
 
 All notable changes to Phantom will be documented in this file.
 
+## [0.8.3] - 2026-02-23
+
+### Fixed
+- **Config setup UX** — `PHANTOM_LLM not set` error now shows `phantom config set PHANTOM_LLM 'openai/gpt-4o'` as the primary recommendation (persistent), with `export` shown as secondary (session-only). Fixes confusion from users trying invalid `set $VAR=value` bash syntax.
+
 ## [0.8.2] - 2026-02-23
 
 ### Fixed
