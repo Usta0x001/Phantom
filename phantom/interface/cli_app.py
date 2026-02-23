@@ -268,6 +268,154 @@ async def _async_scan(args: object) -> None:
         await run_tui(args)
 
 
+# ──────────────────────────── Report Renderers ────────────────────────────
+
+
+def _render_markdown_report(run_name: str, data: dict) -> str:
+    """Render scan data as a Markdown report."""
+    import datetime
+
+    vulns = data.get("vulnerabilities", [])
+    target = data.get("target", data.get("targets", [run_name])[0] if data.get("targets") else run_name)
+    now = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+
+    sev_order = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4}
+    vulns_sorted = sorted(vulns, key=lambda v: sev_order.get(str(v.get("severity", "info")).lower(), 5))
+
+    counts: dict[str, int] = {"critical": 0, "high": 0, "medium": 0, "low": 0, "info": 0}
+    for v in vulns_sorted:
+        sev = str(v.get("severity", "info")).lower()
+        counts[sev] = counts.get(sev, 0) + 1
+
+    lines = [
+        f"# Phantom Security Report: `{target}`",
+        f"",
+        f"> **Run:** `{run_name}`  ",
+        f"> **Generated:** {now}  ",
+        f"> **Total Findings:** {len(vulns)}",
+        f"",
+        f"## Summary",
+        f"",
+        f"| Severity | Count |",
+        f"|----------|-------|",
+        f"| Critical | {counts['critical']} |",
+        f"| High     | {counts['high']} |",
+        f"| Medium   | {counts['medium']} |",
+        f"| Low      | {counts['low']} |",
+        f"| Info     | {counts['info']} |",
+        f"",
+    ]
+
+    if vulns_sorted:
+        lines += ["## Findings", ""]
+        for i, v in enumerate(vulns_sorted, 1):
+            name = v.get("name", v.get("title", "Unknown"))
+            sev = str(v.get("severity", "info")).upper()
+            endpoint = v.get("endpoint", v.get("url", ""))
+            desc = v.get("description", "")
+            payload = v.get("payload", "")
+            remediation = v.get("remediation", "")
+
+            lines += [
+                f"### {i}. {name}",
+                f"",
+                f"**Severity:** `{sev}`  ",
+                f"**Endpoint:** `{endpoint}`  ",
+                f"",
+                f"{desc}",
+                f"",
+            ]
+            if payload:
+                lines += [f"**Payload:**", f"```", f"{payload}", f"```", f""]
+            if remediation:
+                lines += [f"**Remediation:** {remediation}", f""]
+            lines.append("---")
+            lines.append("")
+    else:
+        lines += ["## Findings", "", "_No vulnerabilities found._", ""]
+
+    return "\n".join(lines)
+
+
+def _render_html_report(run_name: str, data: dict) -> str:
+    """Render scan data as a self-contained HTML report."""
+    import datetime
+    import html as html_lib
+
+    vulns = data.get("vulnerabilities", [])
+    target = data.get("target", run_name)
+    now = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+
+    sev_order = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4}
+    vulns_sorted = sorted(vulns, key=lambda v: sev_order.get(str(v.get("severity", "info")).lower(), 5))
+
+    sev_colors = {"critical": "#dc2626", "high": "#ea580c", "medium": "#d97706", "low": "#65a30d", "info": "#2563eb"}
+    counts: dict[str, int] = {"critical": 0, "high": 0, "medium": 0, "low": 0, "info": 0}
+    for v in vulns_sorted:
+        sev = str(v.get("severity", "info")).lower()
+        counts[sev] = counts.get(sev, 0) + 1
+
+    vuln_rows = ""
+    for i, v in enumerate(vulns_sorted, 1):
+        name = html_lib.escape(str(v.get("name", "Unknown")))
+        sev = str(v.get("severity", "info")).lower()
+        color = sev_colors.get(sev, "#64748b")
+        endpoint = html_lib.escape(str(v.get("endpoint", "")))
+        desc = html_lib.escape(str(v.get("description", "")))
+        payload = html_lib.escape(str(v.get("payload", "")))
+        remediation = html_lib.escape(str(v.get("remediation", "")))
+
+        vuln_rows += f"""
+        <div class="finding" id="finding-{i}">
+          <h3><span class="badge" style="background:{color}">{sev.upper()}</span> {i}. {name}</h3>
+          <p><strong>Endpoint:</strong> <code>{endpoint}</code></p>
+          <p>{desc}</p>
+          {"<p><strong>Payload:</strong> <code>" + payload + "</code></p>" if payload else ""}
+          {"<p><strong>Remediation:</strong> " + remediation + "</p>" if remediation else ""}
+        </div>"""
+
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Phantom Report: {html_lib.escape(target)}</title>
+<style>
+  body {{ font-family: system-ui, sans-serif; background: #0f172a; color: #e2e8f0; margin: 0; padding: 2rem; }}
+  h1 {{ color: #9b59b6; border-bottom: 2px solid #9b59b6; padding-bottom: .5rem; }}
+  h2 {{ color: #a78bfa; margin-top: 2rem; }}
+  h3 {{ color: #e2e8f0; }}
+  .meta {{ color: #94a3b8; font-size: .9rem; margin-bottom: 2rem; }}
+  .summary {{ display: flex; gap: 1rem; flex-wrap: wrap; margin-bottom: 2rem; }}
+  .sev-card {{ padding: .75rem 1.5rem; border-radius: .5rem; text-align:center; }}
+  .finding {{ background: #1e293b; border-radius: .5rem; padding: 1.5rem; margin-bottom: 1rem; border-left: 4px solid #9b59b6; }}
+  .badge {{ display: inline-block; padding: .2rem .6rem; border-radius: .25rem; color: white; font-size:.8rem; font-weight:700; margin-right:.5rem; }}
+  code {{ background: #0f172a; padding: .1rem .4rem; border-radius:.25rem; font-size:.9em; }}
+  footer {{ color: #475569; font-size: .8rem; margin-top: 3rem; text-align: center; }}
+</style>
+</head>
+<body>
+<h1>☠ PHANTOM — Security Report</h1>
+<div class="meta">
+  <strong>Target:</strong> {html_lib.escape(target)} &nbsp;|&nbsp;
+  <strong>Run:</strong> {html_lib.escape(run_name)} &nbsp;|&nbsp;
+  <strong>Generated:</strong> {now}
+</div>
+<h2>Summary</h2>
+<div class="summary">
+  <div class="sev-card" style="background:#dc262622;border:1px solid #dc2626"><div style="font-size:2rem;font-weight:700;color:#dc2626">{counts["critical"]}</div>Critical</div>
+  <div class="sev-card" style="background:#ea580c22;border:1px solid #ea580c"><div style="font-size:2rem;font-weight:700;color:#ea580c">{counts["high"]}</div>High</div>
+  <div class="sev-card" style="background:#d9770622;border:1px solid #d97706"><div style="font-size:2rem;font-weight:700;color:#d97706">{counts["medium"]}</div>Medium</div>
+  <div class="sev-card" style="background:#65a30d22;border:1px solid #65a30d"><div style="font-size:2rem;font-weight:700;color:#65a30d">{counts["low"]}</div>Low</div>
+  <div class="sev-card" style="background:#2563eb22;border:1px solid #2563eb"><div style="font-size:2rem;font-weight:700;color:#2563eb">{counts["info"]}</div>Info</div>
+</div>
+<h2>Findings ({len(vulns_sorted)})</h2>
+{"".join(["<p><em>No vulnerabilities found.</em></p>"]) if not vulns_sorted else vuln_rows}
+<footer>Generated by <strong>Phantom</strong> — Autonomous Offensive Security Intelligence | <a href="https://github.com/Usta0x001/Phantom" style="color:#9b59b6">github.com/Usta0x001/Phantom</a></footer>
+</body>
+</html>"""
+
+
 # ──────────────────────────── config ────────────────────────────
 
 config_app = typer.Typer(help="Manage Phantom configuration.", no_args_is_help=True)
@@ -414,8 +562,24 @@ def report_export(
         out_path = output or (runs_dir / f"{run_name}_export.json")
         shutil.copy2(report_files[0], out_path)
         console.print(f"[green]JSON report written to {out_path}[/]")
+    elif fmt == OutputFormat.markdown:
+        import json
+
+        data = json.loads(report_files[0].read_text(encoding="utf-8"))
+        md_content = _render_markdown_report(run_name, data)
+        out_path = output or (runs_dir / f"{run_name}.md")
+        out_path.write_text(md_content, encoding="utf-8")
+        console.print(f"[green]Markdown report written to {out_path}[/]")
+    elif fmt == OutputFormat.html:
+        import json
+
+        data = json.loads(report_files[0].read_text(encoding="utf-8"))
+        html_content = _render_html_report(run_name, data)
+        out_path = output or (runs_dir / f"{run_name}.html")
+        out_path.write_text(html_content, encoding="utf-8")
+        console.print(f"[green]HTML report written to {out_path}[/]")
     else:
-        console.print(f"[yellow]Export format '{fmt.value}' will be available soon.[/]")
+        console.print(f"[yellow]Unknown export format: '{fmt.value}'[/]")
 
 
 # ──────────────────────────── version ────────────────────────────

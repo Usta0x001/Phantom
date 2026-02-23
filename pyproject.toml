@@ -53,7 +53,7 @@ litellm = { version = "~1.81.1", extras = ["proxy"] }
 tenacity = "^9.0.0"
 pydantic = {extras = ["email"], version = "^2.11.3"}
 rich = "*"
-typer = {extras = ["all"], version = "^0.15.0"}
+typer = "^0.15.0"
 docker = "^7.1.0"
 textual = "^4.0.0"
 xmltodict = "^0.13.0"
@@ -345,10 +345,8 @@ minversion = "6.0"
 addopts = [
     "--strict-markers",
     "--strict-config",
-    "--cov=phantom",
-    "--cov-report=term-missing",
-    "--cov-report=html",
-    "--cov-report=xml",
+    # Coverage flags require pytest-cov (installed via: pip install -e '.[dev]' or poetry install --with dev)
+    # Run with: pytest --cov=phantom --cov-report=term-missing
 ]
 testpaths = ["tests"]
 python_files = ["test_*.py", "*_test.py"]
