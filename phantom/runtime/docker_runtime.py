@@ -124,7 +124,7 @@ class DockerRuntime(AbstractRuntime):
 
                 container = self.client.containers.run(
                     image_name,
-                    command="sleep infinity",
+                    command=["sleep", "infinity"],
                     detach=True,
                     name=container_name,
                     hostname=container_name,
