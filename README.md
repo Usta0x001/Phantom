@@ -10,8 +10,9 @@
 
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/Python-3.12%2B-yellow.svg)](https://python.org)
-[![Docker](https://img.shields.io/badge/Docker-Ready-2496ED.svg)](https://hub.docker.com/r/usta0x001/phantom)
-[![Version](https://img.shields.io/badge/Version-0.8.0-purple.svg)](https://github.com/Usta0x001/Phantom/releases)
+[![Docker](https://img.shields.io/badge/Docker-Ready-2496ED.svg)](https://hub.docker.com/r/redwan07/phantom)
+[![PyPI](https://img.shields.io/pypi/v/phantom-agent.svg)](https://pypi.org/project/phantom-agent/)
+[![Version](https://img.shields.io/badge/Version-0.8.1-purple.svg)](https://github.com/Usta0x001/Phantom/releases)
 
 **AI-powered multi-agent penetration testing that thinks like a hacker.**
 
@@ -349,7 +350,7 @@ docker run --rm -it \
   -e PHANTOM_LLM="openai/gpt-4o" \
   -e LLM_API_KEY="your-key" \
   -v /var/run/docker.sock:/var/run/docker.sock \
-  usta0x001/phantom:latest \
+  redwan07/phantom:latest \
   scan --target https://your-app.com
 ```
 
