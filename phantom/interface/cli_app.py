@@ -64,7 +64,6 @@ def _main(
     ] = None,
 ) -> None:
     """Phantom — autonomous AI penetration testing agent."""
-    _auto_install_completion()
 
 
 def _auto_install_completion() -> None:
@@ -254,14 +253,16 @@ def scan(
     )
     from phantom.runtime.docker_runtime import HOST_GATEWAY_HOSTNAME
 
-    # Ensure UTF-8 output on Windows
-    import io
+    # Apply UTF-8 output and silently install shell completion (background, non-blocking)
+    import threading
 
     if sys.platform == "win32":
         if hasattr(sys.stdout, "reconfigure"):
             sys.stdout.reconfigure(encoding="utf-8", errors="replace")
         if hasattr(sys.stderr, "reconfigure"):
             sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
+    threading.Thread(target=_auto_install_completion, daemon=True).start()
 
     apply_saved_config()
 
