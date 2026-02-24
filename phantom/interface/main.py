@@ -12,8 +12,9 @@ import sys
 from pathlib import Path
 from typing import Any
 
-# Silence litellm "Provider List:" stdout noise and debug output before any litellm import
+# Silence litellm noise and prevent network fetch at import — must be before any litellm import
 os.environ.setdefault("LITELLM_LOG", "ERROR")
+os.environ.setdefault("LITELLM_LOCAL_MODEL_COST_MAP", "True")
 
 from docker.errors import DockerException
 from rich.console import Console

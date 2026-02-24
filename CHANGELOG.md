@@ -2,6 +2,11 @@
 
 All notable changes to Phantom will be documented in this file.
 
+## [0.8.5] - 2026-02-24
+
+### Fixed
+- **litellm startup crash** — Set `LITELLM_LOCAL_MODEL_COST_MAP=True` to prevent litellm from making an HTTP network request at import time (caused `KeyboardInterrupt` / SSL errors in some environments)
+
 ## [0.8.4] - 2026-02-23
 
 ### Fixed
