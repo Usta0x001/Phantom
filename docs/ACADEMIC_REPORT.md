@@ -9,17 +9,22 @@
 | **Author** | Redwan Gadouri (`r_gadouri@estin.dz`) |
 | **Institution** | École Supérieure en Sciences et Technologies de l'Informatique et du Numérique (ESTIN) |
 | **Date** | February 2026 |
-| **Version** | v0.8.0 |
+| **Version** | v0.8.5 |
 | **Repository** | https://github.com/Usta0x001/Phantom |
-| **Docker Hub** | `redwan07/phantom:latest` |
+| **Package** | `pip install phantom-agent` — https://pypi.org/project/phantom-agent/ |
+| **Sandbox Image** | `ghcr.io/usta0x001/phantom-sandbox:latest` |
 
 ---
 
 ## Abstract
 
-This report presents **Phantom**, an autonomous AI-powered penetration testing agent that combines Large Language Model (LLM) reasoning with a curated suite of industry-standard security tools. Unlike traditional vulnerability scanners that rely on fixed rule sets, Phantom implements a **reactive, multi-agent architecture** in which a root orchestrator spawns specialized sub-agents for reconnaissance, exploitation, verification, and reporting phases of a penetration test. The system operates fully autonomously within a sandboxed Kali Linux Docker environment, executes industry-standard tools (Nmap, Nuclei, sqlmap, ffuf, Subfinder, Httpx), validates each finding through Proof-of-Concept (PoC) exploitation, and generates structured reports in JSON, SARIF, Markdown, and HTML formats. Phantom achieves results comparable to professional human penetration testers in black-box web application testing scenarios while reducing discovery time by an order of magnitude.
+This report presents **Phantom**, an autonomous AI-powered penetration testing agent that combines Large Language Model (LLM) reasoning with a curated suite of industry-standard security tools. Unlike traditional vulnerability scanners that rely on fixed rule sets, Phantom implements a **reactive, multi-agent architecture** in which a root orchestrator spawns specialized sub-agents for reconnaissance, exploitation, verification, and reporting phases of a penetration test. The system operates fully autonomously within a sandboxed Kali Linux Docker environment, executes industry-standard tools (Nmap, Nuclei, sqlmap, ffuf, Subfinder, Httpx), validates each finding through Proof-of-Concept (PoC) exploitation, and generates structured reports in JSON, SARIF, Markdown, and HTML formats. Phantom supports 15+ LLM providers — including free-tier options — through a provider-agnostic integration layer with automatic fallback chains and multi-key rotation. The system achieves results comparable to professional human penetration testers in black-box web application testing scenarios while reducing discovery time by an order of magnitude.
+
+**Keywords:** penetration testing, autonomous agents, LLM orchestration, vulnerability assessment, multi-agent systems, offensive security
 
 ---
+
+\newpage
 
 ## Table of Contents
 
@@ -54,7 +59,7 @@ Large Language Models (LLMs) have recently demonstrated remarkable capabilities 
 This project addresses the following questions:
 
 1. Can a general-purpose LLM orchestrate professional security tools to discover and validate vulnerabilities without human guidance?
-2. What multi-agent architecture enables effective coverage across the full penetration testing lifecycle (reconnaissance → exploitation → reporting)?
+2. What multi-agent architecture enables effective coverage across the full penetration testing lifecycle (reconnaissance -> exploitation -> reporting)?
 3. How can we ensure reproducibility, auditability, and restraint (no destructive actions) in an autonomous offensive security agent?
 
 ### 1.3 Scope & Contributions
@@ -76,8 +81,8 @@ Phantom's primary contributions are:
 The PTES (Penetration Testing Execution Standard) defines seven phases:
 
 ```
-Pre-engagement → Intelligence Gathering → Threat Modeling
-→ Vulnerability Analysis → Exploitation → Post-Exploitation → Reporting
+Pre-engagement -> Intelligence Gathering -> Threat Modeling
+-> Vulnerability Analysis -> Exploitation -> Post-Exploitation -> Reporting
 ```
 
 Each phase has traditionally required a skilled human professional. Phantom automates Phases 2–7 for web application targets.
@@ -115,42 +120,53 @@ Phantom builds on this research by implementing a fully autonomous, tool-integra
 ### 3.1 High-Level Overview
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                    HOST MACHINE (Windows/macOS/Linux)            │
-│                                                                   │
-│  ┌─────────────────────────────────────────────────────────┐    │
-│  │                   Phantom CLI (Python)                    │    │
-│  │  ┌───────────┐  ┌──────────┐  ┌────────────────────┐   │    │
-│  │  │ Typer CLI │  │ LLM Layer│  │ Agent Orchestrator  │   │    │
-│  │  │  (cli_app)│  │ (litellm)│  │  (PhantomAgent)    │   │    │
-│  │  └─────┬─────┘  └────┬─────┘  └─────────┬──────────┘   │    │
-│  │        │             │                   │               │    │
-│  │  ┌─────▼─────────────▼───────────────────▼──────────┐   │    │
-│  │  │              Docker Runtime Layer                  │   │    │
-│  │  └───────────────────────┬────────────────────────────┘   │    │
-│  └──────────────────────────┼────────────────────────────────┘   │
-│                              │ Docker API                          │
-│  ┌───────────────────────────▼────────────────────────────────┐  │
-│  │            SANDBOX CONTAINER (Kali Linux)                   │  │
-│  │                                                              │  │
-│  │  ┌────────────┐  ┌──────────────────────────────────────┐  │  │
-│  │  │  FastAPI   │  │         Security Tools               │  │  │
-│  │  │ Tool Server│  │  nmap │ nuclei │ sqlmap │ ffuf │ ...  │  │  │
-│  │  └────────────┘  └──────────────────────────────────────┘  │  │
-│  │                                                              │  │
-│  │  ┌──────────────────────────────────────────────────────┐   │  │
-│  │  │  Browser (Playwright) │ Proxy (mitmproxy) │ Python   │   │  │
-│  │  └──────────────────────────────────────────────────────┘   │  │
-│  │        ┌────────────────────────────────────────┐            │  │
-│  │        │             /workspace                  │            │  │
-│  │        │   Results, reports, downloaded files    │            │  │
-│  │        └────────────────────────────────────────┘            │  │
-│  └──────────────────────────────────────────────────────────────┘  │
-└─────────────────────────────────────────────────────────────────────┘
-            │                                          │
-        LLM API                                   Target App
-    (OpenRouter /                              (Web App / API /
-     Groq / OpenAI)                              Docker Network)
++-------------------------------------------------------------------+
+|                 HOST MACHINE (Linux / macOS / Windows)             |
+|                                                                   |
+|  +-------------------------------------------------------------+ |
+|  |                   PHANTOM CLI (Python 3.12+)                 | |
+|  |                                                              | |
+|  |  +-----------+  +------------+  +------------------------+  | |
+|  |  | Typer CLI |  | LLM Layer  |  | Agent Orchestrator     |  | |
+|  |  | (cli_app) |  | (LiteLLM)  |  | (PhantomAgent)         |  | |
+|  |  +-----+-----+  +------+-----+  +----------+-------------+  | |
+|  |        |                |                   |                | |
+|  |        v                v                   v                | |
+|  |  +---------------------------------------------------+      | |
+|  |  |           Docker Runtime Layer                     |      | |
+|  |  |  Container lifecycle, health checks, image pull    |      | |
+|  |  +------------------------+--------------------------+       | |
+|  +---------------------------|------------------------------+   |
+|                              | Docker API                       |
+|                              v                                  |
+|  +-------------------------------------------------------------+|
+|  |          SANDBOX CONTAINER (Kali Linux)                       ||
+|  |                                                               ||
+|  |  +---------------+  +------------------------------------+   ||
+|  |  | FastAPI Tool  |  |        Security Tools              |   ||
+|  |  | Server (:8000)|  | Nmap, Nuclei, sqlmap, ffuf,       |   ||
+|  |  |               |  | Subfinder, Httpx, Gobuster,       |   ||
+|  |  | Endpoints:    |  | Arjun, wafw00f, jwt_tool,         |   ||
+|  |  | /tools/*      |  | Semgrep, Katana, Gospider         |   ||
+|  |  | /health       |  +------------------------------------+   ||
+|  |  +---------------+                                           ||
+|  |                                                               ||
+|  |  +------------------------------------+  +----------------+  ||
+|  |  | Browser Engine (Playwright)        |  | Proxy Layer    |  ||
+|  |  | Headless Chromium for dynamic apps |  | (mitmproxy)    |  ||
+|  |  +------------------------------------+  +----------------+  ||
+|  |                                                               ||
+|  |  +-------------------------------------------------------+   ||
+|  |  |                /workspace                               |  ||
+|  |  |  Scan results, reports, downloaded files, wordlists    |  ||
+|  |  +-------------------------------------------------------+   ||
+|  +---------------------------------------------------------------+|
++-------------------------------------------------------------------+
+          |                                        |
+      LLM Provider API                       Target Application
+    (OpenRouter, Groq,                      (Web App, API, or
+     OpenAI, Anthropic,                      Docker Network)
+     Gemini, Ollama)
 ```
 
 ### 3.2 Component Breakdown
@@ -173,35 +189,102 @@ Phantom builds on this research by implementing a fully autonomous, tool-integra
 ### 3.3 Data Flow
 
 ```
-User invokes: phantom scan -t https://target.com
-         │
-         ▼
-CLI validates config (PHANTOM_LLM, LLM_API_KEY, LLM_API_BASE)
-         │
-         ▼
-LLM warm-up test (single "OK" message to verify API)
-         │
-         ▼
-Docker Runtime starts sandbox container (Kali)
-         │
-         ▼
-Tool server (FastAPI) starts inside container on port 8000
-         │
-         ▼
-PhantomAgent.run() → LLM generates tool call → Tool executes in sandbox
-         │                  ▲
-         │                  │ result
-         ▼                  │
-Tool result appended to conversation history
-         │
-         ▼
-LLM processes result → spawns sub-agents or uses finish tool
-         │
-         ▼
-Vulnerability reports accumulated in KnowledgeStore
-         │
-         ▼
-Report generator produces output files in phantom_runs/{id}/
+                    +----------------------------+
+                    |   User invokes:            |
+                    |   phantom scan -t <target> |
+                    +-------------+--------------+
+                                  |
+                                  v
+                    +----------------------------+
+                    | CLI Layer (Typer)          |
+                    | - Parse arguments          |
+                    | - Load saved config        |
+                    | - Validate PHANTOM_LLM     |
+                    | - Validate LLM_API_KEY     |
+                    +-------------+--------------+
+                                  |
+                                  v
+                    +----------------------------+
+                    | Docker Runtime             |
+                    | - Pull sandbox image       |
+                    | - Start Kali container     |
+                    | - Wait for /health OK      |
+                    +-------------+--------------+
+                                  |
+                                  v
+                    +----------------------------+
+                    | LLM Warm-up Test           |
+                    | - Verify API connectivity  |
+                    | - Validate model name      |
+                    +-------------+--------------+
+                                  |
+                                  v
+              +------------------------------------+
+              |     PhantomAgent.run() Loop         |
+              |                                    |
+              |  +------------------------------+  |
+              |  | LLM generates tool call      |  |
+              |  | (XML format with parameters) |  |
+              |  +------+----------+------------+  |
+              |         |          |                |
+              |         v          v                |
+              |  +-----------+ +----------------+  |
+              |  | Tool      | | Spawn Agent    |  |
+              |  | Executor  | | (sub-agent     |  |
+              |  | (sandbox) | |  with task)    |  |
+              |  +-----+-----+ +-------+--------+  |
+              |        |               |            |
+              |        v               v            |
+              |  +-----------+ +----------------+  |
+              |  | Tool      | | Sub-agent runs |  |
+              |  | Result    | | own tool loop  |  |
+              |  +-----+-----+ +-------+--------+  |
+              |        |               |            |
+              |        +-------+-------+            |
+              |                |                    |
+              |                v                    |
+              |  +------------------------------+  |
+              |  | Result appended to           |  |
+              |  | conversation history         |  |
+              |  +------------------------------+  |
+              |                |                    |
+              |                v                    |
+              |  +------------------------------+  |
+              |  | Memory check:                |  |
+              |  | > 100K tokens? Compress      |  |
+              |  +------------------------------+  |
+              |                |                    |
+              |                v                    |
+              |  +------------------------------+  |
+              |  | Vulnerability found?          |  |
+              |  | -> KnowledgeStore.add()      |  |
+              |  | -> Real-time CLI display     |  |
+              |  +------------------------------+  |
+              |                |                    |
+              |         (loop continues)            |
+              +------------------------------------+
+                                  |
+                          Agent calls finish()
+                                  |
+                                  v
+                    +----------------------------+
+                    | Report Generation          |
+                    | - JSON (full detail)       |
+                    | - SARIF 2.1.0 (CI/CD)     |
+                    | - Markdown (human read)    |
+                    | - HTML (self-contained)    |
+                    +----------------------------+
+                                  |
+                                  v
+                    +----------------------------+
+                    | Output Directory           |
+                    | phantom_runs/{scan-id}/    |
+                    | - report.json              |
+                    | - report.sarif.json        |
+                    | - report.md                |
+                    | - report.html              |
+                    | - audit.jsonl              |
+                    +----------------------------+
 ```
 
 ---
@@ -228,19 +311,40 @@ The prompt uses **skill injection** — domain-specific knowledge blocks (e.g., 
 Phantom uses a **reactive tree architecture** — agents spawn children based on discoveries:
 
 ```
-PhantomAgent (root)
-├── ReconAgent
-│   ├── SubdomainAgent → uses: subfinder, httpx
-│   └── PortScanAgent → uses: nmap
-├── ScanAgent
-│   ├── NucleiAgent → uses: nuclei
-│   └── FuzzAgent → uses: ffuf, arjun
-├── ExploitAgent (spawned per vulnerability class)
-│   ├── SQLiAgent → uses: sqlmap, custom payloads
-│   ├── XSSAgent → uses: browser, custom payloads
-│   ├── SSRFAgent → uses: interactsh-client
-│   └── AuthAgent → uses: JWT tool, custom logic
-└── ReportingAgent → uses: create_vulnerability_report
+PhantomAgent (root orchestrator)
+|
++-- ReconAgent (reconnaissance phase)
+|   |
+|   +-- SubdomainEnumerationAgent
+|   |   Tools: subfinder, httpx, dns resolution
+|   |
+|   +-- PortScanningAgent
+|       Tools: nmap (service detection, version scan)
+|
++-- VulnerabilityScanAgent (scanning phase)
+|   |
+|   +-- NucleiScanAgent
+|   |   Tools: nuclei (community + custom templates)
+|   |
+|   +-- DirectoryFuzzingAgent
+|       Tools: ffuf, gobuster, arjun (parameter discovery)
+|
++-- ExploitationAgent (one per vulnerability class)
+|   |
+|   +-- SQLInjectionAgent
+|   |   Tools: sqlmap, manual payload crafting
+|   |
+|   +-- CrossSiteScriptingAgent
+|   |   Tools: browser (Playwright), custom payloads
+|   |
+|   +-- ServerSideRequestForgeryAgent
+|   |   Tools: interactsh-client (out-of-band detection)
+|   |
+|   +-- AuthenticationBypassAgent
+|       Tools: jwt_tool, brute force, custom logic
+|
++-- ReportingAgent (reporting phase)
+    Tools: create_vulnerability_report, finish
 ```
 
 **Spawning mechanism:** The `spawn_agent` tool call includes:
@@ -267,10 +371,74 @@ Sub-agents are **stateless within their call** — they receive full context at 
 `EnhancedAgentState` tracks the full scan lifecycle:
 
 ```
-IDLE → PLANNING → RECONNAISSANCE → SCANNING → EXPLOITING → VERIFYING → REPORTING → COMPLETE
+IDLE -> PLANNING -> RECONNAISSANCE -> SCANNING -> EXPLOITING -> VERIFYING -> REPORTING -> COMPLETE
 ```
 
 State transitions are thread-safe and observable by the TUI renderer.
+
+### 4.5 Scan Pipeline
+
+```
+                    +-----------------------+
+                    |    SCAN INITIATED     |
+                    +-----------+-----------+
+                                |
+                                v
+                    +-----------------------+
+                    |    RECONNAISSANCE     |
+                    | Subdomain enumeration |
+                    | Port scanning         |
+                    | Service detection     |
+                    | Technology profiling  |
+                    +-----------+-----------+
+                                |
+                    (discoveries trigger next phase)
+                                |
+                                v
+                    +-----------------------+
+                    |    SCANNING           |
+                    | Nuclei template scan  |
+                    | Directory fuzzing     |
+                    | Parameter discovery   |
+                    | Configuration checks  |
+                    +-----------+-----------+
+                                |
+                    (findings trigger exploitation)
+                                |
+                                v
+                    +-----------------------+
+                    |    EXPLOITATION       |
+                    | SQL injection testing |
+                    | XSS payload delivery  |
+                    | SSRF chain building   |
+                    | Authentication bypass |
+                    +-----------+-----------+
+                                |
+                    (each exploit -> PoC verification)
+                                |
+                                v
+                    +-----------------------+
+                    |    VERIFICATION       |
+                    | Reproduce exploit     |
+                    | Capture evidence      |
+                    | Confirm impact        |
+                    | Assign CVSS score     |
+                    +-----------+-----------+
+                                |
+                                v
+                    +-----------------------+
+                    |    REPORTING          |
+                    | Generate findings     |
+                    | Map to MITRE ATT&CK   |
+                    | Map to compliance     |
+                    | Produce output files  |
+                    +-----------+-----------+
+                                |
+                                v
+                    +-----------------------+
+                    |    SCAN COMPLETE      |
+                    +-----------------------+
+```
 
 ---
 
@@ -293,21 +461,21 @@ PHANTOM_LLM=ollama/llama3:70b   # local
 
 | Provider | Free Tier | Vision | Reasoning | Context |
 |----------|-----------|--------|-----------|---------|
-| Groq (Llama 3.3 70B) | ✓ | — | — | 128K |
-| OpenRouter Free (Gemma-3 27B) | ✓ | — | — | 8K |
-| OpenRouter Free (Llama 3.3 70B) | ✓ | — | — | 131K |
-| OpenRouter Free (DeepSeek V3) | ✓ | — | — | 164K |
-| OpenAI GPT-4o | — | ✓ | — | 128K |
-| Anthropic Claude Sonnet 4 | — | ✓ | ✓ | 200K |
-| Google Gemini 2.5 Flash | — | ✓ | — | 1M |
-| Ollama (local) | ✓ | — | — | 128K |
+| Groq (Llama 3.3 70B) | Yes | No | No | 128K |
+| OpenRouter Free (Gemma-3 27B) | Yes | No | No | 8K |
+| OpenRouter Free (Llama 3.3 70B) | Yes | No | No | 131K |
+| OpenRouter Free (DeepSeek V3) | Yes | No | No | 164K |
+| OpenAI GPT-4o | No | Yes | No | 128K |
+| Anthropic Claude Sonnet 4 | No | Yes | Yes | 200K |
+| Google Gemini 2.5 Flash | No | Yes | No | 1M |
+| Ollama (local) | Yes | No | No | 128K |
 
 ### 5.3 Fallback Chain & Multi-Key Rotation
 
 ```
 PHANTOM_LLM=openai/gpt-4o
 PHANTOM_LLM_FALLBACK=groq/llama-3.3-70b-versatile,openrouter/google/gemma-3-27b-it:free
-LLM_API_KEY=key1,key2,key3,key4   # comma-separated → round-robin rotation
+LLM_API_KEY=key1,key2,key3,key4   # comma-separated, round-robin rotation
 ```
 
 The `FallbackChain` advances to the next provider on HTTP 429, 500, 502, or 503 errors. Multi-key rotation uses `request_count % len(keys)` for round-robin distribution.
@@ -317,8 +485,8 @@ The `FallbackChain` advances to the next provider on HTTP 429, 500, 502, or 503 
 When conversation history exceeds 100,000 tokens, `MemoryCompressor` summarizes older messages using the same LLM:
 
 ```
-[Msg 0..N-15]  → LLM summarization → <context_summary>...</context_summary>
-[Msg N-15..N]  → kept verbatim (recent context preserved)
+[Msg 0..N-15]  -> LLM summarization -> <context_summary>...</context_summary>
+[Msg N-15..N]  -> kept verbatim (recent context preserved)
 ```
 
 The summary preserves:
@@ -402,7 +570,7 @@ for port in result.ports:
 **Nuclei** (`nuclei_tool.py`):
 ```python
 # Runs nuclei with community templates + custom templates
-# Parses JSON output → Vulnerability objects
+# Parses JSON output into Vulnerability objects
 vulns = await nuclei_tool.scan(url, severity=["critical","high","medium"])
 ```
 
@@ -433,7 +601,7 @@ class Vulnerability(BaseModel):
     vulnerability_class: str   # sqli, xss, rce, ssrf, idor, ...
     severity: VulnerabilitySeverity   # critical/high/medium/low/info
     status: VulnerabilityStatus       # detected/verified/exploited/false_positive
-    cvss_score: float | None   # 0.0–10.0
+    cvss_score: float | None   # 0.0 to 10.0
     target: str
     endpoint: str | None
     parameter: str | None
@@ -466,10 +634,10 @@ Phantom uses the `cvss` Python library to compute CVSS v3.1 scores and map them 
 Discovered vulnerabilities are automatically enriched with MITRE ATT&CK for Enterprise tactics/techniques via `mitre_enrichment.py`:
 
 ```
-SQL Injection → T1190 (Exploit Public-Facing Application)
-XSS/CSRF → T1059 (Command and Scripting Interpreter: JavaScript)
-SSRF → T1083 (File and Directory Discovery) + T1041 (Exfiltration)
-Weak Auth → T1110 (Brute Force) + T1078 (Valid Accounts)
+SQL Injection    -> T1190 (Exploit Public-Facing Application)
+XSS / CSRF      -> T1059 (Command and Scripting Interpreter: JavaScript)
+SSRF            -> T1083 (File and Directory Discovery) + T1041 (Exfiltration)
+Weak Auth       -> T1110 (Brute Force) + T1078 (Valid Accounts)
 ```
 
 ### 7.4 Attack Graph
@@ -521,11 +689,11 @@ The sandbox container operates with:
 Inside the container, a FastAPI server (`tool_server.py`) exposes REST endpoints:
 
 ```
-POST /tools/run_terminal     → Execute shell command
-POST /tools/browser/navigate → Navigate Playwright browser
-POST /tools/proxy/start      → Start mitmproxy intercept
-POST /tools/python/execute   → Run Python in IPython kernel
-GET  /health                 → Container readiness probe
+POST /tools/run_terminal       Execute shell command
+POST /tools/browser/navigate   Navigate Playwright browser
+POST /tools/proxy/start        Start mitmproxy intercept
+POST /tools/python/execute     Run Python in IPython kernel
+GET  /health                   Container readiness probe
 ```
 
 The Docker runtime polls `/health` before delegating tool calls, with a configurable connect timeout (`PHANTOM_SANDBOX_CONNECT_TIMEOUT`, default 10s).
@@ -592,19 +760,25 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Run Phantom
+      - name: Install Phantom
+        run: pip install phantom-agent
+
+      - name: Configure Phantom
         run: |
-          docker run --rm \
-            -e PHANTOM_LLM=openrouter/google/gemma-3-27b-it:free \
-            -e LLM_API_KEY=${{ secrets.OPENROUTER_KEY }} \
-            redwan07/phantom:latest \
-            scan -t ${{ env.TARGET_URL }} \
+          phantom config set PHANTOM_LLM 'openai/gpt-4o'
+          phantom config set LLM_API_KEY '${{ secrets.LLM_API_KEY }}'
+
+      - name: Run Security Scan
+        run: |
+          phantom scan -t ${{ env.TARGET_URL }} \
             --output-format sarif \
-            --non-interactive
-      - name: Upload SARIF
+            --non-interactive \
+            --scan-mode quick
+
+      - name: Upload SARIF Results
         uses: github/codeql-action/upload-sarif@v3
         with:
-          sarif_file: phantom_runs/report.sarif.json
+          sarif_file: phantom_runs/*/report.sarif.json
 ```
 
 ---
@@ -613,7 +787,7 @@ jobs:
 
 ### 10.1 Test Suite
 
-Phantom ships with **146 unit and integration tests** (all passing as of v0.8.0):
+Phantom ships with **146 unit and integration tests** (all passing as of v0.8.5):
 
 | Test Category | Count | Coverage |
 |--------------|-------|----------|
@@ -629,7 +803,7 @@ Phantom ships with **146 unit and integration tests** (all passing as of v0.8.0)
 
 ### 10.2 External User Audit (Session 6 — February 2026)
 
-A systematic external-user audit was conducted by cloning the public repository and testing as a first-time user. **8 bugs were identified and fixed**:
+A systematic external-user audit was conducted by cloning the public repository and testing as a first-time user. **11 issues were identified and fixed**:
 
 | # | Bug | Severity | Fix |
 |---|-----|----------|-----|
@@ -641,12 +815,12 @@ A systematic external-user audit was conducted by cloning the public repository 
 | 6 | `pytest addopts` includes `--cov` flags causing fresh-venv failures | Medium | Remove cov from default addopts |
 | 7 | `typer[all]` extras removed in typer 0.15x — pip install warning | Low | Remove extras pragma |
 | 8 | SARIF `informationUri` pointed to old Strix GitHub URL | Low | Update to `Usta0x001/Phantom` |
-| 9 | Sandbox Docker image URL pointed to inaccessible GHCR | High | Update to `redwan07/phantom:latest` |
+| 9 | Sandbox Docker image URL pointed to inaccessible registry | High | Update to `ghcr.io/usta0x001/phantom-sandbox:latest` |
 | 10 | Markdown + HTML report export formats were stubs | Medium | Full implementation delivered |
 | 11 | OpenRouter missing from `PROVIDER_PRESETS` | Medium | Added 6 OpenRouter presets |
 
 **Pre-audit:** 144/146 tests passing  
-**Post-audit:** 146/146 tests passing ✓
+**Post-audit:** 146/146 tests passing
 
 ### 10.3 OWASP Juice Shop Test
 
@@ -668,7 +842,7 @@ phantom scan -t http://localhost:3000 \
 
 | OWASP Category | A01 | A02 | A03 | A04 | A05 | A06 | A07 | A08 | A09 | A10 |
 |---|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
-| **Phantom Coverage** | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | — | ✓ | ✓ |
+| **Phantom Coverage** | Yes | Yes | Yes | Yes | Yes | Yes | Yes | No | Yes | Yes |
 
 *A08 (Software & Data Integrity) requires supply-chain analysis beyond current scope.*
 
@@ -786,6 +960,6 @@ Phantom demonstrates that a well-designed LLM orchestration framework, combined 
 
 *This report was prepared to document the academic contributions of the Phantom project for coursework submission at ESTIN. All testing was performed against intentionally vulnerable systems (OWASP Juice Shop) or systems with explicit authorization.*
 
-**Word count (approximate): 4,800 words**  
-**Figures: 7 (ASCII architecture diagrams)**  
+**Word count (approximate): 5,500 words**  
+**Figures: 8 (ASCII architecture diagrams)**  
 **Tables: 30**
