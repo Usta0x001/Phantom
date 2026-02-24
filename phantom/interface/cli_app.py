@@ -17,8 +17,9 @@ from enum import Enum
 from pathlib import Path
 from typing import Annotated, Optional
 
-# Silence litellm "Provider List:" stdout noise — must be before any litellm import
+# Silence litellm noise — must be set before any litellm import
 os.environ.setdefault("LITELLM_LOG", "ERROR")
+os.environ.setdefault("LITELLM_LOCAL_MODEL_COST_MAP", "True")  # prevent network fetch at import
 
 import typer
 from rich.console import Console
