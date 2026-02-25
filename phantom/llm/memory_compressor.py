@@ -10,6 +10,7 @@ logger = logging.getLogger(__name__)
 
 
 MAX_TOTAL_TOKENS = 100_000
+MAX_MESSAGES = 200
 MIN_RECENT_MESSAGES = 15
 
 SUMMARY_PROMPT_TEMPLATE = """You are an agent performing context
@@ -190,6 +191,10 @@ class MemoryCompressor:
         """
         if not messages:
             return messages
+
+        # Hard cap on message count to prevent unbounded memory growth
+        if len(messages) > MAX_MESSAGES:
+            messages = messages[-MAX_MESSAGES:]
 
         _handle_images(messages, self.max_images)
 

@@ -14,7 +14,7 @@ from phantom.agents.state import AgentState
 from phantom.models.vulnerability import Vulnerability, VulnerabilitySeverity
 from phantom.models.host import Host
 from phantom.models.scan import ScanResult, ScanPhase, ScanStatus
-from phantom.core.priority_queue import VulnerabilityPriorityQueue, ScanOrchestrator
+from phantom.core.priority_queue import VulnerabilityPriorityQueue
 
 
 class EnhancedAgentState(AgentState):

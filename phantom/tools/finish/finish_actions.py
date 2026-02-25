@@ -210,7 +210,7 @@ def _run_post_scan_enrichment(tracer: Any) -> dict[str, Any]:
                     template_file.write_text(template_yaml, encoding="utf-8")
                     template_count += 1
             except Exception:
-                pass
+                _logger.debug("Failed to generate Nuclei template for finding %s", report.get("id", "?"), exc_info=True)
 
         enrichment_results["nuclei_templates"] = {"generated": template_count}
         if template_count:
@@ -233,7 +233,7 @@ def _run_post_scan_enrichment(tracer: Any) -> dict[str, Any]:
                     store.save_vulnerability(vuln_model)
                     stored_count += 1
             except Exception:
-                pass
+                _logger.debug("Failed to store vulnerability %s", report.get("id", "?"), exc_info=True)
         enrichment_results["knowledge_store"] = {"vulnerabilities_stored": stored_count}
         _logger.info(f"Knowledge store updated with {stored_count} vulnerabilities")
     except Exception as e:

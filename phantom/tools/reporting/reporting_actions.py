@@ -87,7 +87,7 @@ def _validate_cvss_parameters(**kwargs: str) -> list[str]:
 
 
 @register_tool(sandbox_execution=False)
-def create_vulnerability_report(
+async def create_vulnerability_report(
     title: str,
     description: str,
     impact: str,
@@ -173,7 +173,7 @@ def create_vulnerability_report(
                 "method": method,
             }
 
-            dedupe_result = check_duplicate(candidate, existing_reports)
+            dedupe_result = await check_duplicate(candidate, existing_reports)
 
             if dedupe_result.get("is_duplicate"):
                 duplicate_id = dedupe_result.get("duplicate_id", "")

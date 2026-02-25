@@ -27,15 +27,15 @@ from typing import Any
 
 
 def _yaml_escape(value: str) -> str:
-    """Escape a string for safe inclusion in YAML values."""
-    # Replace characters that would break YAML structure
+    """Escape a string for safe inclusion in YAML double-quoted values."""
     value = value.replace("\\", "\\\\")
     value = value.replace('"', '\\"')
     value = value.replace("\n", " ")
     value = value.replace("\r", "")
-    value = value.replace(":", "\\:")  # colon in flow context
-    value = value.replace("#", "\\#")  # comment char
-    value = value.replace("---", "\\-\\-\\-")  # doc separator
+    # Note: colons and # are safe inside quoted YAML strings — don't escape them.
+    # Only escape the document separator if it appears on its own.
+    if value.strip() == "---":
+        value = "'---'"
     return value
 
 

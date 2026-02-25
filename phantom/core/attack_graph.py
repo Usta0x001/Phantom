@@ -13,6 +13,7 @@ Builds directed graphs of:
 from __future__ import annotations
 
 import json
+from collections import deque
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import Enum
@@ -336,10 +337,10 @@ class AttackGraph:
 
         # BFS from host to find all connected vuln nodes
         visited: set[str] = set()
-        queue = [host_id]
+        queue: deque[str] = deque([host_id])
 
         while queue:
-            current = queue.pop(0)
+            current = queue.popleft()
             if current in visited:
                 continue
             visited.add(current)
@@ -362,6 +363,7 @@ class AttackGraph:
         *,
         target_type: NodeType | None = None,
         max_depth: int = 10,
+        max_paths: int = 500,
     ) -> list[list[str]]:
         """
         Find attack paths from source to target(s).
@@ -371,6 +373,7 @@ class AttackGraph:
             target: Specific target node ID
             target_type: Find paths to all nodes of this type
             max_depth: Maximum path length
+            max_paths: Maximum number of paths to return (prevents combinatorial explosion)
 
         Returns:
             List of paths (each path is a list of node IDs)
@@ -384,6 +387,8 @@ class AttackGraph:
             try:
                 for path in nx.all_simple_paths(self._graph, source, target, cutoff=max_depth):
                     paths.append(list(path))
+                    if len(paths) >= max_paths:
+                        break
             except nx.NetworkXNoPath:
                 pass
         elif target_type:
@@ -392,17 +397,27 @@ class AttackGraph:
                 if d.get("node_type") == target_type.value
             ]
             for t in targets:
+                if len(paths) >= max_paths:
+                    break
                 try:
                     for path in nx.all_simple_paths(self._graph, source, t, cutoff=max_depth):
                         paths.append(list(path))
+                        if len(paths) >= max_paths:
+                            break
                 except (nx.NetworkXNoPath, nx.NodeNotFound):
                     continue
 
         return paths
 
-    def find_critical_paths(self, min_severity: float = 7.0) -> list[dict[str, Any]]:
+    def find_critical_paths(
+        self, min_severity: float = 7.0, *, max_paths: int = 500,
+    ) -> list[dict[str, Any]]:
         """
         Find paths that traverse high-severity vulnerabilities.
+
+        Args:
+            min_severity: Minimum risk score for target vulnerabilities.
+            max_paths: Maximum number of paths to return (prevents combinatorial explosion).
 
         Returns paths annotated with cumulative risk scores.
         """
@@ -415,7 +430,11 @@ class AttackGraph:
         critical_paths: list[dict[str, Any]] = []
 
         for host_node in hosts:
+            if len(critical_paths) >= max_paths:
+                break
             for vuln_node in vulns:
+                if len(critical_paths) >= max_paths:
+                    break
                 try:
                     for path in nx.all_simple_paths(
                         self._graph, host_node.id, vuln_node.id, cutoff=8
@@ -432,6 +451,8 @@ class AttackGraph:
                             "target_vuln": vuln_node.label,
                             "length": len(path),
                         })
+                        if len(critical_paths) >= max_paths:
+                            break
                 except (nx.NetworkXNoPath, nx.NodeNotFound):
                     continue
 

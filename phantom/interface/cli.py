@@ -149,6 +149,26 @@ async def run_cli(args: Any) -> None:  # noqa: PLR0915
         scan_mode=scan_mode,
     )
 
+    # ── Knowledge Store — load past findings for this target ──
+    try:
+        from phantom.core.knowledge_store import get_knowledge_store
+
+        knowledge_store = get_knowledge_store()
+        known_vulns = knowledge_store.get_all_vulnerabilities()
+        target_lower = target_urls[0].lower() if target_urls else ""
+        past_findings = [
+            v for v in known_vulns
+            if target_lower and target_lower in (v.target or "").lower()
+        ]
+        if past_findings:
+            scan_config["known_vulnerabilities"] = len(past_findings)
+            console.print(
+                f"  [dim]Knowledge Store:[/] {len(past_findings)} previously known"
+                f" vulnerabilities for this target"
+            )
+    except Exception:
+        pass  # Knowledge store is optional enhancement
+
     def display_vulnerability(report: dict[str, Any]) -> None:
         report_id = report.get("id", "unknown")
 

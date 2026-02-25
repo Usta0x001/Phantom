@@ -78,10 +78,12 @@ class VerificationEngine:
                 logger.warning(f"Verification attempt failed for {vuln.id}: {e}")
                 result.notes.append(f"Error in {strategy}: {str(e)}")
         
-        # If all attempts failed, mark as failed
+        # If all attempts failed, mark as failed but NOT false positive.
+        # Failure to auto-verify does NOT mean the vuln is a false positive —
+        # it may just mean automated verification doesn't cover this class.
         if result.status == VerificationStatus.IN_PROGRESS:
             result.mark_failed("All verification attempts failed")
-            vuln.mark_false_positive("Automatic verification could not confirm exploitability")
+            # Do NOT call vuln.mark_false_positive here — unverified != false positive
         
         self._results[vuln.id] = result
         return result

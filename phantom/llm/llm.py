@@ -111,7 +111,7 @@ class LLM:
     async def generate(
         self, conversation_history: list[dict[str, Any]]
     ) -> AsyncIterator[LLMResponse]:
-        messages = self._prepare_messages(conversation_history)
+        messages = await asyncio.to_thread(self._prepare_messages, conversation_history)
         max_retries = int(Config.get("phantom_llm_max_retries") or "5")
 
         for attempt in range(max_retries + 1):
@@ -179,9 +179,13 @@ class LLM:
                 }
             )
 
-        compressed = list(self.memory_compressor.compress_history(conversation_history))
-        conversation_history.clear()
-        conversation_history.extend(compressed)
+        compressed = list(self.memory_compressor.compress_history(
+            list(conversation_history)  # operate on a copy to avoid destroying caller's history
+        ))
+        # Only update the caller's history if compression actually reduced it
+        if len(compressed) < len(conversation_history):
+            conversation_history.clear()
+            conversation_history.extend(compressed)
         messages.extend(compressed)
 
         if self._is_anthropic() and self.config.enable_prompt_caching:

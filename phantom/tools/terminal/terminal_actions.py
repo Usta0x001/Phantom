@@ -1,6 +1,9 @@
+import logging
 from typing import Any
 
 from phantom.tools.registry import register_tool
+
+_logger = logging.getLogger(__name__)
 
 
 @register_tool
@@ -11,6 +14,18 @@ def terminal_execute(
     terminal_id: str | None = None,
     no_enter: bool = False,
 ) -> dict[str, Any]:
+    # Validate command input
+    if not command or not command.strip():
+        return {
+            "error": "Command cannot be empty",
+            "command": command,
+            "terminal_id": terminal_id or "default",
+            "content": "",
+            "status": "error",
+            "exit_code": None,
+            "working_dir": None,
+        }
+
     from .terminal_manager import get_terminal_manager
 
     manager = get_terminal_manager()

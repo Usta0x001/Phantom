@@ -29,7 +29,11 @@ _logger = logging.getLogger(__name__)
 
 
 def _validate_url(url: str) -> bool:
-    """Reject URLs pointing to private/loopback addresses (SSRF protection)."""
+    """Reject URLs pointing to private/loopback addresses (SSRF protection).
+    
+    Also resolves DNS to catch rebinding attacks where a public hostname
+    resolves to a private IP.
+    """
     try:
         parsed = urlparse(url)
         hostname = parsed.hostname
@@ -43,7 +47,20 @@ def _validate_url(url: str) -> bool:
             if addr.is_private or addr.is_loopback or addr.is_link_local or addr.is_reserved:
                 return False
         except ValueError:
-            pass  # hostname is a domain name, allow
+            # hostname is a domain name — resolve it to check IP
+            import socket
+            try:
+                resolved = socket.getaddrinfo(hostname, None, socket.AF_UNSPEC, socket.SOCK_STREAM)
+                for family, _type, _proto, _canonname, sockaddr in resolved:
+                    ip_str = sockaddr[0]
+                    addr = ipaddress.ip_address(ip_str)
+                    if addr.is_private or addr.is_loopback or addr.is_link_local or addr.is_reserved:
+                        return False
+            except socket.gaierror:
+                return False  # Can't resolve = don't allow
+        # Only allow https for webhooks
+        if parsed.scheme not in ("https", "http"):
+            return False
         return True
     except Exception:
         return False
