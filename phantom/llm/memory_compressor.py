@@ -83,12 +83,11 @@ def _extract_message_text(msg: dict[str, Any]) -> str:
     return str(content)
 
 
-async def _summarize_messages(
+def _summarize_messages(
     messages: list[dict[str, Any]],
     model: str,
     timeout: int = 30,
 ) -> dict[str, Any]:
-    """Summarize messages asynchronously using the LLM."""
     if not messages:
         empty_summary = "<context_summary message_count='0'>{text}</context_summary>"
         return {
@@ -124,7 +123,7 @@ async def _summarize_messages(
         if api_base:
             completion_args["api_base"] = api_base
 
-        response = await litellm.acompletion(**completion_args)
+        response = litellm.completion(**completion_args)
         summary = response.choices[0].message.content or ""
         if not summary.strip():
             return messages[0]
@@ -170,7 +169,7 @@ class MemoryCompressor:
         if not self.model_name:
             raise ValueError("PHANTOM_LLM environment variable must be set and not empty")
 
-    async def compress_history(
+    def compress_history(
         self,
         messages: list[dict[str, Any]],
     ) -> list[dict[str, Any]]:
@@ -219,7 +218,7 @@ class MemoryCompressor:
         chunk_size = 10
         for i in range(0, len(old_msgs), chunk_size):
             chunk = old_msgs[i : i + chunk_size]
-            summary = await _summarize_messages(chunk, model_name, self.timeout)
+            summary = _summarize_messages(chunk, model_name, self.timeout)
             if summary:
                 compressed.append(summary)
 

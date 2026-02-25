@@ -131,22 +131,21 @@ class BaseAgent(metaclass=AgentMeta):
             "state": self.state.model_dump(),
         }
 
-        with agents_graph_actions._graph_lock:
-            agents_graph_actions._agent_graph["nodes"][self.state.agent_id] = node
+        agents_graph_actions._agent_graph["nodes"][self.state.agent_id] = node
 
-            agents_graph_actions._agent_instances[self.state.agent_id] = self
-            agents_graph_actions._agent_states[self.state.agent_id] = self.state
+        agents_graph_actions._agent_instances[self.state.agent_id] = self
+        agents_graph_actions._agent_states[self.state.agent_id] = self.state
 
-            if self.state.parent_id:
-                agents_graph_actions._agent_graph["edges"].append(
-                    {"from": self.state.parent_id, "to": self.state.agent_id, "type": "delegation"}
-                )
+        if self.state.parent_id:
+            agents_graph_actions._agent_graph["edges"].append(
+                {"from": self.state.parent_id, "to": self.state.agent_id, "type": "delegation"}
+            )
 
-            if self.state.agent_id not in agents_graph_actions._agent_messages:
-                agents_graph_actions._agent_messages[self.state.agent_id] = []
+        if self.state.agent_id not in agents_graph_actions._agent_messages:
+            agents_graph_actions._agent_messages[self.state.agent_id] = []
 
-            if self.state.parent_id is None and agents_graph_actions._root_agent_id is None:
-                agents_graph_actions._root_agent_id = self.state.agent_id
+        if self.state.parent_id is None and agents_graph_actions._root_agent_id is None:
+            agents_graph_actions._root_agent_id = self.state.agent_id
 
     async def agent_loop(self, task: str) -> dict[str, Any]:  # noqa: PLR0912, PLR0915
         from phantom.telemetry.tracer import get_global_tracer
@@ -346,15 +345,10 @@ class BaseAgent(metaclass=AgentMeta):
     async def _process_iteration(self, tracer: Optional["Tracer"]) -> bool:
         final_response = None
 
-        conversation_history = self.state.get_conversation_history()
-        async for response in self.llm.generate(conversation_history):
+        async for response in self.llm.generate(self.state.get_conversation_history()):
             final_response = response
             if tracer and response.content:
                 tracer.update_streaming_content(self.state.agent_id, response.content)
-
-        # Write back compressed conversation history to state
-        # (_prepare_messages may have compressed/trimmed the history)
-        self.state.messages = conversation_history
 
         if final_response is None:
             return False

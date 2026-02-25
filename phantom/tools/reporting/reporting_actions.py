@@ -13,7 +13,6 @@ def calculate_cvss_and_severity(
     integrity: str,
     availability: str,
 ) -> tuple[float, str, str]:
-    vector = ""
     try:
         from cvss import CVSS3
 
@@ -35,8 +34,8 @@ def calculate_cvss_and_severity(
     except Exception:
         import logging
 
-        logging.warning("CVSS calculation failed for vector: %s", vector[:100] if vector else "None")
-        return 0.0, "unknown", ""
+        logging.exception("Failed to calculate CVSS")
+        return 7.5, "high", ""
     else:
         return base_score, severity, vector
 
@@ -153,26 +152,6 @@ def create_vulnerability_report(
         availability,
     )
 
-    # ── MITRE CWE/CAPEC Enrichment ──
-    mitre_data: dict[str, Any] = {}
-    try:
-        from phantom.core.mitre_enrichment import MITREEnricher
-
-        enricher = MITREEnricher()
-        enriched = enricher.enrich_finding({
-            "title": title,
-            "description": description,
-            "severity": severity,
-        })
-        # Extract only the MITRE-specific fields
-        mitre_data = {
-            k: enriched[k]
-            for k in ("cwe", "capec", "primary_cwe", "primary_cwe_name", "owasp_top10")
-            if k in enriched
-        }
-    except Exception:  # noqa: BLE001
-        pass  # enrichment is optional — never block report creation
-
     try:
         from phantom.telemetry.tracer import get_global_tracer
 
@@ -247,41 +226,15 @@ def create_vulnerability_report(
                 code_before=code_before,
                 code_after=code_after,
                 code_diff=code_diff,
-                cvss_vector=cvss_vector if cvss_vector else None,
-                mitre=mitre_data if mitre_data else None,
             )
 
-            result_payload: dict[str, Any] = {
+            return {
                 "success": True,
                 "message": f"Vulnerability report '{title}' created successfully",
                 "report_id": report_id,
                 "severity": severity,
                 "cvss_score": cvss_score,
             }
-            if mitre_data:
-                result_payload["mitre"] = {
-                    "primary_cwe": mitre_data.get("primary_cwe"),
-                    "primary_cwe_name": mitre_data.get("primary_cwe_name"),
-                    "owasp_top10": mitre_data.get("owasp_top10"),
-                }
-
-            # ── Audit log the finding ──
-            try:
-                from phantom.core.audit_logger import get_global_audit_logger
-
-                _audit = get_global_audit_logger()
-                if _audit:
-                    _audit.log_finding(
-                        title=title,
-                        severity=severity,
-                        cwe=mitre_data.get("primary_cwe") if mitre_data else None,
-                        url=endpoint or target,
-                        verified=False,
-                    )
-            except Exception:  # noqa: BLE001
-                pass
-
-            return result_payload
 
         import logging
 

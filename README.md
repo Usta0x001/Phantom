@@ -12,7 +12,7 @@
 [![Python](https://img.shields.io/badge/Python-3.12%2B-yellow.svg)](https://python.org)
 [![Docker](https://img.shields.io/badge/Docker-Ready-2496ED.svg)](https://hub.docker.com/r/redwan07/phantom)
 [![PyPI](https://img.shields.io/pypi/v/phantom-agent.svg)](https://pypi.org/project/phantom-agent/)
-[![Version](https://img.shields.io/badge/Version-0.8.2-purple.svg)](https://github.com/Usta0x001/Phantom/releases)
+[![Version](https://img.shields.io/badge/Version-0.9.0-purple.svg)](https://github.com/Usta0x001/Phantom/releases)
 
 **AI-powered multi-agent penetration testing that thinks like a hacker.**
 
@@ -390,13 +390,41 @@ phantom scan --target https://api.your-app.com \
 phantom --target https://your-app.com
 ```
 
-### Scan Modes
+### Scan Modes & Profiles
 
-| Mode | Speed | Coverage | Best For |
-|------|-------|----------|----------|
-| `quick` | ~10-20 min | Surface-level, common vulns | CI/CD gates, quick checks |
-| `standard` | ~30-60 min | Balanced depth | Regular security testing |
-| `deep` | ~1-3 hours | Full attack surface | Thorough pentests, audits |
+```bash
+# View all scan profiles
+phantom profiles
+```
+
+| Mode | Iterations | Speed | Coverage | Best For |
+|------|:----------:|-------|----------|----------|
+| `quick` | 20 | ~10-20 min | Surface-level, common vulns | CI/CD gates, quick checks |
+| `standard` | 40 | ~30-60 min | Balanced depth | Regular security testing |
+| `deep` | 80 | ~1-3 hours | Full attack surface | Thorough pentests, audits |
+| `stealth` | 30 | ~20-40 min | Quiet probing, no noisy tools | Production systems, stealth recon |
+| `api_only` | 40 | ~30-60 min | API-focused, no browser | REST/GraphQL API testing |
+
+Each profile controls: iteration limit, tool allowlist/blocklist, browser permissions, reasoning effort, and sandbox timeout.
+
+### Post-Scan Enrichment
+
+Every scan automatically runs a 7-stage enrichment pipeline after completion:
+
+1. **MITRE ATT&CK** — CWE/CAPEC/OWASP mapping for every finding
+2. **Compliance** — OWASP Top 10, PCI DSS, NIST mapping → `compliance_report.md`
+3. **Attack Graph** — NetworkX-based attack path analysis → `attack_graph.json` + `attack_paths.md`
+4. **Nuclei Templates** — Auto-generated YAML templates per vulnerability
+5. **Knowledge Store** — Persistent cross-scan memory (learns from past scans)
+6. **Notifications** — Webhook/Slack alerts for critical/high findings
+7. **Reports** — Structured JSON, HTML, and Markdown reports
+
+### Diff Scanning
+
+```bash
+# Compare two scan runs to see what changed
+phantom diff <run1> <run2>
+```
 
 ## ⚙️ Configuration
 
@@ -508,18 +536,27 @@ phantom/
 │   │   ├── llm.py           # Core LLM client
 │   │   ├── provider_registry.py
 │   │   └── memory_compressor.py
-│   ├── core/                # Core modules
-│   │   ├── scope_validator.py
-│   │   ├── knowledge_store.py
-│   │   ├── mitre_enrichment.py
-│   │   ├── attack_graph.py
-│   │   └── compliance_mapper.py
+│   ├── core/                # Core modules (16 active engines)
+│   │   ├── scan_profiles.py     # quick/standard/deep/stealth/api_only
+│   │   ├── scope_validator.py   # Target authorization
+│   │   ├── knowledge_store.py   # Cross-scan persistence
+│   │   ├── mitre_enrichment.py  # CWE/CAPEC/OWASP mapping
+│   │   ├── attack_graph.py      # NetworkX attack DAG
+│   │   ├── attack_path_analyzer.py
+│   │   ├── compliance_mapper.py # OWASP/PCI/NIST mapping
+│   │   ├── report_generator.py  # JSON/HTML/MD reports
+│   │   ├── nuclei_templates.py  # Auto template generation
+│   │   ├── diff_scanner.py      # Cross-run comparison
+│   │   ├── notifier.py          # Webhook/Slack alerts
+│   │   ├── audit_logger.py      # JSONL audit trail
+│   │   ├── verification_engine.py
+│   │   └── priority_queue.py
 │   ├── tools/               # Security tool wrappers
 │   ├── interface/           # CLI, TUI, reporting
 │   ├── runtime/             # Docker sandbox management
 │   ├── telemetry/           # Local-only run tracking
 │   └── config/              # Configuration management
-├── tests/                   # Test suite (90+ tests)
+├── tests/                   # Test suite (142 tests)
 ├── containers/              # Dockerfile for sandbox
 ├── scripts/                 # Install & build scripts
 └── docs/                    # Documentation

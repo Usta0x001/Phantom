@@ -1,9 +1,8 @@
-import threading
 import uuid
 from datetime import UTC, datetime
 from typing import Any
 
-from pydantic import BaseModel, Field, PrivateAttr
+from pydantic import BaseModel, Field
 
 
 def _generate_agent_id() -> str:
@@ -11,8 +10,6 @@ def _generate_agent_id() -> str:
 
 
 class AgentState(BaseModel):
-    model_config = {"arbitrary_types_allowed": True}
-
     agent_id: str = Field(default_factory=_generate_agent_id)
     agent_name: str = "phantom Agent"
     parent_id: str | None = None
@@ -42,8 +39,6 @@ class AgentState(BaseModel):
 
     errors: list[str] = Field(default_factory=list)
 
-    _msg_lock: threading.Lock = PrivateAttr(default_factory=threading.Lock)
-
     def increment_iteration(self) -> None:
         self.iteration += 1
         self.last_updated = datetime.now(UTC).isoformat()
@@ -52,8 +47,7 @@ class AgentState(BaseModel):
         message = {"role": role, "content": content}
         if thinking_blocks:
             message["thinking_blocks"] = thinking_blocks
-        with self._msg_lock:
-            self.messages.append(message)
+        self.messages.append(message)
         self.last_updated = datetime.now(UTC).isoformat()
 
     def add_action(self, action: dict[str, Any]) -> None:
@@ -135,10 +129,10 @@ class AgentState(BaseModel):
         return elapsed > 600
 
     def has_empty_last_messages(self, count: int = 3) -> bool:
-        with self._msg_lock:
-            if len(self.messages) < count:
-                return False
-            last_messages = list(self.messages[-count:])
+        if len(self.messages) < count:
+            return False
+
+        last_messages = self.messages[-count:]
 
         for message in last_messages:
             content = message.get("content", "")
@@ -148,8 +142,7 @@ class AgentState(BaseModel):
         return True
 
     def get_conversation_history(self) -> list[dict[str, Any]]:
-        with self._msg_lock:
-            return list(self.messages)
+        return self.messages
 
     def get_execution_summary(self) -> dict[str, Any]:
         return {

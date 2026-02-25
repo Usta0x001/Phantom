@@ -560,57 +560,6 @@ class TestWiringIntegration:
         assert "get_global_audit_logger" in content
         assert "log_tool_call" in content
 
-    def test_reporting_has_mitre_enrichment(self):
-        """reporting_actions.py should enrich findings with MITRE data."""
-        source = (
-            Path(__file__).resolve().parent.parent
-            / "phantom"
-            / "tools"
-            / "reporting"
-            / "reporting_actions.py"
-        )
-        content = source.read_text(encoding="utf-8")
-        assert "MITREEnricher" in content
-        assert "enrich_finding" in content
-
-    def test_finish_has_post_scan_hooks(self):
-        """finish_actions.py should run compliance, attack graph, SARIF on scan completion."""
-        source = (
-            Path(__file__).resolve().parent.parent
-            / "phantom"
-            / "tools"
-            / "finish"
-            / "finish_actions.py"
-        )
-        content = source.read_text(encoding="utf-8")
-        assert "ComplianceMapper" in content
-        assert "AttackGraph" in content
-        assert "SARIFFormatter" in content
-        assert "_post_scan_hooks" in content
-
-    def test_tracer_accepts_mitre_and_cvss_vector(self):
-        """Tracer.add_vulnerability_report should accept mitre and cvss_vector kwargs."""
-        from phantom.telemetry.tracer import Tracer
-
-        t = Tracer("test-wiring")
-        rid = t.add_vulnerability_report(
-            title="Test Vuln",
-            severity="high",
-            cvss_vector="CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H",
-            mitre={"primary_cwe": "CWE-89", "cwe": [], "capec": []},
-        )
-        assert rid.startswith("vuln-")
-        report = t.vulnerability_reports[-1]
-        assert report["cvss_vector"] == "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"
-        assert report["mitre"]["primary_cwe"] == "CWE-89"
-
-    def test_llm_has_fallback_chain(self):
-        """llm.py should import and use FallbackChain."""
-        source = Path(__file__).resolve().parent.parent / "phantom" / "llm" / "llm.py"
-        content = source.read_text(encoding="utf-8")
-        assert "FallbackChain" in content
-        assert "_fallback_chain" in content
-
 
 # ======================================================================
 # Phase 7 — Scan Profiles

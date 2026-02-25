@@ -12,6 +12,7 @@ from rich.text import Text
 
 from phantom.agents.PhantomAgent import PhantomAgent
 from phantom.core.audit_logger import AuditLogger, set_global_audit_logger
+from phantom.core.scan_profiles import ScanProfile, get_profile
 from phantom.core.scope_validator import ScopeValidator
 from phantom.llm.config import LLMConfig
 from phantom.telemetry.tracer import Tracer, set_global_tracer
@@ -22,10 +23,10 @@ from .utils import (
 )
 
 # ── Phantom Identity ──
-_PHANTOM_COLOR = "#9b59b6"
-_ACCENT_COLOR = "#e74c3c"
+_PHANTOM_COLOR = "#dc2626"
+_ACCENT_COLOR = "#f59e0b"
 _PHANTOM_TITLE = f"[bold {_PHANTOM_COLOR}]☠ PHANTOM[/]"
-_PHANTOM_SUBTITLE = f"[italic {_ACCENT_COLOR}]\" Why So Serious ?! \"[/]"
+_PHANTOM_SUBTITLE = f"[italic {_ACCENT_COLOR}]\" The Ghost in the Machine \"[/]"
 
 
 def _phantom_panel(content: Text | str, *, border: str = _PHANTOM_COLOR, **kw: Any) -> Panel:
@@ -47,15 +48,15 @@ async def run_cli(args: Any) -> None:  # noqa: PLR0915
 
     # ── Phantom Banner ──
     banner = Text()
-    banner.append("\n  ☠ PHANTOM", style="bold #9b59b6")
-    banner.append("  ", style="")
-    banner.append("Autonomous Offensive Security Intelligence", style="dim white")
+    banner.append("\n  ☠ PHANTOM", style="bold #dc2626")
+    banner.append("  —  ", style="dim")
+    banner.append("Autonomous Adversary Simulation Platform", style="dim white")
     banner.append("\n", style="")
 
-    console.print(Panel(banner, border_style="#9b59b6", padding=(0, 2)))
+    console.print(Panel(banner, border_style="#dc2626", padding=(0, 2)))
 
     start_text = Text()
-    start_text.append("▶ Scan initiated", style="bold #9b59b6")
+    start_text.append("▶ Scan initiated", style="bold #dc2626")
 
     target_text = Text()
     target_text.append("Target", style="dim")
@@ -73,6 +74,21 @@ async def run_cli(args: Any) -> None:  # noqa: PLR0915
     results_text.append("  ")
     results_text.append(f"phantom_runs/{args.run_name}", style="#60a5fa")
 
+    scan_mode = getattr(args, "scan_mode", "deep")
+
+    # ── Load Scan Profile ──
+    try:
+        profile: ScanProfile = get_profile(scan_mode)
+    except KeyError:
+        console.print(f"[yellow]Unknown scan mode '{scan_mode}', falling back to 'deep'[/]")
+        profile = get_profile("deep")
+
+    profile_text = Text()
+    profile_text.append("Profile", style="dim")
+    profile_text.append(" ")
+    profile_text.append(f"{profile.name}", style="bold #f59e0b")
+    profile_text.append(f"  (max {profile.max_iterations} iterations, {profile.reasoning_effort} effort)", style="dim")
+
     note_text = Text()
     note_text.append("\n\n", style="dim")
     note_text.append("Vulnerabilities will be displayed in real-time.", style="dim")
@@ -84,6 +100,8 @@ async def run_cli(args: Any) -> None:  # noqa: PLR0915
             target_text,
             "\n",
             results_text,
+            "\n",
+            profile_text,
             note_text,
         ),
     )
@@ -92,20 +110,21 @@ async def run_cli(args: Any) -> None:  # noqa: PLR0915
     console.print(startup_panel)
     console.print()
 
-    scan_mode = getattr(args, "scan_mode", "deep")
-
     scan_config = {
         "scan_id": args.run_name,
         "targets": args.targets_info,
         "user_instructions": args.instruction or "",
         "run_name": args.run_name,
+        "scan_mode": scan_mode,
+        "profile": profile.to_dict(),
     }
 
     llm_config = LLMConfig(scan_mode=scan_mode)
     agent_config = {
         "llm_config": llm_config,
-        "max_iterations": 300,
+        "max_iterations": profile.max_iterations,
         "non_interactive": True,
+        "scan_profile": profile,
     }
 
     if getattr(args, "local_sources", None):
@@ -178,7 +197,7 @@ async def run_cli(args: Any) -> None:  # noqa: PLR0915
 
     def create_live_status() -> Panel:
         status_text = Text()
-        status_text.append("▶ Scan in progress", style="bold #9b59b6")
+        status_text.append("▶ Scan in progress", style="bold #dc2626")
         status_text.append("\n\n")
 
         stats_text = build_live_stats_text(tracer, agent_config)
@@ -256,7 +275,7 @@ async def run_cli(args: Any) -> None:  # noqa: PLR0915
         console.print()
 
         final_report_text = Text()
-        final_report_text.append("☠ Scan Complete", style="bold #9b59b6")
+        final_report_text.append("☠ Scan Complete", style="bold #dc2626")
 
         final_report_panel = _phantom_panel(
             Text.assemble(
