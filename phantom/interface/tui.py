@@ -91,9 +91,11 @@ class ChatTextArea(TextArea):  # type: ignore[misc]
 
 
 class SplashScreen(Static):  # type: ignore[misc]
-    PRIMARY_COLOR = "#9b59b6"
-    ACCENT_COLOR = "#e74c3c"
+    PRIMARY_COLOR = "#dc2626"
+    ACCENT_COLOR = "#f59e0b"
     BANNER = (
+        "          ░▒▓█  PHANTOM SECURITY  █▓▒░\n"
+        "\n"
         " ██████╗ ██╗  ██╗ █████╗ ███╗   ██╗████████╗ ██████╗ ███╗   ███╗\n"
         " ██╔══██╗██║  ██║██╔══██╗████╗  ██║╚══██╔══╝██╔═══██╗████╗ ████║\n"
         " ██████╔╝███████║███████║██╔██╗ ██║   ██║   ██║   ██║██╔████╔██║\n"
@@ -154,33 +156,33 @@ class SplashScreen(Static):  # type: ignore[misc]
             content,
             border_style=self.PRIMARY_COLOR,
             padding=(1, 6),
-            subtitle=Text('" Why So Serious ?! "', style=Style(color=self.ACCENT_COLOR, bold=True, italic=True)),
+            subtitle=Text('" The Ghost in the Machine "', style=Style(color=self.ACCENT_COLOR, bold=True, italic=True)),
             subtitle_align="right",
         )
         return panel
 
     def _build_motto_text(self) -> Text:
         text = Text()
-        text.append("\" ", style=Style(color="#e74c3c", dim=True))
-        text.append("Why So Serious ?!", style=Style(color="#e74c3c", bold=True, italic=True))
-        text.append(" \"", style=Style(color="#e74c3c", dim=True))
+        text.append("\" ", style=Style(color="#f59e0b", dim=True))
+        text.append("The Ghost in the Machine", style=Style(color="#f59e0b", bold=True, italic=True))
+        text.append(" \"", style=Style(color="#f59e0b", dim=True))
         return text
 
     def _build_url_text(self) -> Text:
         return Text("phantom-sec.io", style=Style(color=self.PRIMARY_COLOR, bold=True))
 
     def _build_welcome_text(self) -> Text:
-        text = Text("Welcome to ", style=Style(color="white", bold=True))
+        text = Text("☠ ", style=Style(color=self.PRIMARY_COLOR, bold=True))
         text.append("PHANTOM", style=Style(color=self.PRIMARY_COLOR, bold=True))
-        text.append(" ☠ ", style=Style(color="white", dim=True))
-        text.append("AI Red Team Agent", style=Style(color=self.ACCENT_COLOR, bold=True))
+        text.append("  —  ", style=Style(color="white", dim=True))
+        text.append("AI-Powered Red Team Agent", style=Style(color=self.ACCENT_COLOR, bold=True))
         return text
 
     def _build_version_text(self) -> Text:
         return Text(f"v{self._version}", style=Style(color="white", dim=True))
 
     def _build_tagline_text(self) -> Text:
-        return Text("Autonomous Offensive Security Intelligence", style=Style(color="white", dim=True))
+        return Text("Autonomous Adversary Simulation Platform", style=Style(color="white", dim=True))
 
     def _build_start_line_text(self, phase: int) -> Text:
         full_text = "Starting PHANTOM Agent"
@@ -209,10 +211,18 @@ class SplashScreen(Static):  # type: ignore[misc]
 class HelpScreen(ModalScreen):  # type: ignore[misc]
     def compose(self) -> ComposeResult:
         yield Grid(
-            Label("☠ PHANTOM Help", id="help_title"),
+            Label("☠ PHANTOM — Keyboard Shortcuts", id="help_title"),
             Label(
-                "F1        Help\nCtrl+Q/C  Quit\nESC       Stop Agent\n"
-                "Enter     Send message to agent\nTab       Switch panels\n↑/↓       Navigate tree",
+                "F1        Toggle this help screen\n"
+                "Ctrl+Q    Quit Phantom\n"
+                "Ctrl+C    Quit Phantom\n"
+                "ESC       Stop selected agent\n"
+                "Enter     Send message to agent\n"
+                "Shift+↵   New line in input\n"
+                "Tab       Cycle focus between panels\n"
+                "↑ / ↓     Navigate agent tree\n"
+                "─────────────────────────────────\n"
+                "☠  Hunt. Exploit. Report.",
                 id="help_content",
             ),
             id="dialog",
@@ -230,10 +240,10 @@ class StopAgentScreen(ModalScreen):  # type: ignore[misc]
 
     def compose(self) -> ComposeResult:
         yield Grid(
-            Label(f"🛑 Stop '{self.agent_name}'?", id="stop_agent_title"),
+            Label(f"☠ Terminate '{self.agent_name}'?", id="stop_agent_title"),
             Grid(
-                Button("Yes", variant="error", id="stop_agent"),
-                Button("No", variant="default", id="cancel_stop"),
+                Button("Kill", variant="error", id="stop_agent"),
+                Button("Cancel", variant="default", id="cancel_stop"),
                 id="stop_agent_buttons",
             ),
             id="stop_agent_dialog",
@@ -641,10 +651,10 @@ class VulnerabilitiesPanel(VerticalScroll):  # type: ignore[misc]
 class QuitScreen(ModalScreen):  # type: ignore[misc]
     def compose(self) -> ComposeResult:
         yield Grid(
-            Label("Quit Phantom?", id="quit_title"),
+            Label("☠ Exit Phantom?", id="quit_title"),
             Grid(
-                Button("Yes", variant="error", id="quit"),
-                Button("No", variant="default", id="cancel"),
+                Button("Exit", variant="error", id="quit"),
+                Button("Stay", variant="default", id="cancel"),
                 id="quit_buttons",
             ),
             id="quit_dialog",
@@ -723,13 +733,13 @@ class PhantomTUIApp(App):  # type: ignore[misc]
         self._sweep_num_squares: int = 6  # Number of squares in sweep animation
         self._sweep_colors: list[str] = [
             "#000000",  # Dimmest (shows dot)
-            "#0d0315",
-            "#1a052e",
-            "#2d0a4a",
-            "#6b2fa0",
-            "#9b59b6",
-            "#b07cc8",
-            "#c9a5db",  # Brightest
+            "#1a0000",
+            "#330a0a",
+            "#4d1515",
+            "#801f1f",
+            "#dc2626",
+            "#ef4444",
+            "#fca5a5",  # Brightest
         ]
         self._dot_animation_timer: Any | None = None
 
@@ -1312,7 +1322,7 @@ class PhantomTUIApp(App):  # type: ignore[misc]
         wave_pos = total_range - abs(total_range - frame_in_cycle)
         sweep_pos = wave_pos - offset
 
-        dot_color = "#0a3d1f"
+        dot_color = "#1a0505"
 
         for i in range(num_squares):
             dist = abs(i - sweep_pos)

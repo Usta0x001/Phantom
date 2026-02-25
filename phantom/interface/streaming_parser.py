@@ -42,6 +42,13 @@ def parse_streaming_content(content: str) -> list[StreamSegment]:
     if not content:
         return []
 
+    # Strip thinking/reasoning tags before parsing
+    from phantom.llm.utils import strip_thinking_tags
+
+    content = strip_thinking_tags(content)
+    if not content.strip():
+        return []
+
     segments: list[StreamSegment] = []
 
     func_matches = list(_FUNC_PATTERN.finditer(content))

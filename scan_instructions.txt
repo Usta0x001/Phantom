@@ -1,0 +1,24 @@
+BUDGET CRITICAL: ~$0.90 of API tokens remain. Be maximally efficient with every request.
+
+This target is OWASP Juice Shop, a deliberately vulnerable web application. Focus on finding and reporting as many vulnerabilities as possible.
+
+DO NOT waste tokens on:
+- Port scanning or network enumeration (it's a web app on port 3000)
+- Subdomain enumeration
+- Long wordlist fuzzing or brute-forcing
+
+IMMEDIATELY test these attack surfaces and REPORT each confirmed vulnerability:
+1. POST /rest/user/login - SQL injection (try: ' OR 1=1--, admin@juice-sh.op'--)
+2. GET /rest/products/search?q= - SQL injection and reflected XSS
+3. /#/administration - broken access control (accessible without admin role)
+4. /ftp directory - sensitive file disclosure (backup files, configs)
+5. /metrics - Prometheus metrics exposure
+6. JWT manipulation - test 'none' algorithm on Authorization Bearer tokens
+7. POST /api/Feedbacks - submit feedback as another user (forged feedback)
+8. GET /api/Users - user data exposure without proper auth
+9. /rest/basket/ with different IDs - IDOR vulnerability
+10. XSS in search bar /#/search?q= and contact form /#/contact
+11. /rest/products/{id}/reviews - manipulate other users' reviews
+12. File upload in complaint form - unrestricted file upload or path traversal
+
+Call create_vulnerability_report IMMEDIATELY after confirming each vulnerability. Do NOT batch them. Report every single finding individually as you discover it.

@@ -7,7 +7,7 @@ Screen {
     height: 100%;
     width: 100%;
     background: #000000;
-    color: #9b59b6;
+    color: #dc2626;
     align: center middle;
     content-align: center middle;
     text-align: center;
@@ -163,7 +163,7 @@ VulnerabilityDetailScreen {
 
 #copy_vuln_detail:hover, #copy_vuln_detail:focus {
     background: transparent;
-    color: #9b59b6;
+    color: #dc2626;
     border: none;
 }
 
@@ -241,11 +241,11 @@ VulnerabilityDetailScreen {
 }
 
 #chat_input_container:focus-within {
-    border: round #9b59b6;
+    border: round #dc2626;
 }
 
 #chat_input_container:focus-within #chat_prompt {
-    color: #9b59b6;
+    color: #dc2626;
     text-style: bold;
 }
 
@@ -258,7 +258,7 @@ VulnerabilityDetailScreen {
 }
 
 #chat_history:focus {
-    border: round #9b59b6;
+    border: round #dc2626;
 }
 
 #chat_input {
@@ -289,8 +289,8 @@ VulnerabilityDetailScreen {
 }
 
 #chat_input > .text-area--cursor {
-    color: #9b59b6;
-    background: #9b59b6;
+    color: #dc2626;
+    background: #dc2626;
 }
 
 .chat-placeholder {
@@ -320,7 +320,7 @@ VulnerabilityDetailScreen {
 
 .user-message {
     color: #e5e5e5;
-    border-left: thick #3b82f6;
+    border-left: thick #dc2626;
     padding-left: 1;
     margin-bottom: 1;
 }
@@ -508,10 +508,10 @@ StopAgentScreen {
     grid-gutter: 1;
     grid-rows: auto auto;
     padding: 1;
-    width: 30;
+    width: 34;
     height: auto;
-    border: round #a3a3a3;
-    background: #000000 98%;
+    border: round #dc2626;
+    background: #0a0000 98%;
 }
 
 #stop_agent_title {
@@ -571,10 +571,10 @@ QuitScreen {
     grid-gutter: 1;
     grid-rows: auto auto;
     padding: 1;
-    width: 24;
+    width: 28;
     height: auto;
-    border: round #333333;
-    background: #000000 98%;
+    border: round #991b1b;
+    background: #0a0000 98%;
 }
 
 #quit_title {
@@ -636,12 +636,12 @@ HelpScreen {
     padding: 1 2;
     width: 40;
     height: auto;
-    border: round #9b59b6;
+    border: round #dc2626;
     background: #000000 98%;
 }
 
 #help_title {
-    color: #9b59b6;
+    color: #dc2626;
     text-style: bold;
     text-align: center;
     width: 100%;

@@ -1,6 +1,6 @@
 ﻿% ============================================================
 % PHANTOM: Autonomous AI Penetration Testing Agent
-% Technical Report  v0.8.1
+% Technical Report  v0.8.5
 % ============================================================
 \documentclass[12pt,a4paper]{article}
 
@@ -61,7 +61,7 @@
   citecolor=phantomdark,
   pdftitle={Phantom: Autonomous AI Penetration Testing Agent --- Technical Report},
   pdfauthor={Gadouri Redwan},
-  pdfsubject={Autonomous AI Security Agent v0.8.1},
+  pdfsubject={Autonomous AI Security Agent v0.8.5},
   pdfkeywords={penetration testing, AI agents, LLM, cybersecurity},
 }
 
@@ -69,7 +69,7 @@
 \pagestyle{fancy}
 \fancyhf{}
 \fancyhead[L]{\small\textcolor{phantomviolet}{\textbf{PHANTOM}} \textcolor{phantomdark}{\textemdash{} Autonomous AI Penetration Testing}}
-\fancyhead[R]{\small\textcolor{gray}{v0.8.1}}
+\fancyhead[R]{\small\textcolor{gray}{v0.8.5}}
 \fancyfoot[C]{\small\thepage}
 \renewcommand{\headrulewidth}{0.4pt}
 \renewcommand{\headrule}{\hbox to\headwidth{\color{phantomviolet}\leaders\hrule height\headrulewidth\hfill}}
@@ -127,7 +127,7 @@
 
 \vspace{1.5cm}
 {\Large\bfseries Technical Report}\\[0.4cm]
-{\large Version 0.8.1 \textemdash{} February 2026}
+{\large Version 0.8.5 \textemdash{} February 2026}
 
 \vspace{2cm}
 \begin{tabular}{ll}
@@ -150,9 +150,10 @@
 % -- Abstract ----------------------------------------------
 \begin{abstract}
 \noindent
-Phantom is an autonomous AI-powered penetration testing agent that performs full web application security assessments without human intervention. Given a target URL and an LLM API key, Phantom spawns a tree of specialized agents, each capable of reasoning about the target, selecting and executing security tools, interpreting results, and escalating findings. All tool execution occurs inside an isolated Docker sandbox containing more than 20 professional security tools. Phantom produces structured reports in HTML, Markdown, JSON, SARIF, and PDF formats, with full MITRE ATT\&CK and OWASP Top 10 mapping. The current release (v0.8.1) ships with 146 passing tests, is published on PyPI, and supports any LLM provider via LiteLLM.
+Phantom is an autonomous AI-powered penetration testing agent that performs full web application security assessments without human intervention. Given a target URL and an LLM API key, Phantom spawns a tree of specialized agents, each capable of reasoning about the target, selecting and executing security tools, interpreting results, and escalating findings. All tool execution occurs inside an isolated Docker sandbox containing more than 20 professional security tools. Phantom produces structured reports in HTML, Markdown, JSON, SARIF, and PDF formats, with full MITRE ATT\&CK and OWASP Top 10 mapping. The current release (v0.8.5) ships with 146 passing tests, is published on PyPI, and supports any LLM provider via LiteLLM.
 \end{abstract}
 
+\newpage
 \tableofcontents
 \newpage
 
@@ -469,7 +470,7 @@ Content-Type: application/json
 
 \begin{table}[H]
 \centering
-\caption{Security Tools in the Phantom Sandbox (v0.8.1)}
+\caption{Security Tools in the Phantom Sandbox (v0.8.5)}
 \begin{tabularx}{\textwidth}{l l X}
 \toprule
 \textbf{Tool} & \textbf{Version} & \textbf{Capability} \\
@@ -962,7 +963,7 @@ The package registers one executable: \texttt{phantom}.
 \toprule
 \textbf{Image} & \textbf{Purpose} & \textbf{Size} \\
 \midrule
-\texttt{redwan07/phantom:latest}                  & Phantom CLI (Python only)   & 743\,MB \\
+\texttt{redwan07/phantom:latest}                  & Phantom CLI (Docker image)  & 743\,MB \\
 \texttt{ghcr.io/usta0x001/phantom-sandbox:latest} & Kali sandbox with all tools & 14\,GB \\
 \texttt{ghcr.io/usta0x001/phantom-sandbox:0.8.0}  & Sandbox --- pinned version  & 14\,GB \\
 \bottomrule
@@ -983,7 +984,7 @@ The package registers one executable: \texttt{phantom}.
 
 \begin{table}[H]
 \centering
-\caption{Test Results as of v0.8.1}
+\caption{Test Results as of v0.8.5}
 \begin{tabular}{lrc}
 \toprule
 \textbf{Category} & \textbf{Tests} & \textbf{Pass Rate} \\
@@ -1070,9 +1071,9 @@ Use against systems without written authorisation is illegal under computer frau
 \textbf{Channel}           & \textbf{Address}                               & \textbf{Status} \\
 \midrule
 GitHub                     & \texttt{github.com/Usta0x001/Phantom}           & \checkmark~Live \\
-PyPI                       & \texttt{pypi.org/project/phantom-agent/}        & \checkmark~v0.8.1 \\
-Docker Hub (CLI)           & \texttt{docker.io/redwan07/phantom}             & \checkmark~v0.8.1 \\
-GitHub Container Registry  & \texttt{ghcr.io/usta0x001/phantom-sandbox}     & \checkmark~0.8.0 \\
+PyPI                       & \texttt{pypi.org/project/phantom-agent/}        & \checkmark~v0.8.5 \\
+Docker Hub (CLI)           & \texttt{docker.io/redwan07/phantom}             & \checkmark~Latest \\
+GitHub Container Registry  & \texttt{ghcr.io/usta0x001/phantom-sandbox}     & \checkmark~Latest \\
 \bottomrule
 \end{tabular}
 \end{table}
@@ -1138,23 +1139,10 @@ docker pull ghcr.io/usta0x001/phantom-sandbox:latest
 \texttt{LLM\_API\_BASE}   & Override base URL (e.g.\ for OpenRouter or a local proxy) \\
 \texttt{PHANTOM\_IMAGE}   & Docker image override for the sandbox \\
 \texttt{PHANTOM\_DEBUG}   & Enable verbose debug logging (\texttt{1} or \texttt{true}) \\
-\texttt{PYTHONUTF8}       & Set to \texttt{1} on Windows for correct Unicode output \\
+\texttt{PHANTOM\_LLM\_FALLBACK} & Comma-separated fallback model chain \\
 \bottomrule
 \end{tabular}
 \end{table}
-
-\section{Windows Unicode Fix}
-
-\begin{warnbox}
-\textbf{Garbled output in PowerShell?} Phantom uses Rich for terminal output with Unicode box-drawing characters. Windows PowerShell default encoding (CP850) cannot render them, producing garbage such as \texttt{Goe|GoC Goy}.
-
-\textbf{Fix --- run before every session (or add to \texttt{\$PROFILE}):}
-\begin{lstlisting}[language=bash, numbers=none]
-$env:PYTHONUTF8 = "1"
-[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
-[Console]::InputEncoding  = [System.Text.Encoding]::UTF8
-\end{lstlisting}
-\end{warnbox}
 
 % ============================================================
 \end{document}

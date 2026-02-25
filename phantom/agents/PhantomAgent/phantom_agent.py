@@ -1,7 +1,6 @@
 from typing import Any
 
 from phantom.agents.base_agent import BaseAgent
-from phantom.agents.enhanced_state import EnhancedAgentState
 from phantom.llm.config import LLMConfig
 
 
@@ -14,14 +13,11 @@ class PhantomAgent(BaseAgent):
         state = config.get("state")
         if state is None or (hasattr(state, "parent_id") and state.parent_id is None):
             default_skills = ["root_agent"]
-            # Use EnhancedAgentState for root agents  (security tracking)
-            if state is None:
-                config["state"] = EnhancedAgentState(
-                    agent_name="Phantom Root Agent",
-                    max_iterations=config.get("max_iterations", 300),
-                )
 
         self.default_llm_config = LLMConfig(skills=default_skills)
+
+        # Apply scan profile if provided
+        self.scan_profile = config.get("scan_profile")
 
         super().__init__(config)
 
@@ -90,16 +86,31 @@ class PhantomAgent(BaseAgent):
 
         task_description = " ".join(task_parts)
 
+        # ── Inject scan profile constraints into task ──
+        if self.scan_profile:
+            profile = self.scan_profile
+            profile_name = profile.name if hasattr(profile, "name") else str(profile.get("name", "unknown"))
+            max_iter = profile.max_iterations if hasattr(profile, "max_iterations") else profile.get("max_iterations", 300)
+            task_description += f"\n\n--- SCAN PROFILE: {profile_name} ---"
+            task_description += f"\nYou have a STRICT LIMIT of {max_iter} tool-call iterations."
+            task_description += "\nBe efficient and focused. Report vulnerabilities as soon as you find them."
+
+            skip_tools = profile.skip_tools if hasattr(profile, "skip_tools") else profile.get("skip_tools", [])
+            if skip_tools:
+                task_description += f"\nDO NOT use these tools: {', '.join(skip_tools)}"
+
+            priority_tools = profile.priority_tools if hasattr(profile, "priority_tools") else profile.get("priority_tools", [])
+            if priority_tools:
+                task_description += f"\nPRIORITIZE these tools: {', '.join(priority_tools)}"
+
+            enable_browser = profile.enable_browser if hasattr(profile, "enable_browser") else profile.get("enable_browser", True)
+            if not enable_browser:
+                task_description += "\nDo NOT use browser-based tools (open_browser, browser_navigate, etc.)."
+
+            task_description += "\nCall create_vulnerability_report IMMEDIATELY after confirming each vulnerability."
+            task_description += "\n--- END SCAN PROFILE ---"
+
         if user_instructions:
             task_description += f"\n\nSpecial instructions: {user_instructions}"
-
-        # Initialize enhanced scan tracking if available
-        if hasattr(self.state, "initialize_scan") and targets:
-            first_target = targets[0]
-            target_str = first_target.get("details", {}).get(
-                "target_url",
-                first_target.get("details", {}).get("target_ip", "unknown"),
-            )
-            self.state.initialize_scan(target_str, scan_config.get("scan_id"))
 
         return await self.agent_loop(task=task_description)

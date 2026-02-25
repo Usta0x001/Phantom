@@ -190,7 +190,7 @@ def validate_environment() -> None:  # noqa: PLR0912, PLR0915
 
         panel = Panel(
             error_text,
-            title="[bold #9b59b6]☠ PHANTOM",
+            title="[bold #dc2626]☠ PHANTOM",
             title_align="left",
             border_style="red",
             padding=(1, 2),
@@ -215,7 +215,7 @@ def check_docker_installed() -> None:
 
         panel = Panel(
             error_text,
-            title="[bold #9b59b6]☠ PHANTOM",
+            title="[bold #dc2626]☠ PHANTOM",
             title_align="left",
             border_style="red",
             padding=(1, 2),
@@ -289,7 +289,7 @@ async def warm_up_llm() -> None:
 
         panel = Panel(
             error_text,
-            title="[bold #9b59b6]☠ PHANTOM",
+            title="[bold #dc2626]☠ PHANTOM",
             title_align="left",
             border_style="red",
             padding=(1, 2),
@@ -315,7 +315,7 @@ def parse_arguments() -> argparse.Namespace:
         description="☠ PHANTOM — Autonomous Offensive Security Intelligence",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
-\" Why So Serious ?! \"
+" The Ghost in the Machine "
 
 Examples:
   # Web application penetration test
@@ -464,7 +464,7 @@ def display_completion_message(args: argparse.Namespace, results_path: Path) -> 
 
     completion_text = Text()
     if scan_completed:
-        completion_text.append("☠ Scan completed", style="bold #9b59b6")
+        completion_text.append("☠ Scan completed", style="bold #dc2626")
     else:
         completion_text.append("⚠ Session ended", style="bold #eab308")
         # Show error reason if available
@@ -499,13 +499,13 @@ def display_completion_message(args: argparse.Namespace, results_path: Path) -> 
 
     panel_content = Text.assemble(*panel_parts)
 
-    border_style = "#9b59b6" if scan_completed else "#eab308"
+    border_style = "#dc2626" if scan_completed else "#eab308"
 
     panel = Panel(
         panel_content,
-        title="[bold #9b59b6]☠ PHANTOM",
+        title="[bold #dc2626]☠ PHANTOM",
         title_align="left",
-        subtitle='[italic #e74c3c]" Why So Serious ?! "',
+        subtitle='[italic #f59e0b]" The Ghost in the Machine "',
         subtitle_align="right",
         border_style=border_style,
         padding=(1, 2),
@@ -514,7 +514,7 @@ def display_completion_message(args: argparse.Namespace, results_path: Path) -> 
     console.print("\n")
     console.print(panel)
     console.print()
-    console.print('[bold #9b59b6]☠ PHANTOM[/]  [dim]·[/]  [italic #e74c3c]" Why So Serious ?! "[/]  [dim]·[/]  [dim]Autonomous Offensive Security Intelligence[/]')
+    console.print('[bold #dc2626]☠ PHANTOM[/]  [dim]·[/]  [italic #f59e0b]" The Ghost in the Machine "[/]  [dim]·[/]  [dim]Autonomous Adversary Simulation Platform[/]')
     console.print()
 
 
@@ -549,7 +549,7 @@ def pull_docker_image() -> None:
     try:
         _pull_single_image(client, configured_image)
         success_text = Text()
-        success_text.append("Docker image ready", style="#9b59b6")
+        success_text.append("Docker image ready", style="#dc2626")
         console.print(success_text)
         console.print()
         return
@@ -562,7 +562,7 @@ def pull_docker_image() -> None:
             error_text.append("\n\n")
             error_text.append(f"Could not download: {configured_image}\n", style="white")
             error_text.append(str(primary_err), style="dim red")
-            console.print(Panel(error_text, title="[bold #9b59b6]☠ PHANTOM",
+            console.print(Panel(error_text, title="[bold #dc2626]☠ PHANTOM",
                                 title_align="left", border_style="red", padding=(1, 2)))
             console.print()
             sys.exit(1)
@@ -581,7 +581,7 @@ def pull_docker_image() -> None:
         try:
             _pull_single_image(client, _DEFAULT_SANDBOX_IMAGE)
             success_text = Text()
-            success_text.append("Docker image ready (default fallback)", style="#9b59b6")
+            success_text.append("Docker image ready (default fallback)", style="#dc2626")
             console.print(success_text)
             console.print()
         except DockerException as fallback_err:
@@ -593,7 +593,7 @@ def pull_docker_image() -> None:
             error_text.append(str(fallback_err), style="dim red")
             error_text.append("\n\nTip: pre-pull manually with:\n", style="dim")
             error_text.append(f"  docker pull {_DEFAULT_SANDBOX_IMAGE}", style="bold")
-            console.print(Panel(error_text, title="[bold #9b59b6]☠ PHANTOM",
+            console.print(Panel(error_text, title="[bold #dc2626]☠ PHANTOM",
                                 title_align="left", border_style="red", padding=(1, 2)))
             console.print()
             sys.exit(1)

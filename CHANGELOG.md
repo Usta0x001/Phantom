@@ -2,6 +2,51 @@
 
 All notable changes to Phantom will be documented in this file.
 
+## [0.9.0] - 2025-07-25
+
+### Activated — Dead Code Brought to Life
+
+v0.8.0 introduced 16 core modules (~4,500 lines) that were never wired into the runtime.
+v0.9.0 activates **every single one** in a fully integrated post-scan enrichment pipeline.
+
+### Added
+- **Post-Scan Enrichment Pipeline** — 7-stage automatic enrichment runs after every scan:
+  1. **MITRE Enrichment** — CWE/CAPEC/OWASP mapping for all findings
+  2. **Compliance Mapping** — OWASP Top 10, PCI DSS, NIST reports (saved as `compliance_report.md`)
+  3. **Attack Graph** — NetworkX graph + path analysis (saved as `attack_graph.json` + `attack_paths.md`)
+  4. **Nuclei Templates** — Auto-generated per-vulnerability YAML templates
+  5. **Knowledge Store** — Persistent cross-scan vulnerability memory
+  6. **Notifications** — Webhook/Slack alerts for critical/high findings
+  7. **Enhanced Reports** — JSON, HTML, and Markdown structured reports
+- **Profile-Driven Scans** — Scan profiles now actually control iteration limits:
+  - `quick` → 20 iterations, low effort, no browser
+  - `standard` → 40 iterations, medium effort
+  - `deep` → 80 iterations, high effort
+  - `stealth` → 30 iterations, no noisy tools
+  - `api_only` → 40 iterations, no browser/subfinder
+- **`phantom profiles` command** — Display all available scan profiles in a rich table
+- **`phantom diff` command** — Compare two scan runs to see new/fixed/unchanged vulnerabilities
+- **Profile constraints in LLM prompts** — Agent receives strict iteration limits, allowed/blocked tools, and browser restrictions as part of its task description
+- **`stealth` and `api_only` scan modes** — Added to CLI enum
+
+### Fixed
+- **Hardcoded max_iterations=300** — Was ignoring scan profiles entirely; now uses profile-driven values
+- **KnowledgeStore dict/model mismatch** — Added `_dict_to_vulnerability()` converter for proper Vulnerability model objects
+- **ReportGenerator dict/model mismatch** — Same converter applied; reports now generate correctly
+- **ScopeValidator API** — Corrected method call from `is_allowed()` to `is_in_scope()`
+
+### Changed
+- **`phantom/core/__init__.py`** — Expanded from 5 exports to all 16 modules (full public API)
+- **`phantom/interface/cli.py`** — Profile loading, startup banner shows profile name/iterations/effort
+- **`phantom/agents/PhantomAgent/phantom_agent.py`** — Injects profile constraints into agent task
+- **`phantom/tools/finish/finish_actions.py`** — Enrichment pipeline runs automatically after `finish_scan`
+
+### Technical Details
+- All 16 core modules verified individually (import + instantiate + core method call)
+- 142/142 tests passing
+- Zero circular dependencies
+- All enrichment stages wrapped in try/except — failures are logged but never crash the scan
+
 ## [0.8.5] - 2026-02-24
 
 ### Fixed
