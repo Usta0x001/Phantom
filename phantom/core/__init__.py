@@ -11,7 +11,7 @@ from .knowledge_store import KnowledgeStore, get_knowledge_store
 from .mitre_enrichment import MITREEnricher
 from .notifier import Notifier
 from .nuclei_templates import TemplateGenerator
-from .priority_queue import ScanOrchestrator, ScanPriorityQueue, VulnerabilityPriorityQueue
+from .priority_queue import ScanPriorityQueue, VulnerabilityPriorityQueue
 from .report_generator import ReportGenerator, generate_all_reports
 from .scan_profiles import ScanProfile, get_profile, list_profiles, register_profile
 from .scope_validator import ScopeValidator
@@ -34,7 +34,7 @@ __all__ = [
     # Priority Queue
     "VulnerabilityPriorityQueue",
     "ScanPriorityQueue",
-    "ScanOrchestrator",
+
     # OOB / Interactsh
     "InteractshClient",
     "OOBPayload",

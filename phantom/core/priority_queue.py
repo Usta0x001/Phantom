@@ -292,57 +292,6 @@ class ScanPriorityQueue:
         return len(self._completed)
 
 
-class ScanOrchestrator:
-    """
-    High-level orchestrator combining priority queues.
-    
-    Manages the overall scan flow:
-    1. Recon phase -> populate host/subdomain data
-    2. Scanning phase -> run vulnerability scanners
-    3. Verification phase -> confirm findings
-    4. Reporting phase -> generate output
-    """
-    
-    def __init__(self):
-        self.vuln_queue = VulnerabilityPriorityQueue()
-        self.task_queue = ScanPriorityQueue()
-        self._current_phase = ScanPhase.RECON
-        self._hosts: dict[str, Any] = {}
-        self._vulnerabilities: dict[str, Vulnerability] = {}
-    
-    def start_scan(self, target: str) -> list[ScanTask]:
-        """Initialize scan for target."""
-        tasks = self.task_queue.create_recon_tasks(target)
-        return tasks
-    
-    def add_vulnerability(self, vuln: Vulnerability) -> None:
-        """Add discovered vulnerability."""
-        self._vulnerabilities[vuln.id] = vuln
-        self.vuln_queue.push(vuln)
-        
-        # Create verification task for critical/high severity
-        if vuln.severity in {VulnerabilitySeverity.CRITICAL, VulnerabilitySeverity.HIGH}:
-            self.task_queue.create_verification_task(vuln.id, vuln.target)
-    
-    def next_task(self) -> ScanTask | None:
-        """Get next task to execute."""
-        return self.task_queue.pop()
-    
-    def next_vuln_to_verify(self) -> Vulnerability | None:
-        """Get next vulnerability to verify."""
-        return self.vuln_queue.pop()
-    
-    def complete_task(self, task_id: str) -> None:
-        """Mark task as completed."""
-        self.task_queue.mark_completed(task_id)
-    
-    def get_status(self) -> dict[str, Any]:
-        """Get orchestrator status."""
-        return {
-            "current_phase": self._current_phase.value,
-            "pending_tasks": self.task_queue.pending_count(),
-            "completed_tasks": self.task_queue.completed_count(),
-            "vulnerabilities_found": len(self._vulnerabilities),
-            "vulnerabilities_pending_verification": len(self.vuln_queue),
-            "vuln_queue_stats": self.vuln_queue.stats(),
-        }
+# NOTE: ScanOrchestrator was removed as dead code during audit.
+# Its functionality is handled by EnhancedAgentState.
+# See AUDIT_REPORT.md / ACADEMIC_REPORT.md for details.

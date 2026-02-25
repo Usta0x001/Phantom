@@ -4,6 +4,8 @@ from typing import Any, Literal
 
 from phantom.tools.registry import register_tool
 
+# Thread-safe lock for all agent graph mutations
+_graph_lock = threading.Lock()
 
 _agent_graph: dict[str, Any] = {
     "nodes": {},
@@ -69,9 +71,9 @@ def _run_agent_in_thread(
 
         state.add_message("user", task_xml)
 
-        _agent_states[state.agent_id] = state
-
-        _agent_graph["nodes"][state.agent_id]["state"] = state.model_dump()
+        with _graph_lock:
+            _agent_states[state.agent_id] = state
+            _agent_graph["nodes"][state.agent_id]["state"] = state.model_dump()
 
         import asyncio
 
@@ -83,21 +85,23 @@ def _run_agent_in_thread(
             loop.close()
 
     except Exception as e:
-        _agent_graph["nodes"][state.agent_id]["status"] = "error"
-        _agent_graph["nodes"][state.agent_id]["finished_at"] = datetime.now(UTC).isoformat()
-        _agent_graph["nodes"][state.agent_id]["result"] = {"error": str(e)}
-        _running_agents.pop(state.agent_id, None)
-        _agent_instances.pop(state.agent_id, None)
+        with _graph_lock:
+            _agent_graph["nodes"][state.agent_id]["status"] = "error"
+            _agent_graph["nodes"][state.agent_id]["finished_at"] = datetime.now(UTC).isoformat()
+            _agent_graph["nodes"][state.agent_id]["result"] = {"error": str(e)}
+            _running_agents.pop(state.agent_id, None)
+            _agent_instances.pop(state.agent_id, None)
         raise
     else:
-        if state.stop_requested:
-            _agent_graph["nodes"][state.agent_id]["status"] = "stopped"
-        else:
-            _agent_graph["nodes"][state.agent_id]["status"] = "completed"
-        _agent_graph["nodes"][state.agent_id]["finished_at"] = datetime.now(UTC).isoformat()
-        _agent_graph["nodes"][state.agent_id]["result"] = result
-        _running_agents.pop(state.agent_id, None)
-        _agent_instances.pop(state.agent_id, None)
+        with _graph_lock:
+            if state.stop_requested:
+                _agent_graph["nodes"][state.agent_id]["status"] = "stopped"
+            else:
+                _agent_graph["nodes"][state.agent_id]["status"] = "completed"
+            _agent_graph["nodes"][state.agent_id]["finished_at"] = datetime.now(UTC).isoformat()
+            _agent_graph["nodes"][state.agent_id]["result"] = result
+            _running_agents.pop(state.agent_id, None)
+            _agent_instances.pop(state.agent_id, None)
 
         return {"result": result}
 
@@ -254,7 +258,8 @@ def create_agent(
         if inherit_context:
             inherited_messages = agent_state.get_conversation_history()
 
-        _agent_instances[state.agent_id] = agent
+        with _graph_lock:
+            _agent_instances[state.agent_id] = agent
 
         thread = threading.Thread(
             target=_run_agent_in_thread,
@@ -263,7 +268,8 @@ def create_agent(
             name=f"Agent-{name}-{state.agent_id}",
         )
         thread.start()
-        _running_agents[state.agent_id] = thread
+        with _graph_lock:
+            _running_agents[state.agent_id] = thread
 
     except Exception as e:  # noqa: BLE001
         return {"success": False, "error": f"Failed to create agent: {e}", "agent_id": None}
@@ -442,7 +448,8 @@ def agent_finish(
 
                 parent_notified = True
 
-        _running_agents.pop(agent_id, None)
+        with _graph_lock:
+            _running_agents.pop(agent_id, None)
 
         return {
             "agent_completed": True,
@@ -485,16 +492,17 @@ def stop_agent(agent_id: str) -> dict[str, Any]:
                 "previous_status": agent_node["status"],
             }
 
-        if agent_id in _agent_states:
-            agent_state = _agent_states[agent_id]
-            agent_state.request_stop()
+        with _graph_lock:
+            if agent_id in _agent_states:
+                agent_state = _agent_states[agent_id]
+                agent_state.request_stop()
 
-        if agent_id in _agent_instances:
-            agent_instance = _agent_instances[agent_id]
-            if hasattr(agent_instance, "state"):
-                agent_instance.state.request_stop()
-            if hasattr(agent_instance, "cancel_current_execution"):
-                agent_instance.cancel_current_execution()
+            if agent_id in _agent_instances:
+                agent_instance = _agent_instances[agent_id]
+                if hasattr(agent_instance, "state"):
+                    agent_instance.state.request_stop()
+                if hasattr(agent_instance, "cancel_current_execution"):
+                    agent_instance.cancel_current_execution()
 
         agent_node["status"] = "stopping"
 

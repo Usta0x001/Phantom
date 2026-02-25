@@ -12,6 +12,10 @@ from typing import Any, Literal
 
 from phantom.tools.registry import register_tool
 
+# Pre-compiled patterns for nmap output parsing (avoid re-compiling in loops)
+_HOST_PATTERN = re.compile(r"for\s+(.+?)(?:\s+\(([^)]+)\))?$")
+_PORT_PATTERN = re.compile(r"^\d+/(tcp|udp)")
+
 
 def _parse_nmap_output(raw_output: str) -> dict[str, Any]:
     """Parse nmap text output into structured data."""
@@ -30,14 +34,14 @@ def _parse_nmap_output(raw_output: str) -> dict[str, Any]:
         if line.startswith("Nmap scan report for"):
             if current_host:
                 result["hosts"].append(current_host)
-            host_match = re.search(r"for\s+(.+?)(?:\s+\(([^)]+)\))?$", line)
+            host_match = _HOST_PATTERN.search(line)
             if host_match:
                 hostname = host_match.group(1).strip()
                 ip = host_match.group(2) or hostname
                 current_host = {"hostname": hostname, "ip": ip, "ports": [], "os": None}
 
         # Port info
-        elif current_host and re.match(r"^\d+/(tcp|udp)", line):
+        elif current_host and _PORT_PATTERN.match(line):
             parts = line.split()
             if len(parts) >= 3:
                 port_proto = parts[0]

@@ -138,7 +138,7 @@ def _parse_dedupe_response(content: str) -> dict[str, Any]:
     }
 
 
-def check_duplicate(
+async def check_duplicate(
     candidate: dict[str, Any], existing_reports: list[dict[str, Any]]
 ) -> dict[str, Any]:
     if not existing_reports:
@@ -186,7 +186,7 @@ def check_duplicate(
         if api_base:
             completion_kwargs["api_base"] = api_base
 
-        response = litellm.completion(**completion_kwargs)
+        response = await litellm.acompletion(**completion_kwargs)
 
         content = response.choices[0].message.content
         if not content:

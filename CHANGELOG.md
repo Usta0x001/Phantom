@@ -2,6 +2,45 @@
 
 All notable changes to Phantom will be documented in this file.
 
+## [0.9.1] - 2025-07-26
+
+### Security Hardening & Bug Fixes
+
+Deep offensive audit of all 45+ source files. 6 critical bugs fixed, 5 HIGH severity
+issues resolved, 5 MEDIUM severity improvements, 2 new agent tools, 28 integration tests.
+
+### Fixed — Critical (6)
+- **C-01: LLM history destruction** — `_prepare_messages()` was calling `.clear()/.extend()` on the caller's conversation history, destroying it on every compressed LLM call. Now operates on a copy.
+- **C-02: Thread-unsafe agent graph** — 5 module-level dicts accessed from multiple threads with zero locking. Added `_graph_lock = threading.Lock()` around all mutations.
+- **C-03: False positive misclassification** — Verification engine was calling `mark_false_positive()` when verification attempts failed. Removed — unverified ≠ false positive.
+- **C-04: Broken compliance pass_rate** — Was dividing `passed / failed` instead of `passed / (passed + failed)`. Fixed denominator.
+- **C-05: Event loop blocking** — `_prepare_messages()` sync LLM calls now offloaded via `asyncio.to_thread()` in async `generate()`.
+- **C-06: Invalid YAML output** — `_yaml_escape()` was escaping colons and hashes, producing invalid YAML. Removed — safe inside quoted strings.
+
+### Fixed — High (5)
+- **SSRF via DNS rebinding** — Notifier `_validate_url()` now resolves hostnames and checks resolved IPs against private ranges. Added scheme validation (http/https only).
+- **Sync LLM in async context** — `check_duplicate()` now uses `await litellm.acompletion()`. `create_vulnerability_report()` made async to match.
+- **Unbounded message accumulation** — Added `MAX_MESSAGES = 200` hard cap in memory compressor to prevent OOM on long scans.
+- **Lock-free agent cleanup** — `agent_finish()` and `stop_agent()` now properly acquire `_graph_lock` before mutating shared dicts.
+- **Regex compilation in loops** — Pre-compiled nmap output patterns at module level.
+
+### Fixed — Medium (5)
+- **BFS O(n) pop(0)** — Attack graph BFS now uses `collections.deque.popleft()` (O(1)).
+- **Combinatorial graph traversal** — Added `max_paths=500` limit to `find_attack_paths()` and `find_critical_paths()`.
+- **Dead code removed** — Removed unused `ScanOrchestrator` class (~50 lines) from priority_queue.py.
+- **Missing input validation** — `terminal_execute` now validates non-empty commands.
+- **Silent error swallowing** — Enrichment pipeline bare `except: pass` blocks now log at DEBUG level.
+
+### Added
+- **`check_known_vulnerabilities` tool** — Agent can query the knowledge store for previously found vulnerabilities on a target.
+- **`enrich_vulnerability` tool** — Agent can enrich findings with MITRE ATT&CK (CWE/CAPEC) + compliance mappings before reporting.
+- **Knowledge store at startup** — Scan startup loads prior findings for the target and displays count in console banner.
+- **28 integration tests** — Covering all critical fixes, new tools, profiles, enrichment pipeline, SSRF protection, knowledge store, attack graph, and report generator.
+
+### Changed
+- Total registered agent tools: **49** (47 + 2 new)
+- Test suite: **170 tests** (142 existing + 28 integration)
+
 ## [0.9.0] - 2025-07-25
 
 ### Activated — Dead Code Brought to Life

@@ -483,7 +483,7 @@ class ComplianceMapper:
         num_passed = len(passed_ids)
         num_failed = len(failed_control_ids)
         num_untested = len(untested_ids)
-        num_tested = num_failed  # Only failed controls are truly "tested"
+        num_tested = num_passed + num_failed  # Both passed and failed were tested
 
         pass_rate = (num_passed / num_tested * 100) if num_tested > 0 else 0.0
 
