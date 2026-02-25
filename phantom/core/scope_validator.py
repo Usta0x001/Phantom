@@ -21,6 +21,15 @@ class ScopeRule:
     pattern: str
     rule_type: str  # "domain", "ip", "cidr", "regex"
     action: str = "allow"  # "allow" or "deny"
+    _compiled_regex: re.Pattern[str] | None = field(default=None, repr=False, compare=False)
+
+    def __post_init__(self) -> None:
+        """Pre-compile regex pattern at construction time (validates early, avoids per-call cost)."""
+        if self.rule_type == "regex":
+            try:
+                self._compiled_regex = re.compile(self.pattern, re.IGNORECASE)
+            except re.error:
+                self._compiled_regex = None
 
     def matches(self, target: str) -> bool:
         """Check if a target matches this rule."""
@@ -61,12 +70,12 @@ class ScopeRule:
 
     def _match_regex(self, target: str) -> bool:
         try:
-            compiled = re.compile(self.pattern, re.IGNORECASE)
-            # Use match with a length limit to mitigate catastrophic backtracking
+            if self._compiled_regex is None:
+                return False
+            # Length limit to mitigate catastrophic backtracking
             if len(target) > 2048:
                 target = target[:2048]
-            match = compiled.search(target)
-            return bool(match)
+            return bool(self._compiled_regex.search(target))
         except (re.error, RecursionError):
             return False
 

@@ -459,7 +459,7 @@ class Tracer:
             )
 
     def get_total_llm_stats(self) -> dict[str, Any]:
-        from phantom.tools.agents_graph.agents_graph_actions import _agent_instances
+        from phantom.tools.agents_graph.agents_graph_actions import _agent_instances, _graph_lock
 
         total_stats = {
             "input_tokens": 0,
@@ -469,7 +469,10 @@ class Tracer:
             "requests": 0,
         }
 
-        for agent_instance in _agent_instances.values():
+        with _graph_lock:
+            instances_snapshot = list(_agent_instances.values())
+
+        for agent_instance in instances_snapshot:
             if hasattr(agent_instance, "llm") and hasattr(agent_instance.llm, "_total_stats"):
                 agent_stats = agent_instance.llm._total_stats
                 total_stats["input_tokens"] += agent_stats.input_tokens

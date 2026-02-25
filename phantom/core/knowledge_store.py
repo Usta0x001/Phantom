@@ -225,7 +225,12 @@ class KnowledgeStore:
         """Get all known hosts."""
         with self._lock:
             keys = list(self._hosts.keys())
-        return [self.get_host(k) for k in keys if self.get_host(k)]
+        result = []
+        for k in keys:
+            host = self.get_host(k)
+            if host is not None:
+                result.append(host)
+        return result
     
     def host_exists(self, key: str) -> bool:
         """Check if host is known."""
@@ -257,7 +262,7 @@ class KnowledgeStore:
             "verified_at": vuln.verified_at.isoformat() if vuln.verified_at else None,
         }
         
-        self._save_vulns()
+            self._save_vulns()
     
     def get_vulnerability(self, vuln_id: str) -> Vulnerability | None:
         """Retrieve a vulnerability by ID."""

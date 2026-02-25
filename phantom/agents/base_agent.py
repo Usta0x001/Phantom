@@ -131,21 +131,22 @@ class BaseAgent(metaclass=AgentMeta):
             "state": self.state.model_dump(),
         }
 
-        agents_graph_actions._agent_graph["nodes"][self.state.agent_id] = node
+        with agents_graph_actions._graph_lock:
+            agents_graph_actions._agent_graph["nodes"][self.state.agent_id] = node
 
-        agents_graph_actions._agent_instances[self.state.agent_id] = self
-        agents_graph_actions._agent_states[self.state.agent_id] = self.state
+            agents_graph_actions._agent_instances[self.state.agent_id] = self
+            agents_graph_actions._agent_states[self.state.agent_id] = self.state
 
-        if self.state.parent_id:
-            agents_graph_actions._agent_graph["edges"].append(
-                {"from": self.state.parent_id, "to": self.state.agent_id, "type": "delegation"}
-            )
+            if self.state.parent_id:
+                agents_graph_actions._agent_graph["edges"].append(
+                    {"from": self.state.parent_id, "to": self.state.agent_id, "type": "delegation"}
+                )
 
-        if self.state.agent_id not in agents_graph_actions._agent_messages:
-            agents_graph_actions._agent_messages[self.state.agent_id] = []
+            if self.state.agent_id not in agents_graph_actions._agent_messages:
+                agents_graph_actions._agent_messages[self.state.agent_id] = []
 
-        if self.state.parent_id is None and agents_graph_actions._root_agent_id is None:
-            agents_graph_actions._root_agent_id = self.state.agent_id
+            if self.state.parent_id is None and agents_graph_actions._root_agent_id is None:
+                agents_graph_actions._root_agent_id = self.state.agent_id
 
     async def agent_loop(self, task: str) -> dict[str, Any]:  # noqa: PLR0912, PLR0915
         from phantom.telemetry.tracer import get_global_tracer
@@ -267,10 +268,11 @@ class BaseAgent(metaclass=AgentMeta):
                 tracer.update_agent_status(self.state.agent_id, "running")
 
             try:
-                from phantom.tools.agents_graph.agents_graph_actions import _agent_graph
+                from phantom.tools.agents_graph.agents_graph_actions import _agent_graph, _graph_lock
 
-                if self.state.agent_id in _agent_graph["nodes"]:
-                    _agent_graph["nodes"][self.state.agent_id]["status"] = "running"
+                with _graph_lock:
+                    if self.state.agent_id in _agent_graph["nodes"]:
+                        _agent_graph["nodes"][self.state.agent_id]["status"] = "running"
             except (ImportError, KeyError):
                 pass
 
@@ -424,49 +426,55 @@ class BaseAgent(metaclass=AgentMeta):
 
     def _check_agent_messages(self, state: AgentState) -> None:  # noqa: PLR0912
         try:
-            from phantom.tools.agents_graph.agents_graph_actions import _agent_graph, _agent_messages
+            from phantom.tools.agents_graph.agents_graph_actions import _agent_graph, _agent_messages, _graph_lock
 
             agent_id = state.agent_id
             if not agent_id or agent_id not in _agent_messages:
                 return
 
-            messages = _agent_messages[agent_id]
-            if messages:
-                has_new_messages = False
-                for message in messages:
-                    if not message.get("read", False):
-                        sender_id = message.get("from")
+            with _graph_lock:
+                messages = _agent_messages.get(agent_id, [])
+                # Snapshot unread messages under lock to avoid concurrent modification
+                unread = [m for m in messages if not m.get("read", False)]
 
-                        if state.is_waiting_for_input():
-                            if state.llm_failed:
-                                if sender_id == "user":
-                                    state.resume_from_waiting()
-                                    has_new_messages = True
+            if not unread:
+                return
 
-                                    from phantom.telemetry.tracer import get_global_tracer
+            has_new_messages = False
+            for message in unread:
+                sender_id = message.get("from")
 
-                                    tracer = get_global_tracer()
-                                    if tracer:
-                                        tracer.update_agent_status(state.agent_id, "running")
-                            else:
-                                state.resume_from_waiting()
-                                has_new_messages = True
-
-                                from phantom.telemetry.tracer import get_global_tracer
-
-                                tracer = get_global_tracer()
-                                if tracer:
-                                    tracer.update_agent_status(state.agent_id, "running")
-
+                if state.is_waiting_for_input():
+                    if state.llm_failed:
                         if sender_id == "user":
-                            sender_name = "User"
-                            state.add_message("user", message.get("content", ""))
-                        else:
-                            sender_name = "Unknown"
-                            if sender_id and sender_id in _agent_graph.get("nodes", {}):
-                                sender_name = _agent_graph["nodes"][sender_id]["name"]
+                            state.resume_from_waiting()
+                            has_new_messages = True
 
-                            message_content = f"""<inter_agent_message>
+                            from phantom.telemetry.tracer import get_global_tracer
+
+                            tracer = get_global_tracer()
+                            if tracer:
+                                tracer.update_agent_status(state.agent_id, "running")
+                    else:
+                        state.resume_from_waiting()
+                        has_new_messages = True
+
+                        from phantom.telemetry.tracer import get_global_tracer
+
+                        tracer = get_global_tracer()
+                        if tracer:
+                            tracer.update_agent_status(state.agent_id, "running")
+
+                if sender_id == "user":
+                    sender_name = "User"
+                    state.add_message("user", message.get("content", ""))
+                else:
+                    sender_name = "Unknown"
+                    with _graph_lock:
+                        if sender_id and sender_id in _agent_graph.get("nodes", {}):
+                            sender_name = _agent_graph["nodes"][sender_id]["name"]
+
+                    message_content = f"""<inter_agent_message>
     <delivery_notice>
         <important>You have received a message from another agent. You should acknowledge
         this message and respond appropriately based on its content. However, DO NOT echo
@@ -490,16 +498,17 @@ class BaseAgent(metaclass=AgentMeta):
         Please acknowledge and respond if needed.</note>
     </delivery_info>
 </inter_agent_message>"""
-                            state.add_message("user", message_content.strip())
+                    state.add_message("user", message_content.strip())
 
-                        message["read"] = True
+                with _graph_lock:
+                    message["read"] = True
 
-                if has_new_messages and not state.is_waiting_for_input():
-                    from phantom.telemetry.tracer import get_global_tracer
+            if has_new_messages and not state.is_waiting_for_input():
+                from phantom.telemetry.tracer import get_global_tracer
 
-                    tracer = get_global_tracer()
-                    if tracer:
-                        tracer.update_agent_status(agent_id, "running")
+                tracer = get_global_tracer()
+                if tracer:
+                    tracer.update_agent_status(agent_id, "running")
 
         except (AttributeError, KeyError, TypeError) as e:
             import logging
