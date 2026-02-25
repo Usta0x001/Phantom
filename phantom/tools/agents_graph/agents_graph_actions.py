@@ -111,8 +111,20 @@ def view_agent_graph(agent_state: Any) -> dict[str, Any]:
     try:
         structure_lines = ["=== AGENT GRAPH STRUCTURE ==="]
 
-        def _build_tree(agent_id: str, depth: int = 0) -> None:
-            node = _agent_graph["nodes"][agent_id]
+        with _graph_lock:
+            # Snapshot graph state under lock for consistent reads
+            nodes_snapshot = {k: dict(v) for k, v in _agent_graph["nodes"].items()}
+            edges_snapshot = list(_agent_graph["edges"])
+            root_id_snapshot = _root_agent_id
+
+        def _build_tree(agent_id: str, depth: int = 0, visited: set[str] | None = None) -> None:
+            if visited is None:
+                visited = set()
+            if agent_id in visited:
+                return  # Prevent infinite loop on edge cycles
+            visited.add(agent_id)
+
+            node = nodes_snapshot[agent_id]
             indent = "  " * depth
 
             you_indicator = " ← This is you" if agent_id == agent_state.agent_id else ""
@@ -123,49 +135,50 @@ def view_agent_graph(agent_state: Any) -> dict[str, Any]:
 
             children = [
                 edge["to"]
-                for edge in _agent_graph["edges"]
+                for edge in edges_snapshot
                 if edge["from"] == agent_id and edge["type"] == "delegation"
             ]
 
             if children:
                 structure_lines.append(f"{indent}   Children:")
                 for child_id in children:
-                    _build_tree(child_id, depth + 2)
+                    if child_id in nodes_snapshot:
+                        _build_tree(child_id, depth + 2, visited)
 
-        root_agent_id = _root_agent_id
-        if not root_agent_id and _agent_graph["nodes"]:
-            for agent_id, node in _agent_graph["nodes"].items():
+        root_agent_id = root_id_snapshot
+        if not root_agent_id and nodes_snapshot:
+            for agent_id, node in nodes_snapshot.items():
                 if node.get("parent_id") is None:
                     root_agent_id = agent_id
                     break
             if not root_agent_id:
-                root_agent_id = next(iter(_agent_graph["nodes"].keys()))
+                root_agent_id = next(iter(nodes_snapshot.keys()))
 
-        if root_agent_id and root_agent_id in _agent_graph["nodes"]:
+        if root_agent_id and root_agent_id in nodes_snapshot:
             _build_tree(root_agent_id)
         else:
             structure_lines.append("No agents in the graph yet")
 
         graph_structure = "\n".join(structure_lines)
 
-        total_nodes = len(_agent_graph["nodes"])
+        total_nodes = len(nodes_snapshot)
         running_count = sum(
-            1 for node in _agent_graph["nodes"].values() if node["status"] == "running"
+            1 for node in nodes_snapshot.values() if node["status"] == "running"
         )
         waiting_count = sum(
-            1 for node in _agent_graph["nodes"].values() if node["status"] == "waiting"
+            1 for node in nodes_snapshot.values() if node["status"] == "waiting"
         )
         stopping_count = sum(
-            1 for node in _agent_graph["nodes"].values() if node["status"] == "stopping"
+            1 for node in nodes_snapshot.values() if node["status"] == "stopping"
         )
         completed_count = sum(
-            1 for node in _agent_graph["nodes"].values() if node["status"] == "completed"
+            1 for node in nodes_snapshot.values() if node["status"] == "completed"
         )
         stopped_count = sum(
-            1 for node in _agent_graph["nodes"].values() if node["status"] == "stopped"
+            1 for node in nodes_snapshot.values() if node["status"] == "stopped"
         )
         failed_count = sum(
-            1 for node in _agent_graph["nodes"].values() if node["status"] in ["failed", "error"]
+            1 for node in nodes_snapshot.values() if node["status"] in ["failed", "error"]
         )
 
     except Exception as e:  # noqa: BLE001
@@ -296,51 +309,53 @@ def send_message_to_agent(
     priority: Literal["low", "normal", "high", "urgent"] = "normal",
 ) -> dict[str, Any]:
     try:
-        if target_agent_id not in _agent_graph["nodes"]:
-            return {
-                "success": False,
-                "error": f"Target agent '{target_agent_id}' not found in graph",
-                "message_id": None,
-            }
+        with _graph_lock:
+            if target_agent_id not in _agent_graph["nodes"]:
+                return {
+                    "success": False,
+                    "error": f"Target agent '{target_agent_id}' not found in graph",
+                    "message_id": None,
+                }
 
-        sender_id = agent_state.agent_id
+            sender_id = agent_state.agent_id
 
-        from uuid import uuid4
+            from uuid import uuid4
 
-        message_id = f"msg_{uuid4().hex[:8]}"
-        message_data = {
-            "id": message_id,
-            "from": sender_id,
-            "to": target_agent_id,
-            "content": message,
-            "message_type": message_type,
-            "priority": priority,
-            "timestamp": datetime.now(UTC).isoformat(),
-            "delivered": False,
-            "read": False,
-        }
-
-        if target_agent_id not in _agent_messages:
-            _agent_messages[target_agent_id] = []
-
-        _agent_messages[target_agent_id].append(message_data)
-
-        _agent_graph["edges"].append(
-            {
+            message_id = f"msg_{uuid4().hex[:8]}"
+            message_data = {
+                "id": message_id,
                 "from": sender_id,
                 "to": target_agent_id,
-                "type": "message",
-                "message_id": message_id,
+                "content": message,
                 "message_type": message_type,
                 "priority": priority,
-                "created_at": datetime.now(UTC).isoformat(),
+                "timestamp": datetime.now(UTC).isoformat(),
+                "delivered": False,
+                "read": False,
             }
-        )
 
-        message_data["delivered"] = True
+            if target_agent_id not in _agent_messages:
+                _agent_messages[target_agent_id] = []
 
-        target_name = _agent_graph["nodes"][target_agent_id]["name"]
-        sender_name = _agent_graph["nodes"][sender_id]["name"]
+            _agent_messages[target_agent_id].append(message_data)
+
+            _agent_graph["edges"].append(
+                {
+                    "from": sender_id,
+                    "to": target_agent_id,
+                    "type": "message",
+                    "message_id": message_id,
+                    "message_type": message_type,
+                    "priority": priority,
+                    "created_at": datetime.now(UTC).isoformat(),
+                }
+            )
+
+            message_data["delivered"] = True
+
+            target_name = _agent_graph["nodes"][target_agent_id]["name"]
+            sender_name = _agent_graph["nodes"][sender_id]["name"]
+            target_status = _agent_graph["nodes"][target_agent_id]["status"]
 
         return {
             "success": True,
@@ -350,7 +365,7 @@ def send_message_to_agent(
             "target_agent": {
                 "id": target_agent_id,
                 "name": target_name,
-                "status": _agent_graph["nodes"][target_agent_id]["status"],
+                "status": target_status,
             },
         }
 
@@ -380,35 +395,36 @@ def agent_finish(
 
         agent_id = agent_state.agent_id
 
-        if agent_id not in _agent_graph["nodes"]:
-            return {"agent_completed": False, "error": "Current agent not found in graph"}
+        with _graph_lock:
+            if agent_id not in _agent_graph["nodes"]:
+                return {"agent_completed": False, "error": "Current agent not found in graph"}
 
-        agent_node = _agent_graph["nodes"][agent_id]
+            agent_node = _agent_graph["nodes"][agent_id]
 
-        agent_node["status"] = "finished" if success else "failed"
-        agent_node["finished_at"] = datetime.now(UTC).isoformat()
-        agent_node["result"] = {
-            "summary": result_summary,
-            "findings": findings or [],
-            "success": success,
-            "recommendations": final_recommendations or [],
-        }
+            agent_node["status"] = "finished" if success else "failed"
+            agent_node["finished_at"] = datetime.now(UTC).isoformat()
+            agent_node["result"] = {
+                "summary": result_summary,
+                "findings": findings or [],
+                "success": success,
+                "recommendations": final_recommendations or [],
+            }
 
-        parent_notified = False
+            parent_notified = False
 
-        if report_to_parent and agent_node["parent_id"]:
-            parent_id = agent_node["parent_id"]
+            if report_to_parent and agent_node["parent_id"]:
+                parent_id = agent_node["parent_id"]
 
-            if parent_id in _agent_graph["nodes"]:
-                findings_xml = "\n".join(
-                    f"        <finding>{finding}</finding>" for finding in (findings or [])
-                )
-                recommendations_xml = "\n".join(
-                    f"        <recommendation>{rec}</recommendation>"
-                    for rec in (final_recommendations or [])
-                )
+                if parent_id in _agent_graph["nodes"]:
+                    findings_xml = "\n".join(
+                        f"        <finding>{finding}</finding>" for finding in (findings or [])
+                    )
+                    recommendations_xml = "\n".join(
+                        f"        <recommendation>{rec}</recommendation>"
+                        for rec in (final_recommendations or [])
+                    )
 
-                report_message = f"""<agent_completion_report>
+                    report_message = f"""<agent_completion_report>
     <agent_info>
         <agent_name>{agent_node["name"]}</agent_name>
         <agent_id>{agent_id}</agent_id>
@@ -427,41 +443,41 @@ def agent_finish(
     </results>
 </agent_completion_report>"""
 
-                if parent_id not in _agent_messages:
-                    _agent_messages[parent_id] = []
+                    if parent_id not in _agent_messages:
+                        _agent_messages[parent_id] = []
 
-                from uuid import uuid4
+                    from uuid import uuid4
 
-                _agent_messages[parent_id].append(
-                    {
-                        "id": f"report_{uuid4().hex[:8]}",
-                        "from": agent_id,
-                        "to": parent_id,
-                        "content": report_message,
-                        "message_type": "information",
-                        "priority": "high",
-                        "timestamp": datetime.now(UTC).isoformat(),
-                        "delivered": True,
-                        "read": False,
-                    }
-                )
+                    _agent_messages[parent_id].append(
+                        {
+                            "id": f"report_{uuid4().hex[:8]}",
+                            "from": agent_id,
+                            "to": parent_id,
+                            "content": report_message,
+                            "message_type": "information",
+                            "priority": "high",
+                            "timestamp": datetime.now(UTC).isoformat(),
+                            "delivered": True,
+                            "read": False,
+                        }
+                    )
 
-                parent_notified = True
+                    parent_notified = True
 
-        with _graph_lock:
             _running_agents.pop(agent_id, None)
+            agent_name = agent_node["name"]
+            agent_task = agent_node["task"]
 
         return {
             "agent_completed": True,
             "parent_notified": parent_notified,
             "completion_summary": {
                 "agent_id": agent_id,
-                "agent_name": agent_node["name"],
-                "task": agent_node["task"],
+                "agent_name": agent_name,
+                "task": agent_task,
                 "success": success,
                 "findings_count": len(findings or []),
                 "has_recommendations": bool(final_recommendations),
-                "finished_at": agent_node["finished_at"],
             },
         }
 
@@ -475,24 +491,24 @@ def agent_finish(
 
 def stop_agent(agent_id: str) -> dict[str, Any]:
     try:
-        if agent_id not in _agent_graph["nodes"]:
-            return {
-                "success": False,
-                "error": f"Agent '{agent_id}' not found in graph",
-                "agent_id": agent_id,
-            }
-
-        agent_node = _agent_graph["nodes"][agent_id]
-
-        if agent_node["status"] in ["completed", "error", "failed", "stopped"]:
-            return {
-                "success": True,
-                "message": f"Agent '{agent_node['name']}' was already stopped",
-                "agent_id": agent_id,
-                "previous_status": agent_node["status"],
-            }
-
         with _graph_lock:
+            if agent_id not in _agent_graph["nodes"]:
+                return {
+                    "success": False,
+                    "error": f"Agent '{agent_id}' not found in graph",
+                    "agent_id": agent_id,
+                }
+
+            agent_node = _agent_graph["nodes"][agent_id]
+
+            if agent_node["status"] in ["completed", "error", "failed", "stopped"]:
+                return {
+                    "success": True,
+                    "message": f"Agent '{agent_node['name']}' was already stopped",
+                    "agent_id": agent_id,
+                    "previous_status": agent_node["status"],
+                }
+
             if agent_id in _agent_states:
                 agent_state = _agent_states[agent_id]
                 agent_state.request_stop()
@@ -504,7 +520,13 @@ def stop_agent(agent_id: str) -> dict[str, Any]:
                 if hasattr(agent_instance, "cancel_current_execution"):
                     agent_instance.cancel_current_execution()
 
-        agent_node["status"] = "stopping"
+            agent_node["status"] = "stopping"
+            agent_node["result"] = {
+                "summary": "Agent stop requested by user",
+                "success": False,
+                "stopped_by_user": True,
+            }
+            agent_name = agent_node["name"]
 
         try:
             from phantom.telemetry.tracer import get_global_tracer
@@ -515,17 +537,11 @@ def stop_agent(agent_id: str) -> dict[str, Any]:
         except (ImportError, AttributeError):
             pass
 
-        agent_node["result"] = {
-            "summary": "Agent stop requested by user",
-            "success": False,
-            "stopped_by_user": True,
-        }
-
         return {
             "success": True,
-            "message": f"Stop request sent to agent '{agent_node['name']}'",
+            "message": f"Stop request sent to agent '{agent_name}'",
             "agent_id": agent_id,
-            "agent_name": agent_node["name"],
+            "agent_name": agent_name,
             "note": "Agent will stop gracefully after current iteration",
         }
 
@@ -539,39 +555,41 @@ def stop_agent(agent_id: str) -> dict[str, Any]:
 
 def send_user_message_to_agent(agent_id: str, message: str) -> dict[str, Any]:
     try:
-        if agent_id not in _agent_graph["nodes"]:
-            return {
-                "success": False,
-                "error": f"Agent '{agent_id}' not found in graph",
-                "agent_id": agent_id,
+        with _graph_lock:
+            if agent_id not in _agent_graph["nodes"]:
+                return {
+                    "success": False,
+                    "error": f"Agent '{agent_id}' not found in graph",
+                    "agent_id": agent_id,
+                }
+
+            agent_node = _agent_graph["nodes"][agent_id]
+
+            if agent_id not in _agent_messages:
+                _agent_messages[agent_id] = []
+
+            from uuid import uuid4
+
+            message_data = {
+                "id": f"user_msg_{uuid4().hex[:8]}",
+                "from": "user",
+                "to": agent_id,
+                "content": message,
+                "message_type": "instruction",
+                "priority": "high",
+                "timestamp": datetime.now(UTC).isoformat(),
+                "delivered": True,
+                "read": False,
             }
 
-        agent_node = _agent_graph["nodes"][agent_id]
-
-        if agent_id not in _agent_messages:
-            _agent_messages[agent_id] = []
-
-        from uuid import uuid4
-
-        message_data = {
-            "id": f"user_msg_{uuid4().hex[:8]}",
-            "from": "user",
-            "to": agent_id,
-            "content": message,
-            "message_type": "instruction",
-            "priority": "high",
-            "timestamp": datetime.now(UTC).isoformat(),
-            "delivered": True,
-            "read": False,
-        }
-
-        _agent_messages[agent_id].append(message_data)
+            _agent_messages[agent_id].append(message_data)
+            agent_name = agent_node["name"]
 
         return {
             "success": True,
-            "message": f"Message sent to agent '{agent_node['name']}'",
+            "message": f"Message sent to agent '{agent_name}'",
             "agent_id": agent_id,
-            "agent_name": agent_node["name"],
+            "agent_name": agent_name,
         }
 
     except Exception as e:  # noqa: BLE001
@@ -593,9 +611,10 @@ def wait_for_message(
 
         agent_state.enter_waiting_state()
 
-        if agent_id in _agent_graph["nodes"]:
-            _agent_graph["nodes"][agent_id]["status"] = "waiting"
-            _agent_graph["nodes"][agent_id]["waiting_reason"] = reason
+        with _graph_lock:
+            if agent_id in _agent_graph["nodes"]:
+                _agent_graph["nodes"][agent_id]["status"] = "waiting"
+                _agent_graph["nodes"][agent_id]["waiting_reason"] = reason
 
         try:
             from phantom.telemetry.tracer import get_global_tracer

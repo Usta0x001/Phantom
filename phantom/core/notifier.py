@@ -136,6 +136,9 @@ class SlackChannel(NotificationChannel):
         return f"slack:{self.channel or 'default'}"
 
     def send(self, payload: dict[str, Any]) -> bool:
+        if not _validate_url(self.webhook_url):
+            _logger.warning("Blocked Slack webhook to private/internal URL: %s", self.webhook_url)
+            return False
         slack_msg = self._format_slack(payload)
         try:
             body = json.dumps(slack_msg).encode("utf-8")
