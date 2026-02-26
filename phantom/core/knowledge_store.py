@@ -322,6 +322,15 @@ class KnowledgeStore:
             and self.get_vulnerability(vid) is not None
         ]
     
+    def get_all_vulnerabilities(self) -> list[Vulnerability]:
+        """Get all stored vulnerabilities."""
+        result = []
+        for vid in list(self._vulns.keys()):
+            v = self.get_vulnerability(vid)
+            if v is not None:
+                result.append(v)
+        return result
+    
     # False Positive Management
     
     def mark_false_positive(self, signature: str) -> None:

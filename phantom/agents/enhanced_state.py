@@ -11,7 +11,7 @@ from typing import Any
 from pydantic import Field
 
 from phantom.agents.state import AgentState
-from phantom.models.vulnerability import Vulnerability, VulnerabilitySeverity
+from phantom.models.vulnerability import Vulnerability, VulnerabilitySeverity, VulnerabilityStatus
 from phantom.models.host import Host
 from phantom.models.scan import ScanResult, ScanPhase, ScanStatus
 from phantom.core.priority_queue import VulnerabilityPriorityQueue

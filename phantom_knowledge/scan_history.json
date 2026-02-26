@@ -1,0 +1,57 @@
+[
+  {
+    "scan_id": "test-run-001",
+    "target": "http://example.com",
+    "status": "completed",
+    "completed_at": "2026-02-26T21:39:20.676666+00:00",
+    "vulns_found": 1,
+    "vulns_verified": 0,
+    "hosts_found": 0,
+    "duration_seconds": null,
+    "tools_used": []
+  },
+  {
+    "scan_id": "test-run-001",
+    "target": "http://example.com",
+    "status": "completed",
+    "completed_at": "2026-02-26T21:43:55.396741+00:00",
+    "vulns_found": 1,
+    "vulns_verified": 0,
+    "hosts_found": 0,
+    "duration_seconds": null,
+    "tools_used": []
+  },
+  {
+    "scan_id": "test-run",
+    "target": "",
+    "status": "completed",
+    "completed_at": "2026-02-26T21:43:56.049606+00:00",
+    "vulns_found": 1,
+    "vulns_verified": 0,
+    "hosts_found": 0,
+    "duration_seconds": 0.608663,
+    "tools_used": []
+  },
+  {
+    "scan_id": "test-run-001",
+    "target": "http://example.com",
+    "status": "completed",
+    "completed_at": "2026-02-26T21:44:33.028986+00:00",
+    "vulns_found": 1,
+    "vulns_verified": 0,
+    "hosts_found": 0,
+    "duration_seconds": null,
+    "tools_used": []
+  },
+  {
+    "scan_id": "test-run",
+    "target": "",
+    "status": "completed",
+    "completed_at": "2026-02-26T21:44:33.576670+00:00",
+    "vulns_found": 1,
+    "vulns_verified": 0,
+    "hosts_found": 0,
+    "duration_seconds": 0.501873,
+    "tools_used": []
+  }
+]
