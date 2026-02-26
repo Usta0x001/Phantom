@@ -452,13 +452,35 @@ def finish_scan(
                 _logger.warning(f"Post-scan enrichment pipeline error: {e}")
                 enrichment_results = {"error": str(e)}
 
-            return {
+            # ── Export EnhancedAgentState structured data ──
+            enhanced_state_path = None
+            try:
+                if agent_state and hasattr(agent_state, "to_report_data"):
+                    import json
+                    report_data = agent_state.to_report_data()
+                    run_dir = getattr(tracer, "run_dir", None)
+                    if run_dir and report_data:
+                        from pathlib import Path
+                        state_file = Path(run_dir) / "enhanced_state.json"
+                        state_file.write_text(
+                            json.dumps(report_data, indent=2, default=str),
+                            encoding="utf-8",
+                        )
+                        enhanced_state_path = str(state_file)
+                        _logger.info(f"Enhanced state exported to {enhanced_state_path}")
+            except Exception as e:
+                _logger.warning(f"Enhanced state export failed: {e}")
+
+            result = {
                 "success": True,
                 "scan_completed": True,
                 "message": "Scan completed successfully",
                 "vulnerabilities_found": vulnerability_count,
                 "enrichment": enrichment_results,
             }
+            if enhanced_state_path:
+                result["enhanced_state_file"] = enhanced_state_path
+            return result
 
         import logging
 

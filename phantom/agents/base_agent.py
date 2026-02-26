@@ -422,10 +422,14 @@ class BaseAgent(metaclass=AgentMeta):
         self.state.messages = conversation_history
 
         if should_agent_finish:
-            # Finalize EnhancedAgentState scan tracking when available
+            # Finalize EnhancedAgentState scan tracking when available.
+            # NOTE: complete_scan() internally calls set_completed() with 
+            # the scan summary, so we only call set_completed() separately
+            # for plain AgentState (to avoid overwriting the summary).
             if hasattr(self.state, "complete_scan"):
                 self.state.complete_scan()
-            self.state.set_completed({"success": True})
+            else:
+                self.state.set_completed({"success": True})
             if tracer:
                 tracer.update_agent_status(self.state.agent_id, "completed")
             if self.non_interactive and self.state.parent_id is None:

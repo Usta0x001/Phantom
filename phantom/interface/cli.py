@@ -119,6 +119,17 @@ async def run_cli(args: Any) -> None:  # noqa: PLR0915
         "profile": profile.to_dict(),
     }
 
+    # ── Authenticated Scanning ──
+    auth_headers = getattr(args, "auth_headers", [])
+    if auth_headers:
+        parsed_headers = {}
+        for h in auth_headers:
+            if ":" in h:
+                key, value = h.split(":", 1)
+                parsed_headers[key.strip()] = value.strip()
+        if parsed_headers:
+            scan_config["auth_headers"] = parsed_headers
+
     llm_config = LLMConfig(scan_mode=scan_mode)
     agent_config = {
         "llm_config": llm_config,

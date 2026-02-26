@@ -195,6 +195,14 @@ def scan(
             readable=True,
         ),
     ] = None,
+    auth_header: Annotated[
+        Optional[list[str]],
+        typer.Option(
+            "--auth-header",
+            "-H",
+            help="Auth header for authenticated scanning (e.g. 'Authorization: Bearer TOKEN'). Repeatable.",
+        ),
+    ] = None,
 ) -> None:
     """
     Run a penetration test against one or more targets.
@@ -239,6 +247,7 @@ def scan(
         config=str(config_file) if config_file else None,
         output_format=output_format.value if output_format else None,
         timeout=timeout,
+        auth_headers=auth_header or [],
     )
 
     # Delegate to existing main logic

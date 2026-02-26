@@ -139,6 +139,17 @@ class PhantomAgent(BaseAgent):
             task_description += "\nCall create_vulnerability_report IMMEDIATELY after confirming each vulnerability."
             task_description += "\n--- END SCAN PROFILE ---"
 
+        # ── Inject auth headers for authenticated scanning ──
+        auth_headers = scan_config.get("auth_headers")
+        if auth_headers and isinstance(auth_headers, dict):
+            task_description += "\n\n--- AUTHENTICATED SCANNING ---"
+            task_description += "\nYou MUST include the following authentication headers in ALL HTTP requests:"
+            for header_name, header_value in auth_headers.items():
+                task_description += f"\n  {header_name}: {header_value}"
+            task_description += "\nPass these headers to httpx (-H), nuclei (-header), katana (-headers), and in Python scripts."
+            task_description += "\nTest both authenticated AND unauthenticated access for IDOR/access control issues."
+            task_description += "\n--- END AUTH CONFIG ---"
+
         if user_instructions:
             # Sanitize user instructions to prevent prompt injection
             import re as _re

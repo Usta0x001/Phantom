@@ -331,9 +331,9 @@ class TestNmapRateLimiting:
 
 
 class TestVersion096:
-    def test_version_is_098(self):
+    def test_version_is_099(self):
         from phantom import __version__
-        assert __version__ == "0.9.8"
+        assert __version__ == "0.9.9"
 
 
 # =========================================================================
