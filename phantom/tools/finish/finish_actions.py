@@ -7,6 +7,23 @@ import logging
 _logger = logging.getLogger(__name__)
 
 
+def _extract_cwe_ids(report: dict[str, Any]) -> list[str]:
+    """Extract CWE IDs from a vulnerability report dict."""
+    cwe_ids = report.get("cwe_ids", [])
+    if cwe_ids:
+        return [str(c) for c in cwe_ids if c]
+    # Try MITRE enrichment data
+    mitre = report.get("mitre")
+    if isinstance(mitre, dict):
+        cwes = mitre.get("cwes", [])
+        return [
+            cwe.get("id", "") if isinstance(cwe, dict) else str(cwe)
+            for cwe in cwes
+            if (cwe.get("id", "") if isinstance(cwe, dict) else str(cwe))
+        ]
+    return []
+
+
 def _dict_to_vulnerability(report: dict[str, Any]) -> Any:
     """Convert a vuln report dict (from tracer) to a Vulnerability model object.
 
@@ -44,7 +61,7 @@ def _dict_to_vulnerability(report: dict[str, Any]) -> Any:
             description=report.get("description", "No description"),
             payload=report.get("poc_script_code"),
             cve_ids=[report["cve"]] if report.get("cve") else [],
-            cwe_ids=[],
+            cwe_ids=_extract_cwe_ids(report),
             remediation=report.get("remediation_steps"),
             detected_by="phantom-agent",
         )

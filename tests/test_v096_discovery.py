@@ -284,15 +284,15 @@ class TestToolOutputTruncation:
         from phantom.tools.executor import _format_tool_result
         big_result = "A" * 10000
         observation_xml, images = _format_tool_result("test_tool", big_result)
-        # The truncated result should be about 7000 + XML overhead
+        # The truncated result should be smaller than original + XML overhead
         assert len(observation_xml) < 9000, f"Output too large: {len(observation_xml)}"
-        assert "... [middle content truncated] ..." in observation_xml
+        assert "characters truncated" in observation_xml
 
     def test_small_output_not_truncated(self):
         from phantom.tools.executor import _format_tool_result
         small_result = "A" * 100
         observation_xml, images = _format_tool_result("test_tool", small_result)
-        assert "... [middle content truncated] ..." not in observation_xml
+        assert "characters truncated" not in observation_xml
 
 
 # =========================================================================

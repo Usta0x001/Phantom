@@ -194,7 +194,71 @@ async def execute_tool_invocation(tool_inv: dict[str, Any], agent_state: Any | N
     tool_name = tool_inv.get("toolName")
     tool_args = tool_inv.get("args", {})
 
+    # Auto-inject auth headers for security tools that support extra_args
+    tool_args = _inject_auth_headers(tool_name, tool_args, agent_state)
+
     return await execute_tool_with_validation(tool_name, agent_state, **tool_args)
+
+
+# Tools that accept extra_args and support header-style flags
+_AUTH_INJECTABLE_TOOLS: dict[str, str] = {
+    # tool_name -> header flag format
+    "httpx_probe": "-H",
+    "httpx_full_analysis": "-H",
+    "katana_crawl": "-H",
+    "nuclei_scan": "-header",
+    "nuclei_scan_cves": "-header",
+    "nuclei_scan_misconfigs": "-header",
+    "ffuf_directory_scan": "-H",
+    "ffuf_parameter_fuzz": "-H",
+    "ffuf_vhost_fuzz": "-H",
+    "sqlmap_test": "--headers",
+    "sqlmap_forms": "--headers",
+    "sqlmap_dump_database": "--headers",
+}
+
+
+def _inject_auth_headers(
+    tool_name: str | None, tool_args: dict[str, Any], agent_state: Any | None
+) -> dict[str, Any]:
+    """Auto-inject auth headers into security tools that support extra_args.
+
+    Reads auth_headers from the scan config (via tracer) and appends
+    appropriate header flags to the tool's extra_args parameter.
+    """
+    if not tool_name or tool_name not in _AUTH_INJECTABLE_TOOLS:
+        return tool_args
+
+    auth_headers: dict[str, str] | None = None
+    try:
+        from phantom.telemetry.tracer import get_global_tracer
+        tracer = get_global_tracer()
+        if tracer and tracer.scan_config:
+            auth_headers = tracer.scan_config.get("auth_headers")
+    except (ImportError, AttributeError):
+        pass
+
+    if not auth_headers:
+        return tool_args
+
+    flag = _AUTH_INJECTABLE_TOOLS[tool_name]
+    header_parts: list[str] = []
+    if flag == "--headers":
+        # SQLMap: --headers="Header1: val1\nHeader2: val2"
+        hdr_lines = "\\n".join(f"{n}: {v}" for n, v in auth_headers.items())
+        header_parts.append(f'--headers="{hdr_lines}"')
+    else:
+        for name, value in auth_headers.items():
+            header_parts.append(f'{flag} "{name}: {value}"')
+
+    header_str = " ".join(header_parts)
+    existing = tool_args.get("extra_args", "") or ""
+    if existing:
+        tool_args["extra_args"] = f"{existing} {header_str}"
+    else:
+        tool_args["extra_args"] = header_str
+
+    return tool_args
 
 
 def _check_error_result(result: Any) -> tuple[bool, Any]:
@@ -250,7 +314,19 @@ def _format_tool_result(tool_name: str, result: Any) -> tuple[str, list[dict[str
         if len(final_result_str) > 8000:
             start_part = final_result_str[:3500]
             end_part = final_result_str[-3500:]
-            final_result_str = start_part + "\n\n... [middle content truncated] ...\n\n" + end_part
+            # Snap to nearest newline to avoid cutting mid-line/mid-tag
+            last_nl = start_part.rfind('\n')
+            if last_nl > 2800:
+                start_part = start_part[:last_nl]
+            first_nl = end_part.find('\n')
+            if first_nl != -1 and first_nl < 700:
+                end_part = end_part[first_nl + 1:]
+            omitted = len(final_result_str) - len(start_part) - len(end_part)
+            final_result_str = (
+                start_part
+                + f"\n\n... [{omitted} characters truncated] ...\n\n"
+                + end_part
+            )
 
     observation_xml = (
         f"<tool_result>\n<tool_name>{_xml_escape(tool_name)}</tool_name>\n"
@@ -373,9 +449,20 @@ async def process_tool_invocations(
     tracer, agent_id = _get_tracer_and_agent_id(agent_state)
 
     for tool_inv in tool_invocations:
-        observation_xml, images, tool_should_finish = await _execute_single_tool(
-            tool_inv, agent_state, tracer, agent_id
-        )
+        try:
+            observation_xml, images, tool_should_finish = await _execute_single_tool(
+                tool_inv, agent_state, tracer, agent_id
+            )
+        except Exception as exc:  # noqa: BLE001
+            # Capture error as a tool result so results from prior tools are preserved
+            tool_name = tool_inv.get("toolName", "unknown")
+            error_text = f"Error executing {tool_name}: {str(exc)[:500]}"
+            observation_xml = (
+                f"<tool_result>\n<tool_name>{_xml_escape(tool_name)}</tool_name>\n"
+                f"<result>{_xml_escape(error_text)}</result>\n</tool_result>"
+            )
+            images = []
+            tool_should_finish = False
         observation_parts.append(observation_xml)
         all_images.extend(images)
 
@@ -491,6 +578,9 @@ def _auto_record_findings(tool_name: str, result: Any, agent_state: Any) -> None
                                 vuln_model = _dict_to_vulnerability(r)
                                 if vuln_model:
                                     agent_state.add_vulnerability(vuln_model)
+                                    # Mark as verified — the agent has confirmed this vuln
+                                    if hasattr(agent_state, "mark_vuln_verified"):
+                                        agent_state.mark_vuln_verified(vuln_model.id)
                                 break
                 except Exception:  # noqa: BLE001
                     pass

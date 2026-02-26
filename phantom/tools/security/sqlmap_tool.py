@@ -148,7 +148,7 @@ def sqlmap_dump_database(
     """
     from phantom.tools.terminal.terminal_actions import terminal_execute
 
-    cmd_parts = ["sqlmap", "-u", shlex.quote(url), "--batch", "--flush-session"]
+    cmd_parts = ["sqlmap", "-u", shlex.quote(url), "--batch"]  # No --flush-session: reuse detection from sqlmap_test
 
     if data:
         cmd_parts.extend(["--data", shlex.quote(data)])
