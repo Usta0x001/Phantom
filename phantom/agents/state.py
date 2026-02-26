@@ -14,7 +14,7 @@ class AgentState(BaseModel):
     agent_name: str = "phantom Agent"
     parent_id: str | None = None
     sandbox_id: str | None = None
-    sandbox_token: str | None = None
+    sandbox_token: str | None = Field(default=None, exclude=True)
     sandbox_info: dict[str, Any] | None = None
 
     task: str = ""
@@ -39,6 +39,10 @@ class AgentState(BaseModel):
 
     errors: list[str] = Field(default_factory=list)
 
+    _MAX_ACTIONS: int = 5000
+    _MAX_OBSERVATIONS: int = 5000
+    _MAX_ERRORS: int = 1000
+
     def increment_iteration(self) -> None:
         self.iteration += 1
         self.last_updated = datetime.now(UTC).isoformat()
@@ -51,6 +55,8 @@ class AgentState(BaseModel):
         self.last_updated = datetime.now(UTC).isoformat()
 
     def add_action(self, action: dict[str, Any]) -> None:
+        if len(self.actions_taken) >= self._MAX_ACTIONS:
+            self.actions_taken = self.actions_taken[-self._MAX_ACTIONS // 2 :]
         self.actions_taken.append(
             {
                 "iteration": self.iteration,
@@ -60,6 +66,8 @@ class AgentState(BaseModel):
         )
 
     def add_observation(self, observation: dict[str, Any]) -> None:
+        if len(self.observations) >= self._MAX_OBSERVATIONS:
+            self.observations = self.observations[-self._MAX_OBSERVATIONS // 2 :]
         self.observations.append(
             {
                 "iteration": self.iteration,
@@ -69,6 +77,8 @@ class AgentState(BaseModel):
         )
 
     def add_error(self, error: str) -> None:
+        if len(self.errors) >= self._MAX_ERRORS:
+            self.errors = self.errors[-self._MAX_ERRORS // 2 :]
         self.errors.append(f"Iteration {self.iteration}: {error}")
         self.last_updated = datetime.now(UTC).isoformat()
 

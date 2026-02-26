@@ -11,6 +11,7 @@ import shlex
 from typing import Any, Literal
 
 from phantom.tools.registry import register_tool
+from phantom.tools.security.sanitizer import sanitize_extra_args
 
 # Pre-compiled patterns for nmap output parsing (avoid re-compiling in loops)
 _HOST_PATTERN = re.compile(r"for\s+(.+?)(?:\s+\(([^)]+)\))?$")
@@ -121,7 +122,7 @@ def nmap_scan(
         cmd_parts.extend(["--script", shlex.quote(scripts)])
 
     if extra_args:
-        cmd_parts.extend(shlex.split(extra_args))
+        cmd_parts.extend(sanitize_extra_args(extra_args))
 
     cmd_parts.append(shlex.quote(target))
 

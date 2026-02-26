@@ -9,6 +9,7 @@ import asyncio
 import json
 import logging
 import re
+import shlex
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -107,7 +108,7 @@ class InteractshClient:
             return self._base_domain
         
         # Start interactsh-client and capture domain
-        cmd = f"interactsh-client -server {self.server} -json -poll-interval 1 -n 1"
+        cmd = f"interactsh-client -server {shlex.quote(self.server)} -json -poll-interval 1 -n 1"
         
         try:
             result = await self.terminal_execute(cmd, timeout=15)
@@ -224,7 +225,7 @@ class InteractshClient:
         
         try:
             # Poll interactsh for interactions
-            cmd = f"interactsh-client -server {self.server} -json -poll-interval 1 -n 1"
+            cmd = f"interactsh-client -server {shlex.quote(self.server)} -json -poll-interval 1 -n 1"
             result = await self.terminal_execute(cmd, timeout=10)
             output = result.get("output", "")
             

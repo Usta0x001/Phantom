@@ -5,8 +5,11 @@ import logging
 import threading
 from pathlib import Path
 from typing import Any, cast
+from urllib.parse import urlparse
 
 from playwright.async_api import Browser, BrowserContext, Page, Playwright, async_playwright
+
+_BLOCKED_SCHEMES = frozenset({"file", "javascript", "data", "vbscript"})
 
 
 logger = logging.getLogger(__name__)
@@ -67,7 +70,8 @@ async def _create_browser() -> Browser:
             "--no-sandbox",
             "--disable-dev-shm-usage",
             "--disable-gpu",
-            "--disable-web-security",
+            "--disable-extensions",
+            "--disable-background-networking",
         ],
     )
     return _state.browser
@@ -206,6 +210,11 @@ class BrowserInstance:
 
         if not tab_id or tab_id not in self.pages:
             raise ValueError(f"Tab '{tab_id}' not found")
+
+        # Block dangerous URL schemes
+        parsed = urlparse(url)
+        if parsed.scheme.lower() in _BLOCKED_SCHEMES:
+            raise ValueError(f"Blocked URL scheme: {parsed.scheme}")
 
         page = self.pages[tab_id]
         await page.goto(url, wait_until="domcontentloaded")
@@ -544,6 +553,11 @@ class BrowserInstance:
 
         if not Path(file_path).is_absolute():
             file_path = str(Path("/workspace") / file_path)
+
+        # Prevent path traversal outside /workspace
+        resolved = Path(file_path).resolve()
+        if not str(resolved).startswith("/workspace"):
+            raise ValueError(f"Path traversal blocked: {file_path}")
 
         page = self.pages[tab_id]
         await page.pdf(path=file_path)

@@ -59,7 +59,7 @@ def _validate_url(url: str) -> bool:
             except socket.gaierror:
                 return False  # Can't resolve = don't allow
         # Only allow https for webhooks
-        if parsed.scheme not in ("https", "http"):
+        if parsed.scheme != "https":
             return False
         return True
     except Exception:

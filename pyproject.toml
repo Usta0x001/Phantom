@@ -51,7 +51,7 @@ python = "^3.12"
 litellm = { version = "~1.81.1", extras = ["proxy"] }
 tenacity = "^9.0.0"
 pydantic = {extras = ["email"], version = "^2.11.3"}
-rich = "*"
+rich = "^13.9"
 typer = "^0.15.0"
 docker = "^7.1.0"
 textual = "^4.0.0"
@@ -64,8 +64,8 @@ networkx = "^3.4"
 google-cloud-aiplatform = { version = ">=1.38", optional = true }
 
 # Sandbox-only dependencies (only needed inside Docker container)
-fastapi = { version = "*", optional = true }
-uvicorn = { version = "*", optional = true }
+fastapi = { version = "^0.115.0", optional = true }
+uvicorn = { version = "^0.34.0", optional = true }
 ipython = { version = "^9.3.0", optional = true }
 openhands-aci = { version = "^0.3.0", optional = true }
 playwright = { version = "^1.48.0", optional = true }
@@ -227,8 +227,6 @@ select = [
 
 ignore = [
     "S101",   # Use of assert
-    "S104",   # Possible binding to all interfaces
-    "S301",   # Use of pickle
     "COM812", # Missing trailing comma (handled by formatter)
     "ISC001", # Single line implicit string concatenation (handled by formatter)
     "PLR0913", # Too many arguments to function call
@@ -381,5 +379,5 @@ exclude_lines = [
 
 [tool.bandit]
 exclude_dirs = ["tests", "docs", "build", "dist"]
-skips = ["B101", "B601", "B404", "B603", "B607"]  # Skip assert, shell injection, subprocess import and partial path checks
+skips = ["B101", "B404"]  # Skip assert and subprocess import checks only
 severity = "medium"

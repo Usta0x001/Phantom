@@ -10,6 +10,7 @@ import shlex
 from typing import Any, Literal
 
 from phantom.tools.registry import register_tool
+from phantom.tools.security.sanitizer import sanitize_extra_args
 
 
 def _parse_nuclei_jsonl(raw_output: str) -> list[dict[str, Any]]:
@@ -82,10 +83,9 @@ def nuclei_scan(
     if exclude_tags:
         cmd_parts.extend(["-exclude-tags", shlex.quote(exclude_tags)])
 
-    cmd_parts.extend(["-rl", str(rate_limit)])
+    cmd_parts.extend(["-rl", str(int(rate_limit))])
 
-    if extra_args:
-        cmd_parts.extend(shlex.split(extra_args))
+    cmd_parts.extend(sanitize_extra_args(extra_args))
 
     command = " ".join(cmd_parts)
 

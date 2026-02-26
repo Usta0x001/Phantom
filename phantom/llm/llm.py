@@ -272,7 +272,16 @@ class LLM:
         return code is None or litellm._should_retry(code)
 
     def _raise_error(self, e: Exception) -> None:
-        raise LLMRequestFailedError(f"LLM request failed: {type(e).__name__}", str(e)) from e
+        # Redact potential API keys/secrets from error details
+        details = str(e)
+        import re as _re
+        details = _re.sub(
+            r"(sk-|key-|api[_-]?key[=: \"]*)[A-Za-z0-9\-_]{8,}",
+            r"\1[REDACTED]",
+            details,
+            flags=_re.IGNORECASE,
+        )
+        raise LLMRequestFailedError(f"LLM request failed: {type(e).__name__}", details) from e
 
     def _is_anthropic(self) -> bool:
         if not self.config.model_name:

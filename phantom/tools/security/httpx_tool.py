@@ -10,6 +10,7 @@ import shlex
 from typing import Any
 
 from phantom.tools.registry import register_tool
+from phantom.tools.security.sanitizer import safe_heredoc_write, safe_temp_path, sanitize_extra_args
 
 
 def _parse_httpx_json(raw_output: str) -> list[dict[str, Any]]:
@@ -75,12 +76,13 @@ def httpx_probe(
     # Handle list input
     if isinstance(targets, list):
         targets_str = "\n".join(targets)
-        # Write to temp file safely
+        targets_file = safe_temp_path("httpx_targets", ".txt")
+        # Use safe heredoc with random EOF marker to prevent heredoc injection
         terminal_execute(
-            command=f"cat > /tmp/httpx_targets.txt <<'PHANTOM_EOF'\n{targets_str}\nPHANTOM_EOF",
+            command=safe_heredoc_write(targets_file, targets_str),
             timeout=5.0,
         )
-        cmd_parts = ["httpx", "-l", "/tmp/httpx_targets.txt"]
+        cmd_parts = ["httpx", "-l", targets_file]
     else:
         cmd_parts = ["httpx", "-u", shlex.quote(targets)]
 
@@ -101,10 +103,9 @@ def httpx_probe(
     if title:
         cmd_parts.append("-title")
 
-    cmd_parts.extend(["-rl", str(rate_limit)])
+    cmd_parts.extend(["-rl", str(int(rate_limit))])
 
-    if extra_args:
-        cmd_parts.extend(shlex.split(extra_args))
+    cmd_parts.extend(sanitize_extra_args(extra_args))
 
     command = " ".join(cmd_parts)
 
@@ -160,7 +161,7 @@ def httpx_screenshot(
         }
 
     # Find screenshot file
-    ls_result = terminal_execute(command=f"ls -la {output_dir}/*.png 2>/dev/null | head -5", timeout=5.0)
+    ls_result = terminal_execute(command=f"ls -la {shlex.quote(output_dir)}/*.png 2>/dev/null | head -5", timeout=5.0)
 
     return {
         "success": True,
@@ -188,11 +189,12 @@ def httpx_full_analysis(
 
     if isinstance(targets, list):
         targets_str = "\n".join(targets)
+        targets_file = safe_temp_path("httpx_targets", ".txt")
         terminal_execute(
-            command=f"cat > /tmp/httpx_targets.txt <<'PHANTOM_EOF'\n{targets_str}\nPHANTOM_EOF",
+            command=safe_heredoc_write(targets_file, targets_str),
             timeout=5.0,
         )
-        target_parts = ["-l", "/tmp/httpx_targets.txt"]
+        target_parts = ["-l", targets_file]
     else:
         target_parts = ["-u", shlex.quote(targets)]
 

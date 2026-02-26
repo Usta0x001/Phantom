@@ -436,10 +436,26 @@ class VerificationEngine:
         )
     
     def _inject_payload(self, url: str, parameter: str | None, payload: str) -> str:
-        """Inject payload into URL parameter."""
+        """Inject payload into URL parameter.
+        
+        Includes scope check to prevent SSRF against internal services.
+        """
+        import ipaddress as _ipa
         from urllib.parse import urlencode, urlparse, parse_qs, urlunparse
         
         parsed = urlparse(url)
+        # SSRF guard: reject private/loopback/link-local targets
+        hostname = parsed.hostname or ""
+        if hostname in ("localhost", "0.0.0.0", "169.254.169.254"):
+            raise ValueError(f"Verification blocked: target {hostname!r} is internal")
+        try:
+            addr = _ipa.ip_address(hostname)
+            if addr.is_private or addr.is_loopback or addr.is_link_local or addr.is_reserved:
+                raise ValueError(f"Verification blocked: target {hostname!r} is a private/internal IP")
+        except ValueError as e:
+            if "Verification blocked" in str(e):
+                raise
+            # Not an IP — it's a hostname, which is fine
         params = parse_qs(parsed.query)
         
         if parameter and parameter in params:

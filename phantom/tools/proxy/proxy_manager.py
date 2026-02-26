@@ -1,6 +1,9 @@
 import base64
+import ipaddress
+import logging
 import os
 import re
+import socket
 import time
 from typing import TYPE_CHECKING, Any
 from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
@@ -10,6 +13,35 @@ from gql import Client, gql
 from gql.transport.exceptions import TransportQueryError
 from gql.transport.requests import RequestsHTTPTransport
 from requests.exceptions import ProxyError, RequestException, Timeout
+
+_logger = logging.getLogger(__name__)
+
+
+def _is_ssrf_safe(url: str) -> bool:
+    """Block requests to private/loopback IPs (unless going through proxy)."""
+    try:
+        parsed = urlparse(url)
+        hostname = parsed.hostname
+        if not hostname:
+            return False
+        # Block file:// and other dangerous schemes
+        if parsed.scheme not in ("http", "https"):
+            return False
+        # Check if hostname is a direct IP
+        try:
+            addr = ipaddress.ip_address(hostname)
+            # Allow 127.0.0.1 since requests go through local Caido proxy
+            if hostname == "127.0.0.1":
+                return True
+            if addr.is_private or addr.is_loopback or addr.is_link_local or addr.is_reserved:
+                return False
+        except ValueError:
+            # It's a hostname — resolve and check
+            if hostname in ("localhost", "0.0.0.0"):
+                return False
+        return True
+    except Exception:
+        return False
 
 
 if TYPE_CHECKING:
@@ -175,6 +207,9 @@ class ProxyManager:
     def _search_content(
         self, request_data: dict[str, Any], content: str, pattern: str
     ) -> dict[str, Any]:
+        # Limit pattern length to mitigate ReDoS
+        if len(pattern) > 500:
+            return {"error": "Search pattern too long (max 500 chars)"}
         try:
             regex = re.compile(pattern, re.IGNORECASE | re.MULTILINE | re.DOTALL)
             matches = []
@@ -246,6 +281,8 @@ class ProxyManager:
     ) -> dict[str, Any]:
         if headers is None:
             headers = {}
+        if not _is_ssrf_safe(url):
+            return {"error": "Blocked: URL targets a private/internal address", "url": url}
         try:
             start_time = time.time()
             response = requests.request(
@@ -255,7 +292,7 @@ class ProxyManager:
                 data=body or None,
                 proxies=self.proxies,
                 timeout=timeout,
-                verify=False,
+                verify=False,  # TLS verification disabled: traffic goes through Caido proxy which handles TLS interception
             )
             response_time = int((time.time() - start_time) * 1000)
 
