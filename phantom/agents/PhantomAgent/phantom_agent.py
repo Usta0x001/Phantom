@@ -139,12 +139,19 @@ class PhantomAgent(BaseAgent):
             task_description += "\nCall create_vulnerability_report IMMEDIATELY after confirming each vulnerability."
 
             # ── Mandatory recon-first + efficiency directives ──
-            task_description += "\n\nMANDATORY FIRST STEPS (do these BEFORE creating any sub-agents):"
-            task_description += "\n1. Run nuclei_scan against the target (catches known CVEs & misconfigs)"
-            task_description += "\n2. Run katana_crawl to discover all endpoints and JS files"
-            task_description += "\n3. Run ffuf_directory_scan with common.txt wordlist"
-            task_description += "\n4. Run nmap_scan for port/service discovery"
-            task_description += "\nONLY AFTER these recon tools finish → analyze results → create targeted sub-agents."
+            # Filter out any tools that are in skip_tools to avoid contradictions
+            mandatory_recon = [
+                ("nuclei_scan", "catches known CVEs & misconfigs"),
+                ("katana_crawl", "discover all endpoints and JS files"),
+                ("ffuf_directory_scan", "directory brute-forcing with common.txt wordlist"),
+                ("nmap_scan", "port/service discovery"),
+            ]
+            active_recon = [(t, d) for t, d in mandatory_recon if t not in (skip_tools or [])]
+            if active_recon:
+                task_description += "\n\nMANDATORY FIRST STEPS (do these BEFORE creating any sub-agents):"
+                for i, (tool, desc) in enumerate(active_recon, 1):
+                    task_description += f"\n{i}. Run {tool} against the target ({desc})"
+                task_description += "\nONLY AFTER these recon tools finish → analyze results → create targeted sub-agents."
             task_description += "\n\nEFFICIENCY RULES:"
             task_description += "\n- Do NOT use browser_action for API endpoints — use send_request or python_action instead"
             task_description += "\n- Do NOT use update_todo/create_todo excessively — max 5 todo operations total"
