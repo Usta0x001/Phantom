@@ -117,10 +117,10 @@ def nmap_scan(
         cmd_parts.extend(["-sU", "-T3", "--max-rate", "200"])
 
     if ports:
-        cmd_parts.extend(["-p", shlex.quote(ports)])
+        cmd_parts.extend(["-p", ports])  # ports are validated, no shell quoting needed
 
     if scripts:
-        cmd_parts.extend(["--script", shlex.quote(scripts)])
+        cmd_parts.extend(["--script", scripts])  # script names don't need quoting
 
     if extra_args:
         cmd_parts.extend(sanitize_extra_args(extra_args))
@@ -178,10 +178,10 @@ def nmap_vuln_scan(
     """
     from phantom.tools.terminal.terminal_actions import terminal_execute
 
-    cmd_parts = ["nmap", "-sV", "--script=vuln", "-T4"]
+    cmd_parts = ["nmap", "-sV", "--script=vuln", "-T4", "--max-rate", "300"]
 
     if ports:
-        cmd_parts.extend(["-p", shlex.quote(ports)])
+        cmd_parts.extend(["-p", ports])
 
     cmd_parts.append(shlex.quote(target))
 
@@ -198,17 +198,22 @@ def nmap_vuln_scan(
 
     raw_output = result.get("content", "")
 
-    # Extract vulnerability findings
+    # Extract vulnerability findings with improved parser
     vulns: list[dict[str, str]] = []
     current_vuln: dict[str, str] | None = None
+    prev_line = ""
 
     for line in raw_output.splitlines():
+        stripped = line.strip()
         if "VULNERABLE" in line.upper():
             if current_vuln:
                 vulns.append(current_vuln)
-            current_vuln = {"title": line.strip(), "details": ""}
-        elif current_vuln and line.strip():
-            current_vuln["details"] += line.strip() + "\n"
+            # Use the previous line (script name) as title if it starts with |
+            vuln_title = prev_line.strip().lstrip("| ") if prev_line.strip().startswith("|") else stripped
+            current_vuln = {"title": vuln_title, "details": ""}
+        elif current_vuln and stripped:
+            current_vuln["details"] += stripped + "\n"
+        prev_line = line
 
     if current_vuln:
         vulns.append(current_vuln)

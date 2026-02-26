@@ -245,15 +245,31 @@ class BaseAgent(metaclass=AgentMeta):
                     return result
                 continue
 
-            except (RuntimeError, ValueError, TypeError) as e:
+            except (RuntimeError, ValueError, TypeError, ConnectionError, OSError) as e:
                 if not await self._handle_iteration_error(e, tracer):
                     if self.non_interactive:
+                        self._save_partial_results_on_crash(tracer, str(e))
                         self.state.set_completed({"success": False, "error": str(e)})
                         if tracer:
                             tracer.update_agent_status(self.state.agent_id, "failed")
                         raise
                     await self._enter_waiting_state(tracer, error_occurred=True)
                     continue
+
+            except Exception as e:  # noqa: BLE001
+                # Catch-all for unexpected errors (KeyError, AttributeError, etc.)
+                # that would otherwise crash the agent loop with no cleanup.
+                error_msg = f"Unexpected error in iteration {self.state.iteration}: {e!s}"
+                logger.exception(error_msg)
+                self.state.add_error(error_msg)
+                if self.non_interactive:
+                    self._save_partial_results_on_crash(tracer, error_msg)
+                    self.state.set_completed({"success": False, "error": error_msg})
+                    if tracer:
+                        tracer.update_agent_status(self.state.agent_id, "failed")
+                    return {"success": False, "error": error_msg}
+                await self._enter_waiting_state(tracer, error_occurred=True)
+                continue
 
     async def _wait_for_input(self) -> None:
         if self._force_stop:
@@ -677,12 +693,19 @@ class BaseAgent(metaclass=AgentMeta):
         error: RuntimeError | ValueError | TypeError | asyncio.CancelledError,
         tracer: Optional["Tracer"],
     ) -> bool:
+        """Handle non-LLM iteration errors.
+
+        Returns ``False`` to signal that the caller should propagate the
+        error (non-interactive) or enter waiting state (interactive).
+        Returning ``True`` means the error was absorbed and the loop
+        should continue — only used for genuinely transient errors.
+        """
         error_msg = f"Error in iteration {self.state.iteration}: {error!s}"
         logger.exception(error_msg)
         self.state.add_error(error_msg)
         if tracer:
             tracer.update_agent_status(self.state.agent_id, "error")
-        return True
+        return False  # propagate — let caller decide how to handle
 
     def cancel_current_execution(self) -> None:
         self._force_stop = True

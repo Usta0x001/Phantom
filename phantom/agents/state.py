@@ -98,6 +98,9 @@ class AgentState(BaseModel):
         such as confirmed vulnerabilities, discovered endpoints, credentials,
         and technology versions.
         """
+        # Dedup: skip if finding already recorded
+        if finding in self.findings_ledger:
+            return
         if len(self.findings_ledger) >= self._MAX_FINDINGS:
             # Keep the most recent half
             self.findings_ledger = self.findings_ledger[-self._MAX_FINDINGS // 2 :]
@@ -138,7 +141,9 @@ class AgentState(BaseModel):
     def resume_from_waiting(self, new_task: str | None = None) -> None:
         self.waiting_for_input = False
         self.waiting_start_time = None
-        self.stop_requested = False
+        # Only clear stop_requested if not at iteration limit
+        if not self.has_reached_max_iterations():
+            self.stop_requested = False
         self.completed = False
         self.llm_failed = False
         if new_task:

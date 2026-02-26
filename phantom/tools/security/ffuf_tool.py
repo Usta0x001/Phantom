@@ -235,11 +235,16 @@ def ffuf_vhost_fuzz(
     """
     from phantom.tools.terminal.terminal_actions import terminal_execute
 
+    # Extract the domain from the URL for the Host header
+    from urllib.parse import urlparse
+    parsed = urlparse(url)
+    domain = parsed.hostname or "localhost"
+
     cmd_parts = [
         "ffuf",
         "-u", shlex.quote(url),
         "-w", shlex.quote(wordlist),
-        "-H", "Host: FUZZ.target.com",
+        "-H", f"Host: FUZZ.{domain}",
         "-o", "/tmp/ffuf_vhost.json",
         "-of", "json",
         "-rate", str(rate),
