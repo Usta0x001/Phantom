@@ -131,6 +131,13 @@ async def run_cli(args: Any) -> None:  # noqa: PLR0915
             scan_config["auth_headers"] = parsed_headers
 
     llm_config = LLMConfig(scan_mode=scan_mode)
+
+    # Wire scan profile sandbox timeout into the environment so executor
+    # and tool_server pick it up (unless the user already specified --timeout).
+    import os
+    if not os.environ.get("PHANTOM_SANDBOX_EXECUTION_TIMEOUT"):
+        os.environ["PHANTOM_SANDBOX_EXECUTION_TIMEOUT"] = str(profile.sandbox_timeout_s)
+
     agent_config = {
         "llm_config": llm_config,
         "max_iterations": profile.max_iterations,
@@ -179,6 +186,23 @@ async def run_cli(args: Any) -> None:  # noqa: PLR0915
             )
     except Exception:
         pass  # Knowledge store is optional enhancement
+
+    # ── Plugin Loader — load user plugins if enabled ──
+    try:
+        from phantom.core.plugin_loader import PluginLoader
+        from phantom.tools.registry import tools as _tool_registry
+
+        plugin_loader = PluginLoader()
+        discovered = plugin_loader.discover()
+        if discovered:
+            loaded = plugin_loader.load_all(registry=_tool_registry)
+            if loaded:
+                console.print(
+                    f"  [dim]Plugins:[/] {len(loaded)} plugin(s) loaded from"
+                    f" {plugin_loader.plugin_dir}"
+                )
+    except Exception:
+        pass  # Plugin loading is optional
 
     def display_vulnerability(report: dict[str, Any]) -> None:
         report_id = report.get("id", "unknown")

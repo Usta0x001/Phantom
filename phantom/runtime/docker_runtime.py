@@ -39,9 +39,14 @@ class DockerRuntime(AbstractRuntime):
         self._tool_server_token: str | None = None
 
     def _find_available_port(self) -> int:
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            s.bind(("", 0))
-            return cast("int", s.getsockname()[1])
+        # Bind to port 0 and keep the socket open with SO_REUSEADDR
+        # so Docker can reuse it immediately, avoiding TOCTOU races.
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        s.bind(("", 0))
+        port = cast("int", s.getsockname()[1])
+        s.close()
+        return port
 
     def _get_scan_id(self, agent_id: str) -> str:
         try:
@@ -331,19 +336,14 @@ class DockerRuntime(AbstractRuntime):
 
     def cleanup(self) -> None:
         if self._scan_container is not None:
-            container_name = self._scan_container.name
+            container = self._scan_container
             self._scan_container = None
             self._tool_server_port = None
             self._tool_server_token = None
 
-            if container_name is None:
-                return
-
-            import subprocess
-
-            subprocess.Popen(  # noqa: S603
-                ["docker", "rm", "-f", container_name],  # noqa: S607
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                start_new_session=True,
-            )
+            # Use Docker SDK (already initialised) instead of fire-and-forget subprocess
+            try:
+                container.stop(timeout=5)
+                container.remove(force=True)
+            except Exception:  # noqa: BLE001
+                pass  # Best-effort cleanup

@@ -171,7 +171,7 @@ def ffuf_parameter_fuzz(
         "ffuf",
         "-u", shlex.quote(fuzz_url),
         "-w", shlex.quote(wordlist),
-        "-o", "/tmp/ffuf_params.json",
+        "-o", "/tmp/ffuf_params_$$.json",
         "-of", "json",
         "-rate", str(rate),
     ]
@@ -199,7 +199,7 @@ def ffuf_parameter_fuzz(
         }
 
     # Read JSON output
-    read_result = terminal_execute(command="cat /tmp/ffuf_params.json 2>/dev/null || echo '{}'", timeout=10.0)
+    read_result = terminal_execute(command="cat /tmp/ffuf_params_$$.json 2>/dev/null || echo '{}'", timeout=10.0)
     json_output = read_result.get("content", "{}")
 
     findings = _parse_ffuf_json(json_output)
@@ -245,7 +245,7 @@ def ffuf_vhost_fuzz(
         "-u", shlex.quote(url),
         "-w", shlex.quote(wordlist),
         "-H", f"Host: FUZZ.{domain}",
-        "-o", "/tmp/ffuf_vhost.json",
+        "-o", "/tmp/ffuf_vhost_$$.json",
         "-of", "json",
         "-rate", str(rate),
     ]
@@ -264,7 +264,7 @@ def ffuf_vhost_fuzz(
             "command": command,
         }
 
-    read_result = terminal_execute(command="cat /tmp/ffuf_vhost.json 2>/dev/null || echo '{}'", timeout=10.0)
+    read_result = terminal_execute(command="cat /tmp/ffuf_vhost_$$.json 2>/dev/null || echo '{}'", timeout=10.0)
     json_output = read_result.get("content", "{}")
 
     findings = _parse_ffuf_json(json_output)

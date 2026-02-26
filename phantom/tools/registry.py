@@ -190,11 +190,18 @@ def register_tool(
         tools.append(func_dict)
         _tools_by_name[str(func_dict["name"])] = f
 
-        @wraps(f)
-        def wrapper(*args: Any, **kwargs: Any) -> Any:
-            return f(*args, **kwargs)
+        if inspect.iscoroutinefunction(f):
+            @wraps(f)
+            async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
+                return await f(*args, **kwargs)
 
-        return wrapper
+            return async_wrapper
+        else:
+            @wraps(f)
+            def wrapper(*args: Any, **kwargs: Any) -> Any:
+                return f(*args, **kwargs)
+
+            return wrapper
 
     if func is None:
         return decorator

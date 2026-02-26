@@ -60,6 +60,22 @@ class FindingSummary(BaseModel):
         if verified:
             self.verified += 1
     
+    def remove_finding(self, severity: str) -> None:
+        """Decrement counters when a finding is removed (e.g. false positive)."""
+        self.total = max(0, self.total - 1)
+        self.false_positives += 1
+        severity_lower = severity.lower()
+        if severity_lower == "critical":
+            self.critical = max(0, self.critical - 1)
+        elif severity_lower == "high":
+            self.high = max(0, self.high - 1)
+        elif severity_lower == "medium":
+            self.medium = max(0, self.medium - 1)
+        elif severity_lower == "low":
+            self.low = max(0, self.low - 1)
+        else:
+            self.info = max(0, self.info - 1)
+    
     def verification_rate(self) -> float:
         """Calculate verification rate."""
         if self.total == 0:
@@ -192,6 +208,12 @@ class ScanResult(BaseModel):
         if vuln_id not in self.vulnerability_ids:
             self.vulnerability_ids.append(vuln_id)
             self.finding_summary.add_finding(severity, verified)
+    
+    def remove_vulnerability(self, vuln_id: str, severity: str) -> None:
+        """Remove a vulnerability (e.g. marked as false positive)."""
+        if vuln_id in self.vulnerability_ids:
+            self.vulnerability_ids.remove(vuln_id)
+            self.finding_summary.remove_finding(severity)
     
     def add_host(self, host: str) -> None:
         """Register discovered host."""

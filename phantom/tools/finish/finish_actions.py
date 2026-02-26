@@ -1,5 +1,6 @@
 from typing import Any
 
+from phantom.config import Config
 from phantom.tools.registry import register_tool
 
 import logging
@@ -110,11 +111,24 @@ def _run_post_scan_enrichment(tracer: Any, agent_state: Any = None) -> dict[str,
         http_client = None
         try:
             import httpx  # noqa: F811
-            http_client = httpx.AsyncClient(timeout=15.0, verify=False, follow_redirects=True)
+            tls_verify = Config.get("phantom_verify_tls") != "false"
+            http_client = httpx.AsyncClient(timeout=15.0, verify=tls_verify, follow_redirects=True)
         except ImportError:
             _logger.debug("httpx not available — verification will skip HTTP-based checks")
 
         engine = VerificationEngine(terminal_execute_fn=None, http_client=http_client)
+
+        # Try to set up InteractshClient for OOB verification
+        try:
+            from phantom.core.interactsh_client import InteractshClient
+
+            interactsh = InteractshClient(terminal_execute_fn=None)
+            # Attempt to start a session (gracefully fails if interactsh-client not available)
+            asyncio.run(interactsh.start_session()) if not asyncio.get_event_loop().is_running() else None
+            engine.interactsh = interactsh
+            _logger.info("InteractshClient attached to verification engine for OOB checks")
+        except Exception as e:
+            _logger.debug(f"InteractshClient not available (OOB checks skipped): {e}")
 
         vuln_models_for_verify = []
         for report in vuln_reports:
@@ -128,17 +142,11 @@ def _run_post_scan_enrichment(tracer: Any, agent_state: Any = None) -> dict[str,
                 models = [m for _, m in vuln_models_for_verify]
                 return await engine.verify_batch(models)
 
-            # Get or create an event loop
-            try:
-                loop = asyncio.get_running_loop()
-                # If we're already in an async context, use ensure_future
-                import concurrent.futures
-                with concurrent.futures.ThreadPoolExecutor() as pool:
-                    results = loop.run_in_executor(pool, lambda: asyncio.run(_verify_all()))
-                    # Fallback: run synchronously in new loop
-                    results = asyncio.run(_verify_all())
-            except RuntimeError:
-                results = asyncio.run(_verify_all())
+            # Run in a new event loop on a background thread to avoid
+            # conflicts with any already-running loop.
+            import concurrent.futures
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+                results = pool.submit(asyncio.run, _verify_all()).result(timeout=120)
 
             verified_count = 0
             for vresult in results:
@@ -174,7 +182,9 @@ def _run_post_scan_enrichment(tracer: Any, agent_state: Any = None) -> dict[str,
         # Cleanup http client
         if http_client:
             try:
-                asyncio.run(http_client.aclose())
+                import concurrent.futures as _cf
+                with _cf.ThreadPoolExecutor(max_workers=1) as _pool:
+                    _pool.submit(asyncio.run, http_client.aclose()).result(timeout=10)
             except Exception:
                 pass
 

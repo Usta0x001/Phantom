@@ -10,6 +10,7 @@ import asyncio
 import logging
 from typing import Any
 
+from phantom.config import Config
 from phantom.tools.registry import register_tool
 
 _logger = logging.getLogger(__name__)
@@ -173,13 +174,34 @@ async def verify_vulnerability(
         http_client = None
         try:
             import httpx
+            tls_verify = Config.get("phantom_verify_tls") != "false" if hasattr(Config, 'get') else False
             http_client = httpx.AsyncClient(
-                timeout=15.0, verify=False, follow_redirects=True
+                timeout=15.0, verify=tls_verify, follow_redirects=True
             )
         except ImportError:
             pass
 
-        engine = VerificationEngine(terminal_execute_fn=None, http_client=http_client)
+        # Wire terminal_execute_fn for command-based verification
+        terminal_fn = None
+        try:
+            from phantom.tools.terminal.terminal_actions import terminal_execute
+            terminal_fn = terminal_execute
+        except ImportError:
+            pass
+
+        # Wire InteractshClient for OOB verification
+        interactsh = None
+        try:
+            from phantom.core.interactsh_client import InteractshClient
+            interactsh = InteractshClient(terminal_execute_fn=terminal_fn)
+        except Exception:
+            pass
+
+        engine = VerificationEngine(
+            terminal_execute_fn=terminal_fn,
+            http_client=http_client,
+            interactsh_client=interactsh,
+        )
 
         try:
             result = await engine.verify(vuln)

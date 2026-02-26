@@ -73,13 +73,14 @@ class Tracer:
             self.run_id = run_name
 
     def get_run_dir(self) -> Path:
-        if self._run_dir is None:
-            runs_dir = Path.cwd() / "phantom_runs"
-            runs_dir.mkdir(exist_ok=True)
+        with self._lock:
+            if self._run_dir is None:
+                runs_dir = Path.cwd() / "phantom_runs"
+                runs_dir.mkdir(exist_ok=True)
 
-            run_dir_name = self.run_name if self.run_name else self.run_id
-            self._run_dir = runs_dir / run_dir_name
-            self._run_dir.mkdir(exist_ok=True)
+                run_dir_name = self.run_name if self.run_name else self.run_id
+                self._run_dir = runs_dir / run_dir_name
+                self._run_dir.mkdir(exist_ok=True)
 
         return self._run_dir
 
