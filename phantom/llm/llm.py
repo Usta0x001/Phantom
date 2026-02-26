@@ -136,7 +136,8 @@ class LLM:
             except Exception as e:  # noqa: BLE001
                 if attempt >= max_retries or not self._should_retry(e):
                     self._raise_error(e)
-                wait = min(10, 2 * (2**attempt))
+                import random as _rand
+                wait = min(10, 2 * (2**attempt)) + _rand.uniform(0, 1)
                 await asyncio.sleep(wait)
 
     async def _stream(self, messages: list[dict[str, Any]]) -> AsyncIterator[LLMResponse]:
@@ -196,10 +197,10 @@ class LLM:
         compressed = list(self.memory_compressor.compress_history(
             list(conversation_history)  # operate on a copy to avoid destroying caller's history
         ))
-        # Only update the caller's history if compression actually reduced it
-        if len(compressed) < len(conversation_history):
-            conversation_history.clear()
-            conversation_history.extend(compressed)
+        # NOTE: Do NOT mutate conversation_history here — this method may run
+        # in a background thread via asyncio.to_thread while the event loop
+        # still references the same list.  The caller (agent loop) is
+        # responsible for replacing its history reference if needed.
         messages.extend(compressed)
 
         if self._is_anthropic() and self.config.enable_prompt_caching:
@@ -306,6 +307,9 @@ class LLM:
             pass
 
     def _should_retry(self, e: Exception) -> bool:
+        # Always retry on transient network errors
+        if isinstance(e, (ConnectionError, OSError, TimeoutError)):
+            return True
         code = getattr(e, "status_code", None) or getattr(
             getattr(e, "response", None), "status_code", None
         )

@@ -151,7 +151,7 @@ def _summarize_messages(
         }
     except Exception:
         logger.exception("Failed to summarize messages")
-        return messages[0]
+        return messages  # Return all messages — better over-budget than losing context
 
 
 def _handle_images(messages: list[dict[str, Any]], max_images: int) -> None:
@@ -257,7 +257,10 @@ class MemoryCompressor:
             chunk = old_msgs[i : i + chunk_size]
             summary = _summarize_messages(chunk, model_name, self.timeout)
             if summary:
-                compressed.append(summary)
+                if isinstance(summary, list):
+                    compressed.extend(summary)  # fallback returned all messages
+                else:
+                    compressed.append(summary)
 
         # Inject findings ledger as a pinned context message so it is
         # NEVER lost during compression.  The ledger is a compact list that
