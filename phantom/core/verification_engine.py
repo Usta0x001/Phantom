@@ -32,16 +32,18 @@ class VerificationEngine:
     before marking them as confirmed. This reduces false positives.
     """
     
-    def __init__(self, terminal_execute_fn: Any = None, http_client: Any = None):
+    def __init__(self, terminal_execute_fn: Any = None, http_client: Any = None, interactsh_client: Any = None):
         """
         Initialize verification engine.
         
         Args:
             terminal_execute_fn: Async function to execute commands in sandbox
             http_client: HTTP client for making requests (httpx or aiohttp)
+            interactsh_client: InteractshClient instance for OOB callback verification
         """
         self.terminal_execute = terminal_execute_fn
         self.http_client = http_client
+        self.interactsh = interactsh_client
         self._results: dict[str, VerificationResult] = {}
     
     async def verify(self, vuln: Vulnerability) -> VerificationResult:
@@ -318,7 +320,7 @@ class VerificationEngine:
         return attempt
     
     async def _verify_oob_http(self, vuln: Vulnerability) -> ExploitAttempt:
-        """Verify using out-of-band HTTP callback."""
+        """Verify using out-of-band HTTP callback via InteractshClient."""
         attempt = ExploitAttempt(
             vulnerability_id=vuln.id,
             method="oob_http",
@@ -326,16 +328,61 @@ class VerificationEngine:
             payload="",
         )
         
-        # This requires an interactsh or similar service
-        # For now, just document the payload
-        attempt.payload = "Requires OOB server (interactsh)"
-        attempt.evidence = "OOB verification not yet implemented - requires callback server"
-        attempt.success = False
+        if not self.interactsh:
+            attempt.payload = "Requires OOB server (interactsh)"
+            attempt.evidence = "OOB verification skipped — no interactsh client configured"
+            attempt.success = False
+            return attempt
+        
+        try:
+            # Generate a unique OOB payload for this vuln
+            oob_payload = self.interactsh.generate_payload(
+                vuln_id=vuln.id,
+                vuln_class=vuln.vulnerability_class,
+                payload_type="http",
+            )
+            
+            if not oob_payload:
+                attempt.evidence = "Failed to generate OOB payload"
+                return attempt
+            
+            attempt.payload = oob_payload.payload
+            
+            # Inject the OOB URL into the target parameter
+            if self.http_client and vuln.target:
+                target_url = self._inject_payload(
+                    vuln.target, vuln.parameter, oob_payload.payload
+                )
+                try:
+                    await self.http_client.get(target_url, timeout=10)
+                except Exception:
+                    pass  # We don't care about the response — we care about the callback
+            
+            # Wait for the callback interaction
+            interaction = await self.interactsh.wait_for_interaction(
+                payload_id=oob_payload.id,
+                timeout=15,
+            )
+            
+            if interaction:
+                attempt.success = True
+                attempt.confidence = 0.95
+                attempt.evidence = (
+                    f"OOB HTTP callback received: {interaction.protocol} from "
+                    f"{interaction.remote_address} at {interaction.timestamp}"
+                )
+                return attempt
+            else:
+                attempt.evidence = "OOB payload sent but no callback received within timeout"
+                
+        except Exception as e:
+            attempt.error = str(e)
+            logger.debug(f"OOB HTTP verification failed for {vuln.id}: {e}")
         
         return attempt
     
     async def _verify_oob_dns(self, vuln: Vulnerability) -> ExploitAttempt:
-        """Verify using out-of-band DNS callback."""
+        """Verify using out-of-band DNS callback via InteractshClient."""
         attempt = ExploitAttempt(
             vulnerability_id=vuln.id,
             method="oob_dns",
@@ -343,10 +390,54 @@ class VerificationEngine:
             payload="",
         )
         
-        # This requires an interactsh or similar service
-        attempt.payload = "Requires OOB server (interactsh)"
-        attempt.evidence = "OOB DNS verification not yet implemented"
-        attempt.success = False
+        if not self.interactsh:
+            attempt.payload = "Requires OOB server (interactsh)"
+            attempt.evidence = "OOB DNS verification skipped — no interactsh client configured"
+            attempt.success = False
+            return attempt
+        
+        try:
+            oob_payload = self.interactsh.generate_payload(
+                vuln_id=vuln.id,
+                vuln_class=vuln.vulnerability_class,
+                payload_type="dns",
+            )
+            
+            if not oob_payload:
+                attempt.evidence = "Failed to generate OOB DNS payload"
+                return attempt
+            
+            attempt.payload = oob_payload.payload
+            
+            # Inject the DNS canary into the target
+            if self.http_client and vuln.target:
+                target_url = self._inject_payload(
+                    vuln.target, vuln.parameter, oob_payload.payload
+                )
+                try:
+                    await self.http_client.get(target_url, timeout=10)
+                except Exception:
+                    pass
+            
+            interaction = await self.interactsh.wait_for_interaction(
+                payload_id=oob_payload.id,
+                timeout=15,
+            )
+            
+            if interaction:
+                attempt.success = True
+                attempt.confidence = 0.90
+                attempt.evidence = (
+                    f"OOB DNS callback received: {interaction.protocol} from "
+                    f"{interaction.remote_address} at {interaction.timestamp}"
+                )
+                return attempt
+            else:
+                attempt.evidence = "OOB DNS payload sent but no callback received"
+                
+        except Exception as e:
+            attempt.error = str(e)
+            logger.debug(f"OOB DNS verification failed for {vuln.id}: {e}")
         
         return attempt
     

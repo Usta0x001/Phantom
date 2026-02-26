@@ -100,15 +100,15 @@ class TestConvertToDict:
         result = _convert_to_dict("{}")
         assert result == {}
 
-    def test_invalid_json_returns_empty_dict(self) -> None:
-        """Test that invalid JSON returns an empty dictionary."""
+    def test_invalid_json_wraps_value(self) -> None:
+        """Test that invalid JSON wraps the value instead of silently losing data."""
         result = _convert_to_dict("not json")
-        assert result == {}
+        assert result == {"value": "not json"}
 
-    def test_json_array_returns_empty_dict(self) -> None:
-        """Test that a JSON array returns an empty dictionary."""
+    def test_json_array_wraps_value(self) -> None:
+        """Test that a JSON array is wrapped in a dict."""
         result = _convert_to_dict("[1, 2, 3]")
-        assert result == {}
+        assert result == {"value": [1, 2, 3]}
 
     def test_nested_json_object(self) -> None:
         """Test parsing a nested JSON object."""

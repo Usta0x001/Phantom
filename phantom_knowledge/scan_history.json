@@ -53,5 +53,71 @@
     "hosts_found": 0,
     "duration_seconds": 0.501873,
     "tools_used": []
+  },
+  {
+    "scan_id": "test-run-001",
+    "target": "http://example.com",
+    "status": "completed",
+    "completed_at": "2026-02-26T22:25:08.839944+00:00",
+    "vulns_found": 1,
+    "vulns_verified": 0,
+    "hosts_found": 0,
+    "duration_seconds": null,
+    "tools_used": []
+  },
+  {
+    "scan_id": "test-run",
+    "target": "",
+    "status": "completed",
+    "completed_at": "2026-02-26T22:25:11.692850+00:00",
+    "vulns_found": 1,
+    "vulns_verified": 0,
+    "hosts_found": 0,
+    "duration_seconds": 2.803989,
+    "tools_used": []
+  },
+  {
+    "scan_id": "test-run-001",
+    "target": "http://example.com",
+    "status": "completed",
+    "completed_at": "2026-02-26T22:27:12.418429+00:00",
+    "vulns_found": 1,
+    "vulns_verified": 0,
+    "hosts_found": 0,
+    "duration_seconds": null,
+    "tools_used": []
+  },
+  {
+    "scan_id": "test-run",
+    "target": "",
+    "status": "completed",
+    "completed_at": "2026-02-26T22:27:15.662904+00:00",
+    "vulns_found": 1,
+    "vulns_verified": 0,
+    "hosts_found": 0,
+    "duration_seconds": 3.193107,
+    "tools_used": []
+  },
+  {
+    "scan_id": "test-run-001",
+    "target": "http://example.com",
+    "status": "completed",
+    "completed_at": "2026-02-26T22:31:58.578547+00:00",
+    "vulns_found": 1,
+    "vulns_verified": 0,
+    "hosts_found": 0,
+    "duration_seconds": null,
+    "tools_used": []
+  },
+  {
+    "scan_id": "test-run",
+    "target": "",
+    "status": "completed",
+    "completed_at": "2026-02-26T22:32:01.875842+00:00",
+    "vulns_found": 1,
+    "vulns_verified": 0,
+    "hosts_found": 0,
+    "duration_seconds": 3.25016,
+    "tools_used": []
   }
 ]

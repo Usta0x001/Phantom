@@ -127,6 +127,17 @@ def _convert_to_dict(value: str) -> dict[str, Any]:
         if isinstance(parsed, dict):
             return parsed
     except json.JSONDecodeError:
-        return {}
+        # Try key=value parsing as fallback before giving up
+        if "=" in value:
+            result = {}
+            for pair in value.split(","):
+                if "=" in pair:
+                    k, _, v = pair.partition("=")
+                    result[k.strip()] = v.strip()
+            if result:
+                return result
+        # Wrap non-dict scalars instead of silently returning empty
+        return {"value": value} if value.strip() else {}
     else:
-        return {}
+        # Parsed successfully but not a dict — wrap it
+        return {"value": parsed} if parsed is not None else {}

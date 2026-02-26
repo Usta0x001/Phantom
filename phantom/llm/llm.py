@@ -1,4 +1,5 @@
 import asyncio
+import logging
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from typing import Any
@@ -23,6 +24,8 @@ from phantom.utils.resource_paths import get_phantom_resource_path
 
 litellm.drop_params = True
 litellm.modify_params = True
+
+logger = logging.getLogger(__name__)
 
 
 class LLMRequestFailedError(Exception):

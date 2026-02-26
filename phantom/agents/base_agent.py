@@ -459,10 +459,10 @@ class BaseAgent(metaclass=AgentMeta):
             from phantom.tools.agents_graph.agents_graph_actions import _agent_graph, _agent_messages, _graph_lock
 
             agent_id = state.agent_id
-            if not agent_id or agent_id not in _agent_messages:
-                return
 
             with _graph_lock:
+                if not agent_id or agent_id not in _agent_messages:
+                    return
                 messages = _agent_messages.get(agent_id, [])
                 # Snapshot unread messages under lock to avoid concurrent modification
                 unread = [m for m in messages if not m.get("read", False)]
@@ -506,15 +506,13 @@ class BaseAgent(metaclass=AgentMeta):
 
                     # Sanitize inter-agent message content to mitigate prompt injection
                     raw_content = str(message.get("content", ""))
-                    # Strip XML-like tags that could impersonate system/delivery structure
+                    # Strip ALL XML-like tags to prevent prompt injection via
+                    # any tag, not just a specific denylist.
                     import re as _re
                     sanitized_content = _re.sub(
-                        r"</?(?:inter_agent_message|delivery_notice|important|sender|"
-                        r"agent_name|agent_id|message_metadata|delivery_info|"
-                        r"system|instruction|override|ignore)[^>]*>",
+                        r"</?[a-zA-Z_][a-zA-Z0-9_\-.:]*[^>]*>",
                         "",
                         raw_content,
-                        flags=_re.IGNORECASE,
                     )
 
                     message_content = f"""<inter_agent_message>

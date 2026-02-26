@@ -151,7 +151,17 @@ def _summarize_messages(
         }
     except Exception:
         logger.exception("Failed to summarize messages")
-        return messages  # Return all messages — better over-budget than losing context
+        # Return a single summary dict so the return type is consistent —
+        # returning the raw list defeats the compression budget.
+        error_summary = (
+            "<context_summary message_count='{count}'>"
+            "[Summarization failed — original context contained {count} messages]"
+            "</context_summary>"
+        )
+        return {
+            "role": "assistant",
+            "content": error_summary.format(count=len(messages)),
+        }
 
 
 def _handle_images(messages: list[dict[str, Any]], max_images: int) -> None:

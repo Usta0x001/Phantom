@@ -70,6 +70,8 @@ class ToolExecutionResponse(BaseModel):
 
 
 async def _run_tool(agent_id: str, tool_name: str, kwargs: dict[str, Any]) -> Any:
+    import inspect
+
     from phantom.tools.argument_parser import convert_arguments
     from phantom.tools.context import set_current_agent_id
     from phantom.tools.registry import get_tool_by_name
@@ -81,7 +83,17 @@ async def _run_tool(agent_id: str, tool_name: str, kwargs: dict[str, Any]) -> An
         raise ValueError(f"Tool '{tool_name}' not found")
 
     converted_kwargs = convert_arguments(tool_func, kwargs)
-    return await asyncio.to_thread(tool_func, **converted_kwargs)
+
+    if asyncio.iscoroutinefunction(tool_func) or inspect.isawaitable(tool_func):
+        # Async tool — call directly in the event loop
+        return await tool_func(**converted_kwargs)
+    else:
+        # Sync tool — run in a thread to avoid blocking the event loop
+        result = await asyncio.to_thread(tool_func, **converted_kwargs)
+        # Guard against sync wrappers that return unawaited coroutines
+        if inspect.isawaitable(result):
+            return await result
+        return result
 
 
 @app.post("/execute", response_model=ToolExecutionResponse)

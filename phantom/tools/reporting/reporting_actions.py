@@ -35,7 +35,7 @@ def calculate_cvss_and_severity(
         import logging
 
         logging.exception("Failed to calculate CVSS")
-        return 7.5, "high", ""
+        return 0.0, "unknown", ""
     else:
         return base_score, severity, vector
 

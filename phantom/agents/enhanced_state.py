@@ -195,6 +195,10 @@ class EnhancedAgentState(AgentState):
             if severity_key in self.vuln_stats:
                 self.vuln_stats[severity_key] = max(0, self.vuln_stats[severity_key] - 1)
             
+            # Also update scan_result.finding_summary to stay in sync
+            if self.scan_result:
+                self.scan_result.remove_vulnerability(vuln.id, vuln.severity.value)
+            
             if vuln_id in self.pending_verification:
                 self.pending_verification.remove(vuln_id)
     
