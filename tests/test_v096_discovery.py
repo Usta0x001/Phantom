@@ -93,7 +93,7 @@ class TestMemoryCompressorV096:
 
     def test_max_total_tokens_reduced(self):
         from phantom.llm.memory_compressor import MAX_TOTAL_TOKENS
-        assert MAX_TOTAL_TOKENS == 60_000, f"Expected 60K, got {MAX_TOTAL_TOKENS}"
+        assert MAX_TOTAL_TOKENS == 80_000, f"Expected 80K, got {MAX_TOTAL_TOKENS}"
 
     def test_max_messages_reduced(self):
         from phantom.llm.memory_compressor import MAX_MESSAGES
@@ -181,27 +181,57 @@ class TestSubagentIterations:
 
 
 class TestSubagentContextCap:
-    """Validate subagent gets limited context, not full parent history."""
+    """Validate subagent gets SMART context (first msgs + summary + recent)."""
 
-    def test_context_cap_at_10_messages(self):
-        """When parent has >10 messages, child should get only last 10."""
+    def test_smart_context_preserves_first_messages(self):
+        """When parent has >8 messages, child should get first 2 + summary + last 5."""
+        from phantom.tools.agents_graph.agents_graph_actions import _build_smart_context
+        from unittest.mock import MagicMock
+
         full_history = [{"role": "user", "content": f"msg {i}"} for i in range(50)]
-        _MAX_INHERITED = 10
-        if len(full_history) > _MAX_INHERITED:
-            inherited = full_history[-_MAX_INHERITED:]
-        else:
-            inherited = list(full_history)
-        assert len(inherited) == 10
-        assert inherited[0]["content"] == "msg 40"
+        state = MagicMock()
+        state.findings_ledger = []
+        result = _build_smart_context(full_history, state)
+        # First 2 should be preserved
+        assert result[0]["content"] == "msg 0"
+        assert result[1]["content"] == "msg 1"
+
+    def test_smart_context_includes_recent(self):
+        """Last 5 messages should be in the result."""
+        from phantom.tools.agents_graph.agents_graph_actions import _build_smart_context
+        from unittest.mock import MagicMock
+
+        full_history = [{"role": "user", "content": f"msg {i}"} for i in range(50)]
+        state = MagicMock()
+        state.findings_ledger = []
+        result = _build_smart_context(full_history, state)
+        last_contents = [m["content"] for m in result[-5:]]
+        assert "msg 45" in last_contents
+        assert "msg 49" in last_contents
 
     def test_small_history_passed_fully(self):
+        from phantom.tools.agents_graph.agents_graph_actions import _build_smart_context
+        from unittest.mock import MagicMock
+
         full_history = [{"role": "user", "content": f"msg {i}"} for i in range(5)]
-        _MAX_INHERITED = 10
-        if len(full_history) > _MAX_INHERITED:
-            inherited = full_history[-_MAX_INHERITED:]
-        else:
-            inherited = list(full_history)
-        assert len(inherited) == 5
+        state = MagicMock()
+        state.findings_ledger = []
+        result = _build_smart_context(full_history, state)
+        assert len(result) == 5
+
+    def test_findings_ledger_in_context(self):
+        """If parent has findings, they should appear in the summary."""
+        from phantom.tools.agents_graph.agents_graph_actions import _build_smart_context
+        from unittest.mock import MagicMock
+
+        full_history = [{"role": "user", "content": f"msg {i}"} for i in range(50)]
+        state = MagicMock()
+        state.findings_ledger = ["SQLi at /login", "XSS at /search"]
+        result = _build_smart_context(full_history, state)
+        # There should be a parent_findings_summary message
+        summary_msgs = [m for m in result if "parent_findings_summary" in m.get("content", "")]
+        assert len(summary_msgs) == 1
+        assert "SQLi at /login" in summary_msgs[0]["content"]
 
 
 # =========================================================================
@@ -250,12 +280,12 @@ class TestKatanaTool:
 class TestToolOutputTruncation:
     """Validate executor truncates large tool outputs."""
 
-    def test_truncation_at_6000_chars(self):
+    def test_truncation_at_8000_chars(self):
         from phantom.tools.executor import _format_tool_result
-        big_result = "A" * 8000
+        big_result = "A" * 10000
         observation_xml, images = _format_tool_result("test_tool", big_result)
-        # The truncated result should be about 5000 + XML overhead
-        assert len(observation_xml) < 7000, f"Output too large: {len(observation_xml)}"
+        # The truncated result should be about 7000 + XML overhead
+        assert len(observation_xml) < 9000, f"Output too large: {len(observation_xml)}"
         assert "... [middle content truncated] ..." in observation_xml
 
     def test_small_output_not_truncated(self):
@@ -301,6 +331,158 @@ class TestNmapRateLimiting:
 
 
 class TestVersion096:
-    def test_version_is_096(self):
+    def test_version_is_097(self):
         from phantom import __version__
-        assert __version__ == "0.9.6"
+        assert __version__ == "0.9.7"
+
+
+# =========================================================================
+# Findings Ledger Tests (v0.9.7)
+# =========================================================================
+
+
+class TestFindingsLedger:
+    """Validate persistent findings ledger in AgentState."""
+
+    def test_agentstate_has_findings_ledger(self):
+        from phantom.agents.state import AgentState
+        state = AgentState()
+        assert hasattr(state, "findings_ledger")
+        assert state.findings_ledger == []
+
+    def test_add_finding(self):
+        from phantom.agents.state import AgentState
+        state = AgentState()
+        state.add_finding("SQLi at /login")
+        assert len(state.findings_ledger) == 1
+        assert state.findings_ledger[0] == "SQLi at /login"
+
+    def test_get_findings_summary(self):
+        from phantom.agents.state import AgentState
+        state = AgentState()
+        state.add_finding("SQLi at /login")
+        state.add_finding("XSS at /search")
+        summary = state.get_findings_summary()
+        assert "SQLi at /login" in summary
+        assert "XSS at /search" in summary
+
+    def test_findings_ledger_cap(self):
+        from phantom.agents.state import AgentState
+        state = AgentState()
+        for i in range(250):
+            state.add_finding(f"finding {i}")
+        # Should be capped at _MAX_FINDINGS // 2 + remaining
+        assert len(state.findings_ledger) <= 200
+
+    def test_record_finding_tool_registered(self):
+        from phantom.tools.registry import get_tool_names
+        names = get_tool_names()
+        assert "record_finding" in names, f"record_finding not in {sorted(names)}"
+        assert "get_findings_ledger" in names, f"get_findings_ledger not in {sorted(names)}"
+
+
+class TestAutoRecordFindings:
+    """Validate auto-recording of key findings from security tools."""
+
+    def test_nuclei_findings_auto_recorded(self):
+        from phantom.tools.executor import _auto_record_findings
+        from phantom.agents.state import AgentState
+
+        state = AgentState()
+        result = {
+            "success": True,
+            "findings": [
+                {"severity": "critical", "template_name": "sqli-test", "matched_at": "http://target/login"},
+                {"severity": "info", "template_name": "tech-detect", "matched_at": "http://target/"},
+            ],
+        }
+        _auto_record_findings("nuclei_scan", result, state)
+        # Only critical should be recorded (info is skipped)
+        assert len(state.findings_ledger) == 1
+        assert "sqli-test" in state.findings_ledger[0]
+
+    def test_nmap_ports_auto_recorded(self):
+        from phantom.tools.executor import _auto_record_findings
+        from phantom.agents.state import AgentState
+
+        state = AgentState()
+        result = {
+            "success": True,
+            "hosts": [
+                {
+                    "hostname": "target.com",
+                    "ip": "10.0.0.1",
+                    "ports": [
+                        {"port": 80, "state": "open", "service": "http"},
+                        {"port": 443, "state": "open", "service": "https"},
+                        {"port": 22, "state": "closed", "service": "ssh"},
+                    ],
+                }
+            ],
+        }
+        _auto_record_findings("nmap_scan", result, state)
+        assert len(state.findings_ledger) == 1
+        assert "80/http" in state.findings_ledger[0]
+        assert "443/https" in state.findings_ledger[0]
+        # Closed port should NOT appear
+        assert "22/ssh" not in state.findings_ledger[0]
+
+    def test_katana_crawl_auto_recorded(self):
+        from phantom.tools.executor import _auto_record_findings
+        from phantom.agents.state import AgentState
+
+        state = AgentState()
+        result = {
+            "success": True,
+            "total_urls": 42,
+            "summary": {"api_endpoints": 5, "js_files": 8, "forms": 3},
+            "api_endpoints": [
+                {"url": "http://target/api/users"},
+                {"url": "http://target/api/products"},
+            ],
+        }
+        _auto_record_findings("katana_crawl", result, state)
+        # Should record summary + API endpoints
+        assert len(state.findings_ledger) >= 2
+        assert any("42 URLs" in f for f in state.findings_ledger)
+        assert any("/api/users" in f for f in state.findings_ledger)
+
+    def test_failed_tool_not_recorded(self):
+        from phantom.tools.executor import _auto_record_findings
+        from phantom.agents.state import AgentState
+
+        state = AgentState()
+        result = {"success": False, "error": "timeout"}
+        _auto_record_findings("nuclei_scan", result, state)
+        assert len(state.findings_ledger) == 0
+
+
+class TestMemoryCompressorLedger:
+    """Validate findings ledger is injected during compression."""
+
+    def test_ledger_message_built(self):
+        from phantom.llm.memory_compressor import MemoryCompressor
+        from phantom.agents.state import AgentState
+        from unittest.mock import patch
+
+        state = AgentState()
+        state.add_finding("SQLi at /login")
+        state.add_finding("XSS at /search")
+
+        with patch.dict("os.environ", {"PHANTOM_LLM": "test-model"}):
+            mc = MemoryCompressor(model_name="test-model")
+            mc._agent_state = state
+            msg = mc._build_ledger_message()
+
+        assert msg is not None
+        assert "SQLi at /login" in msg["content"]
+        assert "persistent_findings_ledger" in msg["content"]
+
+    def test_no_ledger_when_empty(self):
+        from phantom.llm.memory_compressor import MemoryCompressor
+
+        with patch.dict("os.environ", {"PHANTOM_LLM": "test-model"}):
+            mc = MemoryCompressor(model_name="test-model")
+            mc._agent_state = None
+            msg = mc._build_ledger_message()
+        assert msg is None

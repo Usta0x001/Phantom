@@ -108,6 +108,11 @@ class LLM:
         if agent_id:
             self.agent_id = agent_id
 
+    def set_agent_state(self, state: Any) -> None:
+        """Give the memory compressor a reference to the agent state so it can
+        read the findings ledger during compression."""
+        self.memory_compressor._agent_state = state
+
     async def generate(
         self, conversation_history: list[dict[str, Any]]
     ) -> AsyncIterator[LLMResponse]:

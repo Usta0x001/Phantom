@@ -1,3 +1,4 @@
+import re as _re
 import threading
 from datetime import UTC, datetime
 from typing import Any, Literal
@@ -6,6 +7,119 @@ from phantom.tools.registry import register_tool
 
 # Thread-safe lock for all agent graph mutations
 _graph_lock = threading.Lock()
+
+
+def _build_smart_context(
+    full_history: list[dict[str, Any]],
+    parent_state: Any,
+) -> list[dict[str, Any]]:
+    """Build an optimised context payload for a new subagent.
+
+    Instead of blindly passing the last N messages (which loses critical
+    recon data) or the full history (which wastes tokens), we construct:
+
+    1. **First 2 messages** — always included because they contain the
+       scan task description and initial target context.
+    2. **Findings summary** — a synthetic message that captures key data
+       extracted from the *entire* parent conversation so the child never
+       loses important discoveries (endpoints, vulns, technologies, creds).
+    3. **Last 5 messages** — recent activity so the child understands what
+       just happened before it was created.
+
+    Total inherited: 2 + 1 (summary) + up to 5 = max 8 messages — compact
+    but information-dense.
+    """
+    if len(full_history) <= 8:
+        return list(full_history)
+
+    # --- 1. First 2 messages (task + initial context) ---
+    initial = full_history[:2]
+
+    # --- 2. Extract key findings from full history ---
+    summary_parts: list[str] = []
+
+    # Gather parent's findings ledger if available
+    if hasattr(parent_state, "findings_ledger") and parent_state.findings_ledger:
+        summary_parts.append("## Key Findings from Parent Agent")
+        for entry in parent_state.findings_ledger[-40:]:
+            summary_parts.append(f"- {entry}")
+
+    # Also scan conversation for important patterns if ledger is insufficient
+    if len(summary_parts) < 5:
+        urls: set[str] = set()
+        techs: set[str] = set()
+        vulns: list[str] = []
+        creds: list[str] = []
+        for msg in full_history:
+            text = _extract_text(msg)
+            if not text:
+                continue
+            # Extract URLs/endpoints mentioned
+            for url in _re.findall(r"https?://[^\s\"'<>]+", text):
+                urls.add(url.rstrip(".,;)"))
+            # Extract technologies
+            for tech in _re.findall(
+                r"(?:running|using|detected|framework|server)[:\s]+([A-Za-z0-9][\w./-]{2,30})",
+                text,
+                _re.IGNORECASE,
+            ):
+                techs.add(tech.strip())
+            # Extract vulnerability mentions
+            for vuln in _re.findall(
+                r"(?:(?:SQL|XSS|SSRF|CSRF|IDOR|XXE|RCE|LFI|RFI)\b[^.]{0,100})",
+                text,
+                _re.IGNORECASE,
+            ):
+                if len(vulns) < 20:
+                    vulns.append(vuln.strip()[:150])
+            # Extract credentials / tokens
+            for cred in _re.findall(r"(?:password|token|secret|api[_-]?key)[:\s=]+\S+", text, _re.IGNORECASE):
+                if len(creds) < 10:
+                    creds.append(cred.strip()[:100])
+
+        if urls:
+            summary_parts.append(f"## Discovered URLs/Endpoints ({len(urls)} total)")
+            for u in sorted(urls)[:40]:
+                summary_parts.append(f"- {u}")
+        if techs:
+            summary_parts.append(f"## Technologies Detected: {', '.join(sorted(techs)[:15])}")
+        if vulns:
+            summary_parts.append("## Potential Vulnerabilities Noted")
+            for v in vulns[:15]:
+                summary_parts.append(f"- {v}")
+        if creds:
+            summary_parts.append("## Credentials/Tokens Found")
+            for c in creds:
+                summary_parts.append(f"- {c}")
+
+    summary_text = "\n".join(summary_parts) if summary_parts else ""
+
+    # --- 3. Last 5 messages (recent activity) ---
+    recents = full_history[-5:]
+
+    # --- Assemble ---
+    result = list(initial)
+    if summary_text:
+        result.append({
+            "role": "user",
+            "content": f"<parent_findings_summary>\n{summary_text}\n</parent_findings_summary>",
+        })
+    result.extend(recents)
+    return result
+
+
+def _extract_text(msg: dict[str, Any]) -> str:
+    """Extract plain text from a conversation message."""
+    content = msg.get("content", "")
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for item in content:
+            if isinstance(item, dict) and item.get("type") == "text":
+                parts.append(item.get("text", ""))
+        return " ".join(parts)
+    return str(content)
 
 _agent_graph: dict[str, Any] = {
     "nodes": {},
@@ -281,14 +395,7 @@ def create_agent(
         inherited_messages = []
         if inherit_context:
             full_history = agent_state.get_conversation_history()
-            # Only pass last few messages to child instead of the entire
-            # conversation.  This dramatically reduces token waste for
-            # subagents while keeping relevant recent context.
-            _MAX_INHERITED = 10
-            if len(full_history) > _MAX_INHERITED:
-                inherited_messages = full_history[-_MAX_INHERITED:]
-            else:
-                inherited_messages = list(full_history)
+            inherited_messages = _build_smart_context(full_history, agent_state)
 
         with _graph_lock:
             _agent_instances[state.agent_id] = agent

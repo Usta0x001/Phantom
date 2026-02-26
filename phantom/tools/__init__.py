@@ -34,6 +34,7 @@ if not SANDBOX_MODE:
     if not DISABLE_BROWSER:
         from .browser import *  # noqa: F403
     from .file_edit import *  # noqa: F403
+    from .findings import *  # noqa: F403 (persistent findings ledger)
     from .finish import *  # noqa: F403
     from .notes import *  # noqa: F403
     from .proxy import *  # noqa: F403

@@ -39,9 +39,17 @@ class AgentState(BaseModel):
 
     errors: list[str] = Field(default_factory=list)
 
+    # Persistent findings ledger — compact, append-only list of key
+    # discoveries made during the scan.  Unlike conversation messages, this
+    # is NEVER compressed or summarised so critical data survives memory
+    # compression without loss.  Each entry is a short human-readable string
+    # (e.g. "SQLi confirmed at POST /rest/user/login param=email").
+    findings_ledger: list[str] = Field(default_factory=list)
+
     _MAX_ACTIONS: int = 5000
     _MAX_OBSERVATIONS: int = 5000
     _MAX_ERRORS: int = 1000
+    _MAX_FINDINGS: int = 200
 
     def increment_iteration(self) -> None:
         self.iteration += 1
@@ -81,6 +89,26 @@ class AgentState(BaseModel):
             self.errors = self.errors[-self._MAX_ERRORS // 2 :]
         self.errors.append(f"Iteration {self.iteration}: {error}")
         self.last_updated = datetime.now(UTC).isoformat()
+
+    def add_finding(self, finding: str) -> None:
+        """Append a discovery to the persistent findings ledger.
+
+        The ledger is compact (one-liners) and NEVER subject to memory
+        compression, so it is the safest place to record important data
+        such as confirmed vulnerabilities, discovered endpoints, credentials,
+        and technology versions.
+        """
+        if len(self.findings_ledger) >= self._MAX_FINDINGS:
+            # Keep the most recent half
+            self.findings_ledger = self.findings_ledger[-self._MAX_FINDINGS // 2 :]
+        self.findings_ledger.append(finding)
+        self.last_updated = datetime.now(UTC).isoformat()
+
+    def get_findings_summary(self) -> str:
+        """Return the findings ledger as a newline-delimited string."""
+        if not self.findings_ledger:
+            return ""
+        return "\n".join(f"- {f}" for f in self.findings_ledger)
 
     def update_context(self, key: str, value: Any) -> None:
         self.context[key] = value

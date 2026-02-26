@@ -247,9 +247,9 @@ def _format_tool_result(tool_name: str, result: Any) -> tuple[str, list[dict[str
         final_result_str = f"Tool {tool_name} executed successfully"
     else:
         final_result_str = str(result_str)
-        if len(final_result_str) > 6000:
-            start_part = final_result_str[:2500]
-            end_part = final_result_str[-2500:]
+        if len(final_result_str) > 8000:
+            start_part = final_result_str[:3500]
+            end_part = final_result_str[-3500:]
             final_result_str = start_part + "\n\n... [middle content truncated] ...\n\n" + end_part
 
     observation_xml = (
@@ -291,6 +291,9 @@ async def _execute_single_tool(
                 should_agent_finish = result.get("agent_completed", False)
 
         _update_tracer_with_result(tracer, execution_id, is_error, result, error_payload)
+
+        # ── Auto-record findings to persistent ledger ──
+        _auto_record_findings(tool_name, result, agent_state)
 
         # ── Audit logging ──
         _duration_ms = (_time.monotonic() - _start_ts) * 1000
@@ -396,6 +399,76 @@ def extract_screenshot_from_result(result: Any) -> str | None:
         return screenshot
 
     return None
+
+
+def _auto_record_findings(tool_name: str, result: Any, agent_state: Any) -> None:
+    """Automatically record key findings from security tool results to the
+    persistent findings ledger.  This ensures critical discoveries survive
+    memory compression even if the agent forgets to call ``record_finding``."""
+    if not isinstance(result, dict) or not result.get("success"):
+        return
+    if not agent_state or not hasattr(agent_state, "add_finding"):
+        return
+
+    try:
+        # --- Nuclei ---
+        if tool_name in ("nuclei_scan", "nuclei_scan_cves", "nuclei_scan_misconfigs"):
+            findings = result.get("findings", [])
+            for f in findings[:15]:
+                sev = f.get("severity", "info")
+                if sev in ("critical", "high", "medium"):
+                    name = f.get("template_name") or f.get("template_id", "unknown")
+                    url = f.get("matched_at") or f.get("host", "")
+                    agent_state.add_finding(f"[vuln/nuclei] {sev.upper()} {name} at {url}")
+
+        # --- Nmap ---
+        elif tool_name == "nmap_scan":
+            for host in result.get("hosts", []):
+                hostname = host.get("hostname", host.get("ip", "?"))
+                ports = host.get("ports", [])
+                open_ports = [p for p in ports if p.get("state") == "open"]
+                if open_ports:
+                    port_list = ", ".join(
+                        f"{p['port']}/{p.get('service','?')}" for p in open_ports[:20]
+                    )
+                    agent_state.add_finding(f"[recon/nmap] {hostname}: {port_list}")
+
+        # --- Katana ---
+        elif tool_name == "katana_crawl":
+            total = result.get("total_urls", 0)
+            api_count = result.get("summary", {}).get("api_endpoints", 0)
+            js_count = result.get("summary", {}).get("js_files", 0)
+            form_count = result.get("summary", {}).get("forms", 0)
+            if total > 0:
+                agent_state.add_finding(
+                    f"[recon/katana] {total} URLs discovered "
+                    f"({api_count} APIs, {js_count} JS, {form_count} forms)"
+                )
+            for ep in result.get("api_endpoints", [])[:10]:
+                url = ep.get("url", "")
+                if url:
+                    agent_state.add_finding(f"[endpoint] API: {url}")
+
+        # --- Httpx ---
+        elif tool_name == "httpx_scan":
+            for host in result.get("results", []):
+                url = host.get("url", "")
+                tech = host.get("technologies", [])
+                status = host.get("status_code", "")
+                if url:
+                    parts = [f"[recon/httpx] {url} ({status})"]
+                    if tech:
+                        parts.append(f"  tech: {', '.join(tech[:5])}")
+                    agent_state.add_finding(" ".join(parts))
+
+        # --- Nmap vuln ---
+        elif tool_name == "nmap_vuln_scan":
+            for vuln in result.get("vulnerabilities", []):
+                title = vuln.get("title", "unknown vuln")
+                agent_state.add_finding(f"[vuln/nmap] {title}")
+
+    except Exception:  # noqa: BLE001
+        pass  # finding recording must never break the pipeline
 
 
 def remove_screenshot_from_result(result: Any) -> Any:
