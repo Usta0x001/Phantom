@@ -2,6 +2,65 @@
 
 All notable changes to Phantom will be documented in this file.
 
+## [0.9.6] - 2026-02-26
+
+### Vulnerability Discovery Overhaul — Finding More Bugs with Less Cost
+
+Root cause analysis revealed the system was only finding 1-2 vulnerabilities
+against OWASP Juice Shop (100+ known vulns) due to critically low iteration
+limits, context bloat, missing attack surface discovery, and cost-inefficient
+token usage.
+
+### Fixed — Critical (5)
+- **Scan profile iterations catastrophically low** — Quick was 20 (now 60),
+  Standard was 40 (now 120), Deep was 80 (now 300). The system prompt said
+  "2000+ steps needed" but profiles stopped agents after just 20-80 iterations.
+- **Quick scan disabled critical tools** — `sqlmap_scan`, `create_sub_agent`,
+  and browser were all skipped in quick mode. SQLi is Juice Shop's #1 vuln
+  class. All restored.
+- **Subagent inherited FULL parent conversation history** — Each child got
+  50-100K tokens of irrelevant parent context. Now capped to last 10 messages.
+- **No tool output size limit per tool** — Nuclei/nmap could return 50KB+
+  per invocation. Nuclei findings now capped at 30 (sorted by severity),
+  nmap raw_output reduced to 2K chars, executor truncation reduced to 6K.
+- **EnhancedAgentState is dead code** — `enhanced_state.py` with full vuln
+  tracking, endpoint tracking, and phase management was never instantiated.
+  (Documented; integration deferred to v0.10)
+
+### Fixed — High (5)
+- **Subagent max_iterations hardcoded to 300** — Regardless of parent profile.
+  Now inherits 60% of parent's max_iterations (minimum 40).
+- **Memory compressor threshold too high** — Was 100K tokens before compression
+  triggered. Reduced to 60K tokens, max messages from 200→150, recent window
+  from 15→12.
+- **No mandatory crawling/spidering phase** — Agent skipped systematic endpoint
+  discovery. Added `katana_crawl` tool and made crawling MANDATORY FIRST STEP
+  in all black-box scan modes.
+- **Memory compressor used wrong API key** — `_summarize_messages()` used
+  generic `llm_api_key` instead of provider-specific keys from the registry.
+  Now resolves provider presets like the main LLM client.
+- **Nmap comprehensive scan used -p- (all 65535 ports)** — Caused target DoS
+  on small servers like Juice Shop. Changed to `--top-ports 10000` with rate
+  limiting (`--max-rate 300`).
+
+### Added
+- **`katana_crawl` tool** — Systematic web crawler for endpoint discovery,
+  JS file parsing, API route detection, and form enumeration. Integrated
+  into all scan profiles as a priority tool.
+- **Rate limiting for nmap** — All scan types now include `--max-rate` to
+  prevent overwhelming targets.
+- **Nuclei findings prioritization** — Findings sorted by severity before
+  truncation so critical/high findings are always preserved.
+
+### Scan Profile Changes
+| Profile   | Old Iterations | New Iterations | Change |
+|-----------|---------------|----------------|--------|
+| Quick     | 20            | 60             | +200%  |
+| Standard  | 40            | 120            | +200%  |
+| Deep      | 80            | 300            | +275%  |
+| Stealth   | 30            | 60             | +100%  |
+| API Only  | 40            | 100            | +150%  |
+
 ## [0.9.5] - 2026-02-26
 
 ### Proxy Resilience — Fixes 502 Failures During Deep Scans

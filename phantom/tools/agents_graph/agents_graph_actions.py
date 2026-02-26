@@ -244,9 +244,20 @@ def create_agent(
         from phantom.agents.state import AgentState
         from phantom.llm.config import LLMConfig
 
-        state = AgentState(task=task, agent_name=name, parent_id=parent_id, max_iterations=300)
-
+        # Derive subagent iteration limit from parent's scan profile instead
+        # of using a hardcoded 300.  Subagents get 60 % of their parent's
+        # max iterations (minimum 40) so the budget scales with profile.
+        child_max_iter = 300  # fallback
         parent_agent = _agent_instances.get(parent_id)
+        if parent_agent:
+            parent_max = getattr(
+                getattr(parent_agent, "scan_profile", None), "max_iterations", None
+            )
+            if parent_max is None:
+                parent_max = getattr(parent_agent.state, "max_iterations", 300)
+            child_max_iter = max(40, int(parent_max * 0.6))
+
+        state = AgentState(task=task, agent_name=name, parent_id=parent_id, max_iterations=child_max_iter)
 
         timeout = None
         scan_mode = "deep"
@@ -269,7 +280,15 @@ def create_agent(
 
         inherited_messages = []
         if inherit_context:
-            inherited_messages = agent_state.get_conversation_history()
+            full_history = agent_state.get_conversation_history()
+            # Only pass last few messages to child instead of the entire
+            # conversation.  This dramatically reduces token waste for
+            # subagents while keeping relevant recent context.
+            _MAX_INHERITED = 10
+            if len(full_history) > _MAX_INHERITED:
+                inherited_messages = full_history[-_MAX_INHERITED:]
+            else:
+                inherited_messages = list(full_history)
 
         with _graph_lock:
             _agent_instances[state.agent_id] = agent

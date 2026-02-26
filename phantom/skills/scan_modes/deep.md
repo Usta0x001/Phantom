@@ -28,6 +28,7 @@ Thorough understanding before exploitation. Test every parameter, every endpoint
 - Check all dependency versions against CVE databases
 
 **Blackbox (no source)**
+- **MANDATORY FIRST STEP**: Run `katana_crawl` with depth=5 to discover ALL endpoints, JS files, API routes, and forms
 - Exhaustive subdomain enumeration with multiple sources and tools
 - Full port scanning across all services
 - Complete content discovery with multiple wordlists

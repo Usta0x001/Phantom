@@ -23,7 +23,7 @@ def _parse_nmap_output(raw_output: str) -> dict[str, Any]:
     result: dict[str, Any] = {
         "hosts": [],
         "scan_info": {},
-        "raw_output": raw_output[:3000],  # Keep first 3000 chars for evidence
+        "raw_output": raw_output[:2000],  # Keep first 2000 chars for evidence
     }
 
     current_host: dict[str, Any] | None = None
@@ -89,7 +89,7 @@ def nmap_scan(
         scan_type: Type of scan:
             - quick: Fast scan of top 100 ports (-F)
             - standard: Default nmap scan of top 1000 ports
-            - comprehensive: All ports + version + OS detection (-p- -sV -O)
+            - comprehensive: Top 10000 ports + version + OS detection (rate-limited)
             - stealth: SYN scan (-sS) - requires root
             - udp: UDP scan (-sU) - requires root
         ports: Specific ports to scan (e.g., "22,80,443" or "1-1000")
@@ -105,15 +105,16 @@ def nmap_scan(
     cmd_parts = ["nmap", "-oN", "-"]  # Normal output to stdout
 
     if scan_type == "quick":
-        cmd_parts.extend(["-F", "-T4"])
+        cmd_parts.extend(["-F", "-T4", "--max-rate", "500"])
     elif scan_type == "standard":
-        cmd_parts.extend(["-sV", "-T4"])  # Service version detection
+        cmd_parts.extend(["-sV", "-T4", "--max-rate", "500"])  # Service version detection
     elif scan_type == "comprehensive":
-        cmd_parts.extend(["-p-", "-sV", "-sC", "-O", "-T4"])
+        # Use top 10000 ports instead of -p- to avoid DoS on small targets
+        cmd_parts.extend(["--top-ports", "10000", "-sV", "-sC", "-O", "-T3", "--max-rate", "300"])
     elif scan_type == "stealth":
-        cmd_parts.extend(["-sS", "-T4"])
+        cmd_parts.extend(["-sS", "-T3", "--max-rate", "200"])
     elif scan_type == "udp":
-        cmd_parts.extend(["-sU", "-T4"])
+        cmd_parts.extend(["-sU", "-T3", "--max-rate", "200"])
 
     if ports:
         cmd_parts.extend(["-p", shlex.quote(ports)])
