@@ -9,39 +9,39 @@ from phantom.config import Config
 logger = logging.getLogger(__name__)
 
 
-MAX_TOTAL_TOKENS = 60_000
+MAX_TOTAL_TOKENS = 80_000
 MAX_MESSAGES = 150
 MIN_RECENT_MESSAGES = 12
 
-SUMMARY_PROMPT_TEMPLATE = """You are an agent performing context
-condensation for a security agent. Your job is to compress scan data while preserving
-ALL operationally critical information for continuing the security assessment.
+SUMMARY_PROMPT_TEMPLATE = """You are performing context condensation for a security
+assessment agent.  Compress the conversation while preserving every piece of
+operationally critical information.  The agent that reads your output must be
+able to continue the assessment exactly where it left off.
 
-CRITICAL ELEMENTS TO PRESERVE:
-- Discovered vulnerabilities and potential attack vectors
-- Scan results and tool outputs (compressed but maintaining key findings)
-- Access credentials, tokens, or authentication details found
-- System architecture insights and potential weak points
-- Progress made in the assessment
-- Failed attempts and dead ends (to avoid duplication)
-- Any decisions made about the testing approach
+MUST PRESERVE (copy verbatim when possible):
+1. **Exact URLs, endpoints, and parameters** discovered or tested
+2. **Working payloads and PoC details** (SQL queries, XSS payloads, etc.)
+3. **Credentials, tokens, API keys, session cookies** found
+4. **Vulnerability findings** — type, location, severity, evidence
+5. **HTTP status codes and response lengths** that indicate anomalies
+6. **Technology stack** — exact versions (e.g. "Express 4.17.1", "Node 18.x")
+7. **Failed attempts and dead ends** (so they are NOT repeated)
+8. **Attack surface map** — which endpoints exist, which were tested, which remain
+9. **Decision rationale** — why particular paths were chosen
+10. **Subagent tasks and results** — what was delegated and what came back
 
-COMPRESSION GUIDELINES:
-- Preserve exact technical details (URLs, paths, parameters, payloads)
-- Summarize verbose tool outputs while keeping critical findings
-- Maintain version numbers, specific technologies identified
-- Keep exact error messages that might indicate vulnerabilities
-- Compress repetitive or similar findings into consolidated form
+COMPRESSION RULES:
+- Strip duplicate/repeated tool outputs but keep ONE representative entry
+- Condense verbose nmap/nuclei/httpx raw output into structured findings
+- NEVER remove a URL, parameter name, or payload string
+- Consolidate similar scan results (e.g. "ports 22,80,443,8080 open")
+- Keep exact error messages that hint at vulnerabilities
+- Preserve the chronological order of discoveries
 
-Remember: Another security agent will use this summary to continue the assessment.
-They must be able to pick up exactly where you left off without losing any
-operational advantage or context needed to find vulnerabilities.
-
-CONVERSATION SEGMENT TO SUMMARIZE:
+CONVERSATION SEGMENT:
 {conversation}
 
-Provide a technically precise summary that preserves all operational security context while
-keeping the summary concise and to the point."""
+Write a technically precise summary preserving all details above."""
 
 
 def _count_tokens(text: str, model: str) -> int:
@@ -186,6 +186,10 @@ class MemoryCompressor:
         if not self.model_name:
             raise ValueError("PHANTOM_LLM environment variable must be set and not empty")
 
+        # Optional back-reference to the agent state so we can read its
+        # findings ledger during compression.  Set by the LLM class.
+        self._agent_state: Any | None = None
+
     def compress_history(
         self,
         messages: list[dict[str, Any]],
@@ -197,6 +201,7 @@ class MemoryCompressor:
         2. Keep all system messages
         3. Keep minimum recent messages
         4. Summarize older messages when total tokens exceed limit
+        5. Inject findings ledger as a pinned context message (never lost)
 
         The compression preserves:
         - All system messages unchanged
@@ -204,6 +209,7 @@ class MemoryCompressor:
         - Critical security context in summaries
         - Recent images for visual context
         - Technical details and findings
+        - Findings ledger (persistent, never compressed)
         """
         if not messages:
             return messages
@@ -243,4 +249,38 @@ class MemoryCompressor:
             if summary:
                 compressed.append(summary)
 
-        return system_msgs + compressed + recent_msgs
+        # Inject findings ledger as a pinned context message so it is
+        # NEVER lost during compression.  The ledger is a compact list that
+        # the agent (and subagents) can rely on for continuity.
+        ledger_msg = self._build_ledger_message()
+
+        result = system_msgs + compressed
+        if ledger_msg:
+            result.append(ledger_msg)
+        result.extend(recent_msgs)
+        return result
+
+    # ------------------------------------------------------------------
+    # Helpers
+    # ------------------------------------------------------------------
+
+    def _build_ledger_message(self) -> dict[str, Any] | None:
+        """Build a synthetic message from the agent's findings ledger."""
+        state = self._agent_state
+        if state is None:
+            return None
+        ledger = getattr(state, "findings_ledger", None)
+        if not ledger:
+            return None
+        text = "\n".join(f"- {f}" for f in ledger[-100:])
+        return {
+            "role": "user",
+            "content": (
+                "<persistent_findings_ledger>\n"
+                "The following is a PERSISTENT list of key discoveries that must\n"
+                "not be forgotten.  Use this to avoid re-testing endpoints and\n"
+                "to remember what has already been found.\n\n"
+                f"{text}\n"
+                "</persistent_findings_ledger>"
+            ),
+        }

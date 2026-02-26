@@ -2,6 +2,60 @@
 
 All notable changes to Phantom will be documented in this file.
 
+## [0.9.7] - 2026-02-26
+
+### Context Intelligence — Preserving Critical Information During Compression
+
+Critical evaluation of v0.9.6 found that two changes (memory threshold 60K,
+subagent context cap at 10 messages) could actually weaken vulnerability
+discovery by discarding important recon data.  v0.9.7 replaces brute-force
+truncation with intelligent context management.
+
+### Fixed — Weaknesses in v0.9.6
+- **Subagent context inheritance was too aggressive** — "last 10 messages"
+  discarded initial task info, endpoint maps, and recon findings. Replaced with
+  smart context extraction: first 2 messages (task) + parent findings summary +
+  last 5 messages (recent activity). Subagents now inherit key discoveries
+  without token bloat.
+- **Memory compressor threshold too low** — 60K triggered compression too
+  frequently, risking data loss through repeated LLM summarisation. Raised to
+  80K (still 20K lower than original 100K for cost savings).
+- **Tool output truncation slightly too aggressive** — 6K could clip middle of
+  important security findings. Raised to 8K (3500 head + 3500 tail).
+
+### Added — Persistent Findings Ledger
+- **`findings_ledger` on AgentState** — append-only list of key discoveries
+  (vulns, endpoints, technologies, credentials, dead-ends) that is NEVER
+  compressed or summarised. Survives all memory compression cycles.
+- **`record_finding` tool** — agent can explicitly record important discoveries
+  to the persistent ledger with category tags (vuln, endpoint, tech, dead-end).
+- **`get_findings_ledger` tool** — agent can review all recorded findings to
+  avoid re-testing endpoints.
+- **Auto-recording from security tools** — nuclei, nmap, katana, httpx, and
+  nmap_vuln results are automatically extracted and recorded to the ledger.
+  Critical/high nuclei findings, open ports, API endpoints, and technologies
+  are captured without agent intervention.
+- **Ledger injection during compression** — when memory compression activates,
+  the findings ledger is injected as a "pinned" message that appears after
+  compressed summaries but before recent messages, ensuring nothing is lost.
+
+### Enhanced — Smarter Context Management
+- **Parent-to-subagent context summary** — smart extraction scans the entire
+  parent conversation for URLs, technologies, vulnerability mentions, and
+  credentials, builds a concise summary, and passes it alongside the first
+  2 and last 5 messages. Subagents now get dense, relevant context.
+- **Memory compressor summary prompt rewritten** — 10 explicit preservation
+  categories (exact URLs, payloads, credentials, attack surface map, etc.)
+  with strict compression rules (never remove a URL or payload).
+- **LLM ↔ AgentState wiring** — `LLM.set_agent_state()` gives the memory
+  compressor a reference to the agent state for findings ledger access.
+
+### Tests
+- 260 passed, 11 skipped, 0 failures (was 247 in v0.9.6)
+- 13 new tests covering: findings ledger CRUD, auto-recording from nuclei/nmap/
+  katana, smart context extraction, ledger injection during compression,
+  tool registration, version check.
+
 ## [0.9.6] - 2026-02-26
 
 ### Vulnerability Discovery Overhaul — Finding More Bugs with Less Cost

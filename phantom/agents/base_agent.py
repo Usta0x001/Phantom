@@ -78,6 +78,8 @@ class BaseAgent(metaclass=AgentMeta):
 
         with contextlib.suppress(Exception):
             self.llm.set_agent_identity(self.state.agent_name, self.state.agent_id)
+        with contextlib.suppress(Exception):
+            self.llm.set_agent_state(self.state)
         self._current_task: asyncio.Task[Any] | None = None
         self._force_stop = False
 

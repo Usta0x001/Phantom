@@ -135,6 +135,15 @@ VALIDATION REQUIREMENTS:
 - A vulnerability is ONLY considered reported when a reporting agent uses create_vulnerability_report with full details. Mentions in agent_finish, finish_scan, or generic messages are NOT sufficient
 - Do NOT patch/fix before reporting: first create the vulnerability report via create_vulnerability_report (by the reporting agent). Only after reporting is completed should fixing/patching proceed
 - DEDUPLICATION: The create_vulnerability_report tool uses LLM-based deduplication. If it rejects your report as a duplicate, DO NOT attempt to re-submit the same vulnerability. Accept the rejection and move on to testing other areas. The vulnerability has already been reported by another agent
+
+FINDINGS LEDGER – RECORD KEY DISCOVERIES:
+- Use record_finding tool after EVERY significant discovery: confirmed vuln, new endpoint, credential, tech version, dead-end
+- The ledger SURVIVES memory compression — it is the safest place to store critical data
+- Use get_findings_ledger to review what has been discovered and avoid re-testing the same endpoints
+- Record dead-ends too (category="dead-end") so subagents don't repeat failed attempts
+- Example: record_finding("SQLi confirmed at POST /rest/user/login param=email", category="vuln")
+- Example: record_finding("Express 4.17.1 running on Node 18", category="tech")
+- Example: record_finding("/api/Users endpoint returns user list without auth", category="endpoint")
 </execution_guidelines>
 
 <vulnerability_focus>
