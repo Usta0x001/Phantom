@@ -23,9 +23,9 @@ from .registry import (
 
 
 try:
-    _SERVER_TIMEOUT = float(Config.get("phantom_sandbox_execution_timeout") or "120")
+    _SERVER_TIMEOUT = float(Config.get("phantom_sandbox_execution_timeout") or "600")
 except (ValueError, TypeError):
-    _SERVER_TIMEOUT = 120.0
+    _SERVER_TIMEOUT = 600.0
 SANDBOX_EXECUTION_TIMEOUT = _SERVER_TIMEOUT + 30
 try:
     SANDBOX_CONNECT_TIMEOUT = float(Config.get("phantom_sandbox_connect_timeout") or "10")

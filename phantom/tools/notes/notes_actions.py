@@ -54,12 +54,18 @@ def create_note(
             return {"success": False, "error": "Content cannot be empty", "note_id": None}
 
         valid_categories = ["general", "findings", "methodology", "questions", "plan"]
+        # Map common LLM category aliases to valid categories
+        category_aliases = {
+            "vulnerability": "findings", "vuln": "findings", "vulnerabilities": "findings",
+            "recon": "methodology", "reconnaissance": "methodology", "enumeration": "methodology",
+            "scan": "methodology", "scanning": "methodology", "testing": "methodology",
+            "exploit": "findings", "exploitation": "findings", "attack": "findings",
+            "note": "general", "info": "general", "observation": "general",
+            "todo": "plan", "task": "plan", "next": "plan", "action": "plan",
+            "question": "questions", "query": "questions",
+        }
         if category not in valid_categories:
-            return {
-                "success": False,
-                "error": f"Invalid category. Must be one of: {', '.join(valid_categories)}",
-                "note_id": None,
-            }
+            category = category_aliases.get(category.lower(), "general")
 
         note_id = str(uuid.uuid4())[:5]
         timestamp = datetime.now(UTC).isoformat()

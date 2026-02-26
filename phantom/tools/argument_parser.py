@@ -17,9 +17,19 @@ def convert_arguments(func: Callable[..., Any], kwargs: dict[str, Any]) -> dict[
         sig = inspect.signature(func)
         converted = {}
 
+        # Check if function accepts **kwargs (VAR_KEYWORD parameter)
+        has_var_keyword = any(
+            p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()
+        )
+
         for param_name, value in kwargs.items():
             if param_name not in sig.parameters:
-                converted[param_name] = value
+                if has_var_keyword:
+                    # Function accepts **kwargs, pass unknown params through
+                    converted[param_name] = value
+                # Otherwise silently drop unknown params — LLMs often
+                # hallucinate extra keyword arguments that would crash
+                # the tool with "unexpected keyword argument".
                 continue
 
             param = sig.parameters[param_name]

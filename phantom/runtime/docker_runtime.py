@@ -120,7 +120,7 @@ class DockerRuntime(AbstractRuntime):
 
                 self._tool_server_port = self._find_available_port()
                 self._tool_server_token = secrets.token_urlsafe(32)
-                execution_timeout = Config.get("phantom_sandbox_execution_timeout") or "120"
+                execution_timeout = Config.get("phantom_sandbox_execution_timeout") or "600"
 
                 container = self.client.containers.run(
                     image_name,
