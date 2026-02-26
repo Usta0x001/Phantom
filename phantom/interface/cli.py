@@ -266,6 +266,26 @@ async def run_cli(args: Any) -> None:  # noqa: PLR0915
                     # Store error on tracer so completion message can display it
                     tracer.scan_error = error_msg
                     tracer.scan_error_details = error_details
+
+                    # ── Attempt partial finish_scan on crash ──
+                    # Even when the LLM dies, try to generate a summary report
+                    # from whatever vulnerabilities were found so far.
+                    try:
+                        from phantom.tools.finish.finish_actions import finish_scan
+                        from phantom.agents.state import AgentState
+
+                        # Build a minimal agent_state for finish_scan
+                        partial_state = agent.state
+                        partial_history = partial_state.get_conversation_history()
+                        finish_result = await finish_scan(
+                            summary=f"PARTIAL SCAN (LLM Error: {error_msg[:100]})",
+                            conversation_history=partial_history,
+                            agent_state=partial_state,
+                        )
+                        if finish_result.get("success"):
+                            tracer.final_scan_result = finish_result.get("report_summary", "")
+                    except Exception:  # noqa: BLE001
+                        pass  # Best-effort; crash_summary.json already saved by base_agent
             finally:
                 stop_updates.set()
                 update_thread.join(timeout=1)

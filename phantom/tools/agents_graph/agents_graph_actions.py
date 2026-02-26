@@ -359,8 +359,9 @@ def create_agent(
         from phantom.llm.config import LLMConfig
 
         # Derive subagent iteration limit from parent's scan profile instead
-        # of using a hardcoded 300.  Subagents get 60 % of their parent's
-        # max iterations (minimum 40) so the budget scales with profile.
+        # of using a hardcoded 300.  Subagents get 75 % of their parent's
+        # max iterations (minimum 50) so they have enough budget to do
+        # real security testing — recon + spray + validate + report.
         child_max_iter = 300  # fallback
         parent_agent = _agent_instances.get(parent_id)
         if parent_agent:
@@ -369,7 +370,7 @@ def create_agent(
             )
             if parent_max is None:
                 parent_max = getattr(parent_agent.state, "max_iterations", 300)
-            child_max_iter = max(40, int(parent_max * 0.6))
+            child_max_iter = max(50, int(parent_max * 0.75))
 
         state = AgentState(task=task, agent_name=name, parent_id=parent_id, max_iterations=child_max_iter)
 

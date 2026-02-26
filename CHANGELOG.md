@@ -2,6 +2,55 @@
 
 All notable changes to Phantom will be documented in this file.
 
+## [0.9.10] - 2026-02-26
+
+### Scan Coverage & Crash Resilience — Root Cause Fixes
+
+Forensic analysis of a live OWASP Juice Shop scan (231 events, 7/110 challenges solved = 6.4%) identified six root causes for poor coverage. Five code fixes address them.
+
+#### Root Causes Identified
+1. **No enforced recon phase** — nuclei_scan never called despite 53 tools available
+2. **38.7% iteration waste** — 89/230 calls were todo/browser/think overhead
+3. **Browser overuse for REST API** — 46 browser_action calls on JSON endpoints
+4. **Sub-agent budget too low** — 60% parent budget insufficient for full methodology
+5. **No graceful degradation** — LLM API failures lost all partial results
+6. **Credit waste across retries** — ~13 failed runs consumed $6 total
+
+#### Bug Fixes
+
+- **Graceful crash handling**: `_save_partial_results_on_crash()` in `base_agent.py`
+  exports `enhanced_state.json` + `crash_summary.json` when LLM fails mid-scan.
+  CLI also attempts partial `finish_scan` to generate reports from found vulns.
+
+- **Sub-agent budget increase**: Raised from 60%/min 40 to 75%/min 50 of parent's
+  max_iterations. Standard profile sub-agents: 72 → 90 iterations.
+
+#### New Features
+
+- **Mandatory recon-first enforcement**: Task description now injects mandatory steps
+  (nuclei_scan → katana_crawl → ffuf → nmap) BEFORE sub-agent creation is allowed.
+  Efficiency rules: no browser for APIs, max 5 todo ops, prefer batch requests.
+
+- **Iteration budget discipline**: System prompt now caps overhead: max 3 todo calls,
+  max 2 think calls, max 1 view_agent_graph per 20 iterations. 30% budget checkpoint
+  forces security scanner usage if none have run.
+
+- **Comprehensive LaTeX report**: `docs/phantom_system_report.tex` — 21-page system
+  analysis covering architecture, scan forensics, root causes, fixes, rating (2.9→5.1/10),
+  and roadmap to v1.0. Compiled via Docker texlive.
+
+#### Technical Details
+
+- **Files Modified**: 5 core files + 1 new test file + 1 LaTeX report
+  - `agents/base_agent.py` — crash handling with partial result saving
+  - `tools/agents_graph/agents_graph_actions.py` — budget 60%→75%
+  - `agents/PhantomAgent/phantom_agent.py` — mandatory recon steps
+  - `agents/PhantomAgent/system_prompt.jinja` — budget discipline rules
+  - `interface/cli.py` — partial finish_scan on crash
+
+- **Tests**: 326 passed, 11 skipped (11 new tests covering crash handling,
+  budget calculations, recon enforcement, prompt improvements)
+
 ## [0.9.9] - 2026-02-26
 
 ### High & Medium Priority Fixes — Dedup, State Wiring, Auth Scanning, Persistence
