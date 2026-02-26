@@ -3,11 +3,16 @@
 These tools let the LLM agent:
 1. Check past scan knowledge before testing (avoid redundant work)
 2. Look up MITRE ATT&CK enrichment for a vulnerability class
+3. Verify a vulnerability using the automated verification engine
 """
 
+import asyncio
+import logging
 from typing import Any
 
 from phantom.tools.registry import register_tool
+
+_logger = logging.getLogger(__name__)
 
 
 @register_tool(sandbox_execution=False)
@@ -113,4 +118,110 @@ def enrich_vulnerability(
             "success": False,
             "error": str(e),
             "message": "MITRE enrichment unavailable. Proceed without enrichment data.",
+        }
+
+
+@register_tool(sandbox_execution=False)
+async def verify_vulnerability(
+    vuln_id: str,
+    target: str,
+    vulnerability_class: str,
+    severity: str = "medium",
+    endpoint: str | None = None,
+    parameter: str | None = None,
+    agent_state: Any = None,
+) -> dict[str, Any]:
+    """Auto-verify a vulnerability using the verification engine.
+
+    Runs exploit-verification strategies (time-based SQLi, error-based SQLi,
+    boolean injection, DOM reflection, LFI, SSTI) against the target to
+    confirm exploitability.
+
+    Call this AFTER discovering a potential vulnerability but BEFORE
+    create_vulnerability_report to increase confidence.
+    """
+    try:
+        from phantom.core.verification_engine import VerificationEngine
+        from phantom.models.vulnerability import (
+            Vulnerability,
+            VulnerabilitySeverity,
+            VulnerabilityStatus,
+        )
+
+        severity_map = {
+            "critical": VulnerabilitySeverity.CRITICAL,
+            "high": VulnerabilitySeverity.HIGH,
+            "medium": VulnerabilitySeverity.MEDIUM,
+            "low": VulnerabilitySeverity.LOW,
+            "info": VulnerabilitySeverity.INFO,
+        }
+
+        vuln = Vulnerability(
+            id=vuln_id,
+            name=f"Pending verification: {vulnerability_class}",
+            vulnerability_class=vulnerability_class,
+            severity=severity_map.get(severity.lower(), VulnerabilitySeverity.MEDIUM),
+            status=VulnerabilityStatus.DETECTED,
+            target=target,
+            endpoint=endpoint,
+            parameter=parameter,
+            description="Awaiting automated verification",
+            detected_by="agent",
+        )
+
+        # Build HTTP client for verification probes
+        http_client = None
+        try:
+            import httpx
+            http_client = httpx.AsyncClient(
+                timeout=15.0, verify=False, follow_redirects=True
+            )
+        except ImportError:
+            pass
+
+        engine = VerificationEngine(terminal_execute_fn=None, http_client=http_client)
+
+        try:
+            result = await engine.verify(vuln)
+        finally:
+            if http_client:
+                await http_client.aclose()
+
+        # Update agent state if verification succeeded
+        if result.is_exploitable and agent_state:
+            if hasattr(agent_state, "mark_vuln_verified"):
+                agent_state.mark_vuln_verified(vuln_id)
+
+        attempts_summary = []
+        for attempt in result.attempts:
+            attempts_summary.append({
+                "method": attempt.method,
+                "success": attempt.success,
+                "confidence": attempt.confidence,
+                "evidence": attempt.evidence or "",
+                "payload": (attempt.payload or "")[:200],
+            })
+
+        return {
+            "success": True,
+            "verified": result.is_exploitable,
+            "status": result.status.value,
+            "confidence": max(
+                (a.confidence for a in result.attempts if a.success), default=0.0
+            ),
+            "attempts": attempts_summary,
+            "note": (
+                "Verified — exploitability confirmed"
+                if result.is_exploitable
+                else "Not auto-verified — does NOT mean false positive. Manual review recommended."
+            ),
+        }
+
+    except Exception as e:
+        _logger.warning(f"Verification failed for {vuln_id}: {e}")
+        return {
+            "success": False,
+            "verified": False,
+            "error": str(e),
+            "note": "Verification engine error. Proceed with manual assessment.",
         }

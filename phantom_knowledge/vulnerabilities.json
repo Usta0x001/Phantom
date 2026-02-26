@@ -89,5 +89,25 @@
     "detected_at": "2026-02-26T20:47:30.445238+00:00",
     "verified_by": null,
     "verified_at": null
+  },
+  "v1": {
+    "id": "v1",
+    "name": "Test",
+    "class": "xss",
+    "severity": "high",
+    "status": "detected",
+    "cvss_score": null,
+    "target": "http://example.com",
+    "endpoint": null,
+    "parameter": null,
+    "description": "Test vuln",
+    "payload": null,
+    "cve_ids": [],
+    "cwe_ids": [],
+    "remediation": null,
+    "detected_by": "phantom-agent",
+    "detected_at": "2026-02-26T21:44:33.559095+00:00",
+    "verified_by": null,
+    "verified_at": null
   }
 }

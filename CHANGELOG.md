@@ -2,6 +2,61 @@
 
 All notable changes to Phantom will be documented in this file.
 
+## [0.9.12] - 2026-02-26
+
+### Wire Verification Engine + Knowledge Store — Expert System Completion
+
+Wired the two largest unwired components (1,000+ lines combined) into the live scan pipeline, transforming Phantom from a scanner with dead code into a fully integrated expert system.
+
+#### Verification Engine Wiring
+
+- **Post-scan auto-verification**: All reported vulnerabilities are now automatically
+  verified by the verification engine during the post-scan enrichment pipeline.
+  Uses 8 strategies: time-based SQLi, error-based SQLi, boolean injection, DOM
+  reflection, OOB HTTP/DNS, known-file LFI, and math-eval SSTI.
+
+- **New `verify_vulnerability` agent tool**: Agents can now explicitly verify a
+  finding during scan (before calling `create_vulnerability_report`), increasing
+  confidence. Returns verification status, confidence score, and exploit evidence.
+
+- **SSRF guard in verification engine**: Payload injection blocks private, loopback,
+  and link-local IPs — prevents verification probes from hitting internal services.
+
+#### Knowledge Store Full Wiring
+
+- **Host persistence**: Discovered hosts (from nmap, httpx, etc.) are now saved to
+  the knowledge store at scan completion, with port/service/technology merging.
+
+- **Scan history recording**: Each completed scan is recorded with target, vulns
+  found/verified, hosts found, duration, and tools used. Enables cross-scan trend
+  analysis.
+
+- **Prior scan intelligence injection**: At scan start, PhantomAgent queries the
+  knowledge store for any prior scan data on the target and injects it into the
+  task description. This lets agents skip redundant work and focus on new vectors.
+
+- **New `get_all_vulnerabilities()` method**: Added missing method to KnowledgeStore
+  that was needed by `check_known_vulnerabilities` tool.
+
+#### Bug Fixes
+
+- **VulnerabilityStatus import fix**: `enhanced_state.py` used `VulnerabilityStatus`
+  in `mark_vuln_verified()` and `mark_vuln_false_positive()` without importing it.
+  Both methods would crash at runtime when called. Now properly imported.
+
+- **Scan duration calculation**: Fixed `start_time` type handling — `AgentState`
+  stores it as ISO string, not datetime object. Duration calculation now correctly
+  parses it.
+
+#### Tests
+
+- Added 36 new tests covering: knowledge store (all_vulns, hosts, scan history,
+  statistics), verification engine (init, verify, batch, SSRF guard, payload
+  injection), verify_vulnerability tool, check_known_vulnerabilities tool,
+  EnhancedAgentState status fix, prior intel injection, post-scan enrichment.
+
+- **Total: 363 tests passing** (up from 327), 11 skipped, 0 failures.
+
 ## [0.9.11] - 2026-02-26
 
 ### Live Scan Validation — 6 Bug Fixes from Real Scan

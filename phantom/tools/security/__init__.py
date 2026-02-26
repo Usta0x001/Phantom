@@ -13,4 +13,5 @@ from .katana_tool import *  # noqa: F401, F403
 from .verification_actions import (  # noqa: F401
     check_known_vulnerabilities,
     enrich_vulnerability,
+    verify_vulnerability,
 )

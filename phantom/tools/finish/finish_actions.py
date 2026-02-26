@@ -90,8 +90,8 @@ def _guess_vuln_class(report: dict[str, Any]) -> str:
     return "other"
 
 
-def _run_post_scan_enrichment(tracer: Any) -> dict[str, Any]:
-    """Run all post-scan enrichment: MITRE, compliance, attack graph, reports."""
+def _run_post_scan_enrichment(tracer: Any, agent_state: Any = None) -> dict[str, Any]:
+    """Run all post-scan enrichment: verification, MITRE, compliance, attack graph, reports."""
     enrichment_results: dict[str, Any] = {}
     vuln_reports = tracer.vulnerability_reports
 
@@ -99,6 +99,88 @@ def _run_post_scan_enrichment(tracer: Any) -> dict[str, Any]:
         return {"enrichment": "skipped", "reason": "no vulnerabilities found"}
 
     run_dir = tracer.get_run_dir()
+
+    # ── 0. Verification Engine ──
+    # Attempt to auto-verify each vulnerability before finalising the report.
+    try:
+        import asyncio
+        from phantom.core.verification_engine import VerificationEngine
+
+        # Build an http client for verification probes
+        http_client = None
+        try:
+            import httpx  # noqa: F811
+            http_client = httpx.AsyncClient(timeout=15.0, verify=False, follow_redirects=True)
+        except ImportError:
+            _logger.debug("httpx not available — verification will skip HTTP-based checks")
+
+        engine = VerificationEngine(terminal_execute_fn=None, http_client=http_client)
+
+        vuln_models_for_verify = []
+        for report in vuln_reports:
+            model = _dict_to_vulnerability(report)
+            if model:
+                vuln_models_for_verify.append((report, model))
+
+        if vuln_models_for_verify:
+            # Run the async verification batch
+            async def _verify_all():
+                models = [m for _, m in vuln_models_for_verify]
+                return await engine.verify_batch(models)
+
+            # Get or create an event loop
+            try:
+                loop = asyncio.get_running_loop()
+                # If we're already in an async context, use ensure_future
+                import concurrent.futures
+                with concurrent.futures.ThreadPoolExecutor() as pool:
+                    results = loop.run_in_executor(pool, lambda: asyncio.run(_verify_all()))
+                    # Fallback: run synchronously in new loop
+                    results = asyncio.run(_verify_all())
+            except RuntimeError:
+                results = asyncio.run(_verify_all())
+
+            verified_count = 0
+            for vresult in results:
+                if vresult.is_exploitable:
+                    verified_count += 1
+                    # Update the original report dict with verification data
+                    for report, model in vuln_models_for_verify:
+                        if model.id == vresult.vulnerability_id:
+                            report["verification_status"] = "verified"
+                            report["verification_confidence"] = max(
+                                (a.confidence for a in vresult.attempts if a.success), default=0.0
+                            )
+                            report["verification_evidence"] = next(
+                                (a.evidence for a in vresult.attempts if a.success), ""
+                            )
+                            # Also update agent state if available
+                            if agent_state and hasattr(agent_state, "mark_vuln_verified"):
+                                agent_state.mark_vuln_verified(model.id)
+                            break
+
+            enrichment_results["verification"] = {
+                "total": len(vuln_models_for_verify),
+                "verified": verified_count,
+                "unverified": len(vuln_models_for_verify) - verified_count,
+                "note": "Unverified does NOT mean false positive — manual review recommended",
+            }
+            _logger.info(
+                f"Verification engine: {verified_count}/{len(vuln_models_for_verify)} auto-verified"
+            )
+        else:
+            enrichment_results["verification"] = {"skipped": "no convertible vuln models"}
+
+        # Cleanup http client
+        if http_client:
+            try:
+                asyncio.run(http_client.aclose())
+            except Exception:
+                pass
+
+    except Exception as e:
+        enrichment_results["verification"] = {"error": str(e)}
+        _logger.warning(f"Verification engine failed: {e}")
 
     # ── 1. MITRE Enrichment ──
     try:
@@ -237,12 +319,14 @@ def _run_post_scan_enrichment(tracer: Any) -> dict[str, Any]:
         enrichment_results["nuclei_templates"] = {"error": str(e)}
         _logger.warning(f"Nuclei template generation failed: {e}")
 
-    # ── 5. Knowledge Store ──
+    # ── 5. Knowledge Store (vulnerabilities + hosts + scan history) ──
     try:
         from phantom.core.knowledge_store import get_knowledge_store
 
         store = get_knowledge_store()
         stored_count = 0
+
+        # 5a. Save vulnerabilities
         for report in vuln_reports:
             try:
                 vuln_model = _dict_to_vulnerability(report)
@@ -251,8 +335,70 @@ def _run_post_scan_enrichment(tracer: Any) -> dict[str, Any]:
                     stored_count += 1
             except Exception:
                 _logger.debug("Failed to store vulnerability %s", report.get("id", "?"), exc_info=True)
-        enrichment_results["knowledge_store"] = {"vulnerabilities_stored": stored_count}
-        _logger.info(f"Knowledge store updated with {stored_count} vulnerabilities")
+
+        # 5b. Save hosts from EnhancedAgentState
+        hosts_stored = 0
+        if agent_state and hasattr(agent_state, "hosts"):
+            for _key, host in agent_state.hosts.items():
+                try:
+                    store.save_host(host)
+                    hosts_stored += 1
+                except Exception:
+                    _logger.debug("Failed to store host %s", _key, exc_info=True)
+
+        # 5c. Record scan in history
+        scan_recorded = False
+        try:
+            scan_id = getattr(agent_state, "scan_id", None) or getattr(tracer, "run_id", "unknown")
+            target_str = ""
+            if tracer.scan_config and tracer.scan_config.get("targets"):
+                targets = tracer.scan_config["targets"]
+                if targets:
+                    target_str = (
+                        targets[0].get("original", "")
+                        if isinstance(targets[0], dict)
+                        else str(targets[0])
+                    )
+
+            verified_count = sum(
+                1 for r in vuln_reports if r.get("verification_status") == "verified"
+            )
+            duration = None
+            if agent_state and hasattr(agent_state, "start_time") and agent_state.start_time:
+                try:
+                    from datetime import datetime, UTC
+                    start = datetime.fromisoformat(str(agent_state.start_time))
+                    duration = (datetime.now(UTC) - start).total_seconds()
+                except (ValueError, TypeError):
+                    pass
+
+            tools_used = []
+            if agent_state and hasattr(agent_state, "tools_used"):
+                tools_used = list(agent_state.tools_used.keys())
+
+            store.record_scan(
+                scan_id=scan_id,
+                target=target_str,
+                status="completed",
+                vulns_found=len(vuln_reports),
+                vulns_verified=verified_count,
+                hosts_found=hosts_stored,
+                duration_seconds=duration,
+                tools_used=tools_used,
+            )
+            scan_recorded = True
+        except Exception as e:
+            _logger.debug(f"Failed to record scan history: {e}")
+
+        enrichment_results["knowledge_store"] = {
+            "vulnerabilities_stored": stored_count,
+            "hosts_stored": hosts_stored,
+            "scan_recorded": scan_recorded,
+        }
+        _logger.info(
+            f"Knowledge store updated: {stored_count} vulns, {hosts_stored} hosts, "
+            f"scan_recorded={scan_recorded}"
+        )
     except Exception as e:
         enrichment_results["knowledge_store"] = {"error": str(e)}
         _logger.warning(f"Knowledge store update failed: {e}")
@@ -463,7 +609,7 @@ def finish_scan(
             # ── Post-Scan Enrichment Pipeline ──
             enrichment_results = {}
             try:
-                enrichment_results = _run_post_scan_enrichment(tracer)
+                enrichment_results = _run_post_scan_enrichment(tracer, agent_state=agent_state)
                 _logger.info(f"Post-scan enrichment completed: {list(enrichment_results.keys())}")
             except Exception as e:
                 _logger.warning(f"Post-scan enrichment pipeline error: {e}")

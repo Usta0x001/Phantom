@@ -54,6 +54,9 @@ class PhantomAgent(BaseAgent):
             )
             self.state.initialize_scan(target_label)
 
+        # ── Query Knowledge Store for prior intelligence ──
+        prior_intel = self._query_prior_intel(targets)
+
         repositories = []
         local_code = []
         urls = []
@@ -190,4 +193,76 @@ class PhantomAgent(BaseAgent):
                 f"\n</user_instructions>"
             )
 
+        # ── Inject prior scan intelligence from knowledge store ──
+        if prior_intel:
+            task_description += prior_intel
+
         return await self.agent_loop(task=task_description)
+
+    def _query_prior_intel(self, targets: list[dict[str, Any]]) -> str:
+        """Query the knowledge store for any prior intelligence on the targets.
+
+        Returns a formatted string to inject into the task description, or
+        empty string if nothing relevant is found.
+        """
+        try:
+            from phantom.core.knowledge_store import get_knowledge_store
+
+            store = get_knowledge_store()
+            stats = store.get_statistics()
+
+            # No prior data at all — skip
+            if stats["total_hosts"] == 0 and stats["total_vulnerabilities"] == 0:
+                return ""
+
+            parts: list[str] = ["\n\n--- PRIOR SCAN INTELLIGENCE ---"]
+            parts.append(
+                f"Knowledge store contains: {stats['total_hosts']} hosts, "
+                f"{stats['total_vulnerabilities']} vulns "
+                f"({stats['verified_vulnerabilities']} verified), "
+                f"{stats['false_positives']} false-positive signatures, "
+                f"{stats['total_scans']} past scans."
+            )
+
+            # Look for vulns matching any target
+            for t in targets:
+                target_str = (
+                    t.get("details", {}).get("target_url")
+                    or t.get("details", {}).get("target_ip")
+                    or t.get("original", "")
+                )
+                if not target_str:
+                    continue
+
+                known_vulns = store.get_vulns_for_target(target_str)
+                if known_vulns:
+                    parts.append(
+                        f"\nPreviously found {len(known_vulns)} vulnerabilities on {target_str}:"
+                    )
+                    for kv in known_vulns[:10]:
+                        sev = kv.severity.value if hasattr(kv.severity, "value") else str(kv.severity)
+                        parts.append(
+                            f"  - [{sev.upper()}] {kv.name} at {kv.endpoint or kv.target}"
+                        )
+                    if len(known_vulns) > 10:
+                        parts.append(f"  ... and {len(known_vulns) - 10} more")
+                    parts.append(
+                        "Focus on NEW attack vectors. Verify if known issues are still present."
+                    )
+
+                # Look for scan history on this target
+                past_scans = store.get_scans_for_target(target_str)
+                if past_scans:
+                    last = past_scans[-1]
+                    parts.append(
+                        f"\nLast scan of {target_str}: {last.get('completed_at', '?')} "
+                        f"({last.get('vulns_found', 0)} vulns, "
+                        f"{last.get('vulns_verified', 0)} verified)"
+                    )
+
+            parts.append("--- END PRIOR INTEL ---")
+            return "\n".join(parts)
+
+        except Exception:
+            # Knowledge store unavailable — no intel to inject
+            return ""
