@@ -85,15 +85,15 @@ class TestExecutorEndpointTracking:
         from phantom.tools.executor import _track_tested_endpoint
         from phantom.agents.enhanced_state import EnhancedAgentState
         state = EnhancedAgentState(agent_name="test")
-        _track_tested_endpoint("sqlmap_scan", {"url": "http://example.com/login", "method": "POST", "parameter": "email"}, state)
+        _track_tested_endpoint("sqlmap_test", {"url": "http://example.com/login", "method": "POST", "parameter": "email"}, state)
         assert len(state.tested_endpoints) == 1
 
     def test_track_non_endpoint_tool(self):
         from phantom.tools.executor import _track_tested_endpoint
         from phantom.agents.enhanced_state import EnhancedAgentState
         state = EnhancedAgentState(agent_name="test")
-        _track_tested_endpoint("nmap_scan", {"target": "192.168.1.1"}, state)
-        assert len(state.tested_endpoints) == 0  # nmap is not an endpoint tool
+        _track_tested_endpoint("subfinder_enumerate", {"target": "192.168.1.1"}, state)
+        assert len(state.tested_endpoints) == 0  # subfinder is not an endpoint tool
 
     def test_track_nuclei_endpoint(self):
         from phantom.tools.executor import _track_tested_endpoint
@@ -313,7 +313,7 @@ class TestV099Integration:
         _auto_record_findings("nuclei_scan", nuclei_result, state)
 
         # 4. Track endpoint testing
-        _track_tested_endpoint("sqlmap_scan", {"url": "http://juiceshop.local:3000/rest/user/login", "method": "POST", "parameter": "email"}, state)
+        _track_tested_endpoint("sqlmap_test", {"url": "http://juiceshop.local:3000/rest/user/login", "method": "POST", "parameter": "email"}, state)
         assert len(state.tested_endpoints) == 1
 
         # 5. Record a vulnerability report

@@ -174,7 +174,8 @@ class EnhancedAgentState(AgentState):
     
     def mark_vuln_verified(self, vuln_id: str) -> None:
         """Mark vulnerability as verified."""
-        if vuln_id in self.vulnerabilities:
+        if vuln_id in self.vulnerabilities and vuln_id not in self.verified_vulns:
+            self.vulnerabilities[vuln_id].status = VulnerabilityStatus.VERIFIED
             self.verified_vulns.append(vuln_id)
             self.vuln_stats["verified"] += 1
             
@@ -183,9 +184,16 @@ class EnhancedAgentState(AgentState):
     
     def mark_vuln_false_positive(self, vuln_id: str) -> None:
         """Mark vulnerability as false positive."""
-        if vuln_id in self.vulnerabilities:
+        if vuln_id in self.vulnerabilities and vuln_id not in self.false_positives:
+            vuln = self.vulnerabilities[vuln_id]
+            vuln.status = VulnerabilityStatus.FALSE_POSITIVE
             self.false_positives.append(vuln_id)
             self.vuln_stats["false_positive"] += 1
+            # Decrement total and severity count since this is not a real vuln
+            self.vuln_stats["total"] = max(0, self.vuln_stats["total"] - 1)
+            severity_key = vuln.severity.value.lower()
+            if severity_key in self.vuln_stats:
+                self.vuln_stats[severity_key] = max(0, self.vuln_stats[severity_key] - 1)
             
             if vuln_id in self.pending_verification:
                 self.pending_verification.remove(vuln_id)

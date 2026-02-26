@@ -100,6 +100,11 @@ class LLM:
             )
             return str(result)
         except Exception:  # noqa: BLE001
+            logger.critical(
+                "Failed to load system prompt for agent %s! Agent will run without methodology.",
+                agent_name,
+                exc_info=True,
+            )
             return ""
 
     def set_agent_identity(self, agent_name: str | None, agent_id: str | None) -> None:

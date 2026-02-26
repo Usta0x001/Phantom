@@ -453,10 +453,10 @@ def _auto_record_findings(tool_name: str, result: Any, agent_state: Any) -> None
                     agent_state.add_finding(f"[endpoint] API: {url}")
 
         # --- Httpx ---
-        elif tool_name == "httpx_scan":
-            for host in result.get("results", []):
+        elif tool_name in ("httpx_probe", "httpx_full_analysis"):
+            for host in result.get("findings", result.get("results", [])):
                 url = host.get("url", "")
-                tech = host.get("technologies", [])
+                tech = host.get("tech", host.get("technologies", []))
                 status = host.get("status_code", "")
                 if url:
                     parts = [f"[recon/httpx] {url} ({status})"]
@@ -495,6 +495,41 @@ def _auto_record_findings(tool_name: str, result: Any, agent_state: Any) -> None
                 except Exception:  # noqa: BLE001
                     pass
 
+        # --- SQLMap ---
+        elif tool_name in ("sqlmap_test", "sqlmap_forms", "sqlmap_dump_database"):
+            if result.get("vulnerable"):
+                url = result.get("url", result.get("target", "?"))
+                params = result.get("vulnerable_params", [])
+                agent_state.add_finding(
+                    f"[vuln/sqlmap] SQLi CONFIRMED at {url} params={params}"
+                )
+            elif tool_name == "sqlmap_dump_database":
+                tables = result.get("tables", [])
+                if tables:
+                    agent_state.add_finding(
+                        f"[data/sqlmap] DB dump: {len(tables)} tables extracted"
+                    )
+
+        # --- FFuf ---
+        elif tool_name in ("ffuf_directory_scan", "ffuf_parameter_fuzz", "ffuf_vhost_fuzz"):
+            findings = result.get("findings", [])
+            for f in findings[:15]:
+                url = f.get("url", f.get("input", ""))
+                status = f.get("status", "")
+                size = f.get("length", f.get("words", ""))
+                agent_state.add_finding(
+                    f"[recon/ffuf] {url} (status={status} size={size})"
+                )
+
+        # --- Subfinder ---
+        elif tool_name == "subfinder_enumerate":
+            subdomains = result.get("subdomains", [])
+            if subdomains:
+                agent_state.add_finding(
+                    f"[recon/subfinder] {len(subdomains)} subdomains: "
+                    + ", ".join(subdomains[:10])
+                )
+
     except Exception:  # noqa: BLE001
         pass  # finding recording must never break the pipeline
 
@@ -518,14 +553,19 @@ def _track_tested_endpoint(tool_name: str, args: dict[str, Any], agent_state: An
     try:
         # Map tool names to test types and extract endpoint info
         _ENDPOINT_TOOLS = {
-            "sqlmap_scan": "sqli",
+            "sqlmap_test": "sqli",
+            "sqlmap_forms": "sqli",
+            "sqlmap_dump_database": "sqli-dump",
             "nuclei_scan": "nuclei",
             "nuclei_scan_cves": "nuclei-cve",
             "nuclei_scan_misconfigs": "nuclei-misconfig",
-            "ffuf_scan": "fuzz",
-            "xss_scan": "xss",
-            "ssrf_scan": "ssrf",
-            "command_injection_scan": "cmdi",
+            "ffuf_directory_scan": "fuzz",
+            "ffuf_parameter_fuzz": "param-fuzz",
+            "ffuf_vhost_fuzz": "vhost-fuzz",
+            "nmap_scan": "portscan",
+            "nmap_vuln_scan": "vuln-scan",
+            "httpx_probe": "httpx",
+            "httpx_full_analysis": "httpx-full",
         }
 
         test_type = _ENDPOINT_TOOLS.get(tool_name)

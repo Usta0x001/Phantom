@@ -242,6 +242,13 @@ class MemoryCompressor:
         )
 
         if total_tokens <= self.max_total_tokens * 0.9:
+            # Even when no compression needed, inject the findings ledger
+            # so the agent always has access to persistent discoveries.
+            ledger_msg = self._build_ledger_message()
+            if ledger_msg:
+                # Insert ledger just before the last few messages
+                insert_idx = max(len(system_msgs), len(messages) - MIN_RECENT_MESSAGES)
+                messages = messages[:insert_idx] + [ledger_msg] + messages[insert_idx:]
             return messages
 
         compressed = []
