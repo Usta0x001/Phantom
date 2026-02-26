@@ -1,4 +1,5 @@
 from collections.abc import Callable
+from typing import Any
 
 import pytest
 
@@ -228,13 +229,29 @@ class TestConvertArguments:
         result = convert_arguments(sample_function_with_types, kwargs)
         assert result["count"] == 42
 
-    def test_unknown_parameter_passed_through(
+    def test_unknown_parameter_dropped_silently(
         self, sample_function_with_types: Callable[..., None]
     ) -> None:
-        """Test that parameters not in signature are passed through."""
+        """Test that unknown parameters are dropped to prevent 'unexpected keyword argument' errors.
+
+        LLMs frequently hallucinate extra parameters. Passing them through
+        causes TypeError. The fix silently drops unknown params unless the
+        function explicitly accepts **kwargs.
+        """
         kwargs = {"name": "test", "unknown_param": "value"}
         result = convert_arguments(sample_function_with_types, kwargs)
-        assert result["unknown_param"] == "value"
+        assert "unknown_param" not in result
+        assert result["name"] == "test"
+
+    def test_unknown_parameter_passed_through_with_var_keyword(self) -> None:
+        """Test that unknown params ARE passed through when function accepts **kwargs."""
+        def func_with_kwargs(name: str, **kwargs: Any) -> None:
+            pass
+
+        kwargs_input = {"name": "test", "extra": "value"}
+        result = convert_arguments(func_with_kwargs, kwargs_input)
+        assert result["extra"] == "value"
+        assert result["name"] == "test"
 
     def test_function_without_annotations(
         self, sample_function_no_annotations: Callable[..., None]

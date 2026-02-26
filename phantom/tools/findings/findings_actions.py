@@ -13,8 +13,11 @@ from phantom.tools.registry import register_tool
 @register_tool(sandbox_execution=False)
 def record_finding(
     agent_state: Any,
-    finding: str,
+    finding: str = "",
     category: str = "general",
+    *,
+    description: str = "",
+    title: str = "",
 ) -> dict[str, Any]:
     """Record an important discovery into the persistent findings ledger.
 
@@ -35,11 +38,18 @@ def record_finding(
                  Example: "SQLi confirmed at POST /rest/user/login param=email"
         category: Optional category tag (e.g., "vuln", "endpoint", "tech",
                   "credential", "dead-end"). Default: "general"
+        description: Alias for 'finding' — accepted for LLM flexibility.
+        title: Alias for 'finding' — accepted for LLM flexibility.
 
     Returns:
         Confirmation with current ledger size.
     """
-    tagged_finding = f"[{category}] {finding}" if category != "general" else finding
+    # Accept common LLM aliases for the 'finding' parameter
+    text = finding or description or title
+    if not text:
+        return {"success": False, "message": "No finding text provided. Use 'finding', 'description', or 'title' parameter."}
+
+    tagged_finding = f"[{category}] {text}" if category != "general" else text
 
     if hasattr(agent_state, "add_finding"):
         agent_state.add_finding(tagged_finding)
