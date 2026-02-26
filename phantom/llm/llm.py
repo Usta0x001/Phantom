@@ -204,14 +204,40 @@ class LLM:
             "stream_options": {"include_usage": True},
         }
 
-        if api_key := Config.get("llm_api_key"):
+        # Resolve provider-specific API key / base from the registry.
+        # When a known provider preset exists, use ONLY its key + base —
+        # do NOT fall back to the generic LLM_API_BASE which may point to
+        # a different provider (e.g. OpenRouter) and break the request.
+        from phantom.llm.provider_registry import PROVIDER_PRESETS
+
+        preset = PROVIDER_PRESETS.get(self.config.model_name.lower())
+        api_key: str | None = None
+        api_base: str | None = None
+
+        if preset:
+            if preset.api_key_env:
+                import os as _os
+                api_key = _os.getenv(preset.api_key_env) or Config.get(preset.api_key_env.lower())
+            if preset.api_base:
+                api_base = preset.api_base
+            # Do NOT fall back to generic LLM_API_BASE for known presets
+        else:
+            # Unknown model — use generic config
+            api_key = Config.get("llm_api_key")
+            api_base = (
+                Config.get("llm_api_base")
+                or Config.get("openai_api_base")
+                or Config.get("litellm_base_url")
+                or Config.get("ollama_api_base")
+            )
+
+        # Last resort key fallback
+        if not api_key:
+            api_key = Config.get("llm_api_key")
+
+        if api_key:
             args["api_key"] = api_key
-        if api_base := (
-            Config.get("llm_api_base")
-            or Config.get("openai_api_base")
-            or Config.get("litellm_base_url")
-            or Config.get("ollama_api_base")
-        ):
+        if api_base:
             args["api_base"] = api_base
         if self._supports_reasoning():
             args["reasoning_effort"] = self._reasoning_effort
