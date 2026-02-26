@@ -2,6 +2,51 @@
 
 All notable changes to Phantom will be documented in this file.
 
+## [0.9.11] - 2026-02-26
+
+### Live Scan Validation — 6 Bug Fixes from Real Scan
+
+Live scan against OWASP Juice Shop found **4 vulnerabilities (3 CRITICAL + 1 HIGH)** using 5 agents, 163 tool calls, at $1.27 total cost. Analysis of 10 tool errors (6.1% error rate) revealed 6 fixable bugs.
+
+#### Bug Fixes
+
+- **Argument parser drops unknown kwargs**: `convert_arguments()` now silently
+  drops parameters not in function signature (unless function accepts `**kwargs`).
+  Prevents `TypeError: got an unexpected keyword argument` when LLMs hallucinate
+  extra parameters — affected httpx_probe, ffuf_directory_scan, and others.
+
+- **record_finding accepts aliases**: LLMs consistently use `description` or `title`
+  instead of `finding`. Now accepts all three with graceful fallback.
+
+- **create_note category mapping**: Unknown categories (e.g. "vulnerability",
+  "recon", "exploit") now map to closest valid category instead of returning error.
+  Added 15+ alias mappings.
+
+- **Sandbox timeout 120s → 600s**: nuclei_scan was hitting ReadTimeout at 150s
+  (120s server + 30s client margin). Increased both host executor and container
+  defaults to 600s to match security tool needs.
+
+- **Docker runtime timeout**: Container's `PHANTOM_SANDBOX_EXECUTION_TIMEOUT`
+  default aligned with executor at 600s.
+
+- **Tests updated**: Replaced `test_unknown_parameter_passed_through` with
+  `test_unknown_parameter_dropped_silently` + added `test_unknown_parameter_passed_through_with_var_keyword`.
+
+#### Scan Results (Juice Shop, standard profile, DeepSeek v3.2)
+
+| Metric | Before (v0.9.9) | After (v0.9.11) |
+|--------|-----------------|-----------------|
+| Vulnerabilities | 4 (3C+1H) + crash | 4 (3C+1H), clean finish |
+| Tool calls | 230 (6 security = 2.6%) | 163 (14 security = 8.6%) |
+| Agents | 8 | 5 (4 specialized + 1 root) |
+| Wasted iterations | 89 (38.7%) | ~0 (all productive) |
+| Cost | ~$6 (13 failed runs) | $1.27 (single clean run) |
+| Inter-agent messages | 0 | 12 |
+| Browser for XSS | 0 | 18 browser_action calls |
+
+#### Tests
+- 327 passed, 11 skipped, 0 failed
+
 ## [0.9.10] - 2026-02-26
 
 ### Scan Coverage & Crash Resilience — Root Cause Fixes
