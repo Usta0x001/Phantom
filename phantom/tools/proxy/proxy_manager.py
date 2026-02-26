@@ -283,35 +283,56 @@ class ProxyManager:
             headers = {}
         if not _is_ssrf_safe(url):
             return {"error": "Blocked: URL targets a private/internal address", "url": url}
-        try:
-            start_time = time.time()
-            response = requests.request(
-                method=method,
-                url=url,
-                headers=headers,
-                data=body or None,
-                proxies=self.proxies,
-                timeout=timeout,
-                verify=False,  # TLS verification disabled: traffic goes through Caido proxy which handles TLS interception
-            )
-            response_time = int((time.time() - start_time) * 1000)
 
-            body_content = response.text
-            if len(body_content) > 10000:
-                body_content = body_content[:10000] + "\n... [truncated]"
+        # Try through proxy first, fall back to direct on 502/proxy failures
+        for attempt, use_proxy in enumerate([(True, "proxy"), (False, "direct")]):
+            proxy_mode = use_proxy[1]
+            current_proxies = self.proxies if use_proxy[0] else None
+            try:
+                start_time = time.time()
+                response = requests.request(
+                    method=method,
+                    url=url,
+                    headers=headers,
+                    data=body or None,
+                    proxies=current_proxies,
+                    timeout=timeout,
+                    verify=False,  # TLS verification disabled: traffic goes through Caido proxy which handles TLS interception
+                )
+                response_time = int((time.time() - start_time) * 1000)
 
-            return {
-                "status_code": response.status_code,
-                "headers": dict(response.headers),
-                "body": body_content,
-                "response_time_ms": response_time,
-                "url": response.url,
-                "message": (
+                # If proxy returns 502, retry without proxy
+                if response.status_code == 502 and proxy_mode == "proxy":
+                    _logger.warning("Proxy returned 502 for %s, retrying direct", url)
+                    continue
+
+                body_content = response.text
+                if len(body_content) > 10000:
+                    body_content = body_content[:10000] + "\n... [truncated]"
+
+                msg = (
                     "Request sent through proxy - check list_requests() for captured traffic"
-                ),
-            }
-        except (RequestException, ProxyError, Timeout) as e:
-            return {"error": f"Request failed: {type(e).__name__}", "details": str(e), "url": url}
+                    if proxy_mode == "proxy"
+                    else "Request sent directly (proxy unavailable)"
+                )
+                return {
+                    "status_code": response.status_code,
+                    "headers": dict(response.headers),
+                    "body": body_content,
+                    "response_time_ms": response_time,
+                    "url": response.url,
+                    "message": msg,
+                }
+            except (ProxyError, ConnectionError) as e:
+                if proxy_mode == "proxy":
+                    _logger.warning("Proxy error for %s (%s), retrying direct", url, e)
+                    continue
+                return {"error": f"Request failed: {type(e).__name__}", "details": str(e), "url": url}
+            except (RequestException, Timeout) as e:
+                return {"error": f"Request failed: {type(e).__name__}", "details": str(e), "url": url}
+
+        # Should not reach here, but just in case
+        return {"error": "Request failed after proxy and direct attempts", "url": url}
 
     def repeat_request(
         self, request_id: str, modifications: dict[str, Any] | None = None
@@ -423,60 +444,73 @@ class ProxyManager:
         # SSRF check: validate modified URL before sending
         if not _is_ssrf_safe(request_data["url"]):
             return {"error": "Blocked: modified URL targets a private/internal address", "url": request_data["url"]}
-        try:
-            start_time = time.time()
-            response = requests.request(
-                method=request_data["method"],
-                url=request_data["url"],
-                headers=request_data["headers"],
-                data=request_data["body"] or None,
-                proxies=self.proxies,
-                timeout=30,
-                verify=False,
-            )
-            response_time = int((time.time() - start_time) * 1000)
 
-            response_body = response.text
-            truncated = len(response_body) > 10000
-            if truncated:
-                response_body = response_body[:10000] + "\n... [truncated]"
+        # Try through proxy first, fall back to direct on 502/proxy failures
+        for use_proxy, proxy_label in [(True, "proxy"), (False, "direct")]:
+            current_proxies = self.proxies if use_proxy else None
+            try:
+                start_time = time.time()
+                response = requests.request(
+                    method=request_data["method"],
+                    url=request_data["url"],
+                    headers=request_data["headers"],
+                    data=request_data["body"] or None,
+                    proxies=current_proxies,
+                    timeout=30,
+                    verify=False,
+                )
+                response_time = int((time.time() - start_time) * 1000)
 
-            return {
-                "status_code": response.status_code,
-                "status_text": response.reason,
-                "headers": {
-                    k: v
-                    for k, v in response.headers.items()
-                    if k.lower()
-                    in ["content-type", "content-length", "server", "set-cookie", "location"]
-                },
-                "body": response_body,
-                "body_truncated": truncated,
-                "body_size": len(response.content),
-                "response_time_ms": response_time,
-                "url": response.url,
-                "original_request_id": request_id,
-                "modifications_applied": modifications,
-                "request": {
-                    "method": request_data["method"],
-                    "url": request_data["url"],
-                    "headers": request_data["headers"],
-                    "has_body": bool(request_data["body"]),
-                },
-            }
+                # If proxy returns 502, retry without proxy
+                if response.status_code == 502 and proxy_label == "proxy":
+                    _logger.warning("Proxy returned 502 for modified request, retrying direct")
+                    continue
 
-        except ProxyError as e:
-            return {
-                "error": "Proxy connection failed - is Caido running?",
-                "details": str(e),
-                "original_request_id": request_id,
-            }
-        except (RequestException, Timeout) as e:
-            return {
-                "error": f"Failed to repeat request: {type(e).__name__}",
-                "details": str(e),
-                "original_request_id": request_id,
-            }
+                response_body = response.text
+                truncated = len(response_body) > 10000
+                if truncated:
+                    response_body = response_body[:10000] + "\n... [truncated]"
+
+                return {
+                    "status_code": response.status_code,
+                    "status_text": response.reason,
+                    "headers": {
+                        k: v
+                        for k, v in response.headers.items()
+                        if k.lower()
+                        in ["content-type", "content-length", "server", "set-cookie", "location"]
+                    },
+                    "body": response_body,
+                    "body_truncated": truncated,
+                    "body_size": len(response.content),
+                    "response_time_ms": response_time,
+                    "url": response.url,
+                    "original_request_id": request_id,
+                    "modifications_applied": modifications,
+                    "request": {
+                        "method": request_data["method"],
+                        "url": request_data["url"],
+                        "headers": request_data["headers"],
+                        "has_body": bool(request_data["body"]),
+                    },
+                }
+            except (ProxyError, ConnectionError) as e:
+                if proxy_label == "proxy":
+                    _logger.warning("Proxy error for modified request (%s), retrying direct", e)
+                    continue
+                return {
+                    "error": "Proxy connection failed - is Caido running?",
+                    "details": str(e),
+                    "original_request_id": request_id,
+                }
+            except (RequestException, Timeout) as e:
+                return {
+                    "error": f"Failed to repeat request: {type(e).__name__}",
+                    "details": str(e),
+                    "original_request_id": request_id,
+                }
+
+        return {"error": "Request failed after proxy and direct attempts", "original_request_id": request_id}
 
     def _handle_scope_list(self) -> dict[str, Any]:
         result = self._get_client().execute(
