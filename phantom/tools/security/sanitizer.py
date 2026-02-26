@@ -100,9 +100,12 @@ def validate_workspace_path(path: str, workspace: str = "/workspace") -> str:
 
     Raises ``ValueError`` on path-traversal attempts.
     """
-    resolved = PurePosixPath(workspace) / PurePosixPath(path)
-    # Normalise away '..' components
-    normalised = str(PurePosixPath(*[p for p in resolved.parts if p != ".."]))
-    if not normalised.startswith(workspace):
+    import posixpath
+
+    joined = str(PurePosixPath(workspace) / PurePosixPath(path))
+    # Properly resolve '..' via normpath (collapses parent references)
+    normalised = posixpath.normpath(joined)
+    # Ensure the normalised path is inside the workspace
+    if normalised != workspace and not normalised.startswith(workspace + "/"):
         raise ValueError(f"Path {path!r} escapes the workspace boundary")
-    return str(resolved)
+    return normalised

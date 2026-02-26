@@ -420,6 +420,9 @@ class ProxyManager:
     def _send_modified_request(
         self, request_data: dict[str, Any], request_id: str, modifications: dict[str, Any]
     ) -> dict[str, Any]:
+        # SSRF check: validate modified URL before sending
+        if not _is_ssrf_safe(request_data["url"]):
+            return {"error": "Blocked: modified URL targets a private/internal address", "url": request_data["url"]}
         try:
             start_time = time.time()
             response = requests.request(

@@ -137,6 +137,12 @@ class BrowserInstance:
     async def _create_context(self, url: str | None = None) -> dict[str, Any]:
         assert self._browser is not None
 
+        # Block dangerous URL schemes before creating context
+        if url:
+            parsed = urlparse(url)
+            if parsed.scheme.lower() in _BLOCKED_SCHEMES:
+                raise ValueError(f"Blocked URL scheme: {parsed.scheme}")
+
         self.context = await self._browser.new_context(
             viewport={"width": 1280, "height": 720},
             user_agent=(
@@ -319,6 +325,12 @@ class BrowserInstance:
     async def _new_tab(self, url: str | None = None) -> dict[str, Any]:
         if not self.context:
             raise ValueError("Browser not launched")
+
+        # Block dangerous URL schemes (same check as _goto)
+        if url:
+            parsed = urlparse(url)
+            if parsed.scheme.lower() in _BLOCKED_SCHEMES:
+                raise ValueError(f"Blocked URL scheme: {parsed.scheme}")
 
         page = await self.context.new_page()
         tab_id = f"tab_{self._next_tab_id}"
