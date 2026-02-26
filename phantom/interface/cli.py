@@ -272,17 +272,17 @@ async def run_cli(args: Any) -> None:  # noqa: PLR0915
                     # from whatever vulnerabilities were found so far.
                     try:
                         from phantom.tools.finish.finish_actions import finish_scan
-                        from phantom.agents.state import AgentState
 
-                        # Build a minimal agent_state for finish_scan
                         partial_state = agent.state
-                        partial_history = partial_state.get_conversation_history()
-                        finish_result = await finish_scan(
-                            summary=f"PARTIAL SCAN (LLM Error: {error_msg[:100]})",
-                            conversation_history=partial_history,
+                        error_snippet = error_msg[:200] if error_msg else "Unknown"
+                        finish_result = finish_scan(
+                            executive_summary=f"PARTIAL SCAN — terminated by LLM error: {error_snippet}",
+                            methodology="Scan was interrupted before completion. Partial results only.",
+                            technical_analysis="See enhanced_state.json and crash_summary.json for details.",
+                            recommendations="Re-run the scan after resolving the LLM API issue.",
                             agent_state=partial_state,
                         )
-                        if finish_result.get("success"):
+                        if isinstance(finish_result, dict) and finish_result.get("success"):
                             tracer.final_scan_result = finish_result.get("report_summary", "")
                     except Exception:  # noqa: BLE001
                         pass  # Best-effort; crash_summary.json already saved by base_agent
