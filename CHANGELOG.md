@@ -2,6 +2,30 @@
 
 All notable changes to Phantom will be documented in this file.
 
+## [0.9.5] - 2026-02-26
+
+### Proxy Resilience — Fixes 502 Failures During Deep Scans
+
+Deep scans against OWASP Juice Shop were hampered by Caido proxy 502 errors
+inside the sandbox container. Fixed proxy fallback and container networking
+to ensure tools can always reach the target.
+
+### Fixed — High (2)
+- **Caido proxy 502 killed sub-agent connectivity** — `send_simple_request()`
+  and `_send_modified_request()` in `proxy_manager.py` now retry without proxy
+  on 502 or `ProxyError`, falling back to direct HTTP connections.
+- **Container `NO_PROXY` not set** — CLI tools (curl, httpx, nuclei) inside the
+  sandbox went through the Caido proxy for ALL requests. Added
+  `NO_PROXY=host.docker.internal,localhost,127.0.0.1` to container environment
+  so tools bypass the proxy when it's overloaded or unreachable.
+
+### Scan Results — OWASP Juice Shop
+- **Standard scan**: 1 CRITICAL SQL Injection in `/rest/user/login` (CVSS 9.4)
+  — verified with live PoC, JWT token obtained
+- **Quick scan**: 1 HIGH SQL Injection in `/rest/products/search` (CVSS 8.6)
+  — UNION SELECT data extraction confirmed
+- **Deep scan**: 1 HIGH Authentication Bypass (CVSS 8.3) — historical analysis
+
 ## [0.9.4] - 2026-02-26
 
 ### Infrastructure Fixes — First Live Scan
