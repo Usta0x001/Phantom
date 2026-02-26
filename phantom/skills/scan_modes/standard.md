@@ -23,11 +23,13 @@ Systematic testing across the full attack surface. Understand the application be
 - Understand the data model and sensitive data locations
 
 **Blackbox (no source)**
+- **MANDATORY FIRST STEP**: Run `katana_crawl` to discover ALL endpoints, JS files, API routes, and forms
 - Crawl application thoroughly, interact with every feature
 - Enumerate endpoints, parameters, and functionality
 - Fingerprint technology stack
 - Map user roles and access levels
 - Capture traffic with proxy to understand request/response patterns
+- Use the full endpoint list from katana to plan which endpoints to test for each vulnerability type
 
 ## Phase 2: Business Logic Analysis
 

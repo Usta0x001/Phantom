@@ -101,6 +101,15 @@ def nuclei_scan(
     raw_output = result.get("content", "")
     findings = _parse_nuclei_jsonl(raw_output)
 
+    # Cap findings list to avoid huge responses blowing up context
+    _MAX_FINDINGS = 30
+    truncated = len(findings) > _MAX_FINDINGS
+    if truncated:
+        # Keep critical/high first, then truncate
+        findings.sort(key=lambda f: {"critical": 0, "high": 1, "medium": 2, "low": 3}.get(
+            f.get("severity", "info").lower(), 4))
+        findings = findings[:_MAX_FINDINGS]
+
     # Group by severity
     severity_groups: dict[str, list[dict[str, Any]]] = {
         "critical": [],
@@ -119,9 +128,10 @@ def nuclei_scan(
         "command": command,
         "target": target,
         "total_findings": len(findings),
+        "findings_truncated": truncated,
         "findings": findings,
         "by_severity": {k: len(v) for k, v in severity_groups.items()},
-        "raw_output": raw_output[:3000] if len(findings) == 0 else "",
+        "raw_output": raw_output[:2000] if len(findings) == 0 else "",
     }
 
 

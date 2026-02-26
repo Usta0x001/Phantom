@@ -20,9 +20,10 @@ Optimize for fast feedback on critical security issues. Skip exhaustive enumerat
 - Check if security controls were modified or bypassed
 
 **Blackbox (no source)**
+- **MANDATORY FIRST STEP**: Run `katana_crawl` to discover all endpoints, JS files, API routes, and forms
 - Map authentication and critical user flows
 - Identify exposed endpoints and entry points
-- Skip deep content discovery—test what's immediately accessible
+- Use the crawl results to prioritize testing targets
 
 ## Phase 2: High-Impact Targets
 

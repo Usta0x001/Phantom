@@ -9,9 +9,9 @@ from phantom.config import Config
 logger = logging.getLogger(__name__)
 
 
-MAX_TOTAL_TOKENS = 100_000
-MAX_MESSAGES = 200
-MIN_RECENT_MESSAGES = 15
+MAX_TOTAL_TOKENS = 60_000
+MAX_MESSAGES = 150
+MIN_RECENT_MESSAGES = 12
 
 SUMMARY_PROMPT_TEMPLATE = """You are an agent performing context
 condensation for a security agent. Your job is to compress scan data while preserving
@@ -112,6 +112,22 @@ def _summarize_messages(
         or Config.get("litellm_base_url")
         or Config.get("ollama_api_base")
     )
+
+    # Resolve provider-specific key / base for known presets
+    try:
+        from phantom.llm.provider_registry import PROVIDER_PRESETS
+        import os as _os
+
+        preset = PROVIDER_PRESETS.get(model.lower())
+        if preset:
+            if preset.api_key_env:
+                _pkey = _os.getenv(preset.api_key_env) or Config.get(preset.api_key_env.lower())
+                if _pkey:
+                    api_key = _pkey
+            if preset.api_base:
+                api_base = preset.api_base
+    except Exception:  # noqa: BLE001
+        pass
 
     try:
         completion_args: dict[str, Any] = {

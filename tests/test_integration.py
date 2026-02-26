@@ -253,8 +253,8 @@ class TestProfileIntegration:
         from phantom.core.scan_profiles import get_profile
 
         quick = get_profile("quick")
-        assert quick.max_iterations == 20
-        assert quick.enable_browser is False
+        assert quick.max_iterations == 60
+        assert quick.enable_browser is True
         assert "subfinder_scan" in quick.skip_tools
 
     def test_deep_copy_isolation(self):
@@ -264,7 +264,7 @@ class TestProfileIntegration:
         p1 = get_profile("quick")
         p2 = get_profile("quick")
         p1.max_iterations = 999
-        assert p2.max_iterations == 20  # Should not be affected
+        assert p2.max_iterations == 60  # Should not be affected
 
     def test_phantom_agent_injects_profile(self, monkeypatch):
         """PhantomAgent should include profile constraints in task."""

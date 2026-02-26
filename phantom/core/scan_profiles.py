@@ -91,32 +91,32 @@ PROFILES: dict[str, ScanProfile] = {
     # ------------------------------------------------------------------
     ProfileName.quick: ScanProfile(
         name="quick",
-        description="Time-boxed rapid assessment (<10 min). High-impact vulns only.",
-        max_iterations=20,
-        sandbox_timeout_s=60,
-        reasoning_effort="low",
+        description="Time-boxed rapid assessment (~15 min). High-impact vulns only.",
+        max_iterations=60,
+        sandbox_timeout_s=90,
+        reasoning_effort="medium",
         priority_tools=[
             "nuclei_scan",
             "httpx_scan",
             "nmap_scan",
+            "sqlmap_scan",
         ],
         skip_tools=[
             "subfinder_scan",
-            "sqlmap_scan",
-            "create_sub_agent",
         ],
-        max_concurrent_tools=2,
-        enable_browser=False,
+        max_concurrent_tools=3,
+        enable_browser=True,
         nuclei_severity="high,critical",
     ),
     # ------------------------------------------------------------------
     ProfileName.standard: ScanProfile(
         name="standard",
-        description="Balanced assessment with systematic methodology (~30 min).",
-        max_iterations=40,
+        description="Balanced assessment with systematic methodology (~45 min).",
+        max_iterations=120,
         sandbox_timeout_s=120,
         reasoning_effort="medium",
         priority_tools=[
+            "katana_crawl",
             "nuclei_scan",
             "httpx_scan",
             "nmap_scan",
@@ -132,10 +132,11 @@ PROFILES: dict[str, ScanProfile] = {
     ProfileName.deep: ScanProfile(
         name="deep",
         description="Exhaustive assessment with maximum coverage and vuln chaining.",
-        max_iterations=80,
+        max_iterations=300,
         sandbox_timeout_s=180,
         reasoning_effort="high",
         priority_tools=[
+            "katana_crawl",
             "nuclei_scan",
             "nuclei_scan_cves",
             "nuclei_scan_misconfigs",
@@ -155,7 +156,7 @@ PROFILES: dict[str, ScanProfile] = {
     ProfileName.stealth: ScanProfile(
         name="stealth",
         description="Low-noise scan to avoid IDS/WAF detection. Slow, rate-limited.",
-        max_iterations=30,
+        max_iterations=60,
         sandbox_timeout_s=60,
         reasoning_effort="medium",
         priority_tools=[
@@ -177,10 +178,11 @@ PROFILES: dict[str, ScanProfile] = {
     ProfileName.api_only: ScanProfile(
         name="api_only",
         description="API-focused assessment. No browser, no subdomain discovery.",
-        max_iterations=40,
+        max_iterations=100,
         sandbox_timeout_s=120,
         reasoning_effort="medium",
         priority_tools=[
+            "katana_crawl",
             "httpx_scan",
             "ffuf_scan",
             "nuclei_scan",

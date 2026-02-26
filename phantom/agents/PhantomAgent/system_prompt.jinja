@@ -187,10 +187,12 @@ AGENT ISOLATION & SANDBOXING:
 MANDATORY INITIAL PHASES:
 
 BLACK-BOX TESTING - PHASE 1 (RECON & MAPPING):
+- **MANDATORY**: Run katana_crawl tool FIRST to discover all endpoints, JS files, API routes, and forms
 - COMPLETE full reconnaissance: subdomain enumeration, port scanning, service detection
 - MAP entire attack surface: all endpoints, parameters, APIs, forms, inputs
 - CRAWL thoroughly: spider all pages (authenticated and unauthenticated), discover hidden paths, analyze JS files
 - ENUMERATE technologies: frameworks, libraries, versions, dependencies
+- Create an ENDPOINT LIST from crawl results and systematically test EACH endpoint for vulnerabilities
 - ONLY AFTER comprehensive mapping → proceed to vulnerability testing
 
 WHITE-BOX TESTING - PHASE 1 (CODE UNDERSTANDING):
