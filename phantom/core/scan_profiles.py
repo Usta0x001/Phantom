@@ -50,6 +50,7 @@ class ScanProfile:
     max_concurrent_tools: int = 4
     enable_browser: bool = True
     nuclei_severity: str = "low,medium,high,critical"
+    memory_threshold: int = 80_000  # Max tokens before memory compression fires
     custom_flags: dict[str, Any] = field(default_factory=dict)
 
     # ------------------------------------------------------------------
@@ -67,6 +68,7 @@ class ScanProfile:
             "max_concurrent_tools": self.max_concurrent_tools,
             "enable_browser": self.enable_browser,
             "nuclei_severity": self.nuclei_severity,
+            "memory_threshold": self.memory_threshold,
             "custom_flags": dict(self.custom_flags),
         }
 
@@ -107,6 +109,7 @@ PROFILES: dict[str, ScanProfile] = {
         max_concurrent_tools=3,
         enable_browser=True,
         nuclei_severity="high,critical",
+        memory_threshold=60_000,  # quick: save cost
     ),
     # ------------------------------------------------------------------
     ProfileName.standard: ScanProfile(
@@ -127,6 +130,7 @@ PROFILES: dict[str, ScanProfile] = {
         max_concurrent_tools=4,
         enable_browser=True,
         nuclei_severity="medium,high,critical",
+        memory_threshold=80_000,  # standard: balanced
     ),
     # ------------------------------------------------------------------
     ProfileName.deep: ScanProfile(
@@ -151,6 +155,7 @@ PROFILES: dict[str, ScanProfile] = {
         max_concurrent_tools=6,
         enable_browser=True,
         nuclei_severity="low,medium,high,critical",
+        memory_threshold=100_000,  # deep: maximum information retention
     ),
     # ------------------------------------------------------------------
     ProfileName.stealth: ScanProfile(
@@ -172,6 +177,7 @@ PROFILES: dict[str, ScanProfile] = {
         max_concurrent_tools=1,
         enable_browser=False,
         nuclei_severity="high,critical",
+        memory_threshold=60_000,  # stealth: save cost
         custom_flags={"rate_limit": 5, "delay_ms": 2000},
     ),
     # ------------------------------------------------------------------
@@ -196,6 +202,7 @@ PROFILES: dict[str, ScanProfile] = {
         max_concurrent_tools=3,
         enable_browser=False,
         nuclei_severity="medium,high,critical",
+        memory_threshold=80_000,  # api_only: balanced
     ),
 }
 

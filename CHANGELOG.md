@@ -2,6 +2,70 @@
 
 All notable changes to Phantom will be documented in this file.
 
+## [0.9.8] - 2026-02-26
+
+### Feature Completeness — DuckDuckGo Fallback, Dynamic Memory, EnhancedAgentState, CI/CD
+
+Comprehensive feature release implementing immediate, short-term and medium-term
+improvements identified during the v0.9.7 review.
+
+#### New Features
+
+- **DuckDuckGo Web Search Fallback**: `web_search` no longer requires a Perplexity
+  API key. When the key is missing (or Perplexity fails), it automatically falls
+  back to DuckDuckGo HTML search — the agent can always research payloads and CVEs.
+  Web search is now always registered (no `HAS_PERPLEXITY_API` gate).
+
+- **Dynamic Memory Threshold Per Profile**: Each scan profile now defines its own
+  `memory_threshold` controlling when memory compression fires:
+  - `quick` / `stealth`: 60K tokens (cost-efficient)
+  - `standard` / `api_only`: 80K tokens (balanced)
+  - `deep`: 100K tokens (maximum information retention)
+  The threshold flows from the profile through `LLM.set_memory_threshold()` to the
+  `MemoryCompressor` instance.
+
+- **EnhancedAgentState Activated**: The previously dead-code `EnhancedAgentState`
+  class is now automatically instantiated for root agents when a scan profile is
+  present. This enables:
+  - Vulnerability tracking with severity statistics
+  - Host/subdomain/endpoint discovery tracking
+  - Tool usage statistics per scan
+  - Phase-aware scan progress tracking
+  - `complete_scan()` auto-called on agent completion
+  - `initialize_scan()` auto-called at scan start
+
+- **CI/CD Test Workflow**: Added `.github/workflows/test.yml` that runs on every
+  push and PR to `main`/`develop`. Tests across Python 3.12 + 3.13, on Linux,
+  macOS, and Windows. Includes lint step with ruff.
+
+- **Enhanced TUI Cost Dashboard**: The TUI sidebar now shows the active scan
+  profile name, agent count, and tool execution count alongside the existing
+  token/cost display.
+
+#### Technical Details
+
+- `phantom/tools/web_search/web_search_actions.py`: Added `_duckduckgo_search()`
+  with HTML parsing (no external deps beyond `urllib`), regex result extraction,
+  and automatic Perplexity-to-DuckDuckGo failover.
+- `phantom/tools/__init__.py`: Removed `HAS_PERPLEXITY_API` gate; web_search
+  always imported.
+- `phantom/core/scan_profiles.py`: Added `memory_threshold` field to `ScanProfile`
+  with per-profile defaults.
+- `phantom/llm/memory_compressor.py`: `MemoryCompressor` now accepts optional
+  `max_tokens` parameter; uses instance-level `max_total_tokens` instead of
+  module-level constant.
+- `phantom/llm/llm.py`: Added `LLM.set_memory_threshold()` method.
+- `phantom/agents/PhantomAgent/phantom_agent.py`: Creates `EnhancedAgentState`
+  when `scan_profile` is present; calls `initialize_scan()` on scan start; passes
+  profile's `memory_threshold` to LLM.
+- `phantom/agents/base_agent.py`: `_execute_actions()` now calls
+  `track_tool_usage()` on EnhancedAgentState; `complete_scan()` called when agent
+  finishes successfully.
+- `phantom/interface/utils.py`: `build_tui_stats_text()` shows profile name,
+  agent count, and tool count.
+- `.github/workflows/test.yml`: New CI workflow with matrix testing and linting.
+- 32 new tests covering all features (292 total, 11 skipped, 0 failed).
+
 ## [0.9.7] - 2026-02-26
 
 ### Context Intelligence — Preserving Critical Information During Compression

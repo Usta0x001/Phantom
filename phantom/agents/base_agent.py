@@ -398,6 +398,11 @@ class BaseAgent(metaclass=AgentMeta):
         """Execute actions and return True if agent should finish."""
         for action in actions:
             self.state.add_action(action)
+            # Track tool usage on EnhancedAgentState when available
+            if hasattr(self.state, "track_tool_usage"):
+                tool_name = action.get("tool_name") or action.get("name", "")
+                if tool_name:
+                    self.state.track_tool_usage(tool_name)
 
         conversation_history = self.state.get_conversation_history()
 
@@ -417,6 +422,9 @@ class BaseAgent(metaclass=AgentMeta):
         self.state.messages = conversation_history
 
         if should_agent_finish:
+            # Finalize EnhancedAgentState scan tracking when available
+            if hasattr(self.state, "complete_scan"):
+                self.state.complete_scan()
             self.state.set_completed({"success": True})
             if tracer:
                 tracer.update_agent_status(self.state.agent_id, "completed")
