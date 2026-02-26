@@ -2,6 +2,64 @@
 
 All notable changes to Phantom will be documented in this file.
 
+## [0.9.9] - 2026-02-26
+
+### High & Medium Priority Fixes — Dedup, State Wiring, Auth Scanning, Persistence
+
+Six targeted fixes addressing the bugs and missing wiring identified during the
+v0.9.8 self-audit, plus new authenticated scanning support.
+
+#### Bug Fixes
+
+- **Double `set_completed()` fix**: `base_agent._execute_actions()` was calling
+  `complete_scan()` (which internally calls `set_completed(summary)`) and THEN
+  calling `set_completed({"success": True})` again, overwriting the scan summary.
+  Now uses an if/else: EnhancedAgentState gets `complete_scan()` only; plain
+  AgentState gets `set_completed()` only.
+
+#### New Features
+
+- **Endpoint Deduplication**: New `tested_endpoints` tracking in EnhancedAgentState
+  prevents re-testing the same URL + method + parameter with the same tool type.
+  - `mark_endpoint_tested(url, method, param, test_type)` — returns True if duplicate
+  - `get_tested_endpoints_summary()` — compact display for agent context
+  - Auto-tracked for: sqlmap, nuclei, ffuf, xss, ssrf, cmdi scans
+  - Summary injected into memory compressor alongside findings ledger
+
+- **Vulnerability Report → EnhancedAgentState Wiring**: `create_vulnerability_report`
+  results now flow into `EnhancedAgentState.add_vulnerability()` via the
+  `_auto_record_findings()` pipeline. The state's vuln tracking is no longer dead
+  during scans — severity stats, verification queue, and report export all work.
+
+- **Scan Result Persistence**: `finish_scan` now exports
+  `EnhancedAgentState.to_report_data()` as `enhanced_state.json` to the run
+  directory, providing structured machine-readable scan results alongside the
+  markdown report.
+
+- **Authenticated Scanning (`--auth-header`)**: New CLI option `-H` / `--auth-header`
+  for passing auth headers that get injected into the agent's task description.
+  Example: `phantom scan -t https://app.com -H "Authorization: Bearer TOKEN"`
+  Repeatable for multiple headers. Agent is instructed to use them in all HTTP tools.
+
+- **Memory Compressor Endpoint Context**: The `_build_ledger_message()` now includes
+  a `<tested_endpoints>` section when endpoint tracking data exists, telling the
+  agent exactly which endpoints have been tested and with which tools — preventing
+  wasted iterations on duplicate testing.
+
+#### Technical Details
+
+- **Files Modified**: 8 core files + 1 new test file
+  - `agents/base_agent.py` — double-completion fix
+  - `agents/enhanced_state.py` — endpoint dedup fields & methods
+  - `tools/executor.py` — vuln wiring + endpoint tracking in auto-record pipeline
+  - `tools/finish/finish_actions.py` — enhanced state JSON export
+  - `llm/memory_compressor.py` — endpoint summary in ledger message
+  - `agents/PhantomAgent/phantom_agent.py` — auth header injection
+  - `interface/cli_app.py` — `--auth-header` CLI option
+  - `interface/cli.py` — auth header parsing into scan config
+
+- **Tests**: 315 passed, 11 skipped (23 new tests covering all v0.9.9 features)
+
 ## [0.9.8] - 2026-02-26
 
 ### Feature Completeness — DuckDuckGo Fallback, Dynamic Memory, EnhancedAgentState, CI/CD

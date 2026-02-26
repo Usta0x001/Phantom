@@ -295,6 +295,9 @@ async def _execute_single_tool(
         # ── Auto-record findings to persistent ledger ──
         _auto_record_findings(tool_name, result, agent_state)
 
+        # ── Track tested endpoints for deduplication ──
+        _track_tested_endpoint(tool_name, tool_inv.get("args", {}), agent_state)
+
         # ── Audit logging ──
         _duration_ms = (_time.monotonic() - _start_ts) * 1000
         try:
@@ -467,6 +470,31 @@ def _auto_record_findings(tool_name: str, result: Any, agent_state: Any) -> None
                 title = vuln.get("title", "unknown vuln")
                 agent_state.add_finding(f"[vuln/nmap] {title}")
 
+        # --- Vulnerability Report ---
+        elif tool_name == "create_vulnerability_report":
+            title = result.get("message", "")
+            severity = result.get("severity", "unknown")
+            cvss = result.get("cvss_score", "?")
+            report_id = result.get("report_id", "")
+            agent_state.add_finding(
+                f"[vuln/report] {severity.upper()} (CVSS {cvss}) {title}"
+            )
+            # Also populate EnhancedAgentState vulnerability tracking
+            if hasattr(agent_state, "add_vulnerability") and report_id:
+                try:
+                    from phantom.telemetry.tracer import get_global_tracer
+                    from phantom.tools.finish.finish_actions import _dict_to_vulnerability
+                    tracer = get_global_tracer()
+                    if tracer:
+                        for r in tracer.vulnerability_reports:
+                            if r.get("id") == report_id:
+                                vuln_model = _dict_to_vulnerability(r)
+                                if vuln_model:
+                                    agent_state.add_vulnerability(vuln_model)
+                                break
+                except Exception:  # noqa: BLE001
+                    pass
+
     except Exception:  # noqa: BLE001
         pass  # finding recording must never break the pipeline
 
@@ -480,3 +508,35 @@ def remove_screenshot_from_result(result: Any) -> Any:
         result_copy["screenshot"] = "[Image data extracted - see attached image]"
 
     return result_copy
+
+
+def _track_tested_endpoint(tool_name: str, args: dict[str, Any], agent_state: Any) -> None:
+    """Track which endpoints have been tested to avoid duplicate testing."""
+    if not agent_state or not hasattr(agent_state, "mark_endpoint_tested"):
+        return
+
+    try:
+        # Map tool names to test types and extract endpoint info
+        _ENDPOINT_TOOLS = {
+            "sqlmap_scan": "sqli",
+            "nuclei_scan": "nuclei",
+            "nuclei_scan_cves": "nuclei-cve",
+            "nuclei_scan_misconfigs": "nuclei-misconfig",
+            "ffuf_scan": "fuzz",
+            "xss_scan": "xss",
+            "ssrf_scan": "ssrf",
+            "command_injection_scan": "cmdi",
+        }
+
+        test_type = _ENDPOINT_TOOLS.get(tool_name)
+        if not test_type:
+            return
+
+        url = args.get("url") or args.get("target") or args.get("target_url") or ""
+        method = args.get("method", "GET").upper()
+        parameter = args.get("parameter") or args.get("param") or ""
+
+        if url:
+            agent_state.mark_endpoint_tested(url, method, parameter, test_type)
+    except Exception:  # noqa: BLE001
+        pass  # endpoint tracking must never break the pipeline

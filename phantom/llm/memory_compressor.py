@@ -268,22 +268,44 @@ class MemoryCompressor:
     # ------------------------------------------------------------------
 
     def _build_ledger_message(self) -> dict[str, Any] | None:
-        """Build a synthetic message from the agent's findings ledger."""
+        """Build a synthetic message from the agent's findings ledger and
+        tested endpoint tracking."""
         state = self._agent_state
         if state is None:
             return None
+
+        parts: list[str] = []
+
+        # Findings ledger
         ledger = getattr(state, "findings_ledger", None)
-        if not ledger:
-            return None
-        text = "\n".join(f"- {f}" for f in ledger[-100:])
-        return {
-            "role": "user",
-            "content": (
+        if ledger:
+            text = "\n".join(f"- {f}" for f in ledger[-100:])
+            parts.append(
                 "<persistent_findings_ledger>\n"
                 "The following is a PERSISTENT list of key discoveries that must\n"
                 "not be forgotten.  Use this to avoid re-testing endpoints and\n"
                 "to remember what has already been found.\n\n"
                 f"{text}\n"
                 "</persistent_findings_ledger>"
-            ),
+            )
+
+        # Tested endpoint dedup summary
+        endpoint_summary_fn = getattr(state, "get_tested_endpoints_summary", None)
+        if endpoint_summary_fn:
+            summary = endpoint_summary_fn()
+            if summary:
+                parts.append(
+                    "<tested_endpoints>\n"
+                    "Endpoints already tested — do NOT re-test these with the same\n"
+                    "tool/technique.  Focus on UNTESTED endpoints and attack vectors.\n\n"
+                    f"{summary}\n"
+                    "</tested_endpoints>"
+                )
+
+        if not parts:
+            return None
+
+        return {
+            "role": "user",
+            "content": "\n\n".join(parts),
         }

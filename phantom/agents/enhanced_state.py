@@ -38,6 +38,10 @@ class EnhancedAgentState(AgentState):
     subdomains: list[str] = Field(default_factory=list)
     endpoints: list[str] = Field(default_factory=list)
     
+    # Tested endpoint tracking for deduplication
+    # Key: "METHOD URL PARAM" (e.g. "POST /login email"), Value: list of test descriptions
+    tested_endpoints: dict[str, list[str]] = Field(default_factory=dict)
+    
     # Vulnerabilities
     vulnerabilities: dict[str, Vulnerability] = Field(default_factory=dict)
     verified_vulns: list[str] = Field(default_factory=list)
@@ -111,6 +115,31 @@ class EnhancedAgentState(AgentState):
             self.endpoints.append(endpoint)
             if self.scan_result:
                 self.scan_result.add_endpoint(endpoint)
+    
+    def mark_endpoint_tested(
+        self, url: str, method: str = "GET", parameter: str = "", test_type: str = ""
+    ) -> bool:
+        """Mark an endpoint+param as tested.  Returns True if it was already
+        tested (i.e. duplicate), False if this is the first test.
+        
+        The agent should call this BEFORE running an exploit against an
+        endpoint to avoid wasting iterations on repeated tests.
+        """
+        key = f"{method.upper()} {url} {parameter}".strip()
+        if key in self.tested_endpoints:
+            self.tested_endpoints[key].append(test_type)
+            return True  # duplicate
+        self.tested_endpoints[key] = [test_type]
+        return False
+    
+    def get_tested_endpoints_summary(self) -> str:
+        """Return a compact summary of tested endpoints for the agent."""
+        if not self.tested_endpoints:
+            return ""
+        lines = []
+        for key, tests in list(self.tested_endpoints.items())[:50]:
+            lines.append(f"  {key} ({len(tests)}x: {', '.join(tests[:3])})")
+        return f"Already tested ({len(self.tested_endpoints)} total):\n" + "\n".join(lines)
     
     def add_vulnerability(self, vuln: Vulnerability) -> None:
         """Register discovered vulnerability."""
