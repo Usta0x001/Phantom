@@ -228,17 +228,10 @@ async def warm_up_llm() -> None:
     console = Console()
 
     try:
+        from phantom.llm.provider_registry import PROVIDER_PRESETS, FallbackChain
+
         model_name = Config.get("phantom_llm")
-        api_key = Config.get("llm_api_key")
-        # Support comma-separated keys for rotation: use first key for warm-up
-        if api_key and "," in api_key:
-            api_key = api_key.split(",")[0].strip()
-        api_base = (
-            Config.get("llm_api_base")
-            or Config.get("openai_api_base")
-            or Config.get("litellm_base_url")
-            or Config.get("ollama_api_base")
-        )
+        fallback_chain = FallbackChain.from_config()
 
         test_messages = [
             {"role": "system", "content": "You are a helpful assistant."},
@@ -247,21 +240,98 @@ async def warm_up_llm() -> None:
 
         llm_timeout = int(Config.get("llm_timeout") or "300")
 
-        completion_kwargs: dict[str, Any] = {
-            "model": model_name,
-            "messages": test_messages,
-            "timeout": llm_timeout,
-        }
-        if api_key:
-            completion_kwargs["api_key"] = api_key
-        if api_base:
-            completion_kwargs["api_base"] = api_base
-
         import litellm  # lazy import — saves ~10s startup
 
-        response = await litellm.acompletion(**completion_kwargs)
+        last_error: Exception | None = None
 
-        validate_llm_response(response)
+        # Try each model in the fallback chain
+        for _attempt_idx in range(len(fallback_chain.providers)):
+            current_model = fallback_chain.current_model
+
+            # Resolve provider-specific API key and base URL
+            preset = PROVIDER_PRESETS.get(current_model.lower())
+            api_key = None
+            api_base = None
+
+            if preset:
+                # Known provider — use its specific key / base
+                if preset.api_key_env:
+                    api_key = os.getenv(preset.api_key_env) or Config.get(preset.api_key_env.lower())
+                if preset.api_base:
+                    api_base = preset.api_base
+                # Do NOT fall back to generic LLM_API_BASE for known presets
+                # (e.g. Groq uses its own endpoint, not OpenRouter's)
+            else:
+                # Unknown model — use generic config
+                api_key = Config.get("llm_api_key")
+                api_base = (
+                    Config.get("llm_api_base")
+                    or Config.get("openai_api_base")
+                    or Config.get("litellm_base_url")
+                    or Config.get("ollama_api_base")
+                )
+
+            # Last resort: if preset had no key, try the generic one
+            if not api_key:
+                api_key = Config.get("llm_api_key")
+
+            # Support comma-separated keys for rotation: use first key for warm-up
+            if api_key and "," in api_key:
+                api_key = api_key.split(",")[0].strip()
+
+            completion_kwargs: dict[str, Any] = {
+                "model": current_model,
+                "messages": test_messages,
+                "timeout": llm_timeout,
+            }
+            if api_key:
+                completion_kwargs["api_key"] = api_key
+            if api_base:
+                completion_kwargs["api_base"] = api_base
+
+            try:
+                # Retry up to 3 times per provider (handles transient 500s)
+                import asyncio as _asyncio
+                import logging as _log
+                _warmup_log = _log.getLogger("phantom.warmup")
+
+                for retry in range(3):
+                    try:
+                        _warmup_log.debug(
+                            "attempt %d/3: model=%s key=%s... base=%s",
+                            retry + 1, current_model,
+                            (completion_kwargs.get("api_key") or "auto")[:12],
+                            completion_kwargs.get("api_base", "default"),
+                        )
+                        response = await litellm.acompletion(**completion_kwargs)
+                        validate_llm_response(response)
+                        # Success — update PHANTOM_LLM to the working model
+                        if current_model != model_name:
+                            os.environ["PHANTOM_LLM"] = current_model
+                        return  # warm-up succeeded
+                    except Exception as retry_err:  # noqa: BLE001
+                        _warmup_log.debug("attempt %d FAILED: %s", retry + 1, retry_err)
+                        err_msg = str(retry_err).lower()
+                        is_transient = any(
+                            k in err_msg for k in ["500", "internal server", "502", "503", "504"]
+                        )
+                        if is_transient and retry < 2:
+                            await _asyncio.sleep(2 ** retry)  # 1s, 2s backoff
+                            continue
+                        raise  # not transient or retries exhausted
+            except Exception as e:  # noqa: BLE001
+                last_error = e
+                next_model = fallback_chain.advance()
+                if next_model is None:
+                    break  # exhausted all providers
+                # Log and try next
+                import logging as _logging
+                _logging.getLogger(__name__).warning(
+                    "Warm-up failed for %s (%s), trying %s", current_model, e, next_model,
+                )
+
+        # All providers failed — raise the last error
+        raise last_error  # type: ignore[misc]
 
     except Exception as e:  # noqa: BLE001
         error_text = Text()

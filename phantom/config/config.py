@@ -10,8 +10,11 @@ class Config:
 
     # LLM Configuration
     phantom_llm = None
+    phantom_llm_fallback = None
     llm_api_key = None
     llm_api_base = None
+    groq_api_key = None
+    openai_api_key = None
     openai_api_base = None
     litellm_base_url = None
     ollama_api_base = None
@@ -21,8 +24,11 @@ class Config:
     llm_timeout = "300"
     _LLM_CANONICAL_NAMES = (
         "phantom_llm",
+        "phantom_llm_fallback",
         "llm_api_key",
         "llm_api_base",
+        "groq_api_key",
+        "openai_api_key",
         "openai_api_base",
         "litellm_base_url",
         "ollama_api_base",
@@ -97,7 +103,7 @@ class Config:
         if not path.exists():
             return {}
         try:
-            with path.open("r", encoding="utf-8") as f:
+            with path.open("r", encoding="utf-8-sig") as f:
                 data: dict[str, Any] = json.load(f)
                 return data
         except (json.JSONDecodeError, OSError):

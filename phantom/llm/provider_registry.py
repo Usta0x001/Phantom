@@ -107,12 +107,28 @@ PROVIDER_PRESETS: dict[str, ProviderConfig] = {
         rate_limit_rpm=999,
     ),
     # ── OpenRouter ────────────────────────────────────────────────────────
-    # Free tier models (no credits required, :free suffix)
+    # Paid models
+    "openrouter/deepseek/deepseek-v3.2": ProviderConfig(
+        model="openrouter/deepseek/deepseek-v3.2",
+        api_key_env="LLM_API_KEY",
+        api_base="https://openrouter.ai/api/v1",
+        context_window=163_840,
+        rate_limit_rpm=200,
+        supports_vision=False,
+    ),
+    "openrouter/meta-llama/llama-3.3-70b-instruct": ProviderConfig(
+        model="openrouter/meta-llama/llama-3.3-70b-instruct",
+        api_key_env="LLM_API_KEY",
+        api_base="https://openrouter.ai/api/v1",
+        context_window=128_000,
+        rate_limit_rpm=200,
+        supports_vision=False,
+    ),
     "openrouter/google/gemma-3-27b-it:free": ProviderConfig(
         model="openrouter/google/gemma-3-27b-it:free",
         api_key_env="LLM_API_KEY",
         api_base="https://openrouter.ai/api/v1",
-        context_window=8_192,
+        context_window=131_072,
         rate_limit_rpm=20,
         supports_vision=False,
     ),
@@ -120,25 +136,33 @@ PROVIDER_PRESETS: dict[str, ProviderConfig] = {
         model="openrouter/meta-llama/llama-3.3-70b-instruct:free",
         api_key_env="LLM_API_KEY",
         api_base="https://openrouter.ai/api/v1",
+        context_window=128_000,
+        rate_limit_rpm=20,
+        supports_vision=False,
+    ),
+    "openrouter/nousresearch/hermes-3-llama-3.1-405b:free": ProviderConfig(
+        model="openrouter/nousresearch/hermes-3-llama-3.1-405b:free",
+        api_key_env="LLM_API_KEY",
+        api_base="https://openrouter.ai/api/v1",
         context_window=131_072,
         rate_limit_rpm=20,
         supports_vision=False,
     ),
-    "openrouter/deepseek/deepseek-chat-v3-0324:free": ProviderConfig(
-        model="openrouter/deepseek/deepseek-chat-v3-0324:free",
+    "openrouter/qwen/qwen3-coder:free": ProviderConfig(
+        model="openrouter/qwen/qwen3-coder:free",
         api_key_env="LLM_API_KEY",
         api_base="https://openrouter.ai/api/v1",
-        context_window=163_840,
+        context_window=262_000,
         rate_limit_rpm=20,
         supports_vision=False,
     ),
-    "openrouter/qwen/qwen3-235b-a22b:free": ProviderConfig(
-        model="openrouter/qwen/qwen3-235b-a22b:free",
+    "openrouter/mistralai/mistral-small-3.1-24b-instruct:free": ProviderConfig(
+        model="openrouter/mistralai/mistral-small-3.1-24b-instruct:free",
         api_key_env="LLM_API_KEY",
         api_base="https://openrouter.ai/api/v1",
-        context_window=40_960,
+        context_window=128_000,
         rate_limit_rpm=20,
-        supports_vision=True,
+        supports_vision=False,
     ),
     # Paid OpenRouter models
     "openrouter/deepseek/deepseek-v3.2": ProviderConfig(

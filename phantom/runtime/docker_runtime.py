@@ -129,8 +129,7 @@ class DockerRuntime(AbstractRuntime):
                     name=container_name,
                     hostname=container_name,
                     ports={f"{CONTAINER_TOOL_SERVER_PORT}/tcp": ("127.0.0.1", self._tool_server_port)},
-                    cap_add=["NET_RAW"],
-                    cap_drop=["ALL"],
+                    cap_add=["NET_ADMIN", "NET_RAW"],
                     labels={"phantom-scan-id": scan_id},
                     environment={
                         "PYTHONUNBUFFERED": "1",
@@ -145,13 +144,22 @@ class DockerRuntime(AbstractRuntime):
                 )
 
                 self._scan_container = container
+                # Give entrypoint time to start Caido + tool server
+                time.sleep(2)
                 self._wait_for_tool_server()
 
-            except (DockerException, RequestsConnectionError, RequestsTimeout) as e:
+            except (DockerException, RequestsConnectionError, RequestsTimeout, SandboxInitializationError) as e:
                 last_error = e
                 if attempt < max_retries:
                     self._tool_server_port = None
                     self._tool_server_token = None
+                    # Clean up the failed container before retrying
+                    if self._scan_container is not None:
+                        with contextlib.suppress(Exception):
+                            self._scan_container.stop(timeout=5)
+                        with contextlib.suppress(Exception):
+                            self._scan_container.remove(force=True)
+                        self._scan_container = None
                     time.sleep(2**attempt)
             else:
                 return container
