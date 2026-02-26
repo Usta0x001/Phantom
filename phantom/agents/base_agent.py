@@ -591,6 +591,12 @@ class BaseAgent(metaclass=AgentMeta):
         self.state.add_error(error_msg)
 
         if self.non_interactive:
+            # ── Graceful degradation: save partial results before dying ──
+            # If this is the root agent and we have an EnhancedAgentState
+            # with findings, attempt to generate a partial report.
+            if self.state.parent_id is None:
+                self._save_partial_results_on_crash(tracer, error_msg)
+
             self.state.set_completed({"success": False, "error": error_msg})
             if tracer:
                 tracer.update_agent_status(self.state.agent_id, "failed", error_msg)
@@ -615,6 +621,56 @@ class BaseAgent(metaclass=AgentMeta):
                 tracer.update_tool_execution(exec_id, "failed", {"details": error_details})
 
         return None
+
+    def _save_partial_results_on_crash(
+        self,
+        tracer: Optional["Tracer"],
+        error_msg: str,
+    ) -> None:
+        """Best-effort save of partial scan results when LLM fails mid-scan.
+
+        Exports enhanced_state.json and a crash summary so discovered
+        vulnerabilities are never lost, even if the LLM runs out of
+        credits or the API goes down.
+        """
+        try:
+            from phantom.agents.enhanced_state import EnhancedAgentState
+
+            if not isinstance(self.state, EnhancedAgentState):
+                return
+
+            # Export EnhancedAgentState data
+            report_data = self.state.to_report_data()
+            if not report_data:
+                return
+
+            import json
+            from pathlib import Path
+
+            if tracer and hasattr(tracer, "run_dir") and tracer.run_dir:
+                run_dir = Path(tracer.run_dir)
+            else:
+                return
+
+            # Save enhanced state
+            state_path = run_dir / "enhanced_state.json"
+            state_path.write_text(json.dumps(report_data, indent=2, default=str))
+
+            # Save crash summary
+            crash_info = {
+                "status": "partial",
+                "error": error_msg,
+                "iteration": self.state.iteration,
+                "max_iterations": self.state.max_iterations,
+                "vulnerabilities_found": len(getattr(self.state, "vulnerabilities", [])),
+                "findings_ledger_size": len(getattr(self.state, "findings_ledger", [])),
+            }
+            crash_path = run_dir / "crash_summary.json"
+            crash_path.write_text(json.dumps(crash_info, indent=2, default=str))
+
+            logger.info("Saved partial results to %s", run_dir)
+        except Exception:  # noqa: BLE001
+            logger.debug("Failed to save partial results on crash", exc_info=True)
 
     async def _handle_iteration_error(
         self,

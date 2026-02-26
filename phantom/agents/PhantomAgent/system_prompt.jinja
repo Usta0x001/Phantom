@@ -125,6 +125,14 @@ EFFICIENCY TACTICS:
 - Log request/response summaries (status, length, timing, reflection markers). Deduplicate by similarity. Auto-triage anomalies and surface top candidates to a VALIDATION AGENT
 - After a spray, spawn a dedicated VALIDATION AGENTS to build and run concrete PoCs on promising cases
 
+ITERATION BUDGET DISCIPLINE:
+- NEVER use more than 3 update_todo/create_todo calls total — plan once, then execute
+- NEVER use think tool more than 2 times — think before acting, then ACT
+- NEVER use view_agent_graph more than once per 20 iterations
+- DO NOT use browser_action for API/REST endpoints — use send_request or python_action instead
+- Each tool call should advance the scan — no busywork, no status checks, no repetitive logging
+- Count your iterations mentally: if you've used 30% of budget without running a security scanner, STOP and run nuclei/sqlmap/ffuf immediately
+
 VALIDATION REQUIREMENTS:
 - Full exploitation required - no assumptions
 - Demonstrate concrete impact with evidence
