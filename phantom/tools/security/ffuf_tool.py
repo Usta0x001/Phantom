@@ -10,6 +10,7 @@ import shlex
 from typing import Any, Literal
 
 from phantom.tools.registry import register_tool
+from phantom.tools.security.sanitizer import safe_temp_path, sanitize_extra_args
 
 
 def _parse_ffuf_json(raw_output: str) -> list[dict[str, Any]]:
@@ -81,18 +82,20 @@ def ffuf_directory_scan(
     if "FUZZ" not in url:
         url = url.rstrip("/") + "/FUZZ"
 
+    out_file = safe_temp_path("ffuf_out", ".json")
+
     cmd_parts = [
         "ffuf",
         "-u", shlex.quote(url),
         "-w", shlex.quote(wordlist),
-        "-o", "/tmp/ffuf_out.json",
+        "-o", out_file,
         "-of", "json",
         "-c",  # Colorized (helps parsing)
-        "-rate", str(rate),
+        "-rate", str(int(rate)),
     ]
 
     if extensions:
-        cmd_parts.extend(["-e", f".{extensions.replace(',', ',.')}"])
+        cmd_parts.extend(["-e", shlex.quote(f".{extensions.replace(',', ',.')}")])
 
     if filter_status:
         cmd_parts.extend(["-fc", shlex.quote(filter_status)])
@@ -100,8 +103,7 @@ def ffuf_directory_scan(
     if match_status:
         cmd_parts.extend(["-mc", shlex.quote(match_status)])
 
-    if extra_args:
-        cmd_parts.extend(shlex.split(extra_args))
+    cmd_parts.extend(sanitize_extra_args(extra_args))
 
     command = " ".join(cmd_parts)
 
@@ -115,7 +117,7 @@ def ffuf_directory_scan(
         }
 
     # Read JSON output file
-    read_result = terminal_execute(command="cat /tmp/ffuf_out.json 2>/dev/null || echo '{}'", timeout=10.0)
+    read_result = terminal_execute(command=f"cat {shlex.quote(out_file)} 2>/dev/null || echo '{{}}'", timeout=10.0)
     json_output = read_result.get("content", "{}")
 
     findings = _parse_ffuf_json(json_output)

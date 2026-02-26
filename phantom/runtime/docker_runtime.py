@@ -128,8 +128,9 @@ class DockerRuntime(AbstractRuntime):
                     detach=True,
                     name=container_name,
                     hostname=container_name,
-                    ports={f"{CONTAINER_TOOL_SERVER_PORT}/tcp": self._tool_server_port},
-                    cap_add=["NET_ADMIN", "NET_RAW"],
+                    ports={f"{CONTAINER_TOOL_SERVER_PORT}/tcp": ("127.0.0.1", self._tool_server_port)},
+                    cap_add=["NET_RAW"],
+                    cap_drop=["ALL"],
                     labels={"phantom-scan-id": scan_id},
                     environment={
                         "PYTHONUNBUFFERED": "1",

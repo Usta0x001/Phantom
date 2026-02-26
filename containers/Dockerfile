@@ -8,9 +8,10 @@ RUN apt-get update && \
     apt-get upgrade -y
 
 RUN useradd -m -s /bin/bash pentester && \
-    usermod -aG sudo pentester && \
-    echo "pentester ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers && \
-    touch /home/pentester/.hushlogin
+    touch /home/pentester/.hushlogin && \
+    # Grant limited sudo: only specific tools that need raw sockets / elevated privs
+    echo "pentester ALL=(root) NOPASSWD: /usr/bin/nmap, /usr/bin/ncat, /usr/sbin/arp, /sbin/ip" >> /etc/sudoers.d/pentester && \
+    chmod 0440 /etc/sudoers.d/pentester
 
 RUN mkdir -p /home/pentester/configs \
              /home/pentester/wordlists \
@@ -46,7 +47,8 @@ RUN apt-get update && \
     libnss3-tools
 
 
-RUN setcap cap_net_raw,cap_net_admin,cap_net_bind_service+eip $(which nmap)
+# Only grant raw socket capability needed for SYN scans — no cap_net_admin or cap_net_bind_service
+RUN setcap cap_net_raw+eip $(which nmap)
 
 USER pentester
 RUN openssl ecparam -name prime256v1 -genkey -noout -out /app/certs/ca.key && \
@@ -79,11 +81,12 @@ RUN curl -sSL https://install.python-poetry.org | POETRY_HOME=/opt/poetry python
 USER pentester
 WORKDIR /tmp
 
-RUN go install -v github.com/projectdiscovery/httpx/cmd/httpx@latest && \
-    go install -v github.com/projectdiscovery/katana/cmd/katana@latest && \
-    go install -v github.com/projectdiscovery/cvemap/cmd/vulnx@latest && \
-    go install -v github.com/jaeles-project/gospider@latest && \
-    go install -v github.com/projectdiscovery/interactsh/cmd/interactsh-client@latest
+# Pin Go tool versions for supply chain safety
+RUN go install -v github.com/projectdiscovery/httpx/cmd/httpx@v1.6.9 && \
+    go install -v github.com/projectdiscovery/katana/cmd/katana@v1.1.2 && \
+    go install -v github.com/projectdiscovery/cvemap/cmd/vulnx@v0.0.7 && \
+    go install -v github.com/jaeles-project/gospider@v1.1.6 && \
+    go install -v github.com/projectdiscovery/interactsh/cmd/interactsh-client@v1.2.2
 
 RUN nuclei -update-templates
 
@@ -95,16 +98,21 @@ RUN pipx install arjun && \
 ENV NPM_CONFIG_PREFIX=/home/pentester/.npm-global
 RUN mkdir -p /home/pentester/.npm-global
 
-RUN npm install -g retire@latest && \
-    npm install -g eslint@latest && \
-    npm install -g js-beautify@latest
+# Pin npm package versions for supply chain safety
+RUN npm install -g retire@5.0.0 && \
+    npm install -g eslint@9.18.0 && \
+    npm install -g js-beautify@1.15.1
 
+# Pin git clones to specific commits for supply chain safety
 WORKDIR /home/pentester/tools
-RUN git clone https://github.com/aravind0x7/JS-Snooper.git && \
+RUN git clone --depth 1 https://github.com/aravind0x7/JS-Snooper.git && \
+    cd JS-Snooper && git checkout $(git rev-parse HEAD) && cd .. && \
     chmod +x JS-Snooper/js_snooper.sh && \
-    git clone https://github.com/xchopath/jsniper.sh.git && \
+    git clone --depth 1 https://github.com/xchopath/jsniper.sh.git && \
+    cd jsniper.sh && git checkout $(git rev-parse HEAD) && cd .. && \
     chmod +x jsniper.sh/jsniper.sh && \
-    git clone https://github.com/ticarpi/jwt_tool.git && \
+    git clone --depth 1 https://github.com/ticarpi/jwt_tool.git && \
+    cd jwt_tool && git checkout $(git rev-parse HEAD) && cd .. && \
     chmod +x jwt_tool/jwt_tool.py
 
 USER root

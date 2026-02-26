@@ -9,6 +9,7 @@ import shlex
 from typing import Any
 
 from phantom.tools.registry import register_tool
+from phantom.tools.security.sanitizer import sanitize_extra_args
 
 
 @register_tool(sandbox_execution=True)
@@ -45,7 +46,7 @@ def subfinder_enumerate(
     cmd_parts.extend(["-timeout", str(timeout)])
 
     if extra_args:
-        cmd_parts.extend(shlex.split(extra_args))
+        cmd_parts.extend(sanitize_extra_args(extra_args))
 
     command = " ".join(cmd_parts)
 

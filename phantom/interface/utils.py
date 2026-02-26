@@ -454,7 +454,42 @@ def generate_run_name(targets_info: list[dict[str, Any]] | None = None) -> str:
 # Target processing utilities
 
 
+def _is_ssrf_safe_url(url: str) -> bool:
+    """Block requests to private/loopback/link-local IPs (SSRF prevention)."""
+    try:
+        parsed = urlparse(url)
+        hostname = parsed.hostname
+        if not hostname:
+            return False
+        if parsed.scheme not in ("http", "https"):
+            return False
+        # Block obviously internal hostnames
+        if hostname in ("localhost", "0.0.0.0"):
+            return False
+        try:
+            addr = ipaddress.ip_address(hostname)
+            if addr.is_private or addr.is_loopback or addr.is_link_local or addr.is_reserved:
+                return False
+        except ValueError:
+            # Hostname — resolve and check resolved IPs
+            import socket as _sock
+            try:
+                resolved = _sock.getaddrinfo(hostname, None, _sock.AF_UNSPEC, _sock.SOCK_STREAM)
+                for _fam, _typ, _pro, _can, sockaddr in resolved:
+                    addr = ipaddress.ip_address(sockaddr[0])
+                    if addr.is_private or addr.is_loopback or addr.is_link_local or addr.is_reserved:
+                        return False
+            except _sock.gaierror:
+                return False
+        return True
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def _is_http_git_repo(url: str) -> bool:
+    # SSRF protection: never probe private/internal addresses
+    if not _is_ssrf_safe_url(url):
+        return False
     check_url = f"{url.rstrip('/')}/info/refs?service=git-upload-pack"
     try:
         req = Request(check_url, headers={"User-Agent": "git/phantom"})  # noqa: S310
@@ -481,7 +516,9 @@ def infer_target_type(target: str) -> tuple[str, dict[str, str]]:  # noqa: PLR09
     parsed = urlparse(target)
     if parsed.scheme in ("http", "https"):
         if parsed.username or parsed.password:
-            return "repository", {"target_repo": target}
+            # Strip embedded credentials before passing to git clone
+            safe_url = parsed._replace(netloc=parsed.hostname + (f":{parsed.port}" if parsed.port else "")).geturl()
+            return "repository", {"target_repo": safe_url}
         if parsed.path.rstrip("/").endswith(".git"):
             return "repository", {"target_repo": target}
         if parsed.query or parsed.fragment:

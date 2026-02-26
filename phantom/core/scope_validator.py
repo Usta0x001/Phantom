@@ -26,6 +26,10 @@ class ScopeRule:
     def __post_init__(self) -> None:
         """Pre-compile regex pattern at construction time (validates early, avoids per-call cost)."""
         if self.rule_type == "regex":
+            # Limit pattern length to mitigate ReDoS from user-supplied patterns
+            if len(self.pattern) > 500:
+                self._compiled_regex = None
+                return
             try:
                 self._compiled_regex = re.compile(self.pattern, re.IGNORECASE)
             except re.error:

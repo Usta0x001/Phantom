@@ -10,6 +10,7 @@ import shlex
 from typing import Any, Literal
 
 from phantom.tools.registry import register_tool
+from phantom.tools.security.sanitizer import sanitize_extra_args
 
 
 def _parse_sqlmap_output(raw_output: str) -> dict[str, Any]:
@@ -97,7 +98,7 @@ def sqlmap_test(
         cmd_parts.extend(["--dbms", shlex.quote(dbms)])
 
     if extra_args:
-        cmd_parts.extend(shlex.split(extra_args))
+        cmd_parts.extend(sanitize_extra_args(extra_args))
 
     command = " ".join(cmd_parts)
 
@@ -155,12 +156,12 @@ def sqlmap_dump_database(
     if dump_all:
         cmd_parts.append("--dump-all")
     elif database and table:
-        cmd_parts.extend(["-D", database, "-T", table])
+        cmd_parts.extend(["-D", shlex.quote(database), "-T", shlex.quote(table)])
         if columns:
-            cmd_parts.extend(["-C", columns])
+            cmd_parts.extend(["-C", shlex.quote(columns)])
         cmd_parts.append("--dump")
     elif database:
-        cmd_parts.extend(["-D", database, "--tables"])
+        cmd_parts.extend(["-D", shlex.quote(database), "--tables"])
     else:
         cmd_parts.append("--dbs")  # List databases
 
