@@ -1,6 +1,7 @@
 from typing import Any
 
 from phantom.agents.base_agent import BaseAgent
+from phantom.agents.enhanced_state import EnhancedAgentState
 from phantom.llm.config import LLMConfig
 
 
@@ -19,11 +20,39 @@ class PhantomAgent(BaseAgent):
         # Apply scan profile if provided
         self.scan_profile = config.get("scan_profile")
 
+        # Use EnhancedAgentState for root agents when scanning, so that
+        # vulnerability/host/endpoint tracking is active from the start.
+        if self.scan_profile and config.get("state") is None:
+            max_iter = (
+                self.scan_profile.max_iterations
+                if hasattr(self.scan_profile, "max_iterations")
+                else config.get("max_iterations", 300)
+            )
+            config["state"] = EnhancedAgentState(
+                agent_name="Root Agent",
+                max_iterations=max_iter,
+            )
+
         super().__init__(config)
+
+        # Apply dynamic memory threshold from scan profile
+        if self.scan_profile and hasattr(self.scan_profile, "memory_threshold"):
+            self.llm.set_memory_threshold(self.scan_profile.memory_threshold)
 
     async def execute_scan(self, scan_config: dict[str, Any]) -> dict[str, Any]:  # noqa: PLR0912
         user_instructions = scan_config.get("user_instructions", "")
         targets = scan_config.get("targets", [])
+
+        # Initialize EnhancedAgentState scan tracking if available
+        if isinstance(self.state, EnhancedAgentState) and targets:
+            first_target = targets[0]
+            target_label = (
+                first_target.get("details", {}).get("target_url")
+                or first_target.get("details", {}).get("target_ip")
+                or first_target.get("details", {}).get("target_repo")
+                or first_target.get("original", "unknown")
+            )
+            self.state.initialize_scan(target_label)
 
         repositories = []
         local_code = []

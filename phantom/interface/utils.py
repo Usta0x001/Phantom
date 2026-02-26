@@ -376,6 +376,13 @@ def build_tui_stats_text(tracer: Any, agent_config: dict[str, Any] | None = None
         model = getattr(llm_config, "model_name", "Unknown")
         stats_text.append(model, style="white")
 
+        # Show scan profile if available
+        scan_profile = agent_config.get("scan_profile")
+        if scan_profile:
+            profile_name = getattr(scan_profile, "name", "") or ""
+            if profile_name:
+                stats_text.append(f" [{profile_name}]", style="dim #fbbf24")
+
     llm_stats = tracer.get_total_llm_stats()
     total_stats = llm_stats["total"]
 
@@ -387,6 +394,15 @@ def build_tui_stats_text(tracer: Any, agent_config: dict[str, Any] | None = None
     if total_stats["cost"] > 0:
         stats_text.append(" · ", style="white")
         stats_text.append(f"${total_stats['cost']:.2f}", style="white")
+
+    # Show iteration count if available
+    agent_count = len(tracer.agents)
+    if agent_count > 0:
+        stats_text.append("\n")
+        stats_text.append(f"{agent_count} agent(s)", style="dim white")
+        tool_count = tracer.get_real_tool_count()
+        if tool_count > 0:
+            stats_text.append(f" · {tool_count} tools", style="dim white")
 
     return stats_text
 

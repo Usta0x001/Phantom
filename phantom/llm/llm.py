@@ -113,6 +113,10 @@ class LLM:
         read the findings ledger during compression."""
         self.memory_compressor._agent_state = state
 
+    def set_memory_threshold(self, max_tokens: int) -> None:
+        """Override the memory compression threshold (e.g. from scan profile)."""
+        self.memory_compressor.max_total_tokens = max_tokens
+
     async def generate(
         self, conversation_history: list[dict[str, Any]]
     ) -> AsyncIterator[LLMResponse]:

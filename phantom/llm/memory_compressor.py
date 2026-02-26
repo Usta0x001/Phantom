@@ -178,10 +178,13 @@ class MemoryCompressor:
         max_images: int = 3,
         model_name: str | None = None,
         timeout: int | None = None,
+        max_tokens: int | None = None,
     ):
         self.max_images = max_images
         self.model_name = model_name or Config.get("phantom_llm")
         self.timeout = timeout or int(Config.get("phantom_memory_compressor_timeout") or "30")
+        # Per-profile override; falls back to the module-level default
+        self.max_total_tokens = max_tokens or MAX_TOTAL_TOKENS
 
         if not self.model_name:
             raise ValueError("PHANTOM_LLM environment variable must be set and not empty")
@@ -238,7 +241,7 @@ class MemoryCompressor:
             _get_message_tokens(msg, model_name) for msg in system_msgs + regular_msgs
         )
 
-        if total_tokens <= MAX_TOTAL_TOKENS * 0.9:
+        if total_tokens <= self.max_total_tokens * 0.9:
             return messages
 
         compressed = []
