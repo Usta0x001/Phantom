@@ -25,6 +25,8 @@ DEFAULT_MAX_COST_USD = 50.0
 DEFAULT_MAX_INPUT_TOKENS = 5_000_000
 DEFAULT_MAX_OUTPUT_TOKENS = 500_000
 DEFAULT_WARNING_THRESHOLD = 0.8  # Warn at 80% of limit
+DEFAULT_MAX_SINGLE_REQUEST_COST = 5.0  # PHT-021: Per-request ceiling
+DEFAULT_MAX_COMPRESSION_CALLS = 50  # PHT-022: Prevent compression spirals
 
 
 class CostLimitExceeded(Exception):
@@ -84,11 +86,15 @@ class CostController:
         max_input_tokens: int = DEFAULT_MAX_INPUT_TOKENS,
         max_output_tokens: int = DEFAULT_MAX_OUTPUT_TOKENS,
         warning_threshold: float = DEFAULT_WARNING_THRESHOLD,
+        max_single_request_cost: float = DEFAULT_MAX_SINGLE_REQUEST_COST,
+        max_compression_calls: int = DEFAULT_MAX_COMPRESSION_CALLS,
     ):
         self.max_cost_usd = max_cost_usd
         self.max_input_tokens = max_input_tokens
         self.max_output_tokens = max_output_tokens
         self.warning_threshold = warning_threshold
+        self.max_single_request_cost = max_single_request_cost
+        self.max_compression_calls = max_compression_calls
 
         self._lock = threading.Lock()
         self._state = CostSnapshot()
@@ -106,8 +112,24 @@ class CostController:
         """Record token usage from an LLM call.
 
         Raises CostLimitExceeded if any limit is breached.
+
+        PHT-044: All state mutations and limit checks are now inside the
+        lock to prevent race conditions when multiple agents share the
+        same cost controller.
         """
         with self._lock:
+            # PHT-021: Per-request cost ceiling — reject anomalous single requests
+            if cost_usd > self.max_single_request_cost:
+                _logger.error(
+                    "Single request cost $%.2f exceeds per-request ceiling $%.2f — rejecting",
+                    cost_usd, self.max_single_request_cost,
+                )
+                raise CostLimitExceeded(
+                    f"Single request cost ${cost_usd:.2f} exceeds ceiling ${self.max_single_request_cost:.2f}",
+                    cost_usd,
+                    self.max_single_request_cost,
+                )
+
             self._state.total_input_tokens += input_tokens
             self._state.total_output_tokens += output_tokens
             self._state.total_cached_tokens += cached_tokens
@@ -117,6 +139,14 @@ class CostController:
             if is_compression:
                 self._state.compression_calls += 1
                 self._state.compression_cost_usd += cost_usd
+
+            # PHT-022: Prevent compression spirals
+            if is_compression and self._state.compression_calls > self.max_compression_calls:
+                raise CostLimitExceeded(
+                    f"Compression calls ({self._state.compression_calls}) exceed limit ({self.max_compression_calls})",
+                    self._state.total_cost_usd,
+                    self.max_cost_usd,
+                )
 
         self._check_limits()
 

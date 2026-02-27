@@ -73,8 +73,8 @@ phantom/
   "env": {
     "PHANTOM_IMAGE": "ghcr.io/usta0x001/phantom-sandbox:latest",
     "PHANTOM_SANDBOX_EXECUTION_TIMEOUT": "180",
-    "GROQ_API_KEY": "<REDACTED>,<REDACTED>",
-    "LLM_API_KEY": "<REDACTED>",
+    "GROQ_API_KEY": "<YOUR_GROQ_API_KEY>",
+    "LLM_API_KEY": "<YOUR_LLM_API_KEY>",
     "LLM_API_BASE": "https://openrouter.ai/api/v1",
     "PHANTOM_LLM": "openrouter/deepseek/deepseek-v3.2",
     "PHANTOM_LLM_FALLBACK": "openrouter/meta-llama/llama-3.3-70b-instruct"

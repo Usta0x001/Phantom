@@ -305,6 +305,22 @@ class VerificationEngine:
             if self.http_client:
                 try:
                     response = await self.http_client.get(target_url)
+
+                    # PHT-043: Only declare XSS if response is HTML.
+                    # JSON/plaintext responses with reflected markers are NOT
+                    # exploitable XSS and would generate false positives.
+                    content_type = ""
+                    if hasattr(response, "headers"):
+                        content_type = str(
+                            response.headers.get("content-type", "")
+                        ).lower()
+                    if content_type and "text/html" not in content_type:
+                        attempt.evidence = (
+                            f"Marker reflected but Content-Type is {content_type!r} "
+                            f"(not text/html) — not exploitable XSS"
+                        )
+                        continue
+
                     body = response.text if hasattr(response, 'text') else str(response.content)
                     
                     if marker in body:
@@ -312,7 +328,7 @@ class VerificationEngine:
                         if payload in body or marker in body:
                             attempt.success = True
                             attempt.confidence = 0.85
-                            attempt.evidence = f"XSS payload reflected in response: {payload[:50]}"
+                            attempt.evidence = f"XSS payload reflected in HTML response: {payload[:50]}"
                             return attempt
                 except Exception as e:
                     attempt.error = str(e)
