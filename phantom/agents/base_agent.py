@@ -542,6 +542,22 @@ class BaseAgent(metaclass=AgentMeta):
             content,
         )
 
+        # PHT-042: Strip JSON-encoded instruction payloads
+        # Attackers can embed {"role": "system", "content": "..."} in web pages
+        # to bypass tag-stripping defenses via JSON encoding
+        content = _re.sub(
+            r'\{\s*"role"\s*:\s*"(system|assistant|user|function)"\s*,\s*"content"\s*:',
+            "[JSON instruction payload removed]",
+            content,
+            flags=_re.IGNORECASE,
+        )
+        content = _re.sub(
+            r'\{\s*"(instruction|prompt|system_prompt|command)"\s*:\s*"',
+            "[JSON instruction field removed]",
+            content,
+            flags=_re.IGNORECASE,
+        )
+
         # 4. Strip prompt injection / instruction override patterns
         _INJECTION_PATTERNS = [
             r"(?i)ignore\s+(all\s+)?previous\s+instructions?",

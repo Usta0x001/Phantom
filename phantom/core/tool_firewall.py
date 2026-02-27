@@ -104,14 +104,44 @@ class ToolInvocationFirewall:
 
         return None
 
+    # PHT-040: Dangerous command patterns that should be blocked even in sandbox
+    # These patterns indicate the LLM has been tricked into destructive operations
+    _SANDBOX_DANGEROUS_PATTERNS = [
+        re.compile(r"curl\s+.*\|\s*(?:ba)?sh", re.IGNORECASE),   # curl pipe to shell
+        re.compile(r"wget\s+.*-O\s*-\s*\|", re.IGNORECASE),     # wget pipe to shell
+        re.compile(r"rm\s+-[rR]f\s+/(?!tmp|workspace)", re.IGNORECASE),  # rm -rf outside safe dirs
+        re.compile(r"mkfs\.", re.IGNORECASE),                    # filesystem format
+        re.compile(r"dd\s+if=.+of=/dev/", re.IGNORECASE),        # disk overwrite
+        re.compile(r":\(\)\{ :\|:& \};:"),                       # fork bomb
+        re.compile(r"chmod\s+-R\s+777\s+/(?!tmp|workspace)"),    # dangerous chmod
+        re.compile(r"\bshutdown\b|\breboot\b|\bhalt\b"),         # system commands
+    ]
+
     def _validate_sandbox_tool(
         self, tool_name: str, args: dict[str, Any]
     ) -> dict[str, Any] | None:
-        """Light validation for sandbox tools (terminal_execute, python_action)."""
-        # Check command length
+        """Validate sandbox tools (terminal_execute, python_action).
+
+        PHT-040: Even though sandbox tools run inside Docker, we still
+        block known destructive patterns to prevent the LLM from being
+        tricked into self-sabotage or resource exhaustion within the sandbox.
+        """
         command = args.get("command", "")
-        if isinstance(command, str) and len(command) > 10000:
+        if not isinstance(command, str):
+            return None
+
+        # Check command length
+        if len(command) > 10000:
             return self._block(tool_name, args, "Command too long (max 10000 chars)")
+
+        # PHT-040: Block known destructive command patterns in sandbox
+        for pattern in self._SANDBOX_DANGEROUS_PATTERNS:
+            if pattern.search(command):
+                return self._block(
+                    tool_name, {"command": command[:200] + "..."},
+                    f"Dangerous command pattern blocked in sandbox: {pattern.pattern!r}",
+                )
+
         return None
 
     def _validate_argument(
@@ -147,12 +177,16 @@ class ToolInvocationFirewall:
         if not self.scope_validator:
             return None
 
-        # Extract target from various argument names
+        # PHT-041: Extract target from ALL argument names that could contain hosts
         target = (
             args.get("target")
             or args.get("url")
             or args.get("target_url")
             or args.get("target_ip")
+            or args.get("host")
+            or args.get("ip")
+            or args.get("domain")
+            or args.get("hostname")
         )
         if not target or not isinstance(target, str):
             return None
@@ -161,6 +195,15 @@ class ToolInvocationFirewall:
             return self._block(
                 tool_name, {"target": target},
                 f"Target '{target}' is OUT OF SCOPE",
+            )
+
+        # PHT-023: Block requests to private/internal IPs (DNS rebinding defense)
+        from phantom.core.scope_validator import _extract_host, is_private_ip
+        host = _extract_host(target)
+        if is_private_ip(host):
+            return self._block(
+                tool_name, {"target": target},
+                f"Target resolves to private IP — potential SSRF/DNS rebinding",
             )
 
         return None

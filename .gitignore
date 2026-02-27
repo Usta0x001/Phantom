@@ -98,3 +98,11 @@ Thumbs.db
 schema.graphql
 
 .opencode/
+
+# Audit & Security Reports (local only — never committed)
+AUDIT_REPORT*.md
+docs/CODEBASE_AUDIT.md
+docs/DEEP_SECURITY_AUDIT.md
+docs/SECURITY_AUDIT_REPORT*.md
+docker_output.txt
+docker_ps.txt

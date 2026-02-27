@@ -147,10 +147,34 @@ class ScopeValidator:
                 self._log_violation(target, "denied_by_rule", rule.pattern)
                 return False
 
-        # Check allow rules
+        # Check allow rules first — explicitly listed targets are trusted
+        host = _extract_host(target)
+        explicitly_allowed = False
         for rule in self.config.rules:
             if rule.action == "allow" and rule.matches(target):
-                return True
+                explicitly_allowed = True
+                break
+
+        # PHT-023: DNS rebinding defense — for targets NOT explicitly allowed,
+        # resolve hostname and check if it points to a private/internal IP.
+        # Skip for explicitly-listed targets (user authorized them).
+        if not explicitly_allowed and not is_private_ip(host):
+            import socket as _socket
+            try:
+                resolved_ips = _socket.getaddrinfo(host, None)
+                for _family, _type, _proto, _canonname, sockaddr in resolved_ips:
+                    resolved_ip = sockaddr[0]
+                    if is_private_ip(resolved_ip):
+                        self._log_violation(
+                            target, "dns_rebinding",
+                            f"Hostname {host} resolves to private IP {resolved_ip}"
+                        )
+                        return False
+            except _socket.gaierror:
+                pass  # DNS resolution failed — continue with rule-based check
+
+        if explicitly_allowed:
+            return True
 
         # Default action
         if self.config.strict_mode:
@@ -235,12 +259,45 @@ class ScopeValidator:
         return cls(config)
 
 
+# PHT-023: Private/internal IP ranges that must NEVER be in scope
+# unless explicitly allowed — prevents SSRF and DNS rebinding attacks
+_PRIVATE_NETWORKS = [
+    ipaddress.ip_network("10.0.0.0/8"),
+    ipaddress.ip_network("172.16.0.0/12"),
+    ipaddress.ip_network("192.168.0.0/16"),
+    ipaddress.ip_network("127.0.0.0/8"),
+    ipaddress.ip_network("169.254.0.0/16"),  # link-local
+    ipaddress.ip_network("::1/128"),  # IPv6 loopback
+    ipaddress.ip_network("fc00::/7"),  # IPv6 ULA
+    ipaddress.ip_network("fe80::/10"),  # IPv6 link-local
+]
+
+
+def is_private_ip(host: str) -> bool:
+    """Check if a host resolves to a private/internal IP address."""
+    try:
+        addr = ipaddress.ip_address(host)
+        return any(addr in net for net in _PRIVATE_NETWORKS)
+    except ValueError:
+        return False
+
+
 def _extract_host(target: str) -> str:
-    """Extract hostname/IP from a target string."""
+    """Extract hostname/IP from a target string.
+
+    PHT-045: Handles user-info in URLs (e.g., ``http://evil@internal.corp``)
+    by stripping the authority component before extracting the hostname.
+    """
     # Handle URLs
     if "://" in target:
         parsed = urlparse(target)
+        # PHT-045: urlparse.hostname already strips user-info correctly,
+        # but we also strip '@' from bare targets below
         return parsed.hostname or target
+
+    # PHT-045: Strip user-info from bare targets (user@host, user:pass@host)
+    if "@" in target:
+        target = target.rsplit("@", 1)[-1]
 
     # Handle host:port
     if ":" in target and not target.startswith("["):

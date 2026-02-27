@@ -106,7 +106,7 @@
     "cwe_ids": [],
     "remediation": null,
     "detected_by": "phantom-agent",
-    "detected_at": "2026-02-26T22:32:01.857663+00:00",
+    "detected_at": "2026-02-27T06:04:31.167691+00:00",
     "verified_by": null,
     "verified_at": null
   }
