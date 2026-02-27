@@ -65,15 +65,44 @@ class PluginLoader:
     # ------------------------------------------------------------------
 
     def discover(self) -> list[Path]:
-        """Scan plugin directory for ``.py`` files.  Returns list of paths."""
+        """Scan plugin directory for ``.py`` files.  Returns list of paths.
+
+        PHT-013 FIX: Validates that discovered files:
+        - Are not symlinks (prevents symlink-based escapes)
+        - Resolve to within the plugin directory (prevents path traversal)
+        - Are regular files (not devices, pipes, etc.)
+        """
         self._discovered = []
         if not self.plugin_dir.is_dir():
             _logger.debug("Plugin directory does not exist: %s", self.plugin_dir)
             return []
 
+        real_base = self.plugin_dir.resolve()
+
         for p in sorted(self.plugin_dir.glob("*.py")):
             if p.name.startswith("_"):
                 continue
+
+            # PHT-013 FIX: reject symlinks
+            if p.is_symlink():
+                _logger.warning("Skipping symlink plugin: %s", p)
+                continue
+
+            # PHT-013 FIX: reject path traversal (resolved path must stay inside plugin dir)
+            try:
+                real_path = p.resolve(strict=True)
+                if not str(real_path).startswith(str(real_base)):
+                    _logger.warning("Skipping plugin outside plugin dir: %s -> %s", p, real_path)
+                    continue
+            except OSError as exc:
+                _logger.warning("Skipping unresolvable plugin: %s (%s)", p, exc)
+                continue
+
+            # PHT-013 FIX: must be a regular file
+            if not real_path.is_file():
+                _logger.warning("Skipping non-regular plugin file: %s", p)
+                continue
+
             self._discovered.append(p)
             _logger.debug("Discovered plugin: %s", p.name)
 

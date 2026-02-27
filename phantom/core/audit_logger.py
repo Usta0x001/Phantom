@@ -30,6 +30,7 @@ class AuditLogger:
     - Thread-safe via lock
     - Automatic log rotation by size
     - Structured events with severity, category, metadata
+    - PHT-017 FIX: HMAC chain for tamper detection
 
     Usage:
         logger = AuditLogger(Path("phantom_runs/run_1234/audit.jsonl"))
@@ -40,11 +41,15 @@ class AuditLogger:
 
     MAX_FILE_SIZE = 50 * 1024 * 1024  # 50 MB rotation threshold
 
-    def __init__(self, log_path: Path, max_size: int = MAX_FILE_SIZE) -> None:
+    def __init__(self, log_path: Path, max_size: int = MAX_FILE_SIZE, hmac_key: str | None = None) -> None:
         self.log_path = log_path
         self.max_size = max_size
         self._lock = threading.Lock()
         self._ensure_directory()
+        # PHT-017 FIX: HMAC chain for tamper detection
+        import hashlib
+        self._hmac_key = (hmac_key or "phantom-audit-default-key").encode()
+        self._prev_hash = hashlib.sha256(b"genesis").hexdigest()[:16]
 
     def _ensure_directory(self) -> None:
         """Ensure the log directory exists."""
@@ -60,13 +65,26 @@ class AuditLogger:
         except OSError:
             pass  # Best effort rotation
 
+    def _compute_hmac(self, data: str) -> str:
+        """Compute HMAC-SHA256 for tamper detection chain."""
+        import hashlib
+        import hmac as _hmac
+        return _hmac.new(self._hmac_key, data.encode(), hashlib.sha256).hexdigest()[:16]
+
     def _write_entry(self, entry: dict[str, Any]) -> None:
-        """Write a single audit entry with fsync for crash safety."""
+        """Write a single audit entry with fsync for crash safety and HMAC chain."""
         with self._lock:
             self._rotate_if_needed()
             try:
+                # PHT-017 FIX: add HMAC chain fields for tamper detection
+                entry["_prev_hash"] = self._prev_hash
+                line = json.dumps(entry, default=str, ensure_ascii=False)
+                entry_hmac = self._compute_hmac(self._prev_hash + line)
+                entry["_hmac"] = entry_hmac
+                self._prev_hash = entry_hmac
+                line = json.dumps(entry, default=str, ensure_ascii=False)
+
                 with self.log_path.open("a", encoding="utf-8") as f:
-                    line = json.dumps(entry, default=str, ensure_ascii=False)
                     f.write(line + "\n")
                     f.flush()
                     os.fsync(f.fileno())

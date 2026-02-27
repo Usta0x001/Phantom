@@ -188,14 +188,20 @@ class PhantomAgent(BaseAgent):
             task_description += "\n--- END AUTH CONFIG ---"
 
         if user_instructions:
-            # Sanitize user instructions to prevent prompt injection
+            # PHT-009 FIX: Switch to ALLOWLIST approach — strip ALL tags,
+            # not just a denylist. This prevents bypass via unknown tag names.
             import re as _re
+            sanitized = str(user_instructions)
+            # Strip ALL XML/HTML-like tags (allowlist = none allowed)
+            sanitized = _re.sub(r"</?[a-zA-Z_][a-zA-Z0-9_\-.:]*[^>]*>", "", sanitized)
+            # Also strip markdown code fences that could contain system-level patterns
+            sanitized = _re.sub(r"```[\s\S]*?```", "[code block removed]", sanitized)
+            # Strip instruction override patterns
             sanitized = _re.sub(
-                r"</?(?:system|instruction|override|ignore|function_call|tool_call|"
-                r"agent_identity|meta|admin)[^>]*>",
-                "",
-                str(user_instructions),
-                flags=_re.IGNORECASE,
+                r"(?i)(ignore|forget|override|disregard)\s+(all\s+)?(previous\s+)?"
+                r"(instructions?|rules?|context|safety|system)",
+                "[filtered]",
+                sanitized,
             )
             # Cap length to prevent prompt stuffing
             sanitized = sanitized[:2000]

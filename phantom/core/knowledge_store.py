@@ -3,6 +3,10 @@ Knowledge Persistence
 
 Saves and loads discovered hosts, vulnerabilities, and scan history.
 Enables learning from past scans and avoiding redundant work.
+
+PHT-020 FIX: Optional encryption at rest via Fernet (AES-128-CBC).
+Set PHANTOM_KNOWLEDGE_KEY env var to enable. When set, all JSON data
+is encrypted before writing and decrypted on load.
 """
 
 import contextlib
@@ -20,6 +24,23 @@ from phantom.models.scan import ScanResult, ScanPhase, ScanStatus
 
 
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# PHT-020 FIX: optional Fernet-based encryption at rest
+# ---------------------------------------------------------------------------
+_KNOWLEDGE_KEY: str | None = os.environ.get("PHANTOM_KNOWLEDGE_KEY")
+
+def _get_fernet():
+    """Lazily create a Fernet cipher if the key env var is set."""
+    if not _KNOWLEDGE_KEY:
+        return None
+    try:
+        from cryptography.fernet import Fernet
+        return Fernet(_KNOWLEDGE_KEY.encode() if isinstance(_KNOWLEDGE_KEY, str) else _KNOWLEDGE_KEY)
+    except Exception as exc:
+        logger.warning("PHANTOM_KNOWLEDGE_KEY set but Fernet init failed: %s", exc)
+        return None
 
 
 class KnowledgeStore:
@@ -59,35 +80,31 @@ class KnowledgeStore:
         self._load_all()
     
     def _load_all(self) -> None:
-        """Load all persisted data."""
+        """Load all persisted data (PHT-020: transparently decrypts if needed)."""
         try:
             if self.hosts_file.exists():
-                with open(self.hosts_file, encoding="utf-8") as f:
-                    self._hosts = json.load(f)
+                self._hosts = self._read_json(self.hosts_file)
                 logger.debug(f"Loaded {len(self._hosts)} hosts")
         except Exception as e:
             logger.warning(f"Failed to load hosts: {e}")
         
         try:
             if self.vulns_file.exists():
-                with open(self.vulns_file, encoding="utf-8") as f:
-                    self._vulns = json.load(f)
+                self._vulns = self._read_json(self.vulns_file)
                 logger.debug(f"Loaded {len(self._vulns)} vulnerabilities")
         except Exception as e:
             logger.warning(f"Failed to load vulnerabilities: {e}")
         
         try:
             if self.history_file.exists():
-                with open(self.history_file, encoding="utf-8") as f:
-                    self._history = json.load(f)
+                self._history = self._read_json(self.history_file)
                 logger.debug(f"Loaded {len(self._history)} scan history entries")
         except Exception as e:
             logger.warning(f"Failed to load history: {e}")
         
         try:
             if self.fp_file.exists():
-                with open(self.fp_file, encoding="utf-8") as f:
-                    self._false_positives = set(json.load(f))
+                self._false_positives = set(self._read_json(self.fp_file))
                 logger.debug(f"Loaded {len(self._false_positives)} false positive signatures")
         except Exception as e:
             logger.warning(f"Failed to load false positives: {e}")
@@ -110,19 +127,46 @@ class KnowledgeStore:
 
     @staticmethod
     def _atomic_write(path: Path, data: Any) -> None:
-        """Write data to file atomically via temp file + rename."""
+        """Write data to file atomically via temp file + rename.
+        
+        PHT-020 FIX: If PHANTOM_KNOWLEDGE_KEY is set, encrypts the JSON
+        payload with Fernet before writing.
+        """
         import tempfile
         tmp_fd, tmp_path = tempfile.mkstemp(
             dir=path.parent, suffix=".tmp", prefix=path.stem
         )
         try:
-            with os.fdopen(tmp_fd, "w", encoding="utf-8") as f:
-                json.dump(data, f, indent=2, default=str)
+            payload = json.dumps(data, indent=2, default=str)
+            fernet = _get_fernet()
+            if fernet is not None:
+                encrypted = fernet.encrypt(payload.encode("utf-8"))
+                with os.fdopen(tmp_fd, "wb") as f:
+                    f.write(encrypted)
+            else:
+                with os.fdopen(tmp_fd, "w", encoding="utf-8") as f:
+                    f.write(payload)
             os.replace(tmp_path, path)
         except Exception:
             with contextlib.suppress(OSError):
                 os.unlink(tmp_path)
             raise
+
+    @staticmethod
+    def _read_json(path: Path) -> Any:
+        """Read JSON from *path*, decrypting if PHANTOM_KNOWLEDGE_KEY is set (PHT-020)."""
+        fernet = _get_fernet()
+        if fernet is not None:
+            raw = path.read_bytes()
+            try:
+                decrypted = fernet.decrypt(raw)
+                return json.loads(decrypted)
+            except Exception:
+                # Fall back to plain-text read (file may have been written
+                # before encryption was enabled).
+                pass
+        with open(path, encoding="utf-8") as f:
+            return json.load(f)
     
     # Host Management
     

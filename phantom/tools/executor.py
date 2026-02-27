@@ -194,6 +194,21 @@ async def execute_tool_invocation(tool_inv: dict[str, Any], agent_state: Any | N
     tool_name = tool_inv.get("toolName")
     tool_args = tool_inv.get("args", {})
 
+    # ---- Tool Firewall check (PHT security controls) ----
+    try:
+        from phantom.core.tool_firewall import get_tool_firewall
+        fw = get_tool_firewall()
+        if fw is not None:
+            violation = fw.validate(tool_name or "", tool_args)
+            if violation is not None:
+                import logging as _fw_log
+                _fw_log.getLogger("phantom.security.firewall").warning(
+                    "Tool call BLOCKED by firewall: %s — %s", tool_name, violation.get("error")
+                )
+                return violation
+    except ImportError:
+        pass  # firewall module not available — skip
+
     # Auto-inject auth headers for security tools that support extra_args
     tool_args = _inject_auth_headers(tool_name, tool_args, agent_state)
 
@@ -248,8 +263,14 @@ def _inject_auth_headers(
         hdr_lines = "\\n".join(f"{n}: {v}" for n, v in auth_headers.items())
         header_parts.append(f'--headers="{hdr_lines}"')
     else:
+        # PHT-004 FIX: Use shlex.quote for each header value to prevent
+        # shell metacharacter injection via double-quote breakout.
+        import shlex as _shlex
         for name, value in auth_headers.items():
-            header_parts.append(f'{flag} "{name}: {value}"')
+            # Validate header name/value don't contain injection chars
+            safe_name = str(name).replace('"', '').replace("'", "").replace(";", "")
+            safe_value = str(value).replace('"', '').replace(";", "").replace("`", "")
+            header_parts.append(f"{flag} {_shlex.quote(f'{safe_name}: {safe_value}')}")
 
     header_str = " ".join(header_parts)
     existing = tool_args.get("extra_args", "") or ""

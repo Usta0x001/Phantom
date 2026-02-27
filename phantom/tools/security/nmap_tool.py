@@ -17,6 +17,12 @@ from phantom.tools.security.sanitizer import sanitize_extra_args
 _HOST_PATTERN = re.compile(r"for\s+(.+?)(?:\s+\(([^)]+)\))?$")
 _PORT_PATTERN = re.compile(r"^\d+/(tcp|udp)")
 
+# ── PHT-001 FIX: Strict validation patterns for nmap parameters ──
+# Ports: digits, commas, hyphens, T:/U: prefixes (e.g. "22,80,443", "1-1000", "T:22,U:53")
+_VALID_PORTS_RE = re.compile(r"^[TU:,\d\-]+$")
+# Scripts: alphanumeric, hyphens, commas, wildcards, plus signs (e.g. "vuln", "http-*", "safe+intrusive")
+_VALID_SCRIPTS_RE = re.compile(r"^[a-zA-Z0-9,\-*+.]+$")
+
 
 def _parse_nmap_output(raw_output: str) -> dict[str, Any]:
     """Parse nmap text output into structured data."""
@@ -117,10 +123,24 @@ def nmap_scan(
         cmd_parts.extend(["-sU", "-T3", "--max-rate", "200"])
 
     if ports:
-        cmd_parts.extend(["-p", ports])  # ports are validated, no shell quoting needed
+        # PHT-001 FIX: Validate port format and always shell-quote
+        if not _VALID_PORTS_RE.match(ports):
+            return {
+                "success": False,
+                "error": f"Invalid port specification: {ports!r}. "
+                         "Only digits, commas, hyphens, and T:/U: prefixes are allowed.",
+            }
+        cmd_parts.extend(["-p", shlex.quote(ports)])
 
     if scripts:
-        cmd_parts.extend(["--script", scripts])  # script names don't need quoting
+        # PHT-001 FIX: Validate script names and always shell-quote
+        if not _VALID_SCRIPTS_RE.match(scripts):
+            return {
+                "success": False,
+                "error": f"Invalid script specification: {scripts!r}. "
+                         "Only alphanumeric names, hyphens, commas, wildcards (*), and dots are allowed.",
+            }
+        cmd_parts.extend(["--script", shlex.quote(scripts)])
 
     if extra_args:
         cmd_parts.extend(sanitize_extra_args(extra_args))
@@ -181,7 +201,14 @@ def nmap_vuln_scan(
     cmd_parts = ["nmap", "-sV", "--script=vuln", "-T4", "--max-rate", "300"]
 
     if ports:
-        cmd_parts.extend(["-p", ports])
+        # PHT-001 FIX: Validate port format and always shell-quote
+        if not _VALID_PORTS_RE.match(ports):
+            return {
+                "success": False,
+                "error": f"Invalid port specification: {ports!r}. "
+                         "Only digits, commas, hyphens, and T:/U: prefixes are allowed.",
+            }
+        cmd_parts.extend(["-p", shlex.quote(ports)])
 
     cmd_parts.append(shlex.quote(target))
 
