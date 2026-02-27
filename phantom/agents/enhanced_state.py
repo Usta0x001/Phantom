@@ -5,7 +5,10 @@ Extended agent state with integrated vulnerability tracking, host discovery,
 and verification capabilities. Bridges the agent with core models.
 """
 
+import json
+import logging
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 from pydantic import Field
@@ -14,7 +17,9 @@ from phantom.agents.state import AgentState
 from phantom.models.vulnerability import Vulnerability, VulnerabilitySeverity, VulnerabilityStatus
 from phantom.models.host import Host
 from phantom.models.scan import ScanResult, ScanPhase, ScanStatus
-from phantom.core.priority_queue import VulnerabilityPriorityQueue
+from phantom.core.priority_queue import VulnerabilityPriorityQueue, ScanPriorityQueue
+
+_logger = logging.getLogger(__name__)
 
 
 class EnhancedAgentState(AgentState):
@@ -25,7 +30,7 @@ class EnhancedAgentState(AgentState):
     - Vulnerability discovery and verification
     - Host/service enumeration
     - Scan progress tracking
-    - Priority-based action queuing
+    - Priority-based action queuing (VulnerabilityPriorityQueue + ScanPriorityQueue)
     """
     
     # Scan tracking
@@ -66,7 +71,7 @@ class EnhancedAgentState(AgentState):
     tools_used: dict[str, int] = Field(default_factory=dict)
     
     def initialize_scan(self, target: str, scan_id: str | None = None) -> ScanResult:
-        """Initialize a new scan."""
+        """Initialize a new scan with priority queues."""
         import uuid
         
         self.scan_id = scan_id or f"scan_{uuid.uuid4().hex[:8]}"
@@ -78,10 +83,39 @@ class EnhancedAgentState(AgentState):
         self.scan_result.start_scan()
         self.current_phase = ScanPhase.RECON
         
+        # Initialize priority queues
+        self._vuln_queue = VulnerabilityPriorityQueue()
+        self._scan_queue = ScanPriorityQueue()
+        self._scan_queue.create_recon_tasks(target)
+        
         self.update_context("scan_id", self.scan_id)
         self.update_context("target", target)
         
         return self.scan_result
+    
+    # -- Priority queue accessors --
+    
+    @property
+    def vuln_queue(self) -> VulnerabilityPriorityQueue:
+        """Get the vulnerability priority queue (lazy-init)."""
+        if not hasattr(self, "_vuln_queue") or self._vuln_queue is None:
+            self._vuln_queue = VulnerabilityPriorityQueue()
+        return self._vuln_queue
+    
+    @property
+    def scan_queue(self) -> ScanPriorityQueue:
+        """Get the scan task priority queue (lazy-init)."""
+        if not hasattr(self, "_scan_queue") or self._scan_queue is None:
+            self._scan_queue = ScanPriorityQueue()
+        return self._scan_queue
+    
+    def get_next_scan_task(self) -> Any:
+        """Pop the highest-priority scan task whose dependencies are met."""
+        return self.scan_queue.pop()
+    
+    def complete_scan_task(self, task_id: str) -> None:
+        """Mark a scan task as completed so dependent tasks become eligible."""
+        self.scan_queue.mark_completed(task_id)
     
     def add_host(self, host: Host) -> None:
         """Register discovered host."""
@@ -142,12 +176,32 @@ class EnhancedAgentState(AgentState):
         return f"Already tested ({len(self.tested_endpoints)} total):\n" + "\n".join(lines)
     
     def add_vulnerability(self, vuln: Vulnerability) -> None:
-        """Register discovered vulnerability."""
+        """Register discovered vulnerability and enqueue for priority processing."""
         if vuln.id in self.vulnerabilities:
             return  # Duplicate
         
+        # Check knowledge store for known false positives
+        try:
+            from phantom.core.knowledge_store import get_knowledge_store
+            store = get_knowledge_store()
+            fp_sig = f"{vuln.detected_by}:{vuln.vulnerability_class}:{vuln.target}"
+            if store.is_false_positive(fp_sig):
+                # Skip known false positives — don't clutter results
+                self.add_observation({
+                    "type": "false_positive_skipped",
+                    "vuln_id": vuln.id,
+                    "name": vuln.name,
+                    "reason": "Known false-positive signature in knowledge store",
+                })
+                return
+        except Exception:
+            pass  # Knowledge store unavailable — continue normally
+        
         self.vulnerabilities[vuln.id] = vuln
         self.pending_verification.append(vuln.id)
+        
+        # Enqueue into priority queue for severity-ordered processing
+        self.vuln_queue.push(vuln)
         
         # Update stats
         self.vuln_stats["total"] += 1
@@ -183,7 +237,7 @@ class EnhancedAgentState(AgentState):
                 self.pending_verification.remove(vuln_id)
     
     def mark_vuln_false_positive(self, vuln_id: str) -> None:
-        """Mark vulnerability as false positive."""
+        """Mark vulnerability as false positive and persist to knowledge store."""
         if vuln_id in self.vulnerabilities and vuln_id not in self.false_positives:
             vuln = self.vulnerabilities[vuln_id]
             vuln.status = VulnerabilityStatus.FALSE_POSITIVE
@@ -201,6 +255,15 @@ class EnhancedAgentState(AgentState):
             
             if vuln_id in self.pending_verification:
                 self.pending_verification.remove(vuln_id)
+            
+            # Persist FP signature to knowledge store for future scans
+            try:
+                from phantom.core.knowledge_store import get_knowledge_store
+                store = get_knowledge_store()
+                fp_sig = f"{vuln.detected_by}:{vuln.vulnerability_class}:{vuln.target}"
+                store.mark_false_positive(fp_sig)
+            except Exception:
+                pass  # Knowledge store unavailable
     
     def get_next_to_verify(self) -> Vulnerability | None:
         """Get next vulnerability to verify (highest severity first)."""
@@ -297,3 +360,131 @@ class EnhancedAgentState(AgentState):
             "tools_used": self.tools_used,
             "errors": self.errors,
         }
+
+    # ------------------------------------------------------------------
+    # Checkpoint / Scan Resume
+    # ------------------------------------------------------------------
+
+    def save_checkpoint(self, run_dir: str | Path) -> Path:
+        """Persist current scan state to *run_dir*/checkpoint.json.
+
+        Called periodically (e.g. every N iterations) so a crashed scan can
+        be resumed from the last checkpoint instead of restarting.
+        """
+        run_dir = Path(run_dir)
+        run_dir.mkdir(parents=True, exist_ok=True)
+        checkpoint_path = run_dir / "checkpoint.json"
+
+        data = {
+            "scan_id": self.scan_id,
+            "target": self.context.get("target", "unknown"),
+            "iteration": self.iteration,
+            "phase": self.current_phase.value,
+            "hosts": {k: h.to_summary() for k, h in self.hosts.items()},
+            "subdomains": self.subdomains,
+            "endpoints": self.endpoints,
+            "tested_endpoints": self.tested_endpoints,
+            "vulnerabilities": {
+                vid: v.to_report_dict() for vid, v in self.vulnerabilities.items()
+            },
+            "verified_vulns": self.verified_vulns,
+            "false_positives": self.false_positives,
+            "vuln_stats": self.vuln_stats,
+            "tools_used": self.tools_used,
+            "saved_at": datetime.now(UTC).isoformat(),
+        }
+
+        checkpoint_path.write_text(json.dumps(data, indent=2, default=str), encoding="utf-8")
+        _logger.debug("Checkpoint saved to %s (iteration %d)", checkpoint_path, self.iteration)
+        return checkpoint_path
+
+    @classmethod
+    def from_checkpoint(cls, checkpoint_path: str | Path) -> "EnhancedAgentState":
+        """Restore an EnhancedAgentState from a previously saved checkpoint.
+
+        The returned state will have iteration, phase, discovered assets,
+        and vulnerability data pre-populated so the agent can continue
+        where it left off.
+        """
+        checkpoint_path = Path(checkpoint_path)
+        data = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+
+        state = cls(
+            agent_name="Root Agent (resumed)",
+            max_iterations=300,  # Will be overridden by caller if needed
+        )
+
+        state.scan_id = data.get("scan_id")
+        state.iteration = data.get("iteration", 0)
+        state.subdomains = data.get("subdomains", [])
+        state.endpoints = data.get("endpoints", [])
+        state.tested_endpoints = data.get("tested_endpoints", {})
+        state.verified_vulns = data.get("verified_vulns", [])
+        state.false_positives = data.get("false_positives", [])
+        state.vuln_stats = data.get("vuln_stats", state.vuln_stats)
+        state.tools_used = data.get("tools_used", {})
+
+        # Restore phase
+        phase_str = data.get("phase", "recon")
+        try:
+            state.current_phase = ScanPhase(phase_str)
+        except (ValueError, KeyError):
+            state.current_phase = ScanPhase.RECON
+
+        # Restore vulnerabilities from checkpoint dicts
+        vuln_dicts = data.get("vulnerabilities", {})
+        for vid, vdict in vuln_dicts.items():
+            try:
+                sev = vdict.get("severity", "medium")
+                severity = VulnerabilitySeverity(sev) if isinstance(sev, str) else VulnerabilitySeverity.MEDIUM
+                status_str = vdict.get("status", "detected")
+                status = VulnerabilityStatus(status_str) if isinstance(status_str, str) else VulnerabilityStatus.DETECTED
+                vuln = Vulnerability(
+                    id=vid,
+                    name=vdict.get("name", vdict.get("class", "Unknown")),
+                    vulnerability_class=vdict.get("class", "other"),
+                    severity=severity,
+                    status=status,
+                    cvss_score=vdict.get("cvss"),
+                    target=vdict.get("target", "unknown"),
+                    endpoint=vdict.get("endpoint"),
+                    parameter=vdict.get("parameter"),
+                    description=vdict.get("description", "Restored from checkpoint"),
+                    payload=vdict.get("payload"),
+                    cve_ids=vdict.get("cve_ids", []),
+                    cwe_ids=vdict.get("cwe_ids", []),
+                    remediation=vdict.get("remediation"),
+                    detected_by=vdict.get("detected_by", "checkpoint"),
+                )
+                state.vulnerabilities[vid] = vuln
+            except Exception as exc:
+                _logger.debug("Could not restore vulnerability %s from checkpoint: %s", vid, exc)
+
+        # Restore hosts as summary dicts (full Host reconstruction is lossy,
+        # but we at least keep the keys so host-count is accurate).
+        host_dicts = data.get("hosts", {})
+        for hkey, hdict in host_dicts.items():
+            try:
+                host = Host(
+                    ip=hdict.get("ip"),
+                    hostname=hdict.get("hostname"),
+                    os=hdict.get("os"),
+                )
+                state.hosts[hkey] = host
+            except Exception as exc:
+                _logger.debug("Could not restore host %s from checkpoint: %s", hkey, exc)
+
+        # Context
+        target = data.get("target", "unknown")
+        state.update_context("scan_id", state.scan_id)
+        state.update_context("target", target)
+
+        _logger.info(
+            "Restored checkpoint: scan=%s iteration=%d phase=%s vulns=%d hosts=%d",
+            state.scan_id,
+            state.iteration,
+            state.current_phase.value,
+            state.vuln_stats.get("total", 0),
+            len(state.hosts),
+        )
+        return state

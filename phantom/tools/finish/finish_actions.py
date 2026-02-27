@@ -124,7 +124,17 @@ def _run_post_scan_enrichment(tracer: Any, agent_state: Any = None) -> dict[str,
 
             interactsh = InteractshClient(terminal_execute_fn=None)
             # Attempt to start a session (gracefully fails if interactsh-client not available)
-            asyncio.run(interactsh.start_session()) if not asyncio.get_event_loop().is_running() else None
+            try:
+                loop = asyncio.get_running_loop()
+            except RuntimeError:
+                loop = None
+            if loop is None:
+                asyncio.run(interactsh.start_session())
+            else:
+                # Event loop already running — schedule session start via ThreadPoolExecutor
+                import concurrent.futures as _cf_interactsh
+                with _cf_interactsh.ThreadPoolExecutor(max_workers=1) as _pool:
+                    _pool.submit(asyncio.run, interactsh.start_session()).result(timeout=15)
             engine.interactsh = interactsh
             _logger.info("InteractshClient attached to verification engine for OOB checks")
         except Exception as e:

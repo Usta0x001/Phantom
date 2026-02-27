@@ -99,12 +99,12 @@ PROFILES: dict[str, ScanProfile] = {
         reasoning_effort="medium",
         priority_tools=[
             "nuclei_scan",
-            "httpx_scan",
+            "httpx_probe",
             "nmap_scan",
-            "sqlmap_scan",
+            "sqlmap_test",
         ],
         skip_tools=[
-            "subfinder_scan",
+            "subfinder_enumerate",
         ],
         max_concurrent_tools=3,
         enable_browser=True,
@@ -121,10 +121,10 @@ PROFILES: dict[str, ScanProfile] = {
         priority_tools=[
             "katana_crawl",
             "nuclei_scan",
-            "httpx_scan",
+            "httpx_probe",
             "nmap_scan",
-            "ffuf_scan",
-            "sqlmap_scan",
+            "ffuf_directory_scan",
+            "sqlmap_test",
         ],
         skip_tools=[],
         max_concurrent_tools=4,
@@ -144,11 +144,11 @@ PROFILES: dict[str, ScanProfile] = {
             "nuclei_scan",
             "nuclei_scan_cves",
             "nuclei_scan_misconfigs",
-            "httpx_scan",
+            "httpx_probe",
             "nmap_scan",
-            "ffuf_scan",
-            "sqlmap_scan",
-            "subfinder_scan",
+            "ffuf_directory_scan",
+            "sqlmap_test",
+            "subfinder_enumerate",
             "create_sub_agent",
         ],
         skip_tools=[],
@@ -165,13 +165,13 @@ PROFILES: dict[str, ScanProfile] = {
         sandbox_timeout_s=60,
         reasoning_effort="medium",
         priority_tools=[
-            "httpx_scan",
+            "httpx_probe",
             "nuclei_scan",
         ],
         skip_tools=[
-            "ffuf_scan",        # noisy
-            "sqlmap_scan",      # very noisy
-            "subfinder_scan",
+            "ffuf_directory_scan",  # noisy
+            "sqlmap_test",          # very noisy
+            "subfinder_enumerate",
             "create_sub_agent",
         ],
         max_concurrent_tools=1,
@@ -189,13 +189,13 @@ PROFILES: dict[str, ScanProfile] = {
         reasoning_effort="medium",
         priority_tools=[
             "katana_crawl",
-            "httpx_scan",
-            "ffuf_scan",
+            "httpx_probe",
+            "ffuf_directory_scan",
             "nuclei_scan",
-            "sqlmap_scan",
+            "sqlmap_test",
         ],
         skip_tools=[
-            "subfinder_scan",
+            "subfinder_enumerate",
             "open_browser",
             "browser_navigate",
         ],

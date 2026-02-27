@@ -80,6 +80,7 @@ tensorboard/
 
 # Agent execution traces
 phantom_runs/
+phantom_knowledge/
 agent_runs/
 
 # Misc

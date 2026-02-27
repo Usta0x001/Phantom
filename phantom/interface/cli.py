@@ -145,6 +145,28 @@ async def run_cli(args: Any) -> None:  # noqa: PLR0915
         "scan_profile": profile,
     }
 
+    # ── Scan Resume ──
+    resume_run = getattr(args, "resume_run", None)
+    if resume_run:
+        from pathlib import Path as _Path
+        checkpoint_path = _Path("phantom_runs") / resume_run / "checkpoint.json"
+        if checkpoint_path.exists():
+            from phantom.agents.enhanced_state import EnhancedAgentState
+            resumed_state = EnhancedAgentState.from_checkpoint(checkpoint_path)
+            resumed_state.max_iterations = profile.max_iterations
+            agent_config["state"] = resumed_state
+            console.print(
+                f"  [bold green]Resuming[/] scan from checkpoint: "
+                f"iteration {resumed_state.iteration}, "
+                f"phase {resumed_state.current_phase.value}, "
+                f"{resumed_state.vuln_stats.get('total', 0)} vulns already found"
+            )
+        else:
+            console.print(
+                f"  [yellow]Warning:[/] No checkpoint found for '{resume_run}', "
+                f"starting fresh scan"
+            )
+
     if getattr(args, "local_sources", None):
         agent_config["local_sources"] = args.local_sources
 

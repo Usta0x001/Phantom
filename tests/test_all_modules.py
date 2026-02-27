@@ -583,7 +583,7 @@ class TestScanProfiles(unittest.TestCase):
         p = get_profile("stealth")
         assert p.name == "stealth"
         assert p.max_concurrent_tools == 1
-        assert "ffuf_scan" in p.skip_tools
+        assert "ffuf_directory_scan" in p.skip_tools
 
     def test_get_profile_unknown(self):
         from phantom.core.scan_profiles import get_profile

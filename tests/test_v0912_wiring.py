@@ -391,20 +391,29 @@ class TestEnhancedStateStatusFix:
         assert state.vulnerabilities["v-1"].status == VulnerabilityStatus.VERIFIED
         assert "v-1" in state.verified_vulns
 
-    def test_mark_vuln_false_positive_uses_correct_status(self):
+    def test_mark_vuln_false_positive_uses_correct_status(self, tmp_path):
         from phantom.agents.enhanced_state import EnhancedAgentState
         from phantom.models.vulnerability import Vulnerability, VulnerabilityStatus
+        import phantom.core.knowledge_store as ks_mod
 
-        state = EnhancedAgentState(agent_name="Test", max_iterations=100)
-        vuln = Vulnerability(
-            id="v-2", name="Test", vulnerability_class="xss",
-            severity="medium", target="http://x.com", description="", detected_by="t",
-        )
-        state.add_vulnerability(vuln)
-        state.mark_vuln_false_positive("v-2")
+        # Use a clean temporary knowledge store to avoid stale FP entries
+        # from prior test runs polluting the default phantom_knowledge/ dir.
+        original_store = ks_mod._knowledge_store
+        ks_mod._knowledge_store = ks_mod.KnowledgeStore(store_path=tmp_path / "ks")
 
-        assert state.vulnerabilities["v-2"].status == VulnerabilityStatus.FALSE_POSITIVE
-        assert "v-2" in state.false_positives
+        try:
+            state = EnhancedAgentState(agent_name="Test", max_iterations=100)
+            vuln = Vulnerability(
+                id="v-2", name="Test", vulnerability_class="xss",
+                severity="medium", target="http://x.com", description="", detected_by="t",
+            )
+            state.add_vulnerability(vuln)
+            state.mark_vuln_false_positive("v-2")
+
+            assert state.vulnerabilities["v-2"].status == VulnerabilityStatus.FALSE_POSITIVE
+            assert "v-2" in state.false_positives
+        finally:
+            ks_mod._knowledge_store = original_store
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
