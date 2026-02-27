@@ -1,0 +1,335 @@
+<tools>
+  <tool name="nmap_scan">
+    <description>Perform a port scan using nmap. Automatically parses output into structured data with hosts, ports, services, and versions.</description>
+    <parameters>
+      <parameter name="target" type="string" required="true">
+        <description>IP address, hostname, or CIDR range to scan (e.g., "192.168.1.1", "example.com", "10.0.0.0/24")</description>
+      </parameter>
+      <parameter name="scan_type" type="string" required="false">
+        <description>Type of scan to perform:
+        - quick: Fast scan of top 100 ports (-F)
+        - standard: Default nmap scan with service version detection (default)
+        - comprehensive: All 65535 ports + version + OS detection
+        - stealth: SYN scan (-sS) - requires root
+        - udp: UDP scan (-sU) - requires root</description>
+      </parameter>
+      <parameter name="ports" type="string" required="false">
+        <description>Specific ports to scan (e.g., "22,80,443" or "1-1000")</description>
+      </parameter>
+      <parameter name="scripts" type="string" required="false">
+        <description>NSE scripts to run (e.g., "vuln", "http-*", "ssl-*")</description>
+      </parameter>
+      <parameter name="extra_args" type="string" required="false">
+        <description>Additional nmap arguments</description>
+      </parameter>
+    </parameters>
+    <returns type="Dict[str, Any]">
+      <description>Structured results with:
+      - success: boolean
+      - hosts: list of discovered hosts with ports, services, versions
+      - scan_info: scan metadata
+      - raw_output: first 3000 chars of raw nmap output for evidence</description>
+    </returns>
+  </tool>
+
+  <tool name="nmap_vuln_scan">
+    <description>Run nmap with vulnerability detection NSE scripts to find known vulnerabilities.</description>
+    <parameters>
+      <parameter name="target" type="string" required="true">
+        <description>IP address, hostname, or CIDR range to scan</description>
+      </parameter>
+      <parameter name="ports" type="string" required="false">
+        <description>Specific ports to scan (default: top 1000)</description>
+      </parameter>
+    </parameters>
+    <returns type="Dict[str, Any]">
+      <description>Vulnerability findings from NSE scripts with title and details</description>
+    </returns>
+  </tool>
+
+  <tool name="nuclei_scan">
+    <description>Run Nuclei template-based vulnerability scan. Uses 9000+ community templates to detect known vulnerabilities, misconfigurations, and exposures.</description>
+    <parameters>
+      <parameter name="target" type="string" required="true">
+        <description>Target URL to scan (e.g., "https://example.com")</description>
+      </parameter>
+      <parameter name="severity" type="string" required="false">
+        <description>Filter by severity: info, low, medium, high, critical, or all (default: all)</description>
+      </parameter>
+      <parameter name="tags" type="string" required="false">
+        <description>Comma-separated tags to run (e.g., "cve,sqli,xss,lfi,rce,ssrf")</description>
+      </parameter>
+      <parameter name="templates" type="string" required="false">
+        <description>Specific templates to run (e.g., "http/cves/2024/")</description>
+      </parameter>
+      <parameter name="exclude_tags" type="string" required="false">
+        <description>Comma-separated tags to exclude (e.g., "dos,fuzz")</description>
+      </parameter>
+      <parameter name="rate_limit" type="integer" required="false">
+        <description>Requests per second (default: 150)</description>
+      </parameter>
+    </parameters>
+    <returns type="Dict[str, Any]">
+      <description>Structured findings with:
+      - findings: list of vulnerabilities with template_id, severity, host, matched_at, curl_command
+      - by_severity: count of findings per severity level
+      - total_findings: total count</description>
+    </returns>
+  </tool>
+
+  <tool name="nuclei_scan_cves">
+    <description>Scan specifically for known CVEs using Nuclei CVE templates.</description>
+    <parameters>
+      <parameter name="target" type="string" required="true">
+        <description>Target URL to scan</description>
+      </parameter>
+      <parameter name="year" type="string" required="false">
+        <description>Filter CVEs by year (e.g., "2023", "2024")</description>
+      </parameter>
+      <parameter name="rate_limit" type="integer" required="false">
+        <description>Requests per second (default: 100)</description>
+      </parameter>
+    </parameters>
+    <returns type="Dict[str, Any]">
+      <description>CVE findings with severity and references</description>
+    </returns>
+  </tool>
+
+  <tool name="nuclei_scan_misconfigs">
+    <description>Scan for misconfigurations and exposures using Nuclei.</description>
+    <parameters>
+      <parameter name="target" type="string" required="true">
+        <description>Target URL to scan</description>
+      </parameter>
+      <parameter name="rate_limit" type="integer" required="false">
+        <description>Requests per second (default: 150)</description>
+      </parameter>
+    </parameters>
+    <returns type="Dict[str, Any]">
+      <description>Misconfiguration findings</description>
+    </returns>
+  </tool>
+
+  <tool name="sqlmap_test">
+    <description>Test for SQL injection vulnerabilities using SQLMap. Automatically detects injection points and DBMS type.</description>
+    <parameters>
+      <parameter name="url" type="string" required="true">
+        <description>Target URL with parameter(s) to test (e.g., "http://site.com/page?id=1")</description>
+      </parameter>
+      <parameter name="data" type="string" required="false">
+        <description>POST data string (e.g., "user=admin&amp;pass=test")</description>
+      </parameter>
+      <parameter name="method" type="string" required="false">
+        <description>HTTP method: GET or POST (default: GET)</description>
+      </parameter>
+      <parameter name="param" type="string" required="false">
+        <description>Specific parameter to test (tests all if not specified)</description>
+      </parameter>
+      <parameter name="level" type="integer" required="false">
+        <description>Test level 1-5 (higher = more tests, default: 2)</description>
+      </parameter>
+      <parameter name="risk" type="integer" required="false">
+        <description>Risk level 1-3 (higher = more dangerous tests, default: 2)</description>
+      </parameter>
+      <parameter name="dbms" type="string" required="false">
+        <description>Force specific DBMS (e.g., "mysql", "postgresql", "mssql")</description>
+      </parameter>
+    </parameters>
+    <returns type="Dict[str, Any]">
+      <description>Findings with:
+      - vulnerable: boolean indicating if SQL injection found
+      - injection_points: list of injectable parameters with type
+      - dbms: detected database system
+      - payloads: working injection payloads</description>
+    </returns>
+  </tool>
+
+  <tool name="sqlmap_dump_database">
+    <description>Dump database contents once SQL injection is confirmed. Use after sqlmap_test confirms vulnerability.</description>
+    <parameters>
+      <parameter name="url" type="string" required="true">
+        <description>Target URL known to be vulnerable</description>
+      </parameter>
+      <parameter name="database" type="string" required="false">
+        <description>Specific database to dump</description>
+      </parameter>
+      <parameter name="table" type="string" required="false">
+        <description>Specific table to dump</description>
+      </parameter>
+      <parameter name="columns" type="string" required="false">
+        <description>Specific columns to dump (comma-separated)</description>
+      </parameter>
+      <parameter name="dump_all" type="boolean" required="false">
+        <description>Dump all databases (use with caution)</description>
+      </parameter>
+      <parameter name="data" type="string" required="false">
+        <description>POST data if needed</description>
+      </parameter>
+    </parameters>
+    <returns type="Dict[str, Any]">
+      <description>Extracted database contents</description>
+    </returns>
+  </tool>
+
+  <tool name="sqlmap_forms">
+    <description>Automatically find and test forms on a page for SQL injection.</description>
+    <parameters>
+      <parameter name="url" type="string" required="true">
+        <description>Target URL to crawl for forms</description>
+      </parameter>
+      <parameter name="crawl_depth" type="integer" required="false">
+        <description>How deep to crawl for forms (default: 2)</description>
+      </parameter>
+      <parameter name="level" type="integer" required="false">
+        <description>Test level 1-5 (default: 2)</description>
+      </parameter>
+    </parameters>
+    <returns type="Dict[str, Any]">
+      <description>Form-based injection findings</description>
+    </returns>
+  </tool>
+
+  <tool name="ffuf_directory_scan">
+    <description>Discover hidden directories and files using FFuf fuzzing.</description>
+    <parameters>
+      <parameter name="url" type="string" required="true">
+        <description>Target URL with FUZZ keyword (e.g., "http://site.com/FUZZ"). FUZZ will be added if missing.</description>
+      </parameter>
+      <parameter name="wordlist" type="string" required="false">
+        <description>Path to wordlist (default: /usr/share/wordlists/dirb/common.txt)</description>
+      </parameter>
+      <parameter name="extensions" type="string" required="false">
+        <description>File extensions to try (e.g., "php,html,txt,bak")</description>
+      </parameter>
+      <parameter name="filter_status" type="string" required="false">
+        <description>Status codes to filter OUT (e.g., "404,403")</description>
+      </parameter>
+      <parameter name="match_status" type="string" required="false">
+        <description>Status codes to match/include (default: "200,204,301,302,307,401,403,405")</description>
+      </parameter>
+      <parameter name="rate" type="integer" required="false">
+        <description>Requests per second (default: 100)</description>
+      </parameter>
+    </parameters>
+    <returns type="Dict[str, Any]">
+      <description>Discovered paths with status codes, sizes, and word counts</description>
+    </returns>
+  </tool>
+
+  <tool name="ffuf_parameter_fuzz">
+    <description>Discover hidden parameters using FFuf.</description>
+    <parameters>
+      <parameter name="url" type="string" required="true">
+        <description>Target URL (FUZZ will be added as parameter name)</description>
+      </parameter>
+      <parameter name="wordlist" type="string" required="false">
+        <description>Parameter wordlist (default: burp-parameter-names.txt)</description>
+      </parameter>
+      <parameter name="method" type="string" required="false">
+        <description>HTTP method: GET or POST (default: GET)</description>
+      </parameter>
+      <parameter name="data" type="string" required="false">
+        <description>POST data with FUZZ keyword (e.g., "FUZZ=test")</description>
+      </parameter>
+      <parameter name="filter_size" type="string" required="false">
+        <description>Filter responses by size (e.g., "1234")</description>
+      </parameter>
+      <parameter name="rate" type="integer" required="false">
+        <description>Requests per second (default: 100)</description>
+      </parameter>
+    </parameters>
+    <returns type="Dict[str, Any]">
+      <description>Discovered parameters with response details</description>
+    </returns>
+  </tool>
+
+  <tool name="ffuf_vhost_fuzz">
+    <description>Discover virtual hosts using FFuf.</description>
+    <parameters>
+      <parameter name="url" type="string" required="true">
+        <description>Target URL</description>
+      </parameter>
+      <parameter name="wordlist" type="string" required="false">
+        <description>Subdomain/vhost wordlist (default: subdomains-top1million-5000.txt)</description>
+      </parameter>
+      <parameter name="filter_size" type="string" required="false">
+        <description>Filter by response size (to exclude default page)</description>
+      </parameter>
+      <parameter name="rate" type="integer" required="false">
+        <description>Requests per second (default: 100)</description>
+      </parameter>
+    </parameters>
+    <returns type="Dict[str, Any]">
+      <description>Discovered virtual hosts</description>
+    </returns>
+  </tool>
+
+  <tool name="subfinder_enumerate">
+    <description>Enumerate subdomains using Subfinder. Uses multiple sources for comprehensive discovery.</description>
+    <parameters>
+      <parameter name="domain" type="string" required="true">
+        <description>Target domain (e.g., "example.com")</description>
+      </parameter>
+      <parameter name="recursive" type="boolean" required="false">
+        <description>Enable recursive subdomain enumeration (default: false)</description>
+      </parameter>
+      <parameter name="all_sources" type="boolean" required="false">
+        <description>Use all available sources (default: true)</description>
+      </parameter>
+      <parameter name="timeout" type="integer" required="false">
+        <description>Timeout per source in seconds (default: 30)</description>
+      </parameter>
+    </parameters>
+    <returns type="Dict[str, Any]">
+      <description>List of discovered subdomains, deduplicated</description>
+    </returns>
+  </tool>
+
+  <tool name="subfinder_with_sources">
+    <description>Enumerate subdomains and show which sources found each subdomain.</description>
+    <parameters>
+      <parameter name="domain" type="string" required="true">
+        <description>Target domain</description>
+      </parameter>
+    </parameters>
+    <returns type="Dict[str, Any]">
+      <description>Subdomains with their discovery sources</description>
+    </returns>
+  </tool>
+
+  <tool name="httpx_probe">
+    <description>Probe HTTP/HTTPS services using HTTPx. Discovers live hosts, tech stack, status codes, and titles.</description>
+    <parameters>
+      <parameter name="targets" type="string" required="true">
+        <description>Single URL/domain or comma-separated list of targets</description>
+      </parameter>
+      <parameter name="ports" type="string" required="false">
+        <description>Ports to probe (e.g., "80,443,8080,8443")</description>
+      </parameter>
+      <parameter name="follow_redirects" type="boolean" required="false">
+        <description>Follow HTTP redirects (default: true)</description>
+      </parameter>
+      <parameter name="tech_detect" type="boolean" required="false">
+        <description>Detect technologies (default: true)</description>
+      </parameter>
+      <parameter name="rate_limit" type="integer" required="false">
+        <description>Requests per second (default: 150)</description>
+      </parameter>
+    </parameters>
+    <returns type="Dict[str, Any]">
+      <description>Probed hosts with status, titles, tech stack, server info</description>
+    </returns>
+  </tool>
+
+  <tool name="httpx_full_analysis">
+    <description>Perform comprehensive HTTP analysis including all available metadata.</description>
+    <parameters>
+      <parameter name="targets" type="string" required="true">
+        <description>URL(s) to analyze</description>
+      </parameter>
+    </parameters>
+    <returns type="Dict[str, Any]">
+      <description>Full analysis with status, title, tech, server, CDN, ASN, websocket support, etc.</description>
+    </returns>
+  </tool>
+</tools>

