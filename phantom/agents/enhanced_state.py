@@ -402,12 +402,58 @@ class EnhancedAgentState(AgentState):
     def from_checkpoint(cls, checkpoint_path: str | Path) -> "EnhancedAgentState":
         """Restore an EnhancedAgentState from a previously saved checkpoint.
 
+        PHT-019 FIX: Validates checkpoint data before applying it.
+        Rejects unknown keys, enforces type constraints, and limits sizes
+        to prevent deserialization-based attacks.
+
         The returned state will have iteration, phase, discovered assets,
         and vulnerability data pre-populated so the agent can continue
         where it left off.
         """
         checkpoint_path = Path(checkpoint_path)
         data = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+
+        # ---- PHT-019 FIX: checkpoint validation ----
+        _ALLOWED_TOP_KEYS = {
+            "scan_id", "target", "iteration", "phase", "hosts",
+            "subdomains", "endpoints", "tested_endpoints",
+            "vulnerabilities", "verified_vulns", "false_positives",
+            "vuln_stats", "tools_used", "saved_at",
+        }
+        unexpected = set(data.keys()) - _ALLOWED_TOP_KEYS
+        if unexpected:
+            _logger.warning("Checkpoint contains unexpected keys (dropped): %s", unexpected)
+            for k in unexpected:
+                del data[k]
+
+        # Type guards
+        if not isinstance(data.get("iteration", 0), int):
+            data["iteration"] = 0
+        if not isinstance(data.get("subdomains", []), list):
+            data["subdomains"] = []
+        if not isinstance(data.get("endpoints", []), list):
+            data["endpoints"] = []
+        if not isinstance(data.get("vulnerabilities", {}), dict):
+            data["vulnerabilities"] = {}
+        if not isinstance(data.get("hosts", {}), dict):
+            data["hosts"] = {}
+        if not isinstance(data.get("tools_used", {}), dict):
+            data["tools_used"] = {}
+
+        # Size guards – refuse absurdly large payloads
+        MAX_LIST_LEN = 50_000
+        MAX_DICT_LEN = 10_000
+        for key in ("subdomains", "endpoints", "verified_vulns", "false_positives"):
+            lst = data.get(key, [])
+            if isinstance(lst, list) and len(lst) > MAX_LIST_LEN:
+                _logger.warning("Checkpoint list '%s' truncated (%d > %d)", key, len(lst), MAX_LIST_LEN)
+                data[key] = lst[:MAX_LIST_LEN]
+        for key in ("vulnerabilities", "hosts", "tested_endpoints", "tools_used"):
+            d = data.get(key, {})
+            if isinstance(d, dict) and len(d) > MAX_DICT_LEN:
+                _logger.warning("Checkpoint dict '%s' truncated (%d > %d)", key, len(d), MAX_DICT_LEN)
+                data[key] = dict(list(d.items())[:MAX_DICT_LEN])
+        # ---- end PHT-019 validation ----
 
         state = cls(
             agent_name="Root Agent (resumed)",

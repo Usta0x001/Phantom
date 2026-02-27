@@ -265,11 +265,43 @@ class MemoryCompressor:
         chunk_size = 10
         for i in range(0, len(old_msgs), chunk_size):
             chunk = old_msgs[i : i + chunk_size]
+
+            # PHT-014 FIX: Before summarizing, extract and pin critical
+            # data (working payloads, PoC, exact URLs with params) so the
+            # LLM summariser cannot lose them even if it hallucinates.
+            critical_extracts: list[str] = []
+            import re as _cre
+            for cmsg in chunk:
+                ctext = _extract_message_text(cmsg)
+                # Preserve working payloads (SQL, XSS, command-injection strings)
+                for payload in _cre.findall(
+                    r"(?:payload|poc|proof.of.concept|working.exploit)[:\s]*(.{10,200})",
+                    ctext, _cre.IGNORECASE,
+                ):
+                    critical_extracts.append(f"[PAYLOAD] {payload.strip()}")
+                # Preserve URLs with query params (likely tested endpoints)
+                for url in _cre.findall(r"https?://[^\s\"'<>]+\?[^\s\"'<>]+", ctext):
+                    critical_extracts.append(f"[URL] {url.rstrip('.,;)')}")
+                # Preserve HTTP status anomalies
+                for anomaly in _cre.findall(
+                    r"(?:status|HTTP)\s*(?:code)?\s*[:=]?\s*(4\d\d|5\d\d)\b[^.]{0,80}",
+                    ctext, _cre.IGNORECASE,
+                ):
+                    critical_extracts.append(f"[HTTP] {anomaly.strip()}")
+
             summary = _summarize_messages(chunk, model_name, self.timeout)
             if summary:
                 if isinstance(summary, list):
                     compressed.extend(summary)  # fallback returned all messages
                 else:
+                    # Append critical extracts that may have been lost
+                    if critical_extracts:
+                        extract_text = "\n".join(dict.fromkeys(critical_extracts))  # dedup
+                        existing = summary.get("content", "")
+                        summary["content"] = (
+                            f"{existing}\n\n"
+                            f"<critical_data_preserved>\n{extract_text}\n</critical_data_preserved>"
+                        )
                     compressed.append(summary)
 
         # Inject findings ledger as a pinned context message so it is

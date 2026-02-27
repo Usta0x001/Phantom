@@ -9,7 +9,7 @@ import sys
 from typing import Any
 
 import uvicorn
-from fastapi import Depends, FastAPI, HTTPException, status
+from fastapi import Depends, FastAPI, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, ValidationError
 
@@ -20,7 +20,8 @@ if not SANDBOX_MODE:
 
 parser = argparse.ArgumentParser(description="Start phantom tool server")
 parser.add_argument("--token", required=True, help="Authentication token")
-parser.add_argument("--host", default="0.0.0.0", help="Host to bind to")  # nosec
+# PHT-005 FIX: Bind to 127.0.0.1 by default to prevent network-adjacent attacks
+parser.add_argument("--host", default="127.0.0.1", help="Host to bind to")
 parser.add_argument("--port", type=int, required=True, help="Port to bind to")
 parser.add_argument(
     "--timeout",
@@ -38,6 +39,30 @@ security = HTTPBearer()
 security_dependency = Depends(security)
 
 agent_tasks: dict[str, asyncio.Task[Any]] = {}
+
+# PHT-012 FIX: Simple in-memory rate limiter
+_rate_limit_store: dict[str, list[float]] = {}
+_RATE_LIMIT_MAX = 60  # max requests per window
+_RATE_LIMIT_WINDOW = 60.0  # seconds
+
+
+async def _rate_limit_check(request: Request) -> None:
+    """PHT-012 FIX: Rate limiting middleware for tool server."""
+    import time as _time
+    client_ip = request.client.host if request.client else "unknown"
+    now = _time.monotonic()
+    if client_ip not in _rate_limit_store:
+        _rate_limit_store[client_ip] = []
+    # Prune old entries
+    _rate_limit_store[client_ip] = [
+        t for t in _rate_limit_store[client_ip] if now - t < _RATE_LIMIT_WINDOW
+    ]
+    if len(_rate_limit_store[client_ip]) >= _RATE_LIMIT_MAX:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Rate limit exceeded. Try again later.",
+        )
+    _rate_limit_store[client_ip].append(now)
 
 
 def verify_token(credentials: HTTPAuthorizationCredentials) -> str:
@@ -98,7 +123,9 @@ async def _run_tool(agent_id: str, tool_name: str, kwargs: dict[str, Any]) -> An
 
 @app.post("/execute", response_model=ToolExecutionResponse)
 async def execute_tool(
-    request: ToolExecutionRequest, credentials: HTTPAuthorizationCredentials = security_dependency
+    request: ToolExecutionRequest,
+    credentials: HTTPAuthorizationCredentials = security_dependency,
+    _rate: None = Depends(_rate_limit_check),
 ) -> ToolExecutionResponse:
     verify_token(credentials)
 
@@ -148,13 +175,13 @@ async def register_agent(
     return {"status": "registered", "agent_id": agent_id}
 
 
+# PHT-011 FIX: Remove active_agents count from health endpoint to reduce info disclosure
 @app.get("/health")
 async def health_check() -> dict[str, Any]:
     return {
         "status": "healthy",
         "sandbox_mode": str(SANDBOX_MODE),
         "environment": "sandbox" if SANDBOX_MODE else "main",
-        "active_agents": len(agent_tasks),
     }
 
 

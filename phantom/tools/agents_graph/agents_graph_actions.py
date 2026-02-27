@@ -72,10 +72,14 @@ def _build_smart_context(
             ):
                 if len(vulns) < 20:
                     vulns.append(vuln.strip()[:150])
-            # Extract credentials / tokens
+            # PHT-015 FIX: Do NOT propagate raw credentials to child agents.
+            # Instead, note that credentials exist without revealing values.
             for cred in _re.findall(r"(?:password|token|secret|api[_-]?key)[:\s=]+\S+", text, _re.IGNORECASE):
                 if len(creds) < 10:
-                    creds.append(cred.strip()[:100])
+                    # Redact the actual value — keep only the key name
+                    key_match = _re.match(r"(password|token|secret|api[_-]?key)", cred, _re.IGNORECASE)
+                    key_name = key_match.group(1) if key_match else "credential"
+                    creds.append(f"{key_name}=[REDACTED — available in parent context]")
 
         if urls:
             summary_parts.append(f"## Discovered URLs/Endpoints ({len(urls)} total)")

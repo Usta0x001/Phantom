@@ -306,6 +306,20 @@ class LLM:
             self._total_stats.cached_tokens += cached_tokens
             self._total_stats.cost += cost
 
+            # ---- Cost Controller integration (PHT security control) ----
+            try:
+                from phantom.core.cost_controller import get_cost_controller
+                cc = get_cost_controller()
+                if cc is not None:
+                    cc.record_usage(
+                        input_tokens=input_tokens,
+                        output_tokens=output_tokens,
+                        cached_tokens=cached_tokens,
+                        cost_usd=cost,
+                    )
+            except ImportError:
+                pass
+
         except Exception:  # noqa: BLE001, S110  # nosec B110
             pass
 

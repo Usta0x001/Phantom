@@ -1,4 +1,7 @@
-FROM kalilinux/kali-rolling:latest
+# PHT-016 FIX: Pin base image to a specific date-tag instead of :latest
+# to prevent supply-chain attacks via upstream image changes.
+# Update this tag periodically after verifying the new image.
+FROM kalilinux/kali-rolling:2025.2
 
 LABEL description="AI Agent Penetration Testing Environment with Comprehensive Automated Tools"
 

@@ -16,9 +16,20 @@ from requests.exceptions import ProxyError, RequestException, Timeout
 
 _logger = logging.getLogger(__name__)
 
+# PHT-010 FIX: Configurable TLS verification instead of hardcoded verify=False
+# In proxy mode, TLS verification is disabled because Caido proxy handles
+# TLS interception. In direct mode, honour the environment setting.
+_PROXY_TLS_VERIFY: bool = False  # proxy always needs verify=False for interception
+_DIRECT_TLS_VERIFY: bool = os.environ.get("PHANTOM_TLS_VERIFY", "0").lower() in ("1", "true", "yes")
+
 
 def _is_ssrf_safe(url: str) -> bool:
-    """Block requests to private/loopback IPs (unless going through proxy)."""
+    """Block requests to private/loopback IPs.
+
+    PHT-003 FIX: Resolves DNS BEFORE checking IP addresses to prevent
+    DNS rebinding attacks where a hostname initially resolves to a public
+    IP during the check but is later re-resolved to a private IP.
+    """
     try:
         parsed = urlparse(url)
         hostname = parsed.hostname
@@ -27,18 +38,35 @@ def _is_ssrf_safe(url: str) -> bool:
         # Block file:// and other dangerous schemes
         if parsed.scheme not in ("http", "https"):
             return False
-        # Check if hostname is a direct IP
+
+        # Block known dangerous hostnames
+        if hostname.lower() in ("localhost", "0.0.0.0"):
+            return False
+
+        # PHT-003 FIX: Resolve DNS first, then check ALL resolved IPs
         try:
-            addr = ipaddress.ip_address(hostname)
+            addrinfos = socket.getaddrinfo(
+                hostname, parsed.port or (443 if parsed.scheme == "https" else 80),
+                proto=socket.IPPROTO_TCP,
+            )
+        except socket.gaierror:
+            return False  # Can't resolve = not safe
+
+        for family, type_, proto, canonname, sockaddr in addrinfos:
+            resolved_ip = sockaddr[0]
+            try:
+                addr = ipaddress.ip_address(resolved_ip)
+            except ValueError:
+                return False
             # Allow 127.0.0.1 since requests go through local Caido proxy
-            if hostname == "127.0.0.1":
-                return True
+            if str(addr) == "127.0.0.1":
+                continue
             if addr.is_private or addr.is_loopback or addr.is_link_local or addr.is_reserved:
+                _logger.warning(
+                    "SSRF blocked: %s resolved to private IP %s", hostname, resolved_ip
+                )
                 return False
-        except ValueError:
-            # It's a hostname — resolve and check
-            if hostname in ("localhost", "0.0.0.0"):
-                return False
+
         return True
     except Exception:
         return False
@@ -290,6 +318,8 @@ class ProxyManager:
             current_proxies = self.proxies if use_proxy[0] else None
             try:
                 start_time = time.time()
+                # PHT-010 FIX: Use configurable TLS verification
+                tls_verify = _PROXY_TLS_VERIFY if use_proxy[0] else _DIRECT_TLS_VERIFY
                 response = requests.request(
                     method=method,
                     url=url,
@@ -297,7 +327,7 @@ class ProxyManager:
                     data=body or None,
                     proxies=current_proxies,
                     timeout=timeout,
-                    verify=False,  # TLS verification disabled: traffic goes through Caido proxy which handles TLS interception
+                    verify=tls_verify,
                 )
                 response_time = int((time.time() - start_time) * 1000)
 
@@ -450,6 +480,8 @@ class ProxyManager:
             current_proxies = self.proxies if use_proxy else None
             try:
                 start_time = time.time()
+                # PHT-010 FIX: Use configurable TLS verification
+                tls_verify = _PROXY_TLS_VERIFY if use_proxy else _DIRECT_TLS_VERIFY
                 response = requests.request(
                     method=request_data["method"],
                     url=request_data["url"],
@@ -457,7 +489,7 @@ class ProxyManager:
                     data=request_data["body"] or None,
                     proxies=current_proxies,
                     timeout=30,
-                    verify=False,
+                    verify=tls_verify,
                 )
                 response_time = int((time.time() - start_time) * 1000)
 
