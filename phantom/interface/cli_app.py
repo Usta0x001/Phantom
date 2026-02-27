@@ -203,6 +203,13 @@ def scan(
             help="Auth header for authenticated scanning (e.g. 'Authorization: Bearer TOKEN'). Repeatable.",
         ),
     ] = None,
+    resume: Annotated[
+        Optional[str],
+        typer.Option(
+            "--resume",
+            help="Resume a previously interrupted scan by run name (e.g. 'example-com_a1b2').",
+        ),
+    ] = None,
 ) -> None:
     """
     Run a penetration test against one or more targets.
@@ -248,6 +255,7 @@ def scan(
         output_format=output_format.value if output_format else None,
         timeout=timeout,
         auth_headers=auth_header or [],
+        resume_run=resume,
     )
 
     # Delegate to existing main logic

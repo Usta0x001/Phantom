@@ -184,6 +184,19 @@ class BaseAgent(metaclass=AgentMeta):
 
             self.state.increment_iteration()
 
+            # Periodic checkpoint for scan resume (every 10 iterations)
+            if (
+                self.state.iteration % 10 == 0
+                and hasattr(self.state, "save_checkpoint")
+                and tracer
+                and hasattr(tracer, "run_dir")
+                and tracer.run_dir
+            ):
+                try:
+                    self.state.save_checkpoint(tracer.run_dir)
+                except Exception:
+                    pass  # Non-fatal — best-effort checkpointing
+
             if (
                 self.state.is_approaching_max_iterations()
                 and not self.state.max_iterations_warning_sent

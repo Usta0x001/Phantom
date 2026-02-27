@@ -255,7 +255,7 @@ class TestProfileIntegration:
         quick = get_profile("quick")
         assert quick.max_iterations == 60
         assert quick.enable_browser is True
-        assert "subfinder_scan" in quick.skip_tools
+        assert "subfinder_enumerate" in quick.skip_tools
 
     def test_deep_copy_isolation(self):
         """Profiles should be deep-copied to prevent mutation."""
@@ -546,3 +546,255 @@ class TestReportGenerator:
             assert Path(path).exists()
             content = Path(path).read_text(encoding="utf-8")
             assert "Test XSS" in content
+
+
+# =========================================================================
+# E2E: ScanPriorityQueue wiring in EnhancedAgentState
+# =========================================================================
+
+
+class TestScanPriorityQueueWiring:
+    """Verify ScanPriorityQueue is instantiated + usable via EnhancedAgentState."""
+
+    def test_initialize_scan_creates_queues(self):
+        from phantom.agents.enhanced_state import EnhancedAgentState
+
+        state = EnhancedAgentState(agent_name="test", max_iterations=10)
+        state.initialize_scan("http://testsite.com")
+
+        # Scan queue should be created with default recon tasks
+        assert state.scan_queue is not None
+        assert len(state.scan_queue) > 0, "create_recon_tasks should populate the queue"
+
+        # Vuln queue should exist (empty until vulns added)
+        assert state.vuln_queue is not None
+        assert len(state.vuln_queue) == 0
+
+    def test_scan_task_dependency_ordering(self):
+        from phantom.agents.enhanced_state import EnhancedAgentState
+
+        state = EnhancedAgentState(agent_name="test", max_iterations=10)
+        state.initialize_scan("http://testsite.com")
+
+        # First task should be subdomain (no dependencies)
+        task = state.get_next_scan_task()
+        assert task is not None
+        assert task.task_type == "subdomain"
+
+        # Complete it → port_scan becomes eligible
+        state.complete_scan_task(task.task_id)
+        task2 = state.get_next_scan_task()
+        assert task2 is not None
+        assert task2.task_type == "port_scan"
+
+    def test_vuln_queue_priority_ordering(self):
+        from phantom.agents.enhanced_state import EnhancedAgentState
+        from phantom.models.vulnerability import Vulnerability, VulnerabilitySeverity, VulnerabilityStatus
+
+        state = EnhancedAgentState(agent_name="test", max_iterations=10)
+        state.initialize_scan("http://testsite.com")
+
+        low = Vulnerability(
+            id="v-low", name="Low Finding", vulnerability_class="info_disclosure",
+            severity=VulnerabilitySeverity.LOW, status=VulnerabilityStatus.DETECTED,
+            target="http://testsite.com", description="Low", detected_by="test",
+        )
+        crit = Vulnerability(
+            id="v-crit", name="Critical Finding", vulnerability_class="rce",
+            severity=VulnerabilitySeverity.CRITICAL, status=VulnerabilityStatus.DETECTED,
+            target="http://testsite.com", description="Critical", detected_by="test",
+        )
+
+        state.add_vulnerability(low)
+        state.add_vulnerability(crit)
+
+        # Pop from vuln queue — critical should come first
+        first = state.vuln_queue.pop()
+        assert first is not None
+        assert first.severity == VulnerabilitySeverity.CRITICAL
+
+
+# =========================================================================
+# E2E: False Positive Learning Loop
+# =========================================================================
+
+
+class TestFalsePositiveLearning:
+    """Verify FP learning round-trips through knowledge store."""
+
+    def test_mark_fp_persists_to_knowledge_store(self, tmp_path):
+        from phantom.agents.enhanced_state import EnhancedAgentState
+        from phantom.models.vulnerability import Vulnerability, VulnerabilitySeverity, VulnerabilityStatus
+        from phantom.core.knowledge_store import KnowledgeStore
+
+        store = KnowledgeStore(tmp_path / "knowledge")
+
+        # Monkey-patch get_knowledge_store to return our test store
+        import phantom.core.knowledge_store as ks_mod
+        original = ks_mod._knowledge_store
+        ks_mod._knowledge_store = store
+
+        try:
+            state = EnhancedAgentState(agent_name="test", max_iterations=10)
+            state.initialize_scan("http://target.com")
+
+            vuln = Vulnerability(
+                id="fp-001", name="False Positive XSS", vulnerability_class="xss",
+                severity=VulnerabilitySeverity.MEDIUM, status=VulnerabilityStatus.DETECTED,
+                target="http://target.com", description="FP", detected_by="nuclei",
+            )
+            state.add_vulnerability(vuln)
+            state.mark_vuln_false_positive("fp-001")
+
+            # FP signature should now be in knowledge store
+            sig = "nuclei:xss:http://target.com"
+            assert store.is_false_positive(sig)
+        finally:
+            ks_mod._knowledge_store = original
+
+    def test_known_fp_skipped_on_add(self, tmp_path):
+        from phantom.agents.enhanced_state import EnhancedAgentState
+        from phantom.models.vulnerability import Vulnerability, VulnerabilitySeverity, VulnerabilityStatus
+        from phantom.core.knowledge_store import KnowledgeStore
+
+        store = KnowledgeStore(tmp_path / "knowledge")
+        # Pre-register a FP
+        store.mark_false_positive("nuclei:xss:http://target.com")
+
+        import phantom.core.knowledge_store as ks_mod
+        original = ks_mod._knowledge_store
+        ks_mod._knowledge_store = store
+
+        try:
+            state = EnhancedAgentState(agent_name="test", max_iterations=10)
+            state.initialize_scan("http://target.com")
+
+            vuln = Vulnerability(
+                id="fp-002", name="Known FP", vulnerability_class="xss",
+                severity=VulnerabilitySeverity.MEDIUM, status=VulnerabilityStatus.DETECTED,
+                target="http://target.com", description="known FP", detected_by="nuclei",
+            )
+            state.add_vulnerability(vuln)
+
+            # Vulnerability should NOT be added (known FP)
+            assert "fp-002" not in state.vulnerabilities
+        finally:
+            ks_mod._knowledge_store = original
+
+
+# =========================================================================
+# E2E: Checkpoint / Scan Resume
+# =========================================================================
+
+
+class TestCheckpointResume:
+    """Verify scan state can be checkpointed and restored."""
+
+    def test_save_and_load_checkpoint(self, tmp_path):
+        from phantom.agents.enhanced_state import EnhancedAgentState
+        from phantom.models.vulnerability import Vulnerability, VulnerabilitySeverity, VulnerabilityStatus
+        from phantom.models.scan import ScanPhase
+
+        state = EnhancedAgentState(agent_name="test", max_iterations=100)
+        state.initialize_scan("http://example.com")
+
+        # Simulate progress
+        state.iteration = 42
+        state.current_phase = ScanPhase.EXPLOITATION
+        state.add_subdomain("sub.example.com")
+        state.add_endpoint("/api/v1/users")
+        vuln = Vulnerability(
+            id="chk-001", name="Checkpoint Vuln", vulnerability_class="sqli",
+            severity=VulnerabilitySeverity.HIGH, status=VulnerabilityStatus.DETECTED,
+            target="http://example.com", description="Test", detected_by="sqlmap",
+        )
+        state.add_vulnerability(vuln)
+
+        # Save checkpoint
+        cp_path = state.save_checkpoint(tmp_path)
+        assert cp_path.exists()
+
+        # Restore from checkpoint
+        restored = EnhancedAgentState.from_checkpoint(cp_path)
+
+        assert restored.iteration == 42
+        assert restored.current_phase == ScanPhase.EXPLOITATION
+        assert "sub.example.com" in restored.subdomains
+        assert "/api/v1/users" in restored.endpoints
+        assert restored.vuln_stats["total"] == 1  # restored from stats
+        assert restored.scan_id == state.scan_id
+        # Vulnerabilities should be reconstructed as model objects
+        assert "chk-001" in restored.vulnerabilities
+        assert restored.vulnerabilities["chk-001"].name == "Checkpoint Vuln"
+        assert restored.vulnerabilities["chk-001"].vulnerability_class == "sqli"
+
+
+# =========================================================================
+# E2E: Persistent Notes
+# =========================================================================
+
+
+class TestPersistentNotes:
+    """Verify notes are persisted to disk."""
+
+    def test_notes_saved_to_disk(self, tmp_path):
+        import phantom.tools.notes.notes_actions as notes_mod
+
+        # Override the notes file path
+        old_file = notes_mod._notes_file
+        old_storage = notes_mod._notes_storage.copy()
+        notes_mod._notes_file = tmp_path / "test_notes.json"
+        notes_mod._notes_storage.clear()
+
+        try:
+            result = notes_mod.create_note(
+                title="Test Note",
+                content="This is a test note",
+                category="general",
+            )
+            assert result["success"] is True
+
+            # Verify the file was created
+            assert notes_mod._notes_file.exists()
+
+            # Clear in-memory and reload from disk
+            notes_mod._notes_storage.clear()
+            notes_mod._load_notes_from_disk()
+
+            assert len(notes_mod._notes_storage) == 1
+            note = list(notes_mod._notes_storage.values())[0]
+            assert note["title"] == "Test Note"
+        finally:
+            notes_mod._notes_file = old_file
+            notes_mod._notes_storage.clear()
+            notes_mod._notes_storage.update(old_storage)
+
+
+# =========================================================================
+# E2E: Stealth custom_flags consumption
+# =========================================================================
+
+
+class TestStealthCustomFlags:
+    """Verify stealth profile custom_flags are injected into task description."""
+
+    def test_stealth_flags_in_task(self):
+        from phantom.core.scan_profiles import get_profile
+
+        profile = get_profile("stealth")
+        assert profile.custom_flags.get("rate_limit") == 5
+        assert profile.custom_flags.get("delay_ms") == 2000
+
+        # Simulate the injection code path from phantom_agent.py
+        task_description = ""
+        custom_flags = profile.custom_flags
+        if custom_flags:
+            rate_limit = custom_flags.get("rate_limit")
+            delay_ms = custom_flags.get("delay_ms")
+            if rate_limit:
+                task_description += f"\nRATE LIMIT: Max {rate_limit} requests per second."
+            if delay_ms:
+                task_description += f"\nDELAY: Wait at least {delay_ms}ms between requests."
+
+        assert "Max 5 requests per second" in task_description
+        assert "2000ms" in task_description

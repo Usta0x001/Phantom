@@ -139,6 +139,20 @@ class PhantomAgent(BaseAgent):
             if not enable_browser:
                 task_description += "\nDo NOT use browser-based tools (open_browser, browser_navigate, etc.)."
 
+            # Consume custom_flags (e.g. stealth rate_limit / delay_ms)
+            custom_flags = profile.custom_flags if hasattr(profile, "custom_flags") else profile.get("custom_flags", {})
+            if custom_flags:
+                rate_limit = custom_flags.get("rate_limit")
+                delay_ms = custom_flags.get("delay_ms")
+                if rate_limit:
+                    task_description += f"\nRATE LIMIT: Max {rate_limit} requests per second."
+                if delay_ms:
+                    task_description += f"\nDELAY: Wait at least {delay_ms}ms between requests."
+                # Pass any remaining flags generically
+                other_flags = {k: v for k, v in custom_flags.items() if k not in ("rate_limit", "delay_ms")}
+                if other_flags:
+                    task_description += f"\nAdditional flags: {other_flags}"
+
             task_description += "\nCall create_vulnerability_report IMMEDIATELY after confirming each vulnerability."
 
             # ── Mandatory recon-first + efficiency directives ──
