@@ -12,11 +12,13 @@
 [![Python](https://img.shields.io/badge/Python-3.12%2B-yellow.svg)](https://python.org)
 [![Docker](https://img.shields.io/badge/Docker-Ready-2496ED.svg)](https://hub.docker.com/r/redwan07/phantom)
 [![PyPI](https://img.shields.io/pypi/v/phantom-agent.svg)](https://pypi.org/project/phantom-agent/)
-[![Version](https://img.shields.io/badge/Version-0.9.0-purple.svg)](https://github.com/Usta0x001/Phantom/releases)
+[![Version](https://img.shields.io/badge/Version-0.9.19-purple.svg)](https://github.com/Usta0x001/Phantom/releases)
 
 **AI-powered multi-agent penetration testing that thinks like a hacker.**
 
 [Quick Start](#-quick-start) · [Features](#-features) · [Architecture](#-architecture) · [Documentation](#-documentation) · [Contributing](#-contributing)
+
+> **585 tests passing** · **152-point security audit** · **E2E validated** · **$0.22/scan average cost**
 
 </div>
 
@@ -54,6 +56,15 @@ Unlike static scanners that just pattern-match, Phantom **thinks**: it reads res
 | Generic reports | MITRE ATT&CK mapped + compliance ready |
 | Manual triage needed | Actionable findings, remediation steps |
 
+## 🆕 What's New in v0.9.19
+
+- **9 critical bug fixes** — Loop detector was dead code, tool firewall could be silently bypassed, report generation could crash on unknown severities, zombie agents could resurrect
+- **Scan resume** — Checkpoint-based system lets you `--resume` interrupted scans without losing progress
+- **Cost tracking** — `scan_stats.json` with per-scan cost breakdown, per-request cost ceiling
+- **SSRF bypass testing** — Built-in SSRF allowlist for testing internal services safely
+- **152-point security audit** — Full-spectrum adversarial audit across 5 domains
+- **585 tests passing** — Comprehensive regression suite covering all audit fixes
+
 ## ✨ Features
 
 - 🤖 **Fully Autonomous** — AI agents that think, adapt, and act like real pentesters
@@ -68,7 +79,10 @@ Unlike static scanners that just pattern-match, Phantom **thinks**: it reads res
 - 🧠 **Knowledge Persistence** — Learns from past scans, avoids redundant work
 - 🔔 **Notifications** — Webhook & Slack alerts on critical findings
 - 🔌 **Plugin System** — Extend with custom tools and workflows
-- ⚡ **Multiple LLM Providers** — OpenAI, Anthropic, Google, Groq, Ollama, and more via LiteLLM
+- ⚡ **Multiple LLM Providers** — OpenAI, Anthropic, Google, Groq, DeepSeek, Ollama, and more via LiteLLM
+- 💰 **Cost Tracking** — Per-request cost ceiling, scan_stats.json with full cost breakdown
+- ⏸️ **Scan Resume** — Checkpoint-based resume after interruptions — never lose progress
+- 🔒 **Security Hardened** — 152-point security audit, tool firewall, scope validator, HMAC audit trail
 
 ## 🏗️ Architecture
 
@@ -350,7 +364,7 @@ docker run --rm -it \
   -e PHANTOM_LLM="openai/gpt-4o" \
   -e LLM_API_KEY="your-key" \
   -v /var/run/docker.sock:/var/run/docker.sock \
-  redwan07/phantom:latest \
+  ghcr.io/usta0x001/phantom:latest \
   scan --target https://your-app.com
 ```
 
@@ -388,6 +402,9 @@ phantom scan --target https://api.your-app.com \
 
 # Interactive TUI mode (rich terminal interface)
 phantom --target https://your-app.com
+
+# Resume an interrupted scan
+phantom scan --target https://your-app.com --resume
 ```
 
 ### Scan Modes & Profiles
@@ -440,6 +457,8 @@ phantom diff <run1> <run2>
 | `PHANTOM_IMAGE` | Custom sandbox Docker image | `ghcr.io/usta0x001/phantom-sandbox:latest` |
 | `PHANTOM_WEBHOOK_URL` | Webhook for critical findings | `https://hooks.slack.com/...` |
 | `PHANTOM_DISABLE_BROWSER` | Disable Playwright browser | `false` |
+| `PHANTOM_MAX_COST` | Maximum cost per scan (USD) | `10.0` |
+| `PHANTOM_PER_REQUEST_CEILING` | Max cost per LLM request (USD) | `5.0` |
 
 ### Supported LLM Providers
 
@@ -451,6 +470,7 @@ phantom diff <run1> <run2>
 | **Groq** | `groq/llama-3.3-70b-versatile` | **Free tier** |
 | **Ollama** | `ollama/llama3.1` | Local, no API key |
 | **DeepSeek** | `deepseek/deepseek-chat` | Cost-effective |
+| **OpenRouter** | `openrouter/deepseek/deepseek-v3.2` | Multi-provider gateway |
 | **Azure** | `azure/gpt-4o` | Enterprise |
 | **AWS Bedrock** | `bedrock/anthropic.claude-v2` | Enterprise |
 
@@ -556,7 +576,7 @@ phantom/
 │   ├── runtime/             # Docker sandbox management
 │   ├── telemetry/           # Local-only run tracking
 │   └── config/              # Configuration management
-├── tests/                   # Test suite (142 tests)
+├── tests/                   # Test suite (585+ tests)
 ├── containers/              # Dockerfile for sandbox
 ├── scripts/                 # Install & build scripts
 └── docs/                    # Documentation
