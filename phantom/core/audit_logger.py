@@ -59,6 +59,7 @@ class AuditLogger:
                 try:
                     self._hmac_key = key_path.read_text(encoding="utf-8").strip().encode()
                 except Exception:
+                    _logger.warning("SEC-004: Could not read HMAC key from %s — generating new key", key_path)
                     self._hmac_key = secrets.token_hex(32).encode()
             else:
                 generated_key = secrets.token_hex(32)
@@ -70,6 +71,77 @@ class AuditLogger:
                     _logger.warning("SEC-004: Could not persist HMAC key to %s", key_path)
             _logger.info("SEC-004: Using unique per-run HMAC key (not default)")
         self._prev_hash = hashlib.sha256(b"genesis").hexdigest()[:16]
+        # H6 FIX: On resume, verify existing chain and pick up from last hash
+        if self.log_path.exists():
+            self._verify_and_resume_chain()
+
+    def _verify_and_resume_chain(self) -> None:
+        """H6 FIX: Verify HMAC chain integrity on resume and set _prev_hash to continue."""
+        import hashlib
+        import hmac as _hmac
+
+        prev = hashlib.sha256(b"genesis").hexdigest()[:16]
+        last_valid_hash = prev
+        tampered = False
+        line_count = 0
+
+        try:
+            with self.log_path.open("r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    line_count += 1
+                    try:
+                        entry = json.loads(line)
+                    except json.JSONDecodeError:
+                        tampered = True
+                        break
+
+                    stored_prev = entry.get("_prev_hash", "")
+                    stored_hmac = entry.get("_hmac", "")
+
+                    if stored_prev != prev:
+                        tampered = True
+                        break
+
+                    # Recompute HMAC: remove _hmac from entry, compute
+                    verify_entry = {k: v for k, v in entry.items() if k != "_hmac"}
+                    verify_line = json.dumps(verify_entry, default=str, ensure_ascii=False)
+                    expected = _hmac.new(
+                        self._hmac_key, (prev + verify_line).encode(), hashlib.sha256
+                    ).hexdigest()[:16]
+
+                    if expected != stored_hmac:
+                        tampered = True
+                        break
+
+                    last_valid_hash = stored_hmac
+                    prev = stored_hmac
+
+        except OSError as exc:
+            _logger.warning("H6: Could not verify audit chain: %s", exc)
+            return
+
+        if tampered:
+            _logger.error(
+                "AUDIT CHAIN TAMPERED: integrity check failed at line %d. "
+                "Previous entries may have been modified.",
+                line_count,
+            )
+            # Log the tamper detection event itself
+            self._prev_hash = last_valid_hash
+            self._write_entry({
+                "timestamp": datetime.now(UTC).isoformat(),
+                "event_type": "audit_chain_tamper_detected",
+                "severity": "critical",
+                "category": "security",
+                "data": {"failed_at_line": line_count},
+            })
+        else:
+            self._prev_hash = last_valid_hash
+            if line_count > 0:
+                _logger.info("H6: Audit chain verified OK (%d entries)", line_count)
 
     def _ensure_directory(self) -> None:
         """Ensure the log directory exists."""
@@ -83,7 +155,7 @@ class AuditLogger:
                 rotated = self.log_path.with_suffix(f".{timestamp}.jsonl")
                 self.log_path.rename(rotated)
         except OSError:
-            pass  # Best effort rotation
+            _logger.debug("Audit log rotation failed", exc_info=True)
 
     def _compute_hmac(self, data: str) -> str:
         """Compute HMAC-SHA256 for tamper detection chain."""
@@ -307,7 +379,7 @@ class AuditLogger:
 
                     buf.append(entry)
         except OSError:
-            pass
+            _logger.debug("Failed to read audit events", exc_info=True)
 
         # Return most recent first
         return list(reversed(buf))

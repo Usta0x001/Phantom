@@ -26,7 +26,7 @@ def _get_notes_file() -> Path:
             if tracer and hasattr(tracer, "run_dir") and tracer.run_dir:
                 _notes_file = Path(tracer.run_dir) / "notes.json"
         except Exception:
-            pass
+            _logger.debug("Could not resolve run dir for notes", exc_info=True)
         if _notes_file is None:
             _notes_file = Path("phantom_runs") / "notes.json"
     return _notes_file

@@ -84,28 +84,28 @@ class KnowledgeStore:
         try:
             if self.hosts_file.exists():
                 self._hosts = self._read_json(self.hosts_file)
-                logger.debug(f"Loaded {len(self._hosts)} hosts")
+                logger.debug("Loaded %d hosts", len(self._hosts))
         except Exception as e:
             logger.warning(f"Failed to load hosts: {e}")
         
         try:
             if self.vulns_file.exists():
                 self._vulns = self._read_json(self.vulns_file)
-                logger.debug(f"Loaded {len(self._vulns)} vulnerabilities")
+                logger.debug("Loaded %d vulnerabilities", len(self._vulns))
         except Exception as e:
             logger.warning(f"Failed to load vulnerabilities: {e}")
         
         try:
             if self.history_file.exists():
                 self._history = self._read_json(self.history_file)
-                logger.debug(f"Loaded {len(self._history)} scan history entries")
+                logger.debug("Loaded %d scan history entries", len(self._history))
         except Exception as e:
             logger.warning(f"Failed to load history: {e}")
         
         try:
             if self.fp_file.exists():
                 self._false_positives = set(self._read_json(self.fp_file))
-                logger.debug(f"Loaded {len(self._false_positives)} false positive signatures")
+                logger.debug("Loaded %d false positive signatures", len(self._false_positives))
         except Exception as e:
             logger.warning(f"Failed to load false positives: {e}")
     

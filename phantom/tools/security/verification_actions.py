@@ -110,7 +110,7 @@ def enrich_vulnerability(
                 frameworks_hit = list({m.framework for m in matches})
                 enrichment["compliance_frameworks"] = frameworks_hit
         except Exception:
-            pass
+            _logger.debug("Compliance mapping enrichment failed", exc_info=True)
 
         return enrichment
 
@@ -195,7 +195,7 @@ async def verify_vulnerability(
             from phantom.core.interactsh_client import InteractshClient
             interactsh = InteractshClient(terminal_execute_fn=terminal_fn)
         except Exception:
-            pass
+            _logger.debug("InteractshClient not available for OOB verification", exc_info=True)
 
         engine = VerificationEngine(
             terminal_execute_fn=terminal_fn,

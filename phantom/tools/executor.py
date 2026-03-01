@@ -1,4 +1,5 @@
 import inspect
+import logging
 import os
 import time as _time
 from html import escape as _xml_escape
@@ -7,6 +8,25 @@ from typing import Any
 import httpx
 
 from phantom.config import Config
+
+_logger = logging.getLogger(__name__)
+
+# L17 FIX: module-level constant instead of per-call recreation
+_ENDPOINT_TOOLS_MAP: dict[str, str] = {
+    "sqlmap_test": "sqli",
+    "sqlmap_forms": "sqli",
+    "sqlmap_dump_database": "sqli-dump",
+    "nuclei_scan": "nuclei",
+    "nuclei_scan_cves": "nuclei-cve",
+    "nuclei_scan_misconfigs": "nuclei-misconfig",
+    "ffuf_directory_scan": "fuzz",
+    "ffuf_parameter_fuzz": "param-fuzz",
+    "ffuf_vhost_fuzz": "vhost-fuzz",
+    "nmap_scan": "portscan",
+    "nmap_vuln_scan": "vuln-scan",
+    "httpx_probe": "httpx",
+    "httpx_full_analysis": "httpx-full",
+}
 
 
 if os.getenv("PHANTOM_SANDBOX_MODE", "false").lower() == "false":
@@ -340,15 +360,16 @@ def _format_tool_result(tool_name: str, result: Any) -> tuple[str, list[dict[str
         final_result_str = f"Tool {tool_name} executed successfully"
     else:
         final_result_str = str(result_str)
-        if len(final_result_str) > 5000:
-            start_part = final_result_str[:2200]
-            end_part = final_result_str[-2200:]
+        if len(final_result_str) > 8000:
+            # H12 FIX: ensure truncation doesn't split multi-byte UTF-8
+            start_part = final_result_str[:3500]
+            end_part = final_result_str[-3500:]
             # Snap to nearest newline to avoid cutting mid-line/mid-tag
             last_nl = start_part.rfind('\n')
-            if last_nl > 1800:
+            if last_nl > 2800:
                 start_part = start_part[:last_nl]
             first_nl = end_part.find('\n')
-            if first_nl != -1 and first_nl < 400:
+            if first_nl != -1 and first_nl < 700:
                 end_part = end_part[first_nl + 1:]
             omitted = len(final_result_str) - len(start_part) - len(end_part)
             final_result_str = (
@@ -423,8 +444,8 @@ async def _execute_single_tool(
                     success=not is_error,
                     duration_ms=round(_duration_ms, 2),
                 )
-        except Exception:  # noqa: BLE001
-            pass  # audit logging must never break the pipeline
+        except Exception as exc:  # noqa: BLE001
+            _logger.debug("Audit log failed for tool %s: %s", tool_name, exc)
 
     except (ConnectionError, RuntimeError, ValueError, TypeError, OSError) as e:
         _duration_ms = (_time.monotonic() - _start_ts) * 1000
@@ -445,8 +466,8 @@ async def _execute_single_tool(
                     success=False,
                     duration_ms=round(_duration_ms, 2),
                 )
-        except Exception:  # noqa: BLE001
-            pass
+        except Exception as exc:  # noqa: BLE001
+            _logger.debug("Audit log failed for tool error %s: %s", tool_name, exc)
         raise
 
     observation_xml, images = _format_tool_result(tool_name, result)
@@ -618,8 +639,8 @@ def _auto_record_findings(tool_name: str, result: Any, agent_state: Any) -> None
                                     if hasattr(agent_state, "mark_vuln_verified"):
                                         agent_state.mark_vuln_verified(vuln_model.id)
                                 break
-                except Exception:  # noqa: BLE001
-                    pass
+                except Exception as exc:  # noqa: BLE001
+                    _logger.debug("Auto-record findings failed for %s: %s", tool_name, exc)
 
         # --- SQLMap ---
         elif tool_name in ("sqlmap_test", "sqlmap_forms", "sqlmap_dump_database"):
@@ -656,8 +677,8 @@ def _auto_record_findings(tool_name: str, result: Any, agent_state: Any) -> None
                     + ", ".join(subdomains[:10])
                 )
 
-    except Exception:  # noqa: BLE001
-        pass  # finding recording must never break the pipeline
+    except Exception as exc:  # noqa: BLE001
+        _logger.debug("auto-record findings swallowed: %s", exc, exc_info=True)
 
 
 def remove_screenshot_from_result(result: Any) -> Any:
@@ -666,7 +687,12 @@ def remove_screenshot_from_result(result: Any) -> Any:
 
     result_copy = result.copy()
     if "screenshot" in result_copy:
-        result_copy["screenshot"] = "[Image data extracted - see attached image]"
+        # H11 FIX: validate the data before passing it along
+        raw = result_copy["screenshot"]
+        if isinstance(raw, str) and len(raw) > 10_000_000:  # >~7.5 MB decoded
+            result_copy["screenshot"] = "[Screenshot too large — removed]"
+        else:
+            result_copy["screenshot"] = "[Image data extracted - see attached image]"
 
     return result_copy
 
@@ -677,24 +703,8 @@ def _track_tested_endpoint(tool_name: str, args: dict[str, Any], agent_state: An
         return
 
     try:
-        # Map tool names to test types and extract endpoint info
-        _ENDPOINT_TOOLS = {
-            "sqlmap_test": "sqli",
-            "sqlmap_forms": "sqli",
-            "sqlmap_dump_database": "sqli-dump",
-            "nuclei_scan": "nuclei",
-            "nuclei_scan_cves": "nuclei-cve",
-            "nuclei_scan_misconfigs": "nuclei-misconfig",
-            "ffuf_directory_scan": "fuzz",
-            "ffuf_parameter_fuzz": "param-fuzz",
-            "ffuf_vhost_fuzz": "vhost-fuzz",
-            "nmap_scan": "portscan",
-            "nmap_vuln_scan": "vuln-scan",
-            "httpx_probe": "httpx",
-            "httpx_full_analysis": "httpx-full",
-        }
-
-        test_type = _ENDPOINT_TOOLS.get(tool_name)
+        # L17 FIX: use module-level constant instead of recreating per call
+        test_type = _ENDPOINT_TOOLS_MAP.get(tool_name)
         if not test_type:
             return
 

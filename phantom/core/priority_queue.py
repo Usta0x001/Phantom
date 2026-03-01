@@ -92,7 +92,7 @@ class VulnerabilityPriorityQueue:
         self._seen_ids.add(vuln.id)
         self._counter += 1
         
-        logger.debug(f"Queued {vuln.id} with priority {priority.name}")
+        logger.debug("Queued %s with priority %s", vuln.id, priority.name)
         return True
     
     def pop(self) -> Vulnerability | None:

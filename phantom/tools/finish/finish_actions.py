@@ -8,6 +8,41 @@ import logging
 
 _logger = logging.getLogger(__name__)
 
+# H1 FIX: Credential-scrubbing regex for reports
+_CREDENTIAL_PATTERNS = re.compile(
+    r"(password|passwd|secret|token|api[_-]?key|auth|bearer|cookie|session[_-]?id"
+    r"|access[_-]?key|private[_-]?key|jwt|csrf[_-]?token)"
+    r"[\s]*[:=]\s*['\"]?([^\s'\"]{4,})['\"]?",
+    re.IGNORECASE,
+)
+
+
+def _scrub_credentials(text: str) -> str:
+    """Replace credential values in text with [REDACTED]."""
+    if not isinstance(text, str):
+        return text
+    return _CREDENTIAL_PATTERNS.sub(r"\1=[REDACTED]", text)
+
+
+def _scrub_dict(d: dict[str, Any]) -> dict[str, Any]:
+    """Recursively scrub credential values from a dict before report output."""
+    result = {}
+    for k, v in d.items():
+        if isinstance(v, str):
+            result[k] = _scrub_credentials(v)
+        elif isinstance(v, dict):
+            result[k] = _scrub_dict(v)
+        elif isinstance(v, list):
+            result[k] = [
+                _scrub_dict(item) if isinstance(item, dict)
+                else _scrub_credentials(item) if isinstance(item, str)
+                else item
+                for item in v
+            ]
+        else:
+            result[k] = v
+    return result
+
 
 def _extract_cwe_ids(report: dict[str, Any]) -> list[str]:
     """Extract CWE IDs from a vulnerability report dict."""
@@ -68,7 +103,7 @@ def _dict_to_vulnerability(report: dict[str, Any]) -> Any:
             detected_by="phantom-agent",
         )
     except Exception as e:
-        _logger.debug(f"Failed to convert vuln dict to model: {e}")
+        _logger.debug("Failed to convert vuln dict to model: %s", e)
         return None
 
 
@@ -139,7 +174,7 @@ def _run_post_scan_enrichment(tracer: Any, agent_state: Any = None) -> dict[str,
             engine.interactsh = interactsh
             _logger.info("InteractshClient attached to verification engine for OOB checks")
         except Exception as e:
-            _logger.debug(f"InteractshClient not available (OOB checks skipped): {e}")
+            _logger.debug("InteractshClient not available (OOB checks skipped): %s", e)
 
         vuln_models_for_verify = []
         for report in vuln_reports:
@@ -197,7 +232,7 @@ def _run_post_scan_enrichment(tracer: Any, agent_state: Any = None) -> dict[str,
                 with _cf.ThreadPoolExecutor(max_workers=1) as _pool:
                     _pool.submit(asyncio.run, http_client.aclose()).result(timeout=10)
             except Exception:
-                pass
+                _logger.debug("HTTP client cleanup error", exc_info=True)
 
     except Exception as e:
         enrichment_results["verification"] = {"error": str(e)}
@@ -409,7 +444,7 @@ def _run_post_scan_enrichment(tracer: Any, agent_state: Any = None) -> dict[str,
             )
             scan_recorded = True
         except Exception as e:
-            _logger.debug(f"Failed to record scan history: {e}")
+            _logger.debug("Failed to record scan history: %s", e)
 
         enrichment_results["knowledge_store"] = {
             "vulnerabilities_stored": stored_count,

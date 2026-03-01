@@ -169,7 +169,7 @@ class InteractshClient:
         )
         
         self._payloads[payload_id] = payload
-        logger.debug(f"Generated OOB payload: {subdomain} for {vulnerability_id}")
+        logger.debug("Generated OOB payload: %s for %s", subdomain, vulnerability_id)
         
         return payload
     
@@ -304,7 +304,7 @@ class InteractshClient:
             # Wait before next poll
             await asyncio.sleep(self.poll_interval)
         
-        logger.debug(f"Timeout waiting for interaction on {payload_id}")
+        logger.debug("Timeout waiting for interaction on %s", payload_id)
         return None
     
     async def start_polling(self) -> None:

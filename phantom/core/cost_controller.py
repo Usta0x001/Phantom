@@ -21,7 +21,7 @@ from typing import Any
 _logger = logging.getLogger(__name__)
 
 # Default thresholds (can be overridden via config)
-DEFAULT_MAX_COST_USD = 50.0
+DEFAULT_MAX_COST_USD = 25.0  # M9 FIX: reduced from $50 to safer default
 DEFAULT_MAX_INPUT_TOKENS = 5_000_000
 DEFAULT_MAX_OUTPUT_TOKENS = 500_000
 DEFAULT_WARNING_THRESHOLD = 0.8  # Warn at 80% of limit

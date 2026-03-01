@@ -39,14 +39,30 @@ class DockerRuntime(AbstractRuntime):
         self._tool_server_token: str | None = None
 
     def _find_available_port(self) -> int:
-        # Bind to port 0 and keep the socket open with SO_REUSEADDR
-        # so Docker can reuse it immediately, avoiding TOCTOU races.
+        """Find an available port with minimal TOCTOU window.
+
+        Binds to port 0 to let the OS pick a free port, stores the socket
+        so it stays bound until Docker takes over.  The caller must call
+        ``_release_port_reservation()`` after the container has started.
+        """
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         s.bind(("", 0))
         port = cast("int", s.getsockname()[1])
-        s.close()
+        # Keep the socket alive to block other processes from grabbing
+        # the same port before Docker binds to it.
+        self._port_reservation_socket: socket.socket | None = s
         return port
+
+    def _release_port_reservation(self) -> None:
+        """Release the port-reservation socket after Docker has bound the port."""
+        sock = getattr(self, "_port_reservation_socket", None)
+        if sock is not None:
+            try:
+                sock.close()
+            except OSError:
+                pass
+            self._port_reservation_socket = None
 
     def _get_scan_id(self, agent_id: str) -> str:
         try:
@@ -164,9 +180,12 @@ class DockerRuntime(AbstractRuntime):
                 # Give entrypoint time to start Caido + tool server
                 time.sleep(2)
                 self._wait_for_tool_server()
+                # Docker has bound the port — release our reservation socket
+                self._release_port_reservation()
 
             except (DockerException, RequestsConnectionError, RequestsTimeout, SandboxInitializationError) as e:
                 last_error = e
+                self._release_port_reservation()
                 if attempt < max_retries:
                     self._tool_server_port = None
                     self._tool_server_token = None
@@ -238,15 +257,31 @@ class DockerRuntime(AbstractRuntime):
         import tarfile
         from io import BytesIO
 
+        # M25 FIX: limit total tar archive size to prevent memory exhaustion
+        _MAX_TAR_BYTES = 500 * 1024 * 1024  # 500 MB
+
         try:
             local_path_obj = Path(local_path).resolve()
             if not local_path_obj.exists() or not local_path_obj.is_dir():
                 return
 
             tar_buffer = BytesIO()
+            total_bytes = 0
             with tarfile.open(fileobj=tar_buffer, mode="w") as tar:
                 for item in local_path_obj.rglob("*"):
+                    # H8 FIX: skip symlinks to prevent path traversal
+                    if item.is_symlink():
+                        continue
                     if item.is_file():
+                        file_size = item.stat().st_size
+                        total_bytes += file_size
+                        if total_bytes > _MAX_TAR_BYTES:
+                            import logging as _log_m25
+                            _log_m25.getLogger(__name__).warning(
+                                "Tar size limit reached (%d bytes), skipping remaining files",
+                                total_bytes,
+                            )
+                            break
                         rel_path = item.relative_to(local_path_obj)
                         arcname = Path(target_name) / rel_path if target_name else rel_path
                         tar.add(item, arcname=arcname)
@@ -302,17 +337,33 @@ class DockerRuntime(AbstractRuntime):
         }
 
     async def _register_agent(self, api_url: str, agent_id: str, token: str) -> None:
-        try:
-            async with httpx.AsyncClient(trust_env=False) as client:
-                response = await client.post(
-                    f"{api_url}/register_agent",
-                    params={"agent_id": agent_id},
-                    headers={"Authorization": f"Bearer {token}"},
-                    timeout=30,
+        max_retries = 3
+        for attempt in range(1, max_retries + 1):
+            try:
+                async with httpx.AsyncClient(trust_env=False) as client:
+                    response = await client.post(
+                        f"{api_url}/register_agent",
+                        params={"agent_id": agent_id},
+                        headers={"Authorization": f"Bearer {token}"},
+                        timeout=30,
+                    )
+                    response.raise_for_status()
+                    return  # success
+            except httpx.RequestError as exc:
+                import logging
+                _log = logging.getLogger(__name__)
+                _log.warning(
+                    "Agent registration attempt %d/%d failed: %s",
+                    attempt, max_retries, exc,
                 )
-                response.raise_for_status()
-        except httpx.RequestError:
-            pass
+                if attempt < max_retries:
+                    import asyncio
+                    await asyncio.sleep(2 * attempt)
+        # All retries exhausted — log error but don't crash the scan
+        import logging
+        logging.getLogger(__name__).error(
+            "Agent registration failed after %d retries for %s", max_retries, agent_id
+        )
 
     async def get_sandbox_url(self, container_id: str, port: int) -> str:
         try:
@@ -353,5 +404,8 @@ class DockerRuntime(AbstractRuntime):
             try:
                 container.stop(timeout=5)
                 container.remove(force=True)
-            except Exception:  # noqa: BLE001
-                pass  # Best-effort cleanup
+            except Exception as exc:  # noqa: BLE001
+                import logging
+                logging.getLogger(__name__).warning(
+                    "Container cleanup failed for %s: %s", getattr(container, 'id', '?'), exc
+                )

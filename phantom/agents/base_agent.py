@@ -1,5 +1,4 @@
 import asyncio
-import contextlib
 import logging
 from typing import TYPE_CHECKING, Any, Optional
 
@@ -40,14 +39,17 @@ class AgentMeta(type):
         new_cls.agent_name = name
         new_cls.jinja_env = Environment(
             loader=FileSystemLoader(prompt_dir),
-            autoescape=select_autoescape(enabled_extensions=(), default_for_string=False),
+            autoescape=select_autoescape(
+                enabled_extensions=("html", "xml"),
+                default_for_string=True,
+            ),
         )
 
         return new_cls
 
 
 class BaseAgent(metaclass=AgentMeta):
-    max_iterations = 300
+    max_iterations = 200  # M29 FIX: reduced from 300 to prevent runaway scans
     agent_name: str = ""
     jinja_env: Environment
     default_llm_config: LLMConfig | None = None
@@ -76,10 +78,14 @@ class BaseAgent(metaclass=AgentMeta):
 
         self.llm = LLM(self.llm_config, agent_name=self.agent_name)
 
-        with contextlib.suppress(Exception):
+        try:
             self.llm.set_agent_identity(self.state.agent_name, self.state.agent_id)
-        with contextlib.suppress(Exception):
+        except Exception:  # noqa: BLE001
+            logger.warning("Failed to set LLM agent identity for %s", self.state.agent_id, exc_info=True)
+        try:
             self.llm.set_agent_state(self.state)
+        except Exception:  # noqa: BLE001
+            logger.warning("Failed to set LLM agent state for %s", self.state.agent_id, exc_info=True)
         self._current_task: asyncio.Task[Any] | None = None
         self._force_stop = False
 
@@ -130,7 +136,14 @@ class BaseAgent(metaclass=AgentMeta):
             "result": None,
             "llm_config": self.llm_config_name,
             "agent_type": self.__class__.__name__,
-            "state": self.state.model_dump(),
+            # H19 FIX: lightweight snapshot — avoid full model_dump() which
+            # serialises the entire message history and bloats memory.
+            "state_summary": {
+                "iteration": self.state.iteration,
+                "max_iterations": self.state.max_iterations,
+                "completed": self.state.completed,
+                "task": self.state.task[:200] if self.state.task else "",
+            },
         }
 
         with agents_graph_actions._graph_lock:
@@ -366,8 +379,13 @@ class BaseAgent(metaclass=AgentMeta):
 
                 if "agent_id" in sandbox_info:
                     self.state.sandbox_info["agent_id"] = sandbox_info["agent_id"]
-            except Exception as e:
+            except SandboxInitializationError:
                 raise
+            except Exception as e:
+                raise SandboxInitializationError(
+                    f"Failed to create sandbox: {e}",
+                    "Check Docker Desktop is running and has enough resources.",
+                ) from e
 
         if not self.state.task:
             self.state.task = task
@@ -482,7 +500,7 @@ class BaseAgent(metaclass=AgentMeta):
             self.state.add_error("Tool execution cancelled by user")
             raise
 
-        self.state.messages = conversation_history
+        self.state.messages = list(conversation_history)
 
         if should_agent_finish:
             # Finalize EnhancedAgentState scan tracking when available.
@@ -785,8 +803,8 @@ class BaseAgent(metaclass=AgentMeta):
             import json
             from pathlib import Path
 
-            if tracer and hasattr(tracer, "run_dir") and tracer.run_dir:
-                run_dir = Path(tracer.run_dir)
+            if tracer and hasattr(tracer, "get_run_dir"):
+                run_dir = Path(tracer.get_run_dir())
             else:
                 return
 
