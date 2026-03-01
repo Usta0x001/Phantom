@@ -1,3 +1,4 @@
+import re
 from typing import Any
 
 from phantom.config import Config
@@ -324,7 +325,7 @@ def _run_post_scan_enrichment(tracer: Any, agent_state: Any = None) -> dict[str,
             try:
                 template_yaml = generator.from_finding(report)
                 if template_yaml:
-                    safe_id = report.get("id", "unknown").replace("/", "_")
+                    safe_id = re.sub(r'[^a-zA-Z0-9_-]', '_', report.get("id", "unknown"))
                     template_file = templates_dir / f"{safe_id}.yaml"
                     template_file.write_text(template_yaml, encoding="utf-8")
                     template_count += 1
@@ -444,6 +445,7 @@ def _run_post_scan_enrichment(tracer: Any, agent_state: Any = None) -> dict[str,
     # ── 7. Generate enhanced reports (JSON/HTML/Markdown) ──
     try:
         from phantom.core.report_generator import ReportGenerator
+        from phantom.models.scan import ScanResult, ScanStatus
 
         gen = ReportGenerator(output_dir=run_dir)
         target_str = ""
@@ -451,6 +453,22 @@ def _run_post_scan_enrichment(tracer: Any, agent_state: Any = None) -> dict[str,
             targets = tracer.scan_config["targets"]
             if targets:
                 target_str = targets[0].get("original", "") if isinstance(targets[0], dict) else str(targets[0])
+
+        # Build ScanResult so reports include timing + status
+        scan_result = None
+        try:
+            from datetime import datetime, UTC
+            started_at = datetime.fromisoformat(tracer.start_time) if tracer.start_time else None
+            completed_at = datetime.now(UTC)
+            scan_result = ScanResult(
+                scan_id=tracer.run_id,
+                target=target_str,
+                started_at=started_at,
+                completed_at=completed_at,
+                status=ScanStatus.COMPLETED,
+            )
+        except Exception as e:
+            _logger.debug("Could not build ScanResult: %s", e)
 
         # Convert dict reports to Vulnerability model objects
         vuln_models = []
@@ -467,6 +485,7 @@ def _run_post_scan_enrichment(tracer: Any, agent_state: Any = None) -> dict[str,
                     target=target_str,
                     vulnerabilities=vuln_models,
                     hosts=[],
+                    scan_result=scan_result,
                 ))
             except Exception as e:
                 _logger.warning(f"JSON report generation failed: {e}")
@@ -477,6 +496,7 @@ def _run_post_scan_enrichment(tracer: Any, agent_state: Any = None) -> dict[str,
                     target=target_str,
                     vulnerabilities=vuln_models,
                     hosts=[],
+                    scan_result=scan_result,
                 ))
             except Exception as e:
                 _logger.warning(f"HTML report generation failed: {e}")
@@ -487,6 +507,7 @@ def _run_post_scan_enrichment(tracer: Any, agent_state: Any = None) -> dict[str,
                     target=target_str,
                     vulnerabilities=vuln_models,
                     hosts=[],
+                    scan_result=scan_result,
                 ))
             except Exception as e:
                 _logger.warning(f"Markdown report generation failed: {e}")
@@ -594,6 +615,51 @@ def finish_scan(
     if validation_error:
         return validation_error
 
+    # ── AUTO-001 FIX: Minimum-work gate ──────────────────────────────────
+    # Prevents premature termination (e.g. via indirect prompt injection
+    # telling the LLM to call finish_scan immediately).
+    MIN_ITERATIONS = 5
+    MIN_TOOL_CALLS = 3
+
+    if agent_state is not None:
+        current_iteration = getattr(agent_state, "iteration", 0)
+        actions_count = len(getattr(agent_state, "actions_taken", []))
+
+        if current_iteration < MIN_ITERATIONS:
+            _logger.warning(
+                "AUTO-001: finish_scan blocked — iteration %d < minimum %d",
+                current_iteration, MIN_ITERATIONS,
+            )
+            return {
+                "success": False,
+                "message": (
+                    f"Cannot finish scan yet: only {current_iteration}/{MIN_ITERATIONS} "
+                    f"iterations completed. You MUST continue scanning — run more "
+                    f"reconnaissance and vulnerability testing before finishing."
+                ),
+                "blocked_by": "AUTO-001_minimum_work_gate",
+            }
+
+        if actions_count < MIN_TOOL_CALLS:
+            _logger.warning(
+                "AUTO-001: finish_scan blocked — %d tool calls < minimum %d",
+                actions_count, MIN_TOOL_CALLS,
+            )
+            return {
+                "success": False,
+                "message": (
+                    f"Cannot finish scan yet: only {actions_count}/{MIN_TOOL_CALLS} "
+                    f"tools invoked. You MUST run more security tools before finishing."
+                ),
+                "blocked_by": "AUTO-001_minimum_work_gate",
+            }
+
+        _logger.info(
+            "AUTO-001: finish_scan allowed — iteration=%d, tools=%d",
+            current_iteration, actions_count,
+        )
+    # ── END AUTO-001 ─────────────────────────────────────────────────────
+
     active_agents_error = _check_active_agents(agent_state)
     if active_agents_error:
         return active_agents_error
@@ -625,6 +691,40 @@ def finish_scan(
             )
 
             vulnerability_count = len(tracer.vulnerability_reports)
+
+            # ── ARCH-003 FIX: Verification summary for HIGH/CRITICAL findings ──
+            verification_summary = {"total_unverified": 0, "details": []}
+            try:
+                if agent_state and hasattr(agent_state, "unverified_findings"):
+                    unverified = getattr(agent_state, "unverified_findings", [])
+                    verified_count = 0
+                    # Check which findings were later verified via create_vulnerability_report
+                    ledger = getattr(agent_state, "findings_ledger", [])
+                    for uf in unverified:
+                        url = uf.get("url", "")
+                        name = uf.get("name", "")
+                        # A finding is considered verified if a vuln report was created for it
+                        is_verified = any(
+                            "[vuln/report]" in entry and (url in entry or name in entry)
+                            for entry in ledger
+                        )
+                        if is_verified:
+                            verified_count += 1
+                        else:
+                            verification_summary["details"].append(
+                                f"{uf.get('severity', '').upper()} {name} at {url} — NOT VERIFIED"
+                            )
+                    verification_summary["total_unverified"] = len(unverified) - verified_count
+                    verification_summary["total_queued"] = len(unverified)
+                    verification_summary["verified_count"] = verified_count
+                    if verification_summary["total_unverified"] > 0:
+                        _logger.warning(
+                            "ARCH-003: %d HIGH/CRITICAL findings were NOT verified before finish",
+                            verification_summary["total_unverified"],
+                        )
+            except Exception as e:
+                _logger.warning(f"ARCH-003 verification summary error: {e}")
+            # ── END ARCH-003 ──
 
             # ── Post-Scan Enrichment Pipeline ──
             enrichment_results = {}
@@ -660,6 +760,7 @@ def finish_scan(
                 "message": "Scan completed successfully",
                 "vulnerabilities_found": vulnerability_count,
                 "enrichment": enrichment_results,
+                "verification_summary": verification_summary,
             }
             if enhanced_state_path:
                 result["enhanced_state_file"] = enhanced_state_path

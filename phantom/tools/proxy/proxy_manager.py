@@ -9,9 +9,16 @@ from typing import TYPE_CHECKING, Any
 from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
 import requests
-from gql import Client, gql
-from gql.transport.exceptions import TransportQueryError
-from gql.transport.requests import RequestsHTTPTransport
+try:
+    from gql import Client, gql
+    from gql.transport.exceptions import TransportQueryError
+    from gql.transport.requests import RequestsHTTPTransport
+except ImportError:
+    # gql is only available inside Docker sandbox; these are not needed on host
+    Client = None  # type: ignore[assignment,misc]
+    gql = None  # type: ignore[assignment]
+    TransportQueryError = Exception  # type: ignore[assignment,misc]
+    RequestsHTTPTransport = None  # type: ignore[assignment]
 from requests.exceptions import ProxyError, RequestException, Timeout
 
 _logger = logging.getLogger(__name__)
@@ -21,6 +28,16 @@ _logger = logging.getLogger(__name__)
 # TLS interception. In direct mode, honour the environment setting.
 _PROXY_TLS_VERIFY: bool = False  # proxy always needs verify=False for interception
 _DIRECT_TLS_VERIFY: bool = os.environ.get("PHANTOM_TLS_VERIFY", "0").lower() in ("1", "true", "yes")
+
+# Explicitly allowed hostnames (populated from scan targets).
+# Requests to these hosts bypass the private-IP SSRF check because
+# they ARE the scan target — blocking them would break the scan.
+_ALLOWED_SSRF_HOSTS: set[str] = set()
+
+
+def allow_ssrf_host(hostname: str) -> None:
+    """Register a hostname as safe for SSRF checks (scan target)."""
+    _ALLOWED_SSRF_HOSTS.add(hostname.lower().strip())
 
 
 def _is_ssrf_safe(url: str) -> bool:
@@ -42,6 +59,11 @@ def _is_ssrf_safe(url: str) -> bool:
         # Block known dangerous hostnames
         if hostname.lower() in ("localhost", "0.0.0.0"):
             return False
+
+        # Allow explicitly registered scan targets even if they resolve to
+        # private IPs (e.g. host.docker.internal → 192.168.x.x).
+        if hostname.lower() in _ALLOWED_SSRF_HOSTS:
+            return True
 
         # PHT-003 FIX: Resolve DNS first, then check ALL resolved IPs
         try:

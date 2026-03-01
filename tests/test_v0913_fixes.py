@@ -245,13 +245,12 @@ class TestConvertToDictWrap:
 class TestExecutorTimeout:
     """Verify executor timeout matches config default."""
 
-    def test_default_timeout_is_120(self) -> None:
-        """Default should be 120s, matching config.py and tool_server."""
-        # We can't easily reload the module, but we can check config
+    def test_default_timeout_is_600(self) -> None:
+        """Default should be 600s, matching config.py and tool_server."""
         from phantom.config import Config
 
         default = Config.get("phantom_sandbox_execution_timeout")
-        assert default == "120"
+        assert default == "600"
 
 
 # ── Finding 13: notes thread safety ──

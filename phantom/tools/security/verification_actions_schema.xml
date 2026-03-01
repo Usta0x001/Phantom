@@ -35,4 +35,38 @@ This makes reports more professional and useful for compliance teams.</descripti
       </parameter>
     </parameters>
   </tool>
+
+  <tool name="verify_vulnerability">
+    <description>Auto-verify a vulnerability using the verification engine.
+
+Runs exploit-verification strategies (time-based SQLi, error-based SQLi, boolean injection, DOM reflection, LFI, SSTI) against the target to confirm exploitability.
+
+Call this AFTER discovering a potential vulnerability but BEFORE create_vulnerability_report to increase confidence.</description>
+    <parameters>
+      <parameter name="vuln_id" type="string" required="true">
+        <description>Unique identifier for the vulnerability (e.g., "sqli-login-001")</description>
+      </parameter>
+      <parameter name="target" type="string" required="true">
+        <description>Target URL where the vulnerability was found</description>
+      </parameter>
+      <parameter name="vulnerability_class" type="string" required="true">
+        <description>Type of vulnerability: sqli, xss, lfi, ssti, idor, auth_bypass, etc.</description>
+      </parameter>
+      <parameter name="severity" type="string" required="false">
+        <description>Severity level: critical, high, medium, low, info (default: medium)</description>
+      </parameter>
+      <parameter name="endpoint" type="string" required="false">
+        <description>Specific endpoint path (e.g., "/rest/user/login")</description>
+      </parameter>
+      <parameter name="parameter" type="string" required="false">
+        <description>Vulnerable parameter name (e.g., "email")</description>
+      </parameter>
+    </parameters>
+    <returns type="Dict[str, Any]">
+      <description>Verification results with:
+      - verified: boolean indicating if vulnerability was confirmed
+      - confidence: verification confidence score
+      - evidence: proof of exploitation</description>
+    </returns>
+  </tool>
 </tools>

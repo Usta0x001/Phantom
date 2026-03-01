@@ -130,6 +130,15 @@ class CostController:
                     self.max_single_request_cost,
                 )
 
+            # LOGIC-002 FIX: Check compression limit BEFORE recording any cost
+            # to prevent accumulating cost for the call that exceeds the limit.
+            if is_compression and self._state.compression_calls >= self.max_compression_calls:
+                raise CostLimitExceeded(
+                    f"Compression calls ({self._state.compression_calls}) reached limit ({self.max_compression_calls})",
+                    self._state.total_cost_usd,
+                    self.max_cost_usd,
+                )
+
             self._state.total_input_tokens += input_tokens
             self._state.total_output_tokens += output_tokens
             self._state.total_cached_tokens += cached_tokens
@@ -140,15 +149,10 @@ class CostController:
                 self._state.compression_calls += 1
                 self._state.compression_cost_usd += cost_usd
 
-            # PHT-022: Prevent compression spirals
-            if is_compression and self._state.compression_calls > self.max_compression_calls:
-                raise CostLimitExceeded(
-                    f"Compression calls ({self._state.compression_calls}) exceed limit ({self.max_compression_calls})",
-                    self._state.total_cost_usd,
-                    self.max_cost_usd,
-                )
-
-        self._check_limits()
+            # LOGIC-001 FIX: _check_limits() now inside the lock to prevent
+            # race condition where another thread could mutate state between
+            # releasing the lock and checking limits.
+            self._check_limits()
 
     def _check_limits(self) -> None:
         """Check if any cost/token limit has been exceeded."""

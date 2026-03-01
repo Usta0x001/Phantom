@@ -333,7 +333,7 @@ class TestNmapRateLimiting:
 class TestVersion096:
     def test_version_is_current(self):
         from phantom import __version__
-        assert __version__ == "0.9.14"
+        assert __version__ == "0.9.16"
 
 
 # =========================================================================

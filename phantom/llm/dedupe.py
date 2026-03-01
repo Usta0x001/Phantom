@@ -113,8 +113,34 @@ def _parse_dedupe_response(content: str) -> dict[str, Any]:
     )
 
     if not result_match:
-        logger.warning(f"No <dedupe_result> block found in response: {content[:500]}")
-        raise ValueError("No <dedupe_result> block found in response")
+        # Fallback: try to infer from raw text when LLM doesn't follow XML format
+        content_lower = content.lower()
+        if any(kw in content_lower for kw in ("not a duplicate", "not duplicate", "unique", "new vulnerability")):
+            return {
+                "is_duplicate": False,
+                "duplicate_id": "",
+                "confidence": 0.7,
+                "reason": f"Inferred from LLM text: {content[:200]}",
+            }
+        if any(kw in content_lower for kw in ("is a duplicate", "duplicate of", "same vulnerability", "already reported")):
+            # Try to extract the duplicate ID from text
+            id_match = re.search(r"(?:vuln|id|report)[-_]?(\d+)", content_lower)
+            dup_id = f"vuln-{id_match.group(1)}" if id_match else ""
+            return {
+                "is_duplicate": True,
+                "duplicate_id": dup_id,
+                "confidence": 0.6,
+                "reason": f"Inferred from LLM text: {content[:200]}",
+            }
+        # Final fallback: treat as not-duplicate with low confidence.
+        # False negatives (missing a dup) are safer than false positives (dropping a unique vuln).
+        logger.warning("No <dedupe_result> block found in response, defaulting to not-duplicate: %s", content[:500])
+        return {
+            "is_duplicate": False,
+            "duplicate_id": "",
+            "confidence": 0.5,
+            "reason": f"Could not parse LLM response; defaulting to not-duplicate: {content[:200]}",
+        }
 
     result_content = result_match.group(1)
 

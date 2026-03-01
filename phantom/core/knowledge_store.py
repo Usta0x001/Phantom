@@ -164,7 +164,10 @@ class KnowledgeStore:
             except Exception:
                 # Fall back to plain-text read (file may have been written
                 # before encryption was enabled).
-                pass
+                logger.warning(
+                    "Decryption failed for %s — falling back to plaintext "
+                    "(expected only for pre-encryption data)", path.name
+                )
         with open(path, encoding="utf-8") as f:
             return json.load(f)
     

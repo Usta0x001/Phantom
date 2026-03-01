@@ -158,25 +158,33 @@ class TestPHT023DNSRebinding:
 
 
 class TestPHT024ContainerCapabilities:
-    """Verify container creation includes cap_drop."""
+    """Verify container creation includes hardening measures."""
 
-    def test_create_container_has_cap_drop(self):
-        """Verify the code passes cap_drop=['ALL'] to Docker."""
+    def test_create_container_has_resource_limits(self):
+        """Verify the code passes resource limits (mem_limit, cpu_quota, pids_limit) to Docker.
+
+        NOTE: cap_drop=['ALL'] and no-new-privileges were removed because the
+        sandbox entrypoint requires sudo for Caido proxy/CA setup.  Resource
+        limits + network binding to 127.0.0.1 are the primary hardening layers.
+        """
         import inspect
 
         from phantom.runtime.docker_runtime import DockerRuntime
 
         source = inspect.getsource(DockerRuntime._create_container)
-        assert "cap_drop" in source
+        assert "mem_limit" in source
+        assert "cpu_quota" in source
+        assert "pids_limit" in source
 
-    def test_no_new_privileges(self):
-        """Verify security_opt includes no-new-privileges."""
+    def test_cap_add_present(self):
+        """Verify cap_add is present for NET_ADMIN and NET_RAW."""
         import inspect
 
         from phantom.runtime.docker_runtime import DockerRuntime
 
         source = inspect.getsource(DockerRuntime._create_container)
-        assert "no-new-privileges" in source
+        assert "cap_add" in source
+        assert "NET_ADMIN" in source
 
 
 # ====================================================================

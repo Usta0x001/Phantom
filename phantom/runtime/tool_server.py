@@ -26,8 +26,8 @@ parser.add_argument("--port", type=int, required=True, help="Port to bind to")
 parser.add_argument(
     "--timeout",
     type=int,
-    default=120,
-    help="Hard timeout in seconds for each request execution (default: 120)",
+    default=600,
+    help="Hard timeout in seconds for each request execution (default: 600)",
 )
 
 args = parser.parse_args()

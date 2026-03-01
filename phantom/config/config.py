@@ -1,8 +1,62 @@
 import contextlib
 import json
+import logging
 import os
 from pathlib import Path
 from typing import Any
+
+_logger = logging.getLogger(__name__)
+
+# IMPL-004 FIX: Credential keys that should use OS keyring when available
+_SENSITIVE_KEYS = frozenset({
+    "LLM_API_KEY", "GROQ_API_KEY", "OPENAI_API_KEY", "PERPLEXITY_API_KEY",
+    "OPENROUTER_API_KEY",
+})
+
+
+def _get_keyring() -> Any:
+    """Try to import and return the keyring module. Returns None if unavailable."""
+    try:
+        import keyring as _kr  # type: ignore[import-untyped]
+        # Verify it's functional (not a null backend)
+        backend = _kr.get_keyring()
+        if "fail" in type(backend).__name__.lower() or "null" in type(backend).__name__.lower():
+            return None
+        return _kr
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _store_secret(key: str, value: str) -> bool:
+    """Store a secret in OS keyring. Returns True on success."""
+    kr = _get_keyring()
+    if kr is None:
+        return False
+    try:
+        kr.set_password("phantom", key, value)
+        return True
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _load_secret(key: str) -> str | None:
+    """Load a secret from OS keyring. Returns None if unavailable."""
+    kr = _get_keyring()
+    if kr is None:
+        return None
+    try:
+        return kr.get_password("phantom", key)
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _delete_secret(key: str) -> None:
+    """Delete a secret from OS keyring (best-effort)."""
+    kr = _get_keyring()
+    if kr is None:
+        return
+    with contextlib.suppress(Exception):
+        kr.delete_password("phantom", key)
 
 
 class Config:
@@ -45,7 +99,7 @@ class Config:
     # Runtime Configuration
     phantom_image = "ghcr.io/usta0x001/phantom-sandbox:latest"
     phantom_runtime_backend = "docker"
-    phantom_sandbox_execution_timeout = "120"
+    phantom_sandbox_execution_timeout = "600"
     phantom_sandbox_connect_timeout = "10"
 
     # Config file override (set via --config CLI arg)
@@ -88,6 +142,21 @@ class Config:
         return os.getenv(env_name, default)
 
     @classmethod
+    def get_redacted(cls, name: str) -> str | None:
+        """Return config value with sensitive data redacted for display."""
+        value = cls.get(name)
+        if value is None:
+            return None
+        # Check if the config key holds a sensitive value (API key, token, secret)
+        sensitive_keywords = ("api_key", "token", "secret", "password", "credential")
+        is_sensitive = any(kw in name.lower() for kw in sensitive_keywords)
+        if is_sensitive:
+            if len(value) <= 8:
+                return "***"
+            return value[:4] + "..." + value[-4:]
+        return value
+
+    @classmethod
     def config_dir(cls) -> Path:
         return Path.home() / ".phantom"
 
@@ -105,6 +174,19 @@ class Config:
         try:
             with path.open("r", encoding="utf-8-sig") as f:
                 data: dict[str, Any] = json.load(f)
+
+                # IMPL-004 FIX: Restore sensitive values from OS keyring
+                env_vars = data.get("env", {})
+                if isinstance(env_vars, dict):
+                    for key, value in list(env_vars.items()):
+                        if value == "__KEYRING__":
+                            secret = _load_secret(key)
+                            if secret:
+                                env_vars[key] = secret
+                            else:
+                                # Keyring unavailable — remove sentinel
+                                env_vars.pop(key, None)
+
                 return data
         except (json.JSONDecodeError, OSError):
             return {}
@@ -114,6 +196,20 @@ class Config:
         try:
             cls.config_dir().mkdir(parents=True, exist_ok=True)
             config_path = cls.config_file()
+
+            # IMPL-004 FIX: Move sensitive values to OS keyring when available
+            env_vars = config.get("env", {})
+            if isinstance(env_vars, dict):
+                keys_moved_to_keyring: list[str] = []
+                for key in list(env_vars.keys()):
+                    if key.upper() in _SENSITIVE_KEYS and env_vars[key]:
+                        if _store_secret(key, env_vars[key]):
+                            keys_moved_to_keyring.append(key)
+                            # Replace with sentinel so load() knows to check keyring
+                            env_vars[key] = "__KEYRING__"
+                if keys_moved_to_keyring:
+                    _logger.debug("Stored %d secrets in OS keyring", len(keys_moved_to_keyring))
+
             with config_path.open("w", encoding="utf-8") as f:
                 json.dump(config, f, indent=2)
         except OSError:

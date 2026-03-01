@@ -519,6 +519,17 @@ Examples:
     assign_workspace_subdirs(args.targets_info)
     rewrite_localhost_targets(args.targets_info, HOST_GATEWAY_HOSTNAME)
 
+    # Register scan targets with SSRF check so send_request won't block them
+    try:
+        from phantom.tools.proxy.proxy_manager import allow_ssrf_host
+        from urllib.parse import urlparse as _urlparse
+        for t in args.targets_info:
+            h = _urlparse(t.get("original", "")).hostname
+            if h:
+                allow_ssrf_host(h)
+    except Exception:
+        pass
+
     return args
 
 

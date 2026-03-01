@@ -34,7 +34,7 @@ class Tracer:
     """
 
     def __init__(self, run_name: str | None = None):
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()  # RLock: allows re-entrant locking (set_scan_config -> get_run_dir)
 
         self.run_name = run_name
         self.run_id = run_name or f"run-{uuid4().hex[:8]}"
@@ -429,6 +429,46 @@ class Tracer:
                 logger.info(f"Updated vulnerability index: {vuln_csv_file}")
 
             logger.info(f"📊 Essential scan data saved to: {run_dir}")
+
+            # Write LLM cost/token stats and scan summary
+            if mark_complete:
+                try:
+                    import json as _json
+                    llm_stats = self.get_total_llm_stats()
+                    duration = self._calculate_duration()
+                    tool_count = self.get_real_tool_count()
+                    stats = {
+                        "scan_id": self.run_id,
+                        "started_at": self.start_time,
+                        "completed_at": self.end_time,
+                        "duration_seconds": round(duration, 1),
+                        "vulnerabilities_found": len(vuln_reports),
+                        "tool_executions": tool_count,
+                        "llm_usage": llm_stats,
+                    }
+                    stats_path = run_dir / "scan_stats.json"
+                    stats_path.write_text(_json.dumps(stats, indent=2), encoding="utf-8")
+                    logger.info("Saved scan stats to: %s", stats_path)
+
+                    # Also log cost summary to audit logger
+                    try:
+                        from phantom.core.audit_logger import get_global_audit_logger
+                        al = get_global_audit_logger()
+                        if al:
+                            al.log_event(
+                                event_type="scan_completed",
+                                category="scan",
+                                data={
+                                    "duration_seconds": round(duration, 1),
+                                    "vulnerabilities_found": len(vuln_reports),
+                                    "tool_executions": tool_count,
+                                    "llm_usage": llm_stats,
+                                },
+                            )
+                    except Exception:
+                        pass
+                except Exception as e:
+                    logger.debug("Could not write scan stats: %s", e)
 
         except (OSError, RuntimeError):
             logger.exception("Failed to save scan data")

@@ -54,14 +54,18 @@ class AuthorizationRecord:
         self.signature = self._compute_signature()
 
     def _compute_signature(self) -> str:
-        """Compute a hash signature of the authorization record."""
+        """Compute a hash signature of the authorization record.
+
+        SEC-006 FIX: Use full SHA-256 hexdigest (64 chars) instead of
+        truncated 16-char version to preserve collision resistance.
+        """
         data = json.dumps({
             "targets": sorted(self.targets),
             "method": self.method,
             "authorized_by": self.authorized_by,
             "timestamp": self.timestamp,
         }, sort_keys=True)
-        return hashlib.sha256(data.encode()).hexdigest()[:16]
+        return hashlib.sha256(data.encode()).hexdigest()
 
     def to_dict(self) -> dict[str, Any]:
         return {

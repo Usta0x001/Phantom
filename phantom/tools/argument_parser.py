@@ -1,9 +1,22 @@
 import contextlib
 import inspect
 import json
+import logging
 import types
 from collections.abc import Callable
 from typing import Any, Union, get_args, get_origin
+
+logger = logging.getLogger(__name__)
+
+# Common parameter name aliases that LLMs frequently hallucinate.
+# Maps (wrong_name, correct_name) — applied when wrong_name is NOT in
+# the function signature but correct_name IS.
+_PARAM_ALIASES: dict[str, list[str]] = {
+    "target": ["targets", "url", "domain"],   # LLMs generalise "target" across tools
+    "targets": ["target"],                     # inverse
+    "host": ["target", "url"],
+    "headers": ["extra_args"],                 # LLMs try "headers" on tools like sqlmap
+}
 
 
 class ArgumentConversionError(Exception):
@@ -22,14 +35,39 @@ def convert_arguments(func: Callable[..., Any], kwargs: dict[str, Any]) -> dict[
             p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()
         )
 
+        # First pass: resolve aliases for unknown parameter names
+        resolved_kwargs: dict[str, Any] = {}
         for param_name, value in kwargs.items():
+            if param_name in sig.parameters:
+                resolved_kwargs[param_name] = value
+            elif param_name in _PARAM_ALIASES:
+                # Try each alias candidate
+                matched = False
+                for alias in _PARAM_ALIASES[param_name]:
+                    if alias in sig.parameters and alias not in kwargs and alias not in resolved_kwargs:
+                        logger.info(
+                            "Auto-corrected parameter '%s' -> '%s' for %s",
+                            param_name, alias, func.__name__,
+                        )
+                        resolved_kwargs[alias] = value
+                        matched = True
+                        break
+                if not matched:
+                    resolved_kwargs[param_name] = value  # pass through
+            else:
+                resolved_kwargs[param_name] = value
+
+        for param_name, value in resolved_kwargs.items():
             if param_name not in sig.parameters:
                 if has_var_keyword:
                     # Function accepts **kwargs, pass unknown params through
                     converted[param_name] = value
-                # Otherwise silently drop unknown params — LLMs often
-                # hallucinate extra keyword arguments that would crash
-                # the tool with "unexpected keyword argument".
+                else:
+                    # Log dropped parameters for debugging
+                    logger.warning(
+                        "Dropped unknown parameter '%s' for tool %s (not in signature, no alias found)",
+                        param_name, func.__name__,
+                    )
                 continue
 
             param = sig.parameters[param_name]

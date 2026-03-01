@@ -134,6 +134,8 @@ class DockerRuntime(AbstractRuntime):
                     name=container_name,
                     hostname=container_name,
                     ports={f"{CONTAINER_TOOL_SERVER_PORT}/tcp": ("127.0.0.1", self._tool_server_port)},
+                    # Sandbox needs standard caps for entrypoint (sudo, proxy config, CA trust).
+                    # Security hardening via resource limits below + network binding to 127.0.0.1.
                     cap_add=["NET_ADMIN", "NET_RAW"],
                     labels={"phantom-scan-id": scan_id},
                     # PHT-006 FIX: Per-container resource limits to prevent DoS
@@ -142,7 +144,6 @@ class DockerRuntime(AbstractRuntime):
                     cpu_period=100000,
                     cpu_quota=200000,  # 2 CPUs max
                     pids_limit=512,    # Limit process spawning
-                    storage_opt={"size": "20G"},  # Limit disk usage
                     environment={
                         "PYTHONUNBUFFERED": "1",
                         "TOOL_SERVER_PORT": str(CONTAINER_TOOL_SERVER_PORT),
