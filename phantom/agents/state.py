@@ -22,7 +22,7 @@ class AgentState(BaseModel):
 
     task: str = ""
     iteration: int = 0
-    max_iterations: int = 300
+    max_iterations: int = 200  # M29 FIX: lowered from 300 to 200
     completed: bool = False
     stop_requested: bool = False
     waiting_for_input: bool = False
@@ -61,12 +61,22 @@ class AgentState(BaseModel):
     _MAX_OBSERVATIONS: int = 5000
     _MAX_ERRORS: int = 1000
     _MAX_FINDINGS: int = 200
+    _MAX_MESSAGES: int = 500
 
     def increment_iteration(self) -> None:
         self.iteration += 1
         self.last_updated = datetime.now(UTC).isoformat()
 
     def add_message(self, role: str, content: Any, thinking_blocks: list[dict[str, Any]] | None = None) -> None:
+        if len(self.messages) >= self._MAX_MESSAGES:
+            # Keep the system prompt (first message) and the most recent half
+            keep = self._MAX_MESSAGES // 2
+            self.messages = self.messages[:1] + self.messages[-keep:]
+            logger.warning(
+                "Message history exceeded %d — trimmed to %d keeping system prompt",
+                self._MAX_MESSAGES,
+                len(self.messages),
+            )
         message = {"role": role, "content": content}
         if thinking_blocks:
             message["thinking_blocks"] = thinking_blocks
@@ -109,9 +119,11 @@ class AgentState(BaseModel):
         such as confirmed vulnerabilities, discovered endpoints, credentials,
         and technology versions.
         """
-        # Dedup: skip if finding already recorded
-        if finding in self.findings_ledger:
-            return
+        # M19 FIX: Normalize whitespace for dedup to avoid near-duplicates
+        normalized = " ".join(finding.split()).strip().lower()
+        for existing in self.findings_ledger:
+            if " ".join(existing.split()).strip().lower() == normalized:
+                return
         if len(self.findings_ledger) >= self._MAX_FINDINGS:
             # Keep the most recent half
             self.findings_ledger = self.findings_ledger[-self._MAX_FINDINGS // 2 :]
@@ -140,13 +152,21 @@ class AgentState(BaseModel):
     def should_stop(self) -> bool:
         return self.stop_requested or self.completed or self.has_reached_max_iterations() or self._has_exceeded_time_limit()
 
+    # Track cumulative elapsed time across resumes (seconds)
+    _cumulative_elapsed_seconds: float = 0.0
+
     def _has_exceeded_time_limit(self) -> bool:
-        """LOGIC-005 FIX: Check if wall-clock time limit has been exceeded."""
+        """LOGIC-005 FIX: Check if wall-clock time limit has been exceeded.
+
+        H14 FIX: accounts for cumulative time across resumes by tracking
+        ``_cumulative_elapsed_seconds`` which is updated on each pause/resume.
+        """
         if self.max_scan_duration_seconds <= 0:
             return False
         try:
-            elapsed = (datetime.now(UTC) - datetime.fromisoformat(self.start_time)).total_seconds()
-            return elapsed >= self.max_scan_duration_seconds
+            current_elapsed = (datetime.now(UTC) - datetime.fromisoformat(self.start_time)).total_seconds()
+            total = self._cumulative_elapsed_seconds + current_elapsed
+            return total >= self.max_scan_duration_seconds
         except (ValueError, TypeError):
             return False
 
@@ -208,7 +228,8 @@ class AgentState(BaseModel):
         return True
 
     def get_conversation_history(self) -> list[dict[str, Any]]:
-        return self.messages
+        # L21 FIX: return a shallow copy to prevent external mutation
+        return list(self.messages)
 
     def get_execution_summary(self) -> dict[str, Any]:
         return {
@@ -216,7 +237,10 @@ class AgentState(BaseModel):
             "agent_name": self.agent_name,
             "parent_id": self.parent_id,
             "sandbox_id": self.sandbox_id,
-            "sandbox_info": self.sandbox_info,
+            "sandbox_info": {
+                k: v for k, v in (self.sandbox_info or {}).items()
+                if k != "auth_token"  # L4 FIX: never expose token in summaries
+            } if self.sandbox_info else None,
             "task": self.task,
             "iteration": self.iteration,
             "max_iterations": self.max_iterations,

@@ -308,31 +308,30 @@ class TestToolResultTruncation:
         assert "short result" in text
         assert "truncated" not in text
 
-    def test_long_result_truncated_at_5k(self):
+    def test_long_result_truncated_at_8k(self):
         from phantom.tools.executor import _format_tool_result
 
-        long_text = "A" * 10_000
+        long_text = "A" * 15_000
         text, images = _format_tool_result("test_tool", long_text)
         # Should be truncated
         assert "truncated" in text.lower() or "characters truncated" in text
-        # Final text should be under ~5500 chars (head + tail + overhead)
-        # The XML wrapper adds some but the inner content should be ~4400+overhead
-        assert len(text) < 8000  # well below old 8K limit
+        # Final text should be under ~8500 chars (head + tail + overhead)
+        assert len(text) < 10000
 
-    def test_5k_boundary_not_truncated(self):
-        """Result exactly at 5000 chars should NOT be truncated."""
+    def test_8k_boundary_not_truncated(self):
+        """Result exactly at 8000 chars should NOT be truncated (M22 raised limit)."""
         from phantom.tools.executor import _format_tool_result
 
-        text_4999 = "B" * 4999
-        result, images = _format_tool_result("test_tool", text_4999)
+        text_7999 = "B" * 7999
+        result, images = _format_tool_result("test_tool", text_7999)
         assert "truncated" not in result
 
-    def test_5001_chars_is_truncated(self):
-        """Result at 5001 chars SHOULD be truncated."""
+    def test_8001_chars_is_truncated(self):
+        """Result at 8001 chars SHOULD be truncated (M22 limit = 8000)."""
         from phantom.tools.executor import _format_tool_result
 
-        text_5001 = "C" * 5001
-        result, images = _format_tool_result("test_tool", text_5001)
+        text_8001 = "C" * 8001
+        result, images = _format_tool_result("test_tool", text_8001)
         assert "truncated" in result.lower() or "characters truncated" in result
 
 
@@ -487,7 +486,7 @@ class TestCostControllerDefaults:
         from phantom.core.cost_controller import CostController
 
         cc = CostController()
-        assert cc.max_cost_usd == 50.0
+        assert cc.max_cost_usd == 25.0  # M9: lowered from $50 to $25
 
     def test_max_input_tokens_default(self):
         from phantom.core.cost_controller import CostController

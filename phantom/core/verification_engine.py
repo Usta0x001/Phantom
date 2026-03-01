@@ -198,7 +198,7 @@ class VerificationEngine:
                         # Timeout expected for time-based verification
                         pass
                     except Exception as e:
-                        logger.debug(f"RCE verification request failed: {e}")
+                        logger.debug("RCE verification request failed: %s", e)
         
         return attempt
     
@@ -393,7 +393,7 @@ class VerificationEngine:
                 
         except Exception as e:
             attempt.error = str(e)
-            logger.debug(f"OOB HTTP verification failed for {vuln.id}: {e}")
+            logger.debug("OOB HTTP verification failed for %s: %s", vuln.id, e)
         
         return attempt
     
@@ -453,7 +453,7 @@ class VerificationEngine:
                 
         except Exception as e:
             attempt.error = str(e)
-            logger.debug(f"OOB DNS verification failed for {vuln.id}: {e}")
+            logger.debug("OOB DNS verification failed for %s: %s", vuln.id, e)
         
         return attempt
     

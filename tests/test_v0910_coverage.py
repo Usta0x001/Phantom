@@ -44,9 +44,9 @@ class TestGracefulCrashHandling:
             agent = BaseAgent.__new__(BaseAgent)
             agent.state = state
 
-        # Mock tracer with run_dir
+        # Mock tracer with get_run_dir method (H4 fix uses get_run_dir())
         tracer = MagicMock()
-        tracer.run_dir = str(tmp_path)
+        tracer.get_run_dir.return_value = str(tmp_path)
 
         agent._save_partial_results_on_crash(tracer, "APIError: credits exhausted")
 

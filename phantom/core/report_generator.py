@@ -15,6 +15,16 @@ from phantom.models.vulnerability import Vulnerability, VulnerabilitySeverity
 from phantom.models.host import Host
 from phantom.models.scan import ScanResult
 
+def _sanitize_csv_cell(value: str) -> str:
+    """M12 FIX: Prevent CSV formula injection.
+    
+    If a cell value starts with =, +, -, @, TAB, or CR, prefix with a
+    single-quote to neutralise it in spreadsheet applications that might
+    import the Markdown table.
+    """
+    if value and value[0] in ("=", "+", "-", "@", "\t", "\r"):
+        return f"'{value}"
+    return value
 
 class ReportGenerator:
     """
@@ -378,7 +388,7 @@ class ReportGenerator:
             if len(host.ports) > 5:
                 ports += f" (+{len(host.ports) - 5} more)"
             
-            lines.append(f"| {host.ip} | {host.hostname or '-'} | {host.os or '-'} | {ports} |")
+            lines.append(f"| {_sanitize_csv_cell(host.ip)} | {_sanitize_csv_cell(host.hostname or '-')} | {_sanitize_csv_cell(host.os or '-')} | {_sanitize_csv_cell(ports)} |")
         
         lines.extend([
             f"",

@@ -466,7 +466,7 @@ class Tracer:
                                 },
                             )
                     except Exception:
-                        pass
+                        logger.debug("Audit log write for scan stats failed", exc_info=True)
                 except Exception as e:
                     logger.debug("Could not write scan stats: %s", e)
 

@@ -209,6 +209,7 @@ def _run_agent_in_thread(
             _agent_graph["nodes"][state.agent_id]["result"] = {"error": str(e)}
             _running_agents.pop(state.agent_id, None)
             _agent_instances.pop(state.agent_id, None)
+            _agent_states.pop(state.agent_id, None)
         raise
     else:
         with _graph_lock:
@@ -220,6 +221,7 @@ def _run_agent_in_thread(
             _agent_graph["nodes"][state.agent_id]["result"] = result
             _running_agents.pop(state.agent_id, None)
             _agent_instances.pop(state.agent_id, None)
+            _agent_states.pop(state.agent_id, None)
 
         return {"result": result}
 

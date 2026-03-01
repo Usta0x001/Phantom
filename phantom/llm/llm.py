@@ -118,7 +118,12 @@ class LLM:
 
     def set_agent_state(self, state: Any) -> None:
         """Give the memory compressor a reference to the agent state so it can
-        read the findings ledger during compression."""
+        read the findings ledger during compression.
+
+        We store a *reference* intentionally — the compressor must see the
+        live findings_ledger so compressions stay up-to-date.  This is safe
+        because the compressor only reads the list; it never mutates it.
+        """
         self.memory_compressor._agent_state = state
 
     def set_memory_threshold(self, max_tokens: int) -> None:
@@ -336,11 +341,18 @@ class LLM:
         # Redact potential API keys/secrets from error details
         details = str(e)
         import re as _re
+        # Redact various API key / token formats
         details = _re.sub(
-            r"(sk-|key-|api[_-]?key[=: \"]*)[A-Za-z0-9\-_]{8,}",
+            r"(sk-|key-|api[_-]?key[=: \"]*|bearer\s+|token[=: \"]*)[A-Za-z0-9\-_./]{8,}",
             r"\1[REDACTED]",
             details,
             flags=_re.IGNORECASE,
+        )
+        # Also redact anything that looks like a long hex/base64 secret
+        details = _re.sub(
+            r"\b[A-Za-z0-9+/]{40,}={0,2}\b",
+            "[REDACTED]",
+            details,
         )
         raise LLMRequestFailedError(f"LLM request failed: {type(e).__name__}", details) from e
 

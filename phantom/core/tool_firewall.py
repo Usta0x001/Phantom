@@ -34,7 +34,7 @@ _MAX_ARGS_COUNT = 50
 # Patterns that indicate injection attempts in string arguments
 _INJECTION_PATTERNS = [
     re.compile(r";\s*\w+"),           # Command chaining via semicolon
-    re.compile(r"\|\s*\w+"),          # Pipe to another command
+    re.compile(r"(?<!http:)(?<!https:)(?<!\d)\|\s*\w+"),  # Pipe (not in URLs/ports)
     re.compile(r"`[^`]+`"),           # Backtick command substitution
     re.compile(r"\$\([^)]+\)"),       # $() command substitution
     re.compile(r"\$\{[^}]+\}"),       # ${} variable expansion
@@ -54,6 +54,19 @@ _SENSITIVE_ARG_NAMES = {
     "target", "url", "target_url", "ports", "scripts",
     "extra_args", "command", "wordlist", "parameter",
     "headers", "body", "cookie", "data",
+}
+
+# Allowed flags per tool for extra_args (H2 FIX: whitelist approach)
+_ALLOWED_EXTRA_FLAGS: dict[str, set[str]] = {
+    "nmap_scan": {"-sV", "-sC", "-sS", "-sT", "-sU", "-A", "-O", "-Pn",
+                   "--top-ports", "--script", "-p", "--min-rate", "--max-rate",
+                   "-T0", "-T1", "-T2", "-T3", "-T4", "-T5", "-v", "-vv"},
+    "nmap_vuln_scan": {"-sV", "-sC", "-Pn", "--script", "-p", "-T3", "-T4"},
+    "ffuf_directory_scan": {"-mc", "-fc", "-fs", "-fw", "-fl", "-t",
+                            "-recursion", "-recursion-depth", "-e"},
+    "ffuf_parameter_fuzz": {"-mc", "-fc", "-fs", "-fw", "-fl", "-t", "-X"},
+    "sqlmap_test": {"--level", "--risk", "--technique", "--tamper",
+                    "--batch", "--random-agent", "--threads"},
 }
 
 
@@ -158,6 +171,26 @@ class ToolInvocationFirewall:
                 f"Argument '{arg_name}' too long ({len(arg_value)} chars, max {_MAX_ARG_LENGTH})",
             )
 
+        # H2 FIX: Validate extra_args against whitelist
+        if arg_name == "extra_args" and arg_value.strip():
+            allowed = _ALLOWED_EXTRA_FLAGS.get(tool_name)
+            if allowed is not None:
+                try:
+                    tokens = shlex.split(arg_value)
+                except ValueError:
+                    return self._block(
+                        tool_name, {arg_name: arg_value[:200]},
+                        f"Malformed extra_args: cannot parse shell tokens",
+                    )
+                for token in tokens:
+                    # Allow flag values (e.g. numbers, host:port)
+                    if token.startswith("-") and token not in allowed:
+                        return self._block(
+                            tool_name, {arg_name: arg_value[:200]},
+                            f"Disallowed flag '{token}' in extra_args. "
+                            f"Allowed: {', '.join(sorted(allowed))}",
+                        )
+
         # For sensitive argument names, check for injection patterns
         if arg_name.lower() in _SENSITIVE_ARG_NAMES:
             for pattern in _INJECTION_PATTERNS:
@@ -221,6 +254,21 @@ class ToolInvocationFirewall:
         }
         self._violations.append(violation)
         _logger.warning("FIREWALL BLOCKED: %s — %s", tool_name, reason)
+
+        # M26 FIX: also record in audit log for tamper-proof trail
+        try:
+            from phantom.core.audit_logger import get_global_audit_logger
+            audit = get_global_audit_logger()
+            if audit:
+                audit.log_event(
+                    "firewall_violation",
+                    {"tool_name": tool_name, "reason": reason},
+                    severity="warning",
+                    category="security",
+                )
+        except Exception:  # noqa: BLE001
+            pass
+
         return {"error": f"Firewall blocked: {reason}"}
 
     def get_violations(self) -> list[dict[str, Any]]:

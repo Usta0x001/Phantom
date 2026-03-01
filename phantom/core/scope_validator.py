@@ -123,7 +123,9 @@ class ScopeValidator:
         self._violation_log: list[dict[str, Any]] = []
         # LOGIC-003 FIX: DNS pin cache — record resolved IPs at first check
         # to detect and prevent DNS rebinding attacks (TOCTOU mitigation).
+        # M7 FIX: Bounded to prevent memory exhaustion
         self._dns_pin_cache: dict[str, set[str]] = {}
+        self._DNS_PIN_CACHE_MAX = 10_000
 
     @classmethod
     def from_targets(cls, targets: list[str]) -> ScopeValidator:
@@ -191,6 +193,10 @@ class ScopeValidator:
                         return False
                 else:
                     # Pin the first resolution
+                    # M7 FIX: evict oldest entries if cache is full
+                    if len(self._dns_pin_cache) >= self._DNS_PIN_CACHE_MAX:
+                        oldest_key = next(iter(self._dns_pin_cache))
+                        del self._dns_pin_cache[oldest_key]
                     self._dns_pin_cache[host] = current_ips
             except _socket.gaierror:
                 pass  # DNS resolution failed — continue with rule-based check
