@@ -47,8 +47,28 @@ class AuditLogger:
         self._lock = threading.Lock()
         self._ensure_directory()
         # PHT-017 FIX: HMAC chain for tamper detection
+        # SEC-004 FIX: No more hardcoded default key — generate unique per-run key
         import hashlib
-        self._hmac_key = (hmac_key or "phantom-audit-default-key").encode()
+        import secrets
+        if hmac_key:
+            self._hmac_key = hmac_key.encode()
+        else:
+            # Generate and persist a unique key per audit log
+            key_path = self.log_path.with_suffix(".hmac_key")
+            if key_path.exists():
+                try:
+                    self._hmac_key = key_path.read_text(encoding="utf-8").strip().encode()
+                except Exception:
+                    self._hmac_key = secrets.token_hex(32).encode()
+            else:
+                generated_key = secrets.token_hex(32)
+                self._hmac_key = generated_key.encode()
+                try:
+                    key_path.write_text(generated_key, encoding="utf-8")
+                    key_path.chmod(0o600)
+                except OSError:
+                    _logger.warning("SEC-004: Could not persist HMAC key to %s", key_path)
+            _logger.info("SEC-004: Using unique per-run HMAC key (not default)")
         self._prev_hash = hashlib.sha256(b"genesis").hexdigest()[:16]
 
     def _ensure_directory(self) -> None:

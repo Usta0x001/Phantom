@@ -121,6 +121,9 @@ class ScopeValidator:
     def __init__(self, config: ScopeConfig | None = None) -> None:
         self.config = config or ScopeConfig()
         self._violation_log: list[dict[str, Any]] = []
+        # LOGIC-003 FIX: DNS pin cache — record resolved IPs at first check
+        # to detect and prevent DNS rebinding attacks (TOCTOU mitigation).
+        self._dns_pin_cache: dict[str, set[str]] = {}
 
     @classmethod
     def from_targets(cls, targets: list[str]) -> ScopeValidator:
@@ -158,18 +161,37 @@ class ScopeValidator:
         # PHT-023: DNS rebinding defense — for targets NOT explicitly allowed,
         # resolve hostname and check if it points to a private/internal IP.
         # Skip for explicitly-listed targets (user authorized them).
+        # LOGIC-003 FIX: DNS pinning — record resolved IPs on first check and
+        # reject if subsequent resolutions return different IPs (TOCTOU defense).
         if not explicitly_allowed and not is_private_ip(host):
             import socket as _socket
             try:
                 resolved_ips = _socket.getaddrinfo(host, None)
+                current_ips = set()
                 for _family, _type, _proto, _canonname, sockaddr in resolved_ips:
                     resolved_ip = sockaddr[0]
+                    current_ips.add(resolved_ip)
                     if is_private_ip(resolved_ip):
                         self._log_violation(
                             target, "dns_rebinding",
                             f"Hostname {host} resolves to private IP {resolved_ip}"
                         )
                         return False
+
+                # DNS pinning: compare against cached resolution
+                if host in self._dns_pin_cache:
+                    pinned_ips = self._dns_pin_cache[host]
+                    if current_ips != pinned_ips:
+                        new_ips = current_ips - pinned_ips
+                        self._log_violation(
+                            target, "dns_pin_violation",
+                            f"Hostname {host} resolved to new IPs {new_ips} "
+                            f"(pinned: {pinned_ips})"
+                        )
+                        return False
+                else:
+                    # Pin the first resolution
+                    self._dns_pin_cache[host] = current_ips
             except _socket.gaierror:
                 pass  # DNS resolution failed — continue with rule-based check
 

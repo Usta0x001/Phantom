@@ -144,9 +144,18 @@ def _get_schema_path(func: Callable[..., Any]) -> Path | None:
 
     folder = parts[0]
     file_stem = parts[1]
-    schema_file = f"{file_stem}_schema.xml"
 
-    return get_phantom_resource_path("tools", folder, schema_file)
+    # Try per-file schema first (e.g., verification_actions_schema.xml)
+    per_file = get_phantom_resource_path("tools", folder, f"{file_stem}_schema.xml")
+    if per_file.exists():
+        return per_file
+
+    # Fall back to consolidated folder schema (e.g., security_tools_schema.xml)
+    consolidated = get_phantom_resource_path("tools", folder, f"{folder}_tools_schema.xml")
+    if consolidated.exists():
+        return consolidated
+
+    return None
 
 
 def register_tool(

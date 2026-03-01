@@ -5,16 +5,21 @@
       <parameter name="httpql_filter" type="string" required="false">
         <description>HTTPQL filter using Caido's syntax:
 
-        Integer fields (port, code, roundtrip, id) - eq, gt, gte, lt, lte, ne:
-        - resp.code.eq:200, resp.code.gte:400, req.port.eq:443
+        OPERATORS BY FIELD TYPE:
+        - Integer fields (resp.code, req.port, resp.roundtrip) support: eq, gt, gte, lt, lte, ne
+        - Text fields (req.ext, req.host, req.method, req.path, req.query, req.raw, resp.raw) support: eq, ne, cont, ncont, regex, like
+        - Date fields (req.created_at) support: gt, lt with ISO format
 
-        Text/byte fields (ext, host, method, path, query, raw) - regex:
-        - req.method.regex:"POST", req.path.regex:"/api/.*", req.host.regex:".*.com"
+        EXAMPLES:
+        - resp.code.eq:200                          (200 responses)
+        - req.method.eq:"POST"                      (POST requests)
+        - req.path.cont:"/api/"                     (paths containing /api/)
+        - req.host.eq:"example.com"                 (specific host)
+        - resp.code.gte:400                          (error responses)
+        - req.method.eq:"POST" AND req.path.cont:"/api/"  (combined with AND)
+        - req.path.cont:"/login" OR req.path.cont:"/auth" (combined with OR)
 
-        Date fields (created_at) - gt, lt with ISO formats:
-        - req.created_at.gt:"2024-01-01T00:00:00Z"
-
-        Special: source:intercept, preset:"name"</description>
+        NOTE: String values MUST be quoted with double quotes. Combine conditions with AND/OR (uppercase).</description>
       </parameter>
       <parameter name="start_page" type="integer" required="false">
         <description>Starting page (1-based)</description>

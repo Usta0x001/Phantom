@@ -23,9 +23,9 @@ from .registry import (
 
 
 try:
-    _SERVER_TIMEOUT = float(Config.get("phantom_sandbox_execution_timeout") or "120")
+    _SERVER_TIMEOUT = float(Config.get("phantom_sandbox_execution_timeout") or "600")
 except (ValueError, TypeError):
-    _SERVER_TIMEOUT = 120.0
+    _SERVER_TIMEOUT = 600.0
 SANDBOX_EXECUTION_TIMEOUT = _SERVER_TIMEOUT + 30
 try:
     SANDBOX_CONNECT_TIMEOUT = float(Config.get("phantom_sandbox_connect_timeout") or "10")
@@ -207,7 +207,10 @@ async def execute_tool_invocation(tool_inv: dict[str, Any], agent_state: Any | N
                 )
                 return violation
     except ImportError:
-        pass  # firewall module not available — skip
+        import logging as _fw_log
+        _fw_log.getLogger("phantom.security.firewall").critical(
+            "Tool firewall module UNAVAILABLE — security controls degraded"
+        )
 
     # Auto-inject auth headers for security tools that support extra_args
     tool_args = _inject_auth_headers(tool_name, tool_args, agent_state)
@@ -260,16 +263,21 @@ def _inject_auth_headers(
     header_parts: list[str] = []
     if flag == "--headers":
         # SQLMap: --headers="Header1: val1\nHeader2: val2"
-        hdr_lines = "\\n".join(f"{n}: {v}" for n, v in auth_headers.items())
+        # SEC-007 FIX: Strip CRLF from header names and values
+        hdr_lines = "\\n".join(
+            f"{n.replace(chr(13),'').replace(chr(10),'')}: {v.replace(chr(13),'').replace(chr(10),'')}"
+            for n, v in auth_headers.items()
+        )
         header_parts.append(f'--headers="{hdr_lines}"')
     else:
         # PHT-004 FIX: Use shlex.quote for each header value to prevent
         # shell metacharacter injection via double-quote breakout.
+        # SEC-007 FIX: Also strip \r\n (CRLF) to prevent HTTP header injection.
         import shlex as _shlex
         for name, value in auth_headers.items():
             # Validate header name/value don't contain injection chars
-            safe_name = str(name).replace('"', '').replace("'", "").replace(";", "")
-            safe_value = str(value).replace('"', '').replace(";", "").replace("`", "")
+            safe_name = str(name).replace('"', '').replace("'", "").replace(";", "").replace("\r", "").replace("\n", "")
+            safe_value = str(value).replace('"', '').replace(";", "").replace("`", "").replace("\r", "").replace("\n", "")
             header_parts.append(f"{flag} {_shlex.quote(f'{safe_name}: {safe_value}')}")
 
     header_str = " ".join(header_parts)
@@ -332,15 +340,15 @@ def _format_tool_result(tool_name: str, result: Any) -> tuple[str, list[dict[str
         final_result_str = f"Tool {tool_name} executed successfully"
     else:
         final_result_str = str(result_str)
-        if len(final_result_str) > 8000:
-            start_part = final_result_str[:3500]
-            end_part = final_result_str[-3500:]
+        if len(final_result_str) > 5000:
+            start_part = final_result_str[:2200]
+            end_part = final_result_str[-2200:]
             # Snap to nearest newline to avoid cutting mid-line/mid-tag
             last_nl = start_part.rfind('\n')
-            if last_nl > 2800:
+            if last_nl > 1800:
                 start_part = start_part[:last_nl]
             first_nl = end_part.find('\n')
-            if first_nl != -1 and first_nl < 700:
+            if first_nl != -1 and first_nl < 400:
                 end_part = end_part[first_nl + 1:]
             omitted = len(final_result_str) - len(start_part) - len(end_part)
             final_result_str = (
@@ -530,7 +538,14 @@ def _auto_record_findings(tool_name: str, result: Any, agent_state: Any) -> None
                 if sev in ("critical", "high", "medium"):
                     name = f.get("template_name") or f.get("template_id", "unknown")
                     url = f.get("matched_at") or f.get("host", "")
-                    agent_state.add_finding(f"[vuln/nuclei] {sev.upper()} {name} at {url}")
+                    # ARCH-003 FIX: Tag HIGH/CRITICAL findings as unverified
+                    verified_tag = "[UNVERIFIED] " if sev in ("critical", "high") else ""
+                    agent_state.add_finding(f"[vuln/nuclei] {verified_tag}{sev.upper()} {name} at {url}")
+                    # Queue for verification if EnhancedAgentState supports it
+                    if sev in ("critical", "high") and hasattr(agent_state, "unverified_findings"):
+                        agent_state.unverified_findings.append({
+                            "tool": "nuclei", "severity": sev, "name": name, "url": url,
+                        })
 
         # --- Nmap ---
         elif tool_name == "nmap_scan":
@@ -689,5 +704,5 @@ def _track_tested_endpoint(tool_name: str, args: dict[str, Any], agent_state: An
 
         if url:
             agent_state.mark_endpoint_tested(url, method, parameter, test_type)
-    except Exception:  # noqa: BLE001
-        pass  # endpoint tracking must never break the pipeline
+    except Exception as e:  # noqa: BLE001
+        _logger.debug("auto-record findings failed: %s", e, exc_info=True)

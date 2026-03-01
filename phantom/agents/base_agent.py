@@ -189,13 +189,12 @@ class BaseAgent(metaclass=AgentMeta):
                 self.state.iteration % 10 == 0
                 and hasattr(self.state, "save_checkpoint")
                 and tracer
-                and hasattr(tracer, "run_dir")
-                and tracer.run_dir
+                and hasattr(tracer, "get_run_dir")
             ):
                 try:
-                    self.state.save_checkpoint(tracer.run_dir)
-                except Exception:
-                    pass  # Non-fatal — best-effort checkpointing
+                    self.state.save_checkpoint(tracer.get_run_dir())
+                except Exception as e:
+                    logger.warning("Checkpoint save failed: %s", e)
 
             if (
                 self.state.is_approaching_max_iterations()
@@ -397,7 +396,7 @@ class BaseAgent(metaclass=AgentMeta):
             if ld is not None and content_stripped:
                 result = ld.record_response(content_stripped)
                 if result.is_loop:
-                    _logger.warning(
+                    logger.warning(
                         "Loop detected (%s) — injecting corrective prompt",
                         result.details,
                     )
@@ -411,11 +410,6 @@ class BaseAgent(metaclass=AgentMeta):
                     )
         except ImportError:
             pass
-
-        if final_response is None:
-            return False
-
-        content_stripped = (final_response.content or "").strip()
 
         if not content_stripped:
             corrective_message = (
@@ -520,8 +514,15 @@ class BaseAgent(metaclass=AgentMeta):
         6. Adding explicit DATA boundary markers
         """
         import re as _re
+        import unicodedata as _ud
 
         content = str(raw_content)
+
+        # IMPL-003 FIX: Normalize unicode BEFORE regex matching to prevent
+        # bypass via homoglyphs, zero-width characters, and encoding tricks.
+        content = _ud.normalize("NFKC", content)
+        # Strip zero-width and invisible characters
+        content = _re.sub(r"[\u200b\u200c\u200d\u2060\ufeff\u00ad]", "", content)
 
         # 1. Strip ALL XML/HTML-like tags (comprehensive)
         content = _re.sub(r"</?[a-zA-Z_][a-zA-Z0-9_\-.:]*[^>]*>", "", content)

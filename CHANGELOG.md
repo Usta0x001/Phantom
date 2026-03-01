@@ -2,6 +2,55 @@
 
 All notable changes to Phantom will be documented in this file.
 
+## [0.9.19] - 2026-03-01
+
+### Full Spectrum Audit & Critical Bug Fixes
+
+Comprehensive security audit (152 findings across 5 domains) with 9 critical/high bug fixes applied. All 585 tests passing.
+
+#### Critical Bug Fixes
+
+- **Loop detector NameError (CRITICAL)**: `_logger` was undefined in `base_agent.py` — the loop detector would crash with NameError on every trigger, making it dead code. Fixed to use `logger`.
+
+- **Duplicate dead code block**: Second `final_response is None` check + `content_stripped` re-assignment after loop detector masked its injection logic. Removed duplicate block.
+
+- **Zombie agent resurrection (HIGH)**: `resume_from_waiting()` in `state.py` cleared the `completed` flag, allowing completed agents to be resurrected by inter-agent messages. Now guards against resuming completed agents.
+
+- **Report generation crash (HIGH)**: Severity sort used `list.index()` which throws `ValueError` on unknown severity values. All 3 report generators (JSON, HTML, Markdown) now use `dict.get()` with safe defaults.
+
+- **Tool firewall silent bypass (HIGH)**: `ImportError` on tool_firewall module caused all security controls to be silently skipped. Now logs CRITICAL warning.
+
+- **Path traversal in nuclei templates (HIGH)**: Template ID sanitization only replaced `/`, allowing `..\..\` traversal on Windows. Now uses allowlist regex `[a-zA-Z0-9_-]`.
+
+- **Checkpoint save was silent**: `save_checkpoint` failures were swallowed with bare `pass`. Now logged at WARNING level so users know if resume data isn't being saved.
+
+- **Knowledge store encryption fallback**: Decryption failures silently fell through to plaintext read without any warning. Now logs a warning when falling back.
+
+- **Auto-record findings exception swallowing**: `_auto_record_findings` caught all exceptions with bare `pass`, silently losing security findings. Now logs at DEBUG level.
+
+#### Session Fixes (Pre-Audit)
+
+- **gql import error**: `proxy_manager.py` imported `gql` at module level (Docker-only). Made conditional with `try/except ImportError`.
+- **certutil hang**: `certutil -N` in sandbox entrypoint hanged indefinitely. Added `timeout 10` wrapper with fallback.
+- **Checkpoint attribute**: `base_agent.py` checked `tracer.run_dir` (doesn't exist) instead of `tracer.get_run_dir()`.
+- **Test encoding**: 3 tests failed on Windows reading UTF-8 emoji from docker-entrypoint.sh. Added `encoding="utf-8"`.
+
+#### Security Audit Results
+
+Full spectrum audit produced **152 findings**: 11 CRITICAL, 35 HIGH, 69 MEDIUM, 37 LOW across:
+- Core Agent Loop (31 findings)
+- Tool Execution Layer (24 findings)
+- LLM/Telemetry/Config (37 findings)
+- Sandbox/Docker (28 findings)
+- Reports/Knowledge (32 findings)
+
+See `AUDIT_REPORT_v0.9.19_FINAL.md` for the complete report with fix plan.
+
+#### Tests
+
+- **585 tests passing**, 21 skipped, 0 failures
+- All fixes verified with full regression suite
+
 ## [0.9.12] - 2026-02-26
 
 ### Wire Verification Engine + Knowledge Store — Expert System Completion

@@ -29,7 +29,7 @@ LABEL maintainer="Usta0x001 <r_gadouri@estin.dz>"
 LABEL org.opencontainers.image.title="Phantom"
 LABEL org.opencontainers.image.description="Autonomous AI-Powered Penetration Testing"
 LABEL org.opencontainers.image.source="https://github.com/Usta0x001/Phantom"
-LABEL org.opencontainers.image.version="0.8.0"
+LABEL org.opencontainers.image.version="0.9.17"
 LABEL org.opencontainers.image.licenses="Apache-2.0"
 
 # Docker CLI (needed to manage sandbox containers)
@@ -61,7 +61,13 @@ ENV PATH="/app/.venv/bin:$PATH"
 ENV PYTHONPATH="/app"
 ENV PHANTOM_DOCKER_MODE=true
 
+# Reduce image size
+RUN rm -rf /root/.cache /tmp/* /var/tmp/*
+
 WORKDIR /app
+
+HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
+  CMD ["phantom", "--version"]
 
 ENTRYPOINT ["phantom"]
 CMD ["--help"]

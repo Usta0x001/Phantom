@@ -131,7 +131,7 @@ class TestDynamicMemory:
         from phantom.core.scan_profiles import get_profile
 
         quick = get_profile("quick")
-        assert quick.memory_threshold == 60_000
+        assert quick.memory_threshold == 40_000  # v0.9.18: reduced for cost savings
 
     def test_standard_profile_balanced_threshold(self):
         from phantom.core.scan_profiles import get_profile

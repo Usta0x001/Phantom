@@ -1,0 +1,44 @@
+# Phantom Docker build ignore rules
+# Reduces build context size significantly
+
+# Test files
+tests/
+*.test.*
+
+# Documentation
+docs/
+*.md
+!README.md
+!LICENSE
+
+# Build artifacts and caches
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+
+# Scan output and run data
+phantom_runs/
+phantom_knowledge/
+scan_debug.log
+scan_output*.log
+docker_output.txt
+docker_ps.txt
+
+# Dev files
+.git/
+.github/
+.vscode/
+.env
+*.spec
+
+# Scripts dir (not needed for images)
+scripts/
+
+# Keep containers/ — needed by sandbox overlay build
+# containers/ is NOT excluded

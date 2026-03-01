@@ -142,6 +142,28 @@ def _summarize_messages(
 
         response = litellm.completion(**completion_args)
         summary = response.choices[0].message.content or ""
+
+        # LOGIC-004 FIX: Log compression calls to audit trail so data flows
+        # to external LLM providers are visible and auditable.
+        try:
+            from phantom.telemetry.audit_logger import get_global_audit_logger
+            _audit = get_global_audit_logger()
+            if _audit:
+                _audit.log_event(
+                    event_type="compression",
+                    severity="info",
+                    category="llm",
+                    data={
+                        "model": model,
+                        "input_messages": len(messages),
+                        "input_chars": len(conversation),
+                        "output_chars": len(summary),
+                        "provider": model.split("/")[0] if "/" in model else "unknown",
+                    },
+                )
+        except Exception:  # noqa: BLE001
+            pass  # Non-fatal — audit logging should never break compression
+
         if not summary.strip():
             return messages[0]
         summary_msg = "<context_summary message_count='{count}'>{text}</context_summary>"

@@ -96,7 +96,7 @@ PROFILES: dict[str, ScanProfile] = {
         description="Time-boxed rapid assessment (~15 min). High-impact vulns only.",
         max_iterations=60,
         sandbox_timeout_s=90,
-        reasoning_effort="medium",
+        reasoning_effort="low",
         priority_tools=[
             "nuclei_scan",
             "httpx_probe",
@@ -109,7 +109,7 @@ PROFILES: dict[str, ScanProfile] = {
         max_concurrent_tools=3,
         enable_browser=True,
         nuclei_severity="high,critical",
-        memory_threshold=60_000,  # quick: save cost
+        memory_threshold=40_000,  # quick: aggressive token savings
     ),
     # ------------------------------------------------------------------
     ProfileName.standard: ScanProfile(

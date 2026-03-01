@@ -957,13 +957,14 @@ class TestTracerThreadSafety:
         assert len(set(msg_ids)) == 50  # All message IDs unique
 
     def test_has_lock_attribute(self):
-        """Tracer should have a threading lock."""
+        """Tracer should have a threading lock (Lock or RLock)."""
         from phantom.telemetry.tracer import Tracer
         import threading
 
         tracer = Tracer("lock-test")
         assert hasattr(tracer, "_lock")
-        assert isinstance(tracer._lock, type(threading.Lock()))
+        # Accept both Lock and RLock (RLock needed for re-entrant calls like set_scan_config -> get_run_dir)
+        assert isinstance(tracer._lock, (type(threading.Lock()), type(threading.RLock())))
 
 
 # =========================================================================

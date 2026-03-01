@@ -134,6 +134,9 @@
       <parameter name="dbms" type="string" required="false">
         <description>Force specific DBMS (e.g., "mysql", "postgresql", "mssql")</description>
       </parameter>
+      <parameter name="extra_args" type="string" required="false">
+        <description>Additional sqlmap arguments (e.g., "--threads=5 --technique=BEU"). Auth headers are automatically injected — do NOT pass --headers here.</description>
+      </parameter>
     </parameters>
     <returns type="Dict[str, Any]">
       <description>Findings with:
@@ -330,6 +333,56 @@
     </parameters>
     <returns type="Dict[str, Any]">
       <description>Full analysis with status, title, tech, server, CDN, ASN, websocket support, etc.</description>
+    </returns>
+  </tool>
+
+  <tool name="httpx_screenshot">
+    <description>Take a screenshot of a web page using HTTPx.</description>
+    <parameters>
+      <parameter name="url" type="string" required="true">
+        <description>Target URL to screenshot</description>
+      </parameter>
+      <parameter name="output_dir" type="string" required="false">
+        <description>Directory to save screenshots (default: /workspace/screenshots)</description>
+      </parameter>
+    </parameters>
+    <returns type="Dict[str, Any]">
+      <description>Screenshot file path and status</description>
+    </returns>
+  </tool>
+
+  <tool name="katana_crawl">
+    <description>Crawl and spider a web application using Katana to discover all URLs, endpoints, JavaScript files, API routes, and forms.
+
+Use this BEFORE vulnerability scanning to build a full attack surface map. Essential for discovering hidden endpoints that manual browsing misses.</description>
+    <parameters>
+      <parameter name="target" type="string" required="true">
+        <description>Target URL to crawl (e.g., "http://target.com")</description>
+      </parameter>
+      <parameter name="depth" type="integer" required="false">
+        <description>Crawl depth - how many links deep to follow (default: 3)</description>
+      </parameter>
+      <parameter name="js_crawl" type="boolean" required="false">
+        <description>Also parse JavaScript files for hidden endpoints and API routes (default: true)</description>
+      </parameter>
+      <parameter name="scope_in_domain" type="boolean" required="false">
+        <description>Stay within the target domain to avoid crawling external sites (default: true)</description>
+      </parameter>
+      <parameter name="rate_limit" type="integer" required="false">
+        <description>Requests per second (default: 100)</description>
+      </parameter>
+      <parameter name="max_duration" type="integer" required="false">
+        <description>Maximum crawl duration in seconds (default: 120)</description>
+      </parameter>
+      <parameter name="extra_args" type="string" required="false">
+        <description>Additional katana command-line arguments</description>
+      </parameter>
+    </parameters>
+    <returns type="Dict[str, Any]">
+      <description>Discovered endpoints with:
+      - endpoints: list of discovered URLs with method, status, content_type
+      - total_found: count of unique endpoints
+      - by_type: breakdown by content type (html, js, api, etc.)</description>
     </returns>
   </tool>
 </tools>

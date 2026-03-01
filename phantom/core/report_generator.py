@@ -66,7 +66,7 @@ class ReportGenerator:
             "vulnerabilities": [
                 self._vuln_to_dict(v) for v in sorted(
                     vulnerabilities,
-                    key=lambda x: ["critical", "high", "medium", "low", "info"].index(x.severity.value)
+                    key=lambda x: {"critical":0,"high":1,"medium":2,"low":3,"info":4}.get(x.severity.value, 5)
                 )
             ],
             "hosts": [self._host_to_dict(h) for h in hosts],
@@ -331,7 +331,7 @@ class ReportGenerator:
         # Sort by severity
         sorted_vulns = sorted(
             vulnerabilities,
-            key=lambda x: ["critical", "high", "medium", "low", "info"].index(x.severity.value)
+            key=lambda x: {"critical":0,"high":1,"medium":2,"low":3,"info":4}.get(x.severity.value, 5)
         )
         
         for vuln in sorted_vulns:
@@ -467,7 +467,7 @@ class ReportGenerator:
         cards = []
         sorted_vulns = sorted(
             vulns,
-            key=lambda x: ["critical", "high", "medium", "low", "info"].index(x.severity.value)
+            key=lambda x: {"critical":0,"high":1,"medium":2,"low":3,"info":4}.get(x.severity.value, 5)
         )
         
         for vuln in sorted_vulns:

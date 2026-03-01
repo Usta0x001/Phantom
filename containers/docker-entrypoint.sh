@@ -147,8 +147,9 @@ echo "✅ System-wide proxy configuration complete"
 
 echo "Adding CA to browser trust store..."
 sudo -u pentester mkdir -p /home/pentester/.pki/nssdb
-sudo -u pentester certutil -N -d sql:/home/pentester/.pki/nssdb --empty-password
-sudo -u pentester certutil -A -n "Testing Root CA" -t "C,," -i /app/certs/ca.crt -d sql:/home/pentester/.pki/nssdb
+# Use timeout + stdin redirect to prevent certutil from hanging
+echo "" | timeout 10 sudo -u pentester certutil -N -d sql:/home/pentester/.pki/nssdb --empty-password 2>/dev/null || echo "⚠️  NSS DB init skipped (timeout or error, non-critical)"
+echo "" | timeout 10 sudo -u pentester certutil -A -n "Testing Root CA" -t "C,," -i /app/certs/ca.crt -d sql:/home/pentester/.pki/nssdb 2>/dev/null || echo "⚠️  CA import skipped (timeout or error, non-critical)"
 echo "✅ CA added to browser trust store"
 
 echo "Starting tool server..."
@@ -156,7 +157,7 @@ cd /app
 export PYTHONPATH=/app
 export PHANTOM_SANDBOX_MODE=true
 export POETRY_VIRTUALENVS_CREATE=false
-export TOOL_SERVER_TIMEOUT="${PHANTOM_SANDBOX_EXECUTION_TIMEOUT:-120}"
+export TOOL_SERVER_TIMEOUT="${PHANTOM_SANDBOX_EXECUTION_TIMEOUT:-600}"
 TOOL_SERVER_LOG="/tmp/tool_server.log"
 
 # PHT-018 FIX: Write token to tmpfs file instead of CLI arg to prevent
@@ -165,7 +166,7 @@ TOKEN_FILE="/tmp/.tool_server_token"
 echo -n "$TOOL_SERVER_TOKEN" > "$TOKEN_FILE"
 chmod 600 "$TOKEN_FILE"
 
-# Prefer venv python directly (compatible with both phantom and strix sandbox images)
+# Prefer venv python directly (compatible with phantom sandbox images)
 # Falls back to poetry run if venv not found
 if [ -x "/app/venv/bin/python" ]; then
   PYTHON_BIN="/app/venv/bin/python"
@@ -176,11 +177,12 @@ else
 fi
 
 echo "Using Python: $PYTHON_BIN"
-# PHT-005 FIX: Bind tool server to 127.0.0.1 inside container
+# Inside Docker, bind to 0.0.0.0 so Docker port forwarding works.
+# Security is handled at the Docker level: host binds to 127.0.0.1.
 sudo -E -u pentester env PATH="$PATH:/app/venv/bin" PYTHONPATH=/app PHANTOM_SANDBOX_MODE=true \
   $PYTHON_BIN -m phantom.runtime.tool_server \
   --token="$TOOL_SERVER_TOKEN" \
-  --host=127.0.0.1 \
+  --host=0.0.0.0 \
   --port="$TOOL_SERVER_PORT" \
   --timeout="$TOOL_SERVER_TIMEOUT" > "$TOOL_SERVER_LOG" 2>&1 &
 
@@ -199,6 +201,34 @@ for i in {1..10}; do
 done
 
 echo "✅ Container ready"
+
+# ─── ARCH-004 FIX: Egress filtering ─────────────────────────────────────────
+# Restrict outbound traffic to only authorized destinations.
+# HOST_GATEWAY is passed via env by docker_runtime.py (e.g. "host.docker.internal").
+if command -v iptables >/dev/null 2>&1 && [ -n "$HOST_GATEWAY" ]; then
+  GATEWAY_IP=$(getent hosts "$HOST_GATEWAY" 2>/dev/null | awk '{print $1}' | head -1)
+  if [ -n "$GATEWAY_IP" ]; then
+    # Allow loopback (tool_server, Caido proxy)
+    sudo iptables -A OUTPUT -o lo -j ACCEPT 2>/dev/null || true
+    # Allow established/related connections (responses to our requests)
+    sudo iptables -A OUTPUT -m state --state ESTABLISHED,RELATED -j ACCEPT 2>/dev/null || true
+    # Allow DNS resolution (UDP/TCP 53)
+    sudo iptables -A OUTPUT -p udp --dport 53 -j ACCEPT 2>/dev/null || true
+    sudo iptables -A OUTPUT -p tcp --dport 53 -j ACCEPT 2>/dev/null || true
+    # Allow traffic to host gateway (target application + host communication)
+    sudo iptables -A OUTPUT -d "$GATEWAY_IP" -j ACCEPT 2>/dev/null || true
+    # Allow traffic to Docker bridge network (172.17.0.0/16)
+    sudo iptables -A OUTPUT -d 172.16.0.0/12 -j ACCEPT 2>/dev/null || true
+    # Log and drop everything else
+    sudo iptables -A OUTPUT -j LOG --log-prefix "PHANTOM_EGRESS_BLOCKED: " --log-level 4 2>/dev/null || true
+    sudo iptables -A OUTPUT -j DROP 2>/dev/null || true
+    echo "✅ Egress filtering configured (allowed: loopback, $GATEWAY_IP, Docker bridge, DNS)"
+  else
+    echo "⚠ Could not resolve HOST_GATEWAY — egress filtering skipped"
+  fi
+else
+  echo "⚠ iptables not available or HOST_GATEWAY not set — egress filtering skipped"
+fi
 
 cd /workspace
 exec "$@"

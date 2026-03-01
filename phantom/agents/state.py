@@ -1,8 +1,11 @@
+import logging
 import uuid
 from datetime import UTC, datetime
 from typing import Any
 
 from pydantic import BaseModel, Field
+
+logger = logging.getLogger(__name__)
 
 
 def _generate_agent_id() -> str:
@@ -28,6 +31,10 @@ class AgentState(BaseModel):
     final_result: dict[str, Any] | None = None
     max_iterations_warning_sent: bool = False
 
+    # LOGIC-005 FIX: Wall-clock time limit (seconds) — prevents unbounded
+    # autonomous operation.  Default 4 hours; configurable per scan profile.
+    max_scan_duration_seconds: int = 14400  # 4 hours
+
     messages: list[dict[str, Any]] = Field(default_factory=list)
     context: dict[str, Any] = Field(default_factory=dict)
 
@@ -45,6 +52,10 @@ class AgentState(BaseModel):
     # compression without loss.  Each entry is a short human-readable string
     # (e.g. "SQLi confirmed at POST /rest/user/login param=email").
     findings_ledger: list[str] = Field(default_factory=list)
+
+    # ARCH-003 FIX: Queue of HIGH/CRITICAL findings awaiting verification.
+    # Populated by _auto_record_findings(), consumed by finish_scan().
+    unverified_findings: list[dict[str, Any]] = Field(default_factory=list)
 
     _MAX_ACTIONS: int = 5000
     _MAX_OBSERVATIONS: int = 5000
@@ -127,7 +138,17 @@ class AgentState(BaseModel):
         self.last_updated = datetime.now(UTC).isoformat()
 
     def should_stop(self) -> bool:
-        return self.stop_requested or self.completed or self.has_reached_max_iterations()
+        return self.stop_requested or self.completed or self.has_reached_max_iterations() or self._has_exceeded_time_limit()
+
+    def _has_exceeded_time_limit(self) -> bool:
+        """LOGIC-005 FIX: Check if wall-clock time limit has been exceeded."""
+        if self.max_scan_duration_seconds <= 0:
+            return False
+        try:
+            elapsed = (datetime.now(UTC) - datetime.fromisoformat(self.start_time)).total_seconds()
+            return elapsed >= self.max_scan_duration_seconds
+        except (ValueError, TypeError):
+            return False
 
     def is_waiting_for_input(self) -> bool:
         return self.waiting_for_input
@@ -139,12 +160,14 @@ class AgentState(BaseModel):
         self.last_updated = datetime.now(UTC).isoformat()
 
     def resume_from_waiting(self, new_task: str | None = None) -> None:
+        if self.completed:
+            logger.warning("Ignoring resume_from_waiting on already-completed agent %s", self.agent_id)
+            return
         self.waiting_for_input = False
         self.waiting_start_time = None
         # Only clear stop_requested if not at iteration limit
         if not self.has_reached_max_iterations():
             self.stop_requested = False
-        self.completed = False
         self.llm_failed = False
         if new_task:
             self.task = new_task
