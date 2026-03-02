@@ -25,16 +25,10 @@ def _parse_nuclei_jsonl(raw_output: str) -> list[dict[str, Any]]:
             finding = json.loads(line)
             findings.append({
                 "template_id": finding.get("template-id", ""),
-                "template_name": finding.get("info", {}).get("name", ""),
                 "severity": finding.get("info", {}).get("severity", "unknown"),
-                "host": finding.get("host", ""),
                 "matched_at": finding.get("matched-at", ""),
+                "description": (finding.get("info", {}).get("description", "") or "")[:150],
                 "matcher_name": finding.get("matcher-name", ""),
-                "extracted_results": finding.get("extracted-results", []),
-                "curl_command": finding.get("curl-command", ""),
-                "description": finding.get("info", {}).get("description", ""),
-                "reference": finding.get("info", {}).get("reference", []),
-                "tags": finding.get("info", {}).get("tags", []),
             })
         except json.JSONDecodeError:
             continue
@@ -123,7 +117,7 @@ def nuclei_scan(
         if sev in severity_groups:
             severity_groups[sev].append(f)
 
-    return {
+    result = {
         "success": True,
         "command": command,
         "target": target,
@@ -131,8 +125,11 @@ def nuclei_scan(
         "findings_truncated": truncated,
         "findings": findings,
         "by_severity": {k: len(v) for k, v in severity_groups.items()},
-        "raw_output_tail": raw_output[-500:] if len(raw_output) > 0 else "(no output)",
     }
+    # Only include raw output when no findings were parsed (helps debug failures)
+    if len(findings) == 0:
+        result["raw_output_tail"] = raw_output[-500:] if len(raw_output) > 0 else "(no output)"
+    return result
 
 
 @register_tool(sandbox_execution=True)

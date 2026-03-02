@@ -247,7 +247,7 @@ class TestScanProfileOptimization:
         from phantom.core.scan_profiles import get_profile
 
         profile = get_profile("quick")
-        assert profile.memory_threshold == 80_000
+        assert profile.memory_threshold == 120_000
 
     def test_standard_profile_medium_reasoning(self):
         from phantom.core.scan_profiles import get_profile
@@ -315,23 +315,23 @@ class TestToolResultTruncation:
         text, images = _format_tool_result("test_tool", long_text)
         # Should be truncated
         assert "truncated" in text.lower() or "characters truncated" in text
-        # Final text should be under ~18000 chars (head + tail + overhead)
-        assert len(text) < 18000
+        # Final text should be under ~12000 chars (head + tail + overhead)
+        assert len(text) < 12000
 
     def test_16k_boundary_not_truncated(self):
-        """Result exactly at 16000 chars should NOT be truncated."""
+        """Result exactly at 10000 chars should NOT be truncated."""
         from phantom.tools.executor import _format_tool_result
 
-        text_15999 = "B" * 15999
-        result, images = _format_tool_result("test_tool", text_15999)
+        text_9999 = "B" * 9999
+        result, images = _format_tool_result("test_tool", text_9999)
         assert "truncated" not in result
 
     def test_16001_chars_is_truncated(self):
-        """Result at 16001 chars SHOULD be truncated (limit = 16000)."""
+        """Result at 10001 chars SHOULD be truncated (limit = 10000)."""
         from phantom.tools.executor import _format_tool_result
 
-        text_16001 = "C" * 16001
-        result, images = _format_tool_result("test_tool", text_16001)
+        text_10001 = "C" * 10001
+        result, images = _format_tool_result("test_tool", text_10001)
         assert "truncated" in result.lower() or "characters truncated" in result
 
 

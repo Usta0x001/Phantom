@@ -425,18 +425,32 @@ class ProxyManager:
                 if response.status_code in (200, 201) and method.upper() in ("POST", "PUT"):
                     _capture_auth_from_response(dict(response.headers), body_content)
 
-                # Body truncation: 10K balances response visibility vs context cost
-                if len(body_content) > 10000:
-                    body_content = body_content[:10000] + "\n... [truncated]"
+                # Body truncation: 3K for HTML (boilerplate-heavy), 5K for other content
+                content_type = response.headers.get("content-type", "")
+                body_limit = 3000 if "text/html" in content_type else 5000
+                if len(body_content) > body_limit:
+                    body_content = body_content[:body_limit] + "\n... [truncated]"
 
                 msg = (
                     "Request sent through proxy - check list_requests() for captured traffic"
                     if proxy_mode == "proxy"
                     else "Request sent directly (proxy unavailable)"
                 )
+                # Filter to security-relevant headers only (saves ~800 tokens/call)
+                _RELEVANT_HEADERS = {
+                    "content-type", "content-length", "server", "set-cookie",
+                    "location", "www-authenticate", "x-powered-by",
+                    "access-control-allow-origin", "x-frame-options",
+                    "content-security-policy", "strict-transport-security",
+                    "x-content-type-options", "authorization",
+                }
+                filtered_headers = {
+                    k: v for k, v in response.headers.items()
+                    if k.lower() in _RELEVANT_HEADERS
+                }
                 result = {
                     "status_code": response.status_code,
-                    "headers": dict(response.headers),
+                    "headers": filtered_headers,
                     "body": body_content,
                     "response_time_ms": response_time,
                     "url": response.url,
@@ -592,10 +606,10 @@ class ProxyManager:
                     continue
 
                 response_body = response.text
-                # Balanced body cap for repeat_request (less than send_request's 30K)
-                truncated = len(response_body) > 15000
+                # Reduced body cap for repeat_request (was 15K, now 5K — targeted probing)
+                truncated = len(response_body) > 5000
                 if truncated:
-                    response_body = response_body[:15000] + "\n... [truncated]"
+                    response_body = response_body[:5000] + "\n... [truncated]"
 
                 return {
                     "status_code": response.status_code,

@@ -112,7 +112,7 @@ PROFILES: dict[str, ScanProfile] = {
         max_concurrent_tools=3,
         enable_browser=True,
         nuclei_severity="medium,high,critical",
-        memory_threshold=80_000,  # quick: generous budget for diverse vuln coverage
+        memory_threshold=120_000,  # quick: raised from 80K — was causing compression death spiral
     ),
     # ------------------------------------------------------------------
     ProfileName.standard: ScanProfile(
