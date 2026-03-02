@@ -1,0 +1,765 @@
+\documentclass[12pt,a4paper]{report}
+
+% ============================================================================
+% Packages
+% ============================================================================
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage{graphicx}
+\usepackage{hyperref}
+\usepackage{xcolor}
+\usepackage{titlesec}
+\usepackage{fancyhdr}
+\usepackage{booktabs}
+\usepackage{longtable}
+\usepackage{enumitem}
+\usepackage{listings}
+\usepackage{amsmath}
+\usepackage{float}
+\usepackage{caption}
+\usepackage{tocloft}
+\usepackage{setspace}
+
+% ============================================================================
+% Color Definitions
+% ============================================================================
+\definecolor{phantomred}{RGB}{200,30,30}
+\definecolor{darkgray}{RGB}{40,40,40}
+\definecolor{codebg}{RGB}{245,245,245}
+\definecolor{linkblue}{RGB}{30,80,160}
+
+% ============================================================================
+% Hyperref Configuration
+% ============================================================================
+\hypersetup{
+    colorlinks=true,
+    linkcolor=darkgray,
+    urlcolor=linkblue,
+    citecolor=darkgray,
+    pdftitle={Phantom: Autonomous Adversary Simulation Platform},
+    pdfauthor={Gadouri Rodwan},
+}
+
+% ============================================================================
+% Header/Footer
+% ============================================================================
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{\small\textcolor{gray}{Phantom --- Autonomous Adversary Simulation Platform}}
+\fancyhead[R]{\small\textcolor{gray}{\thepage}}
+\fancyfoot[C]{\small\textcolor{gray}{Gadouri Rodwan --- System Technical Report}}
+\renewcommand{\headrulewidth}{0.4pt}
+\renewcommand{\footrulewidth}{0.2pt}
+
+% ============================================================================
+% Title Formatting
+% ============================================================================
+\titleformat{\chapter}[display]
+  {\normalfont\huge\bfseries\color{phantomred}}
+  {\chaptertitlename\ \thechapter}{20pt}{\Huge}
+\titleformat{\section}
+  {\normalfont\Large\bfseries\color{darkgray}}
+  {\thesection}{1em}{}
+\titleformat{\subsection}
+  {\normalfont\large\bfseries\color{darkgray}}
+  {\thesubsection}{1em}{}
+
+% ============================================================================
+% Code Listing Style
+% ============================================================================
+\lstset{
+    backgroundcolor=\color{codebg},
+    basicstyle=\ttfamily\small,
+    breaklines=true,
+    frame=single,
+    rulecolor=\color{gray},
+    numbers=left,
+    numberstyle=\tiny\color{gray},
+    keywordstyle=\color{phantomred}\bfseries,
+    commentstyle=\color{gray}\itshape,
+    stringstyle=\color{linkblue},
+    showstringspaces=false,
+    tabsize=4,
+}
+
+% ============================================================================
+% Document
+% ============================================================================
+\begin{document}
+
+% ============================================================================
+% Title Page
+% ============================================================================
+\begin{titlepage}
+\centering
+\vspace*{3cm}
+
+{\Huge\bfseries\textcolor{phantomred}{PHANTOM}\par}
+\vspace{0.5cm}
+{\Large Autonomous Adversary Simulation Platform\par}
+
+\vspace{1cm}
+{\color{phantomred}\rule{8cm}{1.5pt}\par}
+\vspace{1cm}
+
+{\large\bfseries System Design \& Technical Report\par}
+\vspace{0.3cm}
+{\large Version 1.0\par}
+
+\vspace{3cm}
+
+\begin{tabular}{rl}
+    \textbf{Author:} & Gadouri Rodwan \\[4pt]
+    \textbf{Supervisor:} & Dr. Allama Oussama \\[4pt]
+    \textbf{Institution:} & ESTIN \\[4pt]
+    \textbf{Repository:} & \url{https://github.com/Usta0x001/Phantom} \\
+\end{tabular}
+
+\vfill
+{\large \today\par}
+
+\end{titlepage}
+
+% ============================================================================
+% Abstract
+% ============================================================================
+\chapter*{Abstract}
+\addcontentsline{toc}{chapter}{Abstract}
+
+Phantom is an autonomous AI-powered penetration testing platform that uses large language models (LLMs) to discover, exploit, and verify real vulnerabilities in web applications, APIs, and network services. Unlike traditional vulnerability scanners that rely on static signatures and predefined rules, Phantom employs a ReAct (Reason + Act) reasoning loop that enables adaptive, multi-step attack strategies similar to those used by human security professionals.
+
+The system implements a layered architecture with seven defense-in-depth security controls: scope validation with DNS pinning, a tool invocation firewall with injection detection, sandboxed execution in ephemeral Docker containers, cost and time controllers, HMAC-chained audit logging, and output sanitization. All offensive operations execute within isolated containers with no host filesystem access.
+
+Phantom integrates 30+ security tools (nmap, nuclei, sqlmap, ffuf, Playwright, and others) through a unified execution framework and supports 100+ LLM providers via LiteLLM. The system has been validated through 808+ automated tests and two deep security audits that identified and resolved 83 findings across all severity levels.
+
+This report presents the complete system design, architecture, security model, tool ecosystem, and testing methodology of the Phantom platform.
+
+\textbf{Keywords:} penetration testing, autonomous agents, large language models, vulnerability discovery, security automation, adversary simulation
+
+% ============================================================================
+% Table of Contents
+% ============================================================================
+\tableofcontents
+\newpage
+
+% ============================================================================
+% Chapter 1: Introduction
+% ============================================================================
+\chapter{Introduction}
+
+\section{Context and Motivation}
+
+Modern web applications are increasingly complex, employing dynamic frontends, microservice backends, containerized deployments, and cloud-native architectures. This complexity creates attack surfaces that are difficult to assess through traditional vulnerability scanning approaches.
+
+Traditional scanners operate through signature matching and predefined rule sets. While effective for known vulnerability patterns, they fundamentally struggle with:
+
+\begin{itemize}[leftmargin=2cm]
+    \item \textbf{Multi-step vulnerabilities} that require chaining multiple attack vectors across different application components
+    \item \textbf{Business logic flaws} that no signature database can capture
+    \item \textbf{Novel attack surfaces} in REST APIs, GraphQL endpoints, WebSockets, and single-page applications
+    \item \textbf{Context-dependent vulnerabilities} that require understanding application behavior and state
+    \item \textbf{Authentication-gated functionality} that requires session management and credential handling
+\end{itemize}
+
+Manual penetration testing addresses these limitations but is expensive, time-consuming, and does not scale. A single comprehensive pentest can cost \$10,000--\$50,000 and take weeks to complete. Organizations that need continuous security assessment cannot afford this cadence.
+
+\section{Objectives}
+
+Phantom was designed to address the gap between automated scanners and manual pentesting by introducing autonomous AI reasoning into the security testing workflow. The primary design objectives are:
+
+\begin{enumerate}[leftmargin=2cm]
+    \item \textbf{Autonomous operation:} Execute complete penetration tests with zero human intervention
+    \item \textbf{Real vulnerability discovery:} Find exploitable bugs, not theoretical risks
+    \item \textbf{Verification:} Confirm every finding by independently re-exploiting it
+    \item \textbf{Safety:} Strict scope enforcement, sandboxed execution, and complete audit trail
+    \item \textbf{Extensibility:} Skills system for domain-specific knowledge injection
+    \item \textbf{Cost control:} Hard budget limits to prevent runaway LLM spending
+\end{enumerate}
+
+\section{Contributions}
+
+The main contributions of this work are:
+
+\begin{itemize}[leftmargin=2cm]
+    \item A ReAct-based autonomous agent architecture for penetration testing
+    \item A 7-layer defense-in-depth security model for safe autonomous offensive operations
+    \item A unified tool execution framework supporting 30+ security tools in sandboxed environments
+    \item A knowledge persistence system enabling cross-scan learning
+    \item Comprehensive validation through 808+ automated tests and two security audits
+\end{itemize}
+
+\section{Report Organization}
+
+This report is organized as follows: Chapter~2 presents the system architecture. Chapter~3 details the core components. Chapter~4 describes the security architecture. Chapter~5 covers the LLM integration strategy. Chapter~6 documents the tool ecosystem. Chapter~7 explains the data models. Chapter~8 walks through the scan lifecycle. Chapter~9 describes the report pipeline. Chapter~10 covers the skills and knowledge system. Chapter~11 presents the testing methodology and quality metrics. Chapter~12 discusses performance characteristics. Chapter~13 outlines future work. Chapter~14 concludes the report.
+
+% ============================================================================
+% Chapter 2: System Architecture
+% ============================================================================
+\chapter{System Architecture}
+
+\section{Architecture Overview}
+
+Phantom follows a layered architecture with clear separation of concerns. The system is organized into six major layers, each with distinct responsibilities:
+
+\begin{table}[H]
+\centering
+\caption{Architecture Layers}
+\begin{tabular}{@{}lll@{}}
+\toprule
+\textbf{Layer} & \textbf{Components} & \textbf{Responsibility} \\
+\midrule
+Interface & CLI, TUI, Streaming Parser & User interaction and live display \\
+Orchestration & Profile, Scope, Cost, Audit & Scan configuration and governance \\
+Agent Core & BaseAgent, State, LLM, Memory & Reasoning loop and state management \\
+Security & Firewall, Verifier, Scope & Input validation and access control \\
+Execution & Docker, Tool Server, Tools & Sandboxed tool execution \\
+Output & Reports, Graphs, Templates & Structured result generation \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\section{Package Structure}
+
+The codebase is organized into 11 Python packages under the \texttt{phantom/} namespace, totaling 80+ modules and 15,000+ lines of production code.
+
+\begin{table}[H]
+\centering
+\caption{Package Organization}
+\begin{tabular}{@{}llp{8cm}@{}}
+\toprule
+\textbf{Package} & \textbf{Modules} & \textbf{Purpose} \\
+\midrule
+\texttt{agents/} & 5 & Agent core, state machine, ReAct loop \\
+\texttt{core/} & 20 & Security, verification, reporting, compliance \\
+\texttt{tools/} & 25+ & Tool implementations and dispatch \\
+\texttt{llm/} & 7 & LLM client, memory compression, providers \\
+\texttt{runtime/} & 4 & Docker sandbox and tool server \\
+\texttt{models/} & 5 & Pydantic domain models \\
+\texttt{skills/} & 50+ & Domain knowledge Markdown files \\
+\texttt{interface/} & 8 & CLI, TUI, formatters \\
+\texttt{telemetry/} & 2 & Run tracing and statistics \\
+\texttt{config/} & 1 & Environment-based configuration \\
+\texttt{utils/} & 1 & Resource path resolution \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\section{Design Principles}
+
+The architecture follows several key design principles:
+
+\begin{description}[leftmargin=2cm]
+    \item[Defense in Depth:] Every tool invocation passes through multiple security gates before reaching the execution layer. No single point of failure can compromise system safety.
+    \item[Bounded Resources:] All collections (messages, findings, actions, errors) have hard upper limits with FIFO eviction to prevent unbounded memory growth.
+    \item[Crash Safety:] Partial results are preserved if the LLM fails mid-scan. Checkpoint-based resume enables continuation after failures.
+    \item[Separation of Concerns:] Local agent logic (reasoning, state management) is cleanly separated from remote execution (sandbox tools, Docker).
+    \item[Auditability:] Every tool invocation, finding, and agent decision is logged to an HMAC-chained audit trail for tamper-evident record keeping.
+\end{description}
+
+% ============================================================================
+% Chapter 3: Core Components
+% ============================================================================
+\chapter{Core Components}
+
+\section{BaseAgent}
+
+The \texttt{BaseAgent} class (859 lines, \texttt{agents/base\_agent.py}) implements the ReAct reasoning loop that drives all agent behavior. On each iteration, the agent:
+
+\begin{enumerate}[leftmargin=2cm]
+    \item Sends the conversation history (including the findings ledger) to the LLM
+    \item Parses tool invocations from the LLM response (XML format)
+    \item Validates each invocation through the Tool Firewall
+    \item Executes approved tools (local or sandbox)
+    \item Records findings and updates agent state
+    \item Checks stop conditions (iterations, time, cost, agent finish)
+\end{enumerate}
+
+The agent supports graceful crash handling: if the LLM fails mid-scan, partial results are saved and a report is generated from whatever findings have been collected.
+
+\section{AgentState}
+
+\texttt{AgentState} (\texttt{agents/state.py}) is a Pydantic model that tracks the agent's complete state with bounded collections:
+
+\begin{table}[H]
+\centering
+\caption{AgentState Resource Bounds}
+\begin{tabular}{@{}llp{7cm}@{}}
+\toprule
+\textbf{Collection} & \textbf{Limit} & \textbf{Behavior at Limit} \\
+\midrule
+Messages & 500 & FIFO eviction, system prompt preserved \\
+Findings Ledger & 200 & Hard cap, NEVER compressed \\
+Actions & 5,000 & FIFO eviction \\
+Errors & 1,000 & FIFO eviction \\
+Iterations & 200 & Scan terminates \\
+Wall-clock time & 4 hours & Cumulative across resumes \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\section{EnhancedAgentState}
+
+Extends \texttt{AgentState} with vulnerability tracking, host discovery, scan phase management, endpoint deduplication, and priority queuing. Provides \texttt{checkpoint save/restore} for resumable scans and \texttt{to\_report\_data()} export for structured reporting.
+
+\section{LLM Client}
+
+The LLM client (\texttt{llm/llm.py}) wraps LiteLLM for multi-provider access supporting OpenRouter, OpenAI, Anthropic, Google, Groq, DeepSeek, Ollama, and 100+ other providers. Key features include:
+
+\begin{itemize}[leftmargin=2cm]
+    \item Async streaming for real-time CLI display
+    \item Per-request cost tracking (input, output, and cached tokens)
+    \item Prompt caching support for compatible providers
+    \item Vision/screenshot support for browser-based testing
+    \item Automatic retries with exponential backoff
+    \item Credential redaction before sending prompts
+\end{itemize}
+
+\section{Memory Compressor}
+
+When conversation exceeds 80,000 tokens, the \texttt{MemoryCompressor} (\texttt{llm/memory\_compressor.py}):
+
+\begin{enumerate}[leftmargin=2cm]
+    \item Keeps the system prompt and last 12 messages verbatim
+    \item Summarizes older messages via a separate LLM call
+    \item Preserves all URLs, payloads, credentials, and vulnerability details in summaries
+    \item The \texttt{findings\_ledger} is NEVER compressed --- it serves as permanent agent memory
+\end{enumerate}
+
+% ============================================================================
+% Chapter 4: Security Architecture
+% ============================================================================
+\chapter{Security Architecture}
+
+Phantom implements 7 layers of defense-in-depth to prevent misuse, scope violations, and unintended damage. Every tool invocation passes through multiple security gates before reaching the execution layer.
+
+\section{Layer 1: Scope Validator}
+
+The \texttt{ScopeValidator} enforces whitelist-based target authorization with DNS pinning. It supports domain, IP, CIDR, and regex scope rules. Private IP detection prevents SSRF attacks against internal networks. DNS resolution is cached (bounded to 10,000 entries) and pinned to prevent DNS rebinding attacks. Validation occurs on every tool call, not just at scan start.
+
+\section{Layer 2: Tool Invocation Firewall}
+
+The \texttt{ToolInvocationFirewall} validates every tool call before execution:
+
+\begin{itemize}[leftmargin=2cm]
+    \item Checks 8 injection patterns: semicolons, pipes, backticks, \texttt{\$()}, \texttt{\$\{\}}, redirections, \texttt{\&\&}, \texttt{||}
+    \item Enforces per-tool argument whitelists for \texttt{nmap}, \texttt{sqlmap}, \texttt{ffuf} extra arguments
+    \item Rejects arguments longer than 4,096 characters
+    \item Blocks dangerous sandbox commands: fork bombs, \texttt{rm -rf /}, \texttt{curl|sh}
+    \item Logs all violations to the HMAC-chained audit trail
+\end{itemize}
+
+\section{Layer 3: Docker Sandbox}
+
+All offensive tools execute inside an ephemeral Docker container with:
+
+\begin{itemize}[leftmargin=2cm]
+    \item No host filesystem access
+    \item Restricted Linux capabilities
+    \item Port reservation with minimal TOCTOU window (socket held until Docker binds)
+    \item Symlink-safe file operations
+    \item Tar archive size cap (500~MB) to prevent disk bombs
+    \item Automatic cleanup on scan completion or failure
+\end{itemize}
+
+\section{Layer 4: Cost Controller}
+
+The \texttt{CostController} enforces hard budget limits (default \$25) with an 80\% warning threshold. Every LLM request tracks input tokens, output tokens, cached tokens, and cost. Per-request ceiling prevents individual expensive calls.
+
+\section{Layer 5: Time Controller}
+
+Wall-clock time limit of 4 hours, cumulative across scan resumes via \texttt{\_cumulative\_elapsed\_seconds}. Prevents runaway scans that could consume resources indefinitely.
+
+\section{Layer 6: Audit Logger}
+
+The \texttt{AuditLogger} provides a crash-safe, tamper-evident audit trail in JSONL format. Each entry is HMAC-SHA256 chained to the previous entry. On scan resume, chain integrity is verified to detect tampering. File rotation at configurable size limits.
+
+\section{Layer 7: Output Sanitizer}
+
+Before report generation, all output passes through credential scrubbing (regex detection of \texttt{password=}, \texttt{token=}, \texttt{api\_key=}, \texttt{bearer}, \texttt{session\_id}). CSV formula injection is prevented by prefixing dangerous cell values. Recursive dictionary scrubbing handles nested structures.
+
+\begin{table}[H]
+\centering
+\caption{Security Layer Summary}
+\begin{tabular}{@{}clp{7cm}@{}}
+\toprule
+\textbf{Layer} & \textbf{Component} & \textbf{Protection} \\
+\midrule
+L1 & Scope Validator & Target authorization, DNS pinning, SSRF prevention \\
+L2 & Tool Firewall & Injection detection, argument whitelisting \\
+L3 & Docker Sandbox & Process isolation, no host access \\
+L4 & Cost Controller & Budget limits (\$25 default) \\
+L5 & Time Controller & Wall-clock limit (4h cumulative) \\
+L6 & Audit Logger & HMAC chain, tamper detection \\
+L7 & Output Sanitizer & Credential scrubbing, CSV injection prevention \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+% ============================================================================
+% Chapter 5: LLM Integration
+% ============================================================================
+\chapter{LLM Integration}
+
+\section{Provider Support}
+
+Phantom uses LiteLLM to support 100+ LLM providers through a unified API. The recommended configuration uses OpenRouter as a gateway to access DeepSeek, Claude, GPT-4, and Llama models. Direct provider support includes OpenAI, Anthropic, Google, Groq, and local inference via Ollama or vLLM.
+
+\section{Prompt Architecture}
+
+The agent's system prompt is assembled from five components:
+
+\begin{enumerate}[leftmargin=2cm]
+    \item \textbf{Persona definition:} PhantomAgent identity, rules, and behavioral constraints
+    \item \textbf{Tool schemas:} Available tool definitions in XML format
+    \item \textbf{Loaded skills:} Domain-specific knowledge (Markdown files selected based on target)
+    \item \textbf{Scan profile directives:} Depth, iteration limits, tool restrictions
+    \item \textbf{Findings ledger:} Permanent record of all discoveries (never compressed)
+\end{enumerate}
+
+Jinja2 templates with autoescape are used for safe prompt construction, preventing injection through template variables.
+
+\section{Streaming and Cost Tracking}
+
+LLM responses are streamed via async iterators for real-time CLI display. Every request tracks: input tokens, output tokens, cached tokens, and cost in USD. The cost controller enforces both per-scan and per-request budget limits. Credential patterns are redacted from prompts before transmission to the LLM provider.
+
+% ============================================================================
+% Chapter 6: Tool Ecosystem
+% ============================================================================
+\chapter{Tool Ecosystem}
+
+\section{Tool Categories}
+
+Phantom provides 30+ security tools organized into functional categories:
+
+\begin{table}[H]
+\centering
+\caption{Tool Categories}
+\begin{tabular}{@{}llp{6cm}@{}}
+\toprule
+\textbf{Category} & \textbf{Tools} & \textbf{Execution Mode} \\
+\midrule
+Reconnaissance & nmap, httpx, subfinder & Docker Sandbox \\
+Discovery & ffuf, nuclei, gobuster & Docker Sandbox \\
+Exploitation & sqlmap, nikto, custom scripts & Docker Sandbox \\
+Browser & Playwright (navigate, click, JS) & Docker Sandbox \\
+Agent & sub\_agent, todo, notes, finish & Local Process \\
+Reporting & record\_finding, web\_search & Local Process \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\section{Tool Execution Path}
+
+The tool execution pipeline follows a strict sequence:
+
+\begin{enumerate}[leftmargin=2cm]
+    \item LLM response is parsed for XML tool invocations
+    \item Each invocation is validated by the \texttt{ToolFirewall} (scope, injection patterns, argument whitelist)
+    \item Blocked calls return a descriptive error to the LLM for self-correction
+    \item Local tools execute in-process; sandbox tools are dispatched via HTTP to the Docker container
+    \item Results are truncated to 8~KB, XML-wrapped, and appended to the conversation
+    \item The audit logger records each tool call with timing and result summary
+\end{enumerate}
+
+\section{Tool Registry}
+
+Tools are registered at import time using \texttt{@tool} decorators with XML schema files. Each schema defines: tool name, description, parameters (type, required, description), and execution mode (local vs.\ sandbox). The registry supports dynamic content injection for skills-based tool discovery.
+
+% ============================================================================
+% Chapter 7: Data Models
+% ============================================================================
+\chapter{Data Models}
+
+Phantom uses Pydantic models for type-safe data management throughout the system.
+
+\section{Vulnerability Model}
+
+\begin{description}[leftmargin=2cm]
+    \item[Identity:] id, name, vulnerability\_class, severity (Critical/High/Medium/Low/Info), CVSS score (0--10)
+    \item[Evidence:] Raw HTTP request/response data, payloads used, screenshots
+    \item[Verification:] Status (detected/verified/false\_positive), verification method, PoC code
+    \item[Enrichment:] CWE IDs, MITRE ATT\&CK techniques, OWASP category, remediation steps
+\end{description}
+
+\section{Host Model}
+
+\begin{description}[leftmargin=2cm]
+    \item[Identity:] IP address, hostname, OS fingerprint
+    \item[Services:] Port number, protocol, service name, version, state
+    \item[Technologies:] Name, version, category (framework, CMS, server, language)
+\end{description}
+
+\section{Scan Model}
+
+\begin{description}[leftmargin=2cm]
+    \item[ScanResult:] scan\_id, target, status, timing, vulnerability count
+    \item[ScanPhase:] RECON, ENUMERATION, EXPLOITATION, POST\_EXPLOITATION, REPORTING
+    \item[ScanStatus:] INITIALIZING, RUNNING, COMPLETED, FAILED, CANCELLED
+\end{description}
+
+% ============================================================================
+% Chapter 8: Scan Lifecycle
+% ============================================================================
+\chapter{Scan Lifecycle}
+
+\section{Initialization}
+
+The scan initialization phase performs the following steps:
+
+\begin{enumerate}[leftmargin=2cm]
+    \item CLI parses target URLs and scan profile selection
+    \item \texttt{ScopeValidator} created with target whitelist
+    \item \texttt{DockerRuntime} creates ephemeral sandbox container
+    \item \texttt{AuditLogger} and \texttt{Tracer} initialized (HMAC chain started)
+    \item \texttt{ToolFirewall} initialized with scope validator reference
+    \item \texttt{CostController} initialized with budget limit
+    \item \texttt{KnowledgeStore} loaded from previous scans
+\end{enumerate}
+
+\section{Execution (ReAct Loop)}
+
+Each iteration of the reasoning loop:
+
+\begin{enumerate}[leftmargin=2cm]
+    \item LLM receives conversation history including the findings ledger
+    \item Agent reasons about current state and selects a strategy
+    \item Tool calls are emitted in XML format
+    \item Executor validates through the firewall and dispatches approved calls
+    \item Results are recorded and state is updated
+    \item Memory compression triggers when context exceeds 80,000 tokens
+    \item Loop detector prevents repetitive behavior patterns
+\end{enumerate}
+
+Stop conditions: iteration limit (200), time limit (4 hours), cost limit (\$25), agent calling \texttt{finish}, or user interrupt.
+
+\section{Finalization}
+
+The post-scan pipeline performs 8 stages:
+
+\begin{enumerate}[leftmargin=2cm]
+    \item Verification engine re-tests HIGH and CRITICAL findings
+    \item MITRE ATT\&CK enrichment tags each vulnerability with TTPs
+    \item Compliance mapper generates OWASP, CWE, and NIST reports
+    \item Attack graph built with NetworkX (nodes: hosts, services, vulnerabilities)
+    \item Nuclei templates generated for each finding (YAML format)
+    \item Knowledge store updated with new findings (optional Fernet encryption)
+    \item Reports generated: JSON + HTML + Markdown (all credential-scrubbed)
+    \item Sandbox container destroyed, audit trail finalized
+\end{enumerate}
+
+% ============================================================================
+% Chapter 9: Report Pipeline
+% ============================================================================
+\chapter{Report Pipeline}
+
+\section{Report Formats}
+
+\begin{table}[H]
+\centering
+\caption{Report Output Formats}
+\begin{tabular}{@{}llp{7cm}@{}}
+\toprule
+\textbf{Format} & \textbf{Purpose} & \textbf{Features} \\
+\midrule
+JSON & Machine-readable & Full vulnerability data, CVSS, evidence, MITRE mapping \\
+HTML & Executive/team & Styled CSS, sortable tables, severity badges \\
+Markdown & Documentation & GitHub-compatible, CSV-injection safe \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\section{Output Structure}
+
+Each scan generates a run directory under \texttt{phantom\_runs/} containing:
+
+\begin{itemize}[leftmargin=2cm]
+    \item \texttt{scan\_stats.json} --- Timing, token usage, cost breakdown
+    \item \texttt{vulnerabilities.csv} --- Quick reference vulnerability index
+    \item \texttt{report.json/html/md} --- Full structured reports
+    \item \texttt{attack\_graph.json} --- NetworkX graph data
+    \item \texttt{compliance\_report.json} --- OWASP, CWE, NIST mappings
+    \item \texttt{nuclei\_templates/} --- Generated YAML templates
+    \item \texttt{audit.jsonl} --- HMAC-chained audit trail
+    \item \texttt{screenshots/} --- Browser capture artifacts
+\end{itemize}
+
+\section{Credential Scrubbing}
+
+Before report generation, all output passes through recursive credential scrubbing. Regular expressions detect patterns including \texttt{password=}, \texttt{token=}, \texttt{api\_key=}, \texttt{bearer}, and \texttt{session\_id}, replacing values with \texttt{[REDACTED]}. CSV formula injection is prevented by prefixing cell values starting with \texttt{=}, \texttt{+}, \texttt{-}, or \texttt{@} with a single quote character.
+
+% ============================================================================
+% Chapter 10: Skills and Knowledge System
+% ============================================================================
+\chapter{Skills and Knowledge System}
+
+\section{Skills}
+
+Skills are Markdown files loaded into the agent's system prompt to provide domain expertise. Categories include: reconnaissance, vulnerabilities, frameworks, technologies, protocols, cloud, scan modes, coordination, and custom. The agent selects relevant skills based on the target technology stack and scan profile.
+
+Custom skills can be added to \texttt{phantom\_knowledge/custom/} to extend the agent's expertise for specific domains or target environments.
+
+\section{Knowledge Persistence}
+
+The \texttt{KnowledgeStore} saves discovered hosts, vulnerabilities, false positive signatures, and scan history across sessions. This enables the agent to:
+
+\begin{itemize}[leftmargin=2cm]
+    \item Skip known false positives from previous scans
+    \item Prioritize previously vulnerable endpoints
+    \item Build a cumulative picture of the target's attack surface
+    \item Track vulnerability lifecycle (new, recurring, resolved)
+\end{itemize}
+
+Optional Fernet encryption protects stored knowledge data at rest.
+
+% ============================================================================
+% Chapter 11: Testing and Quality Assurance
+% ============================================================================
+\chapter{Testing and Quality Assurance}
+
+\section{Test Suite}
+
+Phantom maintains a comprehensive test suite with 808+ tests, 0 failures, and 21 skipped:
+
+\begin{table}[H]
+\centering
+\caption{Test Suite Breakdown}
+\begin{tabular}{@{}llp{7cm}@{}}
+\toprule
+\textbf{Suite} & \textbf{Tests} & \textbf{Scope} \\
+\midrule
+\texttt{test\_e2e\_system.py} & 184 & Full system integration \\
+\texttt{test\_v0920\_audit\_fixes.py} & 39 & Security fix verification \\
+\texttt{test\_all\_modules.py} & $\sim$200 & Module-level unit tests \\
+\texttt{test\_v0918\_features.py} & $\sim$100 & Feature regression \\
+\texttt{test\_v0910\_coverage.py} & $\sim$80 & Coverage gap tests \\
+\texttt{test\_security\_fixes.py} & $\sim$50 & Security-specific tests \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\section{Security Audit}
+
+The system underwent two deep offensive security audits:
+
+\begin{itemize}[leftmargin=2cm]
+    \item \textbf{v0.9.19 audit:} 83 findings (8 Critical, 19 High, 34 Medium, 22 Low)
+    \item \textbf{Remediation:} All Critical and High findings fixed and verified with dedicated tests
+    \item \textbf{System score:} Improved from 5.8/10 to 8.0/10 after full remediation
+\end{itemize}
+
+Critical findings addressed include: command injection via tool arguments, unbounded state growth, race conditions in port reservation, HMAC chain bypass, and ReDoS in URL parsing.
+
+% ============================================================================
+% Chapter 12: Performance and Scalability
+% ============================================================================
+\chapter{Performance and Scalability}
+
+\section{Resource Bounds}
+
+\begin{table}[H]
+\centering
+\caption{System Resource Bounds}
+\begin{tabular}{@{}llp{6cm}@{}}
+\toprule
+\textbf{Resource} & \textbf{Limit} & \textbf{Purpose} \\
+\midrule
+Messages & 500 & Prevent OOM from conversation growth \\
+Findings & 200 & Bound permanent ledger \\
+Actions & 5,000 & Bound tool history \\
+Errors & 1,000 & Bound error log \\
+Iterations & 200 & Prevent infinite loops \\
+Wall-clock & 4 hours & Prevent runaway scans \\
+Cost & \$25 & Prevent budget overrun \\
+Argument length & 4,096 chars & Prevent injection via overflow \\
+Tar archive & 500~MB & Prevent disk bombs \\
+DNS cache & 10,000 entries & Prevent cache memory leak \\
+Screenshot & 10~MB & Prevent memory bomb via images \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\section{Optimization Techniques}
+
+\begin{itemize}[leftmargin=2cm]
+    \item \textbf{Lazy debug logging:} \texttt{\%}-formatting avoids eager f-string evaluation in hot paths
+    \item \textbf{Module-level constants:} Tool maps and regex patterns compiled once at import time
+    \item \textbf{Lightweight state summaries:} Hot-path code uses \texttt{dict}, not \texttt{model\_dump()}
+    \item \textbf{Bounded collections:} FIFO eviction prevents unbounded memory growth
+    \item \textbf{Truncated tool results:} 8~KB cap prevents token waste on verbose tool output
+\end{itemize}
+
+% ============================================================================
+% Chapter 13: Future Work
+% ============================================================================
+\chapter{Future Work}
+
+The current architecture (v1) has been hardened through two security audits and achieves a system score of 8.0/10. Architecture v2 will focus on the following areas:
+
+\section{Async-First Architecture}
+
+Replace the synchronous enrichment pipeline with fully asynchronous execution. Enable parallel tool execution with configurable concurrency limits. Non-blocking report generation to reduce scan completion time.
+
+\section{Plugin-Based Tool System}
+
+Replace the hardcoded tool registry with plugin discovery via Python entry points. Enable third-party tool packages that can be installed independently. Support hot-reload of tool schemas without system restart.
+
+\section{State Machine Formalization}
+
+Replace ad-hoc phase tracking with a formal state machine implementation. Enable checkpoint schema versioning for forward compatibility across system updates.
+
+\section{Multi-Agent Orchestration}
+
+Implement hierarchical agent delegation with shared context passing. Develop specialized agents: \texttt{ReconAgent}, \texttt{ExploitAgent}, \texttt{ReportAgent}. Enable inter-agent message passing with priority-based routing.
+
+\section{Benchmark Suite}
+
+Create a standardized benchmark suite using intentionally vulnerable applications (DVWA, Juice Shop, WebGoat) to measure detection rate, false positive rate, and time-to-finding across system versions.
+
+% ============================================================================
+% Chapter 14: Conclusion
+% ============================================================================
+\chapter{Conclusion}
+
+Phantom represents a new approach to automated security testing by combining large language model reasoning with a hardened execution sandbox and comprehensive security architecture. The system demonstrates that autonomous AI agents can discover real vulnerabilities that traditional signature-based scanners miss, while maintaining safety through strict scope enforcement, sandboxed execution, and tamper-evident audit logging.
+
+The system has been validated through 808+ automated tests, two deep security audits, and iterative development across 20 release versions. All 83 security findings identified during auditing have been resolved and verified with dedicated regression tests, achieving a system score of 8.0/10.
+
+The foundation built in version 1 is production-grade and ready for evolution toward Architecture v2, which will bring async-first execution, plugin-based tool management, and hierarchical multi-agent orchestration. The path forward is to benchmark the system against real-world intentionally vulnerable applications to measure and improve detection capabilities before architectural evolution.
+
+\vspace{1cm}
+\begin{center}
+\textit{Phantom --- Autonomous Adversary Simulation Platform}\\
+\textit{Author: Gadouri Rodwan}\\
+\textit{Supervisor: Dr. Allama Oussama}
+\end{center}
+
+% ============================================================================
+% Bibliography
+% ============================================================================
+\begin{thebibliography}{99}
+
+\bibitem{react} Yao, S., et al. ``ReAct: Synergizing Reasoning and Acting in Language Models.'' \textit{ICLR}, 2023.
+
+\bibitem{litellm} BerriAI. ``LiteLLM: Call All LLM APIs Using the OpenAI Format.'' \url{https://github.com/BerriAI/litellm}, 2024.
+
+\bibitem{nuclei} ProjectDiscovery. ``Nuclei: Fast and Customizable Vulnerability Scanner.'' \url{https://github.com/projectdiscovery/nuclei}, 2024.
+
+\bibitem{owasp} OWASP Foundation. ``OWASP Top Ten.'' \url{https://owasp.org/www-project-top-ten/}, 2021.
+
+\bibitem{mitre} MITRE Corporation. ``MITRE ATT\&CK Framework.'' \url{https://attack.mitre.org/}, 2024.
+
+\bibitem{docker} Docker Inc. ``Docker: Empowering App Development for Developers.'' \url{https://www.docker.com/}, 2024.
+
+\bibitem{playwright} Microsoft. ``Playwright: Reliable End-to-End Testing for Modern Web Apps.'' \url{https://playwright.dev/}, 2024.
+
+\bibitem{pydantic} Colvin, S. ``Pydantic: Data Validation Using Python Type Annotations.'' \url{https://docs.pydantic.dev/}, 2024.
+
+\bibitem{networkx} Hagberg, A., Schult, D., and Swart, P. ``NetworkX: Network Analysis in Python.'' \url{https://networkx.org/}, 2024.
+
+\bibitem{pentestgpt} Deng, G., et al. ``PentestGPT: An LLM-empowered Automatic Penetration Testing Tool.'' \textit{arXiv preprint arXiv:2308.06782}, 2023.
+
+\end{thebibliography}
+
+\end{document}
