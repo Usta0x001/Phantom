@@ -25,22 +25,26 @@ Optimize for fast feedback on critical security issues. Skip exhaustive enumerat
 - Identify exposed endpoints and entry points
 - Use the crawl results to prioritize testing targets
 
-## Phase 2: High-Impact Targets
+## Phase 2: Systematic High-Impact Testing
 
-Test in priority order:
+Test in priority order — spend max 5 iterations per vuln class per endpoint cluster:
 
-1. **Authentication bypass** - login flaws, session issues, token weaknesses
-2. **Broken access control** - IDOR, privilege escalation, missing authorization
-3. **Remote code execution** - command injection, deserialization, SSTI
-4. **SQL injection** - authentication endpoints, search, filters
-5. **SSRF** - URL parameters, webhooks, integrations
-6. **Exposed secrets** - hardcoded credentials, API keys, config files
+1. **SQL injection** - ALL authentication endpoints, search fields, filters, API params — use sqlmap first
+2. **XSS (Reflected & Stored)** - ALL input fields, search bars, comments, profile fields — use ffuf with XSS wordlist
+3. **Authentication bypass** - login flaws, session issues, JWT manipulation — use jwt_tool for token testing
+4. **Broken access control / IDOR** - sequential IDs, privilege escalation, missing authorization
+5. **Path Traversal / LFI** - file download endpoints, image paths, include parameters — try ../../etc/passwd payloads
+6. **SSRF** - URL parameters, webhooks, image fetch, integrations — try http://localhost, http://127.0.0.1
+7. **Remote code execution** - command injection, deserialization, SSTI — test any user-controlled input reaching server-side processing
+8. **File Upload** - unrestricted file types, bypass extension filters, test for web shell upload
+9. **Business Logic** - price manipulation, coupon abuse, race conditions on financial operations
+10. **Information Disclosure** - error messages, stack traces, debug endpoints, /ftp, .git exposure, API key leakage
 
-Skip for quick scans:
-- Exhaustive subdomain enumeration
-- Full directory bruteforcing
-- Low-severity information disclosure
-- Theoretical issues without working PoC
+CRITICAL RULES for quick scan:
+- Use SPECIALIZED TOOLS (nuclei, sqlmap, ffuf, jwt_tool) before python_action scripts
+- If a tool confirms a vuln → validate with PoC → call create_vulnerability_report IMMEDIATELY (no separate reporting agent!)
+- Move on after 5 iterations per endpoint per vuln class — record dead-ends
+- Aim to test at LEAST 6 vuln classes before iterations run out
 
 ## Phase 3: Validation
 
@@ -54,12 +58,13 @@ When a strong primitive is found (auth weakness, injection point, internal acces
 
 ## Operational Guidelines
 
-- Use browser tool for quick manual testing of critical flows
-- Use terminal for targeted scans with fast presets (e.g., nuclei with critical/high templates only)
+- Use SPECIALIZED TOOLS first: nuclei (broad templates), sqlmap, ffuf, jwt_tool, arjun
+- Only use python_action for custom business logic tests or exploit chaining
+- Use browser tool only for complex interactive flows — NOT for API endpoints
 - Use proxy to inspect traffic on key endpoints
-- Skip extensive fuzzing—use targeted payloads only
-- Create subagents only for parallel high-priority tasks
+- Create subagents for parallel vuln class testing (e.g., "SQLi Agent", "XSS Agent", "Auth Agent")
+- Each subagent should discover, validate, AND report (no separate reporting agents)
 
 ## Mindset
 
-Think like a time-boxed bug bounty hunter going for quick wins. Prioritize breadth over depth on critical areas. If something looks exploitable, validate quickly and move on. Don't get stuck—if an attack vector isn't yielding results quickly, pivot.
+Think like a time-boxed bug bounty hunter going for quick wins. BREADTH over DEPTH: test ALL vuln classes across ALL endpoints. If something isn't yielding results after 5 iterations, record as dead-end and MOVE ON. Report each finding immediately via create_vulnerability_report.

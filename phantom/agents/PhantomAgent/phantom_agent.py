@@ -178,8 +178,9 @@ class PhantomAgent(BaseAgent):
             task_description += "\n\nEFFICIENCY RULES:"
             task_description += "\n- Do NOT use browser_action for API endpoints — use send_request or python_action instead"
             task_description += "\n- Do NOT use update_todo/create_todo excessively — max 5 todo operations total"
-            task_description += "\n- PREFER python_action with batch HTTP requests over individual send_request calls"
+            task_description += "\n- Use SPECIALIZED TOOLS (nuclei, sqlmap, ffuf, jwt_tool) first — only use python_action for custom logic no tool handles"
             task_description += "\n- Each sub-agent MUST use at least 1 security scanner tool (nuclei, sqlmap, ffuf, etc.)"
+            task_description += "\n- Report IMMEDIATELY: call create_vulnerability_report as soon as you confirm a vuln — do NOT spawn a separate reporting agent"
             task_description += "\n--- END SCAN PROFILE ---"
 
         # ── Inject auth headers for authenticated scanning ──
