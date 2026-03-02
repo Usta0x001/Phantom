@@ -2,6 +2,49 @@
 
 All notable changes to Phantom will be documented in this file.
 
+## [0.9.22] - 2026-03-02
+
+### Live Scan Bug Report — 11 Fixes from Real-World Observation
+
+Live scan against OWASP Juice Shop revealed 15 bugs/flaws. 3 were hot-fixed during the scan, 8 more fixed in this release, 4 deferred to Arch v2. All 808 tests passing.
+
+#### Runtime Hot-Fixes (3) — Applied During Live Scan
+
+- **BUG-01 FIX: `no-new-privileges` broke sandbox** — P2-FIX10's `security_opt` prevented `sudo` inside Kali container (needed for Caido proxy setup). Removed `security_opt` from `docker_runtime.py`.
+
+- **BUG-02 FIX: `cap_drop=ALL` too restrictive** — P2-FIX10's capability restrictions broke Caido and other security tools. Removed `cap_drop=["ALL"]`, kept only `cap_add` for extra capabilities.
+
+- **BUG-03 FIX: `storage_opt` incompatible** — P2-FIX9's `storage_opt={"size": "20g"}` only works with devicemapper, not overlayfs (Docker Desktop). Removed `storage_opt`.
+
+#### Phase & State Machine Fixes (2)
+
+- **BUG-04 FIX: Phase transitions never fire** — `ScanPhase` state machine was dead code — `set_phase()` existed but was never called. Added automatic phase transitions in `base_agent.py`: RECON→EXPLOIT at 25% iterations or 3+ findings, EXPLOIT→REPORT at 75%.
+
+- **BUG-08 FIX: Coverage tracker and stagnation detector inert** — Coverage tracker used empty `endpoints` list; stagnation detector used empty `vulnerabilities` dict. Fixed coverage to use `add_advisory()` with TTL; fixed stagnation to use `max(findings_ledger, vulnerabilities)` count.
+
+#### Endpoint & Finding Tracking Fixes (3)
+
+- **BUG-07 FIX: `add_endpoint()` never called** — Endpoints list was always empty despite tools discovering URLs. Wired `add_endpoint()` in `_auto_record_findings` for katana, httpx, ffuf results.
+
+- **BUG-09 FIX: `save_checkpoint` omitted `findings_ledger`** — The most important persistent data store was lost on scan resume. Added `findings_ledger` to checkpoint serialization/deserialization with size guards.
+
+- **BUG-10 FIX: `record_finding` has no severity** — Added optional `severity` parameter to `record_finding` tool. Output tags findings as `[category/SEVERITY] text`.
+
+#### Miscellaneous Fixes (3)
+
+- **BUG-11 FIX: System prompt "2000+ steps" impossible** — System prompt claimed "expect 2000+ steps minimum" but max_iterations ranges 60-300. Changed to "expect to use most of your available iterations".
+
+- **BUG-14 FIX: `from_checkpoint` hardcodes `max_iterations=300`** — Changed to 200 (the default) to match `AgentState` default.
+
+- **LIVE_SCAN_BUG_REPORT.md** — Comprehensive 15-bug report with severity ratings, code locations, and fix plans.
+
+#### Deferred to Arch v2 (4)
+
+- **BUG-05: Subagent state isolation** — Subagents get plain `AgentState`, findings/vulns never merge back to root.
+- **BUG-06: Findings vs vulnerabilities dual tracking** — Two parallel systems (`findings_ledger` strings vs `vulnerabilities` models) never bridge properly.
+- **BUG-12: `tested_endpoints` fails for subagents** — No deduplication across agents in multi-agent scans.
+- **BUG-15: Priority queues are dead code** — `VulnerabilityPriorityQueue` and `ScanPriorityQueue` are scaffolded but never consulted.
+
 ## [0.9.21] - 2026-03-02
 
 ### Deep System Audit — 15 Critical Fixes Across All Layers

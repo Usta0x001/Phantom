@@ -15,6 +15,7 @@ def record_finding(
     agent_state: Any,
     finding: str = "",
     category: str = "general",
+    severity: str = "",
     *,
     description: str = "",
     title: str = "",
@@ -38,6 +39,8 @@ def record_finding(
                  Example: "SQLi confirmed at POST /rest/user/login param=email"
         category: Optional category tag (e.g., "vuln", "endpoint", "tech",
                   "credential", "dead-end"). Default: "general"
+        severity: Optional severity level (e.g., "critical", "high", "medium",
+                  "low", "info"). Helps prioritize and filter findings.
         description: Alias for 'finding' — accepted for LLM flexibility.
         title: Alias for 'finding' — accepted for LLM flexibility.
 
@@ -49,7 +52,9 @@ def record_finding(
     if not text:
         return {"success": False, "message": "No finding text provided. Use 'finding', 'description', or 'title' parameter."}
 
-    tagged_finding = f"[{category}] {text}" if category != "general" else text
+    # BUG-10 FIX: Include severity tag when provided
+    sev_tag = f"/{severity.upper()}" if severity else ""
+    tagged_finding = f"[{category}{sev_tag}] {text}" if category != "general" else text
 
     if hasattr(agent_state, "add_finding"):
         agent_state.add_finding(tagged_finding)

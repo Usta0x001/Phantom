@@ -607,6 +607,13 @@ def _auto_record_findings(tool_name: str, result: Any, agent_state: Any) -> None
                 url = ep.get("url", "")
                 if url:
                     agent_state.add_finding(f"[endpoint] API: {url}")
+                    # BUG-07 FIX: Wire add_endpoint for structured tracking
+                    if hasattr(agent_state, "add_endpoint"):
+                        agent_state.add_endpoint(url)
+            # Also register crawled URLs as endpoints
+            for url in result.get("urls", [])[:100]:
+                if isinstance(url, str) and hasattr(agent_state, "add_endpoint"):
+                    agent_state.add_endpoint(url)
 
         # --- Httpx ---
         elif tool_name in ("httpx_probe", "httpx_full_analysis"):
@@ -619,6 +626,9 @@ def _auto_record_findings(tool_name: str, result: Any, agent_state: Any) -> None
                     if tech:
                         parts.append(f"  tech: {', '.join(tech[:5])}")
                     agent_state.add_finding(" ".join(parts))
+                    # BUG-07 FIX: Wire add_endpoint for structured tracking
+                    if hasattr(agent_state, "add_endpoint"):
+                        agent_state.add_endpoint(url)
 
         # --- Nmap vuln ---
         elif tool_name == "nmap_vuln_scan":
@@ -679,6 +689,9 @@ def _auto_record_findings(tool_name: str, result: Any, agent_state: Any) -> None
                 agent_state.add_finding(
                     f"[recon/ffuf] {url} (status={status} size={size})"
                 )
+                # BUG-07 FIX: Wire add_endpoint for structured tracking
+                if url and hasattr(agent_state, "add_endpoint"):
+                    agent_state.add_endpoint(url)
 
         # --- Subfinder ---
         elif tool_name == "subfinder_enumerate":
