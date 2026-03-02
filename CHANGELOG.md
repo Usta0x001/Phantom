@@ -2,6 +2,52 @@
 
 All notable changes to Phantom will be documented in this file.
 
+## [0.9.21] - 2026-03-02
+
+### Deep System Audit — 15 Critical Fixes Across All Layers
+
+Comprehensive deep audit with 15 fixes across Docker runtime, agent loop, LLM cost/memory management, and security hardening. All 808 tests passing.
+
+#### Priority 1 — Critical Fixes (5)
+
+- **P1-FIX1: Signal handler container orphaning** — `signal_handler` in `cli.py` set `_cleanup_done=True` before calling cleanup, causing atexit to skip cleanup and orphan Docker containers on Ctrl+C. Fixed: now calls `cleanup_on_exit()` directly before `sys.exit(1)`.
+
+- **P1-FIX2: run_scan.py cleanup gap** — Cleanup code (`tracer.cleanup()`, `cleanup_runtime()`) was outside try/except. Unexpected exceptions orphaned containers. Fixed: moved to `finally` block with individual try/except wrappers.
+
+- **P1-FIX3: System prompt aggressive mandate** — "AGGRESSIVE SCANNING MANDATE" with "GO SUPER HARD", "2000+ steps MINIMUM" contradicted efficiency goals. Replaced with "INTELLIGENT SCANNING STRATEGY" promoting coverage awareness and quality over quantity.
+
+- **P1-FIX4: Dead stagnation detector** — `loop_detector.record_findings_count()` was never called anywhere in the codebase — stagnation detection was dead code. Wired into agent loop after each iteration. Now injects advisory when no new vulns found.
+
+- **P1-FIX5: Orphan container cleanup** — No cleanup of leftover `phantom-scan-*` containers from crashed runs. Added `_cleanup_orphaned_containers()` in `DockerRuntime.__init__()` to remove exited/dead/created containers on startup.
+
+#### Priority 2 — Architecture Enhancements (5)
+
+- **P2-FIX6: Coverage-based stopping** — No metric tracking of attack surface exploration. Added endpoint coverage ratio computation every 10 iterations (after iter 20). Injects HIGH/LOW coverage advisories to guide the LLM's finish_scan decision.
+
+- **P2-FIX7: Container auto-recovery** — If sandbox container died mid-scan, scan failed with no recovery. Added auto-detection and recreation of dead containers in `_get_or_create_container()`.
+
+- **P2-FIX8: Stealth enforcement middleware** — Stealth mode rate limits were advisory-only (LLM could ignore them). Added hard `asyncio.sleep(delay_ms)` enforcement in `executor.py` before every sandbox HTTP call. Wired via `set_active_profile_flags()`.
+
+- **P2-FIX9: Disk quota** — Container had no storage limit. Added `storage_opt={"size": "20g"}` to container creation.
+
+- **P2-FIX10: Capability hardening** — Container could inherit extra Linux capabilities. Added `cap_drop=["ALL"]`, `cap_add=["NET_ADMIN", "NET_RAW"]`, `security_opt=["no-new-privileges:true"]`.
+
+#### LLM Cost/Memory Optimization (5)
+
+- **L1-FIX: Dynamic context window** — Memory compressor used hardcoded 80K threshold regardless of model (DeepSeek v3.2=163K, Gemini=1M). Now uses 75% of the model's actual context window from the provider registry.
+
+- **L2-FIX: Wire max_tokens in API** — LLM response length was unconstrained (model default). Now sends `max_tokens` from provider registry in every API call to prevent wasteful verbose responses.
+
+- **L3-FIX: Advisory message TTL** — Coverage updates, stagnation warnings, and loop-detected prompts persisted forever in history, wasting tokens on every subsequent call. Added `add_advisory(ttl=N)` system: advisory messages auto-expire after N iterations.
+
+- **L4-FIX: Cost fallback estimator** — When `litellm.completion_cost()` returns $0 (unsupported model/route), cost limits never triggered. Added fallback estimation using `cost_per_1k_input/output` from provider registry.
+
+- **L5-FIX: Cost in tracer output** — Scan stats JSON had no cost controller data. Now includes `cost_controller` snapshot and `cost_summary` from the authoritative cost controller.
+
+#### Files Modified (13)
+
+`phantom/interface/cli.py`, `run_scan.py`, `phantom/agents/PhantomAgent/system_prompt.jinja`, `phantom/agents/base_agent.py`, `phantom/agents/state.py`, `phantom/runtime/docker_runtime.py`, `phantom/tools/executor.py`, `phantom/core/scan_profiles.py`, `phantom/agents/PhantomAgent/phantom_agent.py`, `phantom/llm/llm.py`, `phantom/llm/memory_compressor.py`, `phantom/llm/provider_registry.py`, `phantom/telemetry/tracer.py`
+
 ## [0.9.19] - 2026-03-01
 
 ### Full Spectrum Audit & Critical Bug Fixes

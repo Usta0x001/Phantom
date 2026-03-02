@@ -98,6 +98,18 @@ async def _execute_tool_in_sandbox(tool_name: str, agent_state: Any, **kwargs: A
         "Content-Type": "application/json",
     }
 
+    # P2-FIX8: Stealth enforcement middleware — enforce rate limiting when
+    # stealth profile is active. This is a hard limit, not advisory-only.
+    try:
+        from phantom.core.scan_profiles import get_active_profile_flags
+        flags = get_active_profile_flags()
+        delay_ms = flags.get("delay_ms", 0)
+        if delay_ms > 0:
+            import asyncio as _asyncio
+            await _asyncio.sleep(delay_ms / 1000.0)
+    except (ImportError, AttributeError):
+        pass
+
     timeout = httpx.Timeout(
         timeout=SANDBOX_EXECUTION_TIMEOUT,
         connect=SANDBOX_CONNECT_TIMEOUT,

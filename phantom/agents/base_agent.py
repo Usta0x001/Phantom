@@ -209,6 +209,39 @@ class BaseAgent(metaclass=AgentMeta):
                 except Exception as e:
                     logger.warning("Checkpoint save failed: %s", e)
 
+            # P2-FIX6: Coverage-based stopping signals
+            # Every 10 iterations, compute coverage % and inject advisory if plateauing
+            if (
+                self.state.iteration % 10 == 0
+                and self.state.iteration >= 20
+                and hasattr(self.state, "endpoints")
+                and hasattr(self.state, "tested_endpoints")
+            ):
+                try:
+                    discovered = len(self.state.endpoints)
+                    tested = len(self.state.tested_endpoints)
+                    if discovered > 0:
+                        coverage_pct = (tested / discovered) * 100
+                        vuln_count = len(getattr(self.state, "vulnerabilities", {}))
+                        if coverage_pct >= 80:
+                            self.state.add_message(
+                                "user",
+                                f"📊 COVERAGE UPDATE: {tested}/{discovered} endpoints tested "
+                                f"({coverage_pct:.0f}% coverage), {vuln_count} vulnerabilities found.\n"
+                                "Coverage is HIGH. If no new attack vectors remain, consider "
+                                "verifying existing findings and finishing with finish_scan.",
+                            )
+                        elif self.state.iteration >= 40 and coverage_pct < 30:
+                            self.state.add_message(
+                                "user",
+                                f"📊 COVERAGE UPDATE: {tested}/{discovered} endpoints tested "
+                                f"({coverage_pct:.0f}% coverage), {vuln_count} vulnerabilities found.\n"
+                                "Coverage is LOW. Prioritize testing untested endpoints "
+                                "rather than re-testing the same ones.",
+                            )
+                except Exception:  # noqa: BLE001
+                    pass
+
             if (
                 self.state.is_approaching_max_iterations()
                 and not self.state.max_iterations_warning_sent
@@ -241,6 +274,30 @@ class BaseAgent(metaclass=AgentMeta):
                 self._current_task = iteration_task
                 should_finish = await iteration_task
                 self._current_task = None
+
+                # P1-FIX4: Wire stagnation detector — record findings count each iteration
+                # so the loop detector can detect when no new vulns are being found.
+                try:
+                    import phantom.core.loop_detector as _ld_stag
+                    ld = getattr(_ld_stag, "_global_detector", None)
+                    if ld is not None and hasattr(self.state, "vulnerabilities"):
+                        vuln_count = len(self.state.vulnerabilities)
+                        stag_result = ld.record_findings_count(vuln_count)
+                        if stag_result.is_loop:
+                            logger.warning(
+                                "Stagnation detected: %s", stag_result.details,
+                            )
+                            self.state.add_advisory(
+                                f"\u26a0\ufe0f STAGNATION: {stag_result.details}\n"
+                                "No new vulnerabilities found in recent iterations.\n"
+                                "Consider:\n"
+                                "- Switching to a completely different attack vector\n"
+                                "- Testing different endpoints or parameters\n"
+                                "- If you've tested all reasonable vectors, use finish_scan",
+                                ttl=2,
+                            )
+                except (ImportError, AttributeError):
+                    pass
 
                 if should_finish:
                     if self.non_interactive:

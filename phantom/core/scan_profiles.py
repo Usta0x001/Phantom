@@ -223,3 +223,18 @@ def list_profiles() -> list[dict[str, str]]:
 def register_profile(profile: ScanProfile) -> None:
     """Register (or overwrite) a custom profile at runtime."""
     PROFILES[profile.name] = profile
+
+
+# P2-FIX8: Global active profile tracking for stealth enforcement middleware
+_active_profile_flags: dict[str, object] = {}
+
+
+def set_active_profile_flags(flags: dict[str, object]) -> None:
+    """Set the active scan profile's custom_flags for middleware access."""
+    global _active_profile_flags  # noqa: PLW0603
+    _active_profile_flags = dict(flags) if flags else {}
+
+
+def get_active_profile_flags() -> dict[str, object]:
+    """Get the active scan profile's custom_flags."""
+    return _active_profile_flags

@@ -141,6 +141,12 @@ class PhantomAgent(BaseAgent):
 
             # Consume custom_flags (e.g. stealth rate_limit / delay_ms)
             custom_flags = profile.custom_flags if hasattr(profile, "custom_flags") else profile.get("custom_flags", {})
+            # P2-FIX8: Register active profile flags for stealth enforcement middleware
+            try:
+                from phantom.core.scan_profiles import set_active_profile_flags
+                set_active_profile_flags(custom_flags or {})
+            except ImportError:
+                pass
             if custom_flags:
                 rate_limit = custom_flags.get("rate_limit")
                 delay_ms = custom_flags.get("delay_ms")

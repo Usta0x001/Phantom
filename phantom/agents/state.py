@@ -67,6 +67,16 @@ class AgentState(BaseModel):
         self.iteration += 1
         self.last_updated = datetime.now(UTC).isoformat()
 
+    def add_advisory(self, content: str, ttl: int = 3) -> None:
+        """L3-FIX: Add an advisory message that auto-expires after `ttl` iterations.
+
+        Advisory messages (coverage updates, stagnation warnings, etc.) are useful
+        for 2-3 iterations but waste tokens if they persist forever in history.
+        Tagged with a marker so the memory compressor can strip expired ones.
+        """
+        tagged_content = f"<advisory ttl='{ttl}' iter='{self.iteration}'>{content}</advisory>"
+        self.add_message("user", tagged_content)
+
     def add_message(self, role: str, content: Any, thinking_blocks: list[dict[str, Any]] | None = None) -> None:
         if len(self.messages) >= self._MAX_MESSAGES:
             # Keep the system prompt (first message) and the most recent half

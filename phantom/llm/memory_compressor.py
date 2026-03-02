@@ -249,6 +249,27 @@ class MemoryCompressor:
         if not messages:
             return messages
 
+        # L3-FIX: Strip expired advisory messages before compression.
+        # Advisories tagged with <advisory ttl='N' iter='M'> expire after N
+        # iterations to prevent token accumulation from persistent warnings.
+        import re as _adv_re
+        current_iter = 0
+        if self._agent_state and hasattr(self._agent_state, "iteration"):
+            current_iter = self._agent_state.iteration
+        if current_iter > 0:
+            cleaned = []
+            for msg in messages:
+                content = msg.get("content", "")
+                if isinstance(content, str) and "<advisory" in content:
+                    m = _adv_re.search(r"ttl='(\d+)'\s+iter='(\d+)'", content)
+                    if m:
+                        ttl = int(m.group(1))
+                        created_iter = int(m.group(2))
+                        if current_iter - created_iter > ttl:
+                            continue  # expired — drop
+                cleaned.append(msg)
+            messages = cleaned
+
         # Hard cap on message count to prevent unbounded memory growth
         if len(messages) > MAX_MESSAGES:
             messages = messages[-MAX_MESSAGES:]
