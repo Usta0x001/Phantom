@@ -213,6 +213,9 @@
       <parameter name="rate" type="integer" required="false">
         <description>Requests per second (default: 100)</description>
       </parameter>
+      <parameter name="extra_args" type="string" required="false">
+        <description>Additional ffuf arguments (e.g., "-H 'Authorization: Bearer token'" for authenticated scanning)</description>
+      </parameter>
     </parameters>
     <returns type="Dict[str, Any]">
       <description>Discovered paths with status codes, sizes, and word counts</description>

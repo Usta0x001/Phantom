@@ -425,9 +425,9 @@ class ProxyManager:
                 if response.status_code in (200, 201) and method.upper() in ("POST", "PUT"):
                     _capture_auth_from_response(dict(response.headers), body_content)
 
-                # Raise body truncation limit from 10K to 30K for richer context
-                if len(body_content) > 30000:
-                    body_content = body_content[:30000] + "\n... [truncated]"
+                # Body truncation: 10K balances response visibility vs context cost
+                if len(body_content) > 10000:
+                    body_content = body_content[:10000] + "\n... [truncated]"
 
                 msg = (
                     "Request sent through proxy - check list_requests() for captured traffic"
