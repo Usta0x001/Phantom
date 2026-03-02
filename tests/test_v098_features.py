@@ -131,7 +131,7 @@ class TestDynamicMemory:
         from phantom.core.scan_profiles import get_profile
 
         quick = get_profile("quick")
-        assert quick.memory_threshold == 50_000  # v0.9.24: moderate token budget for diversity
+        assert quick.memory_threshold == 80_000  # v0.9.25: generous budget for diverse vuln coverage
 
     def test_standard_profile_balanced_threshold(self):
         from phantom.core.scan_profiles import get_profile
@@ -271,7 +271,7 @@ class TestEnhancedAgentState:
             )
 
         assert isinstance(config["state"], EnhancedAgentState)
-        assert config["state"].max_iterations == 100  # quick profile
+        assert config["state"].max_iterations == 150  # quick profile
 
 
 # ── CI/CD workflow tests ───────────────────────────────────────────────

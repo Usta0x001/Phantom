@@ -11,7 +11,7 @@ logger = logging.getLogger(__name__)
 
 MAX_TOTAL_TOKENS = 80_000
 MAX_MESSAGES = 150
-MIN_RECENT_MESSAGES = 12
+MIN_RECENT_MESSAGES = 20
 
 SUMMARY_PROMPT_TEMPLATE = """You are performing context condensation for a security
 assessment agent.  Compress the conversation while preserving every piece of
@@ -87,7 +87,7 @@ def _extract_message_text(msg: dict[str, Any]) -> str:
 def _summarize_messages(
     messages: list[dict[str, Any]],
     model: str,
-    timeout: int = 30,
+    timeout: int = 60,
 ) -> dict[str, Any]:
     if not messages:
         empty_summary = "<context_summary message_count='0'>{text}</context_summary>"
@@ -214,7 +214,7 @@ class MemoryCompressor:
     ):
         self.max_images = max_images
         self.model_name = model_name or Config.get("phantom_llm")
-        self.timeout = timeout or int(Config.get("phantom_memory_compressor_timeout") or "30")
+        self.timeout = timeout or int(Config.get("phantom_memory_compressor_timeout") or "60")
         # Per-profile override; falls back to the module-level default
         self.max_total_tokens = max_tokens or MAX_TOTAL_TOKENS
 
@@ -331,6 +331,36 @@ class MemoryCompressor:
                     ctext, _cre.IGNORECASE,
                 ):
                     critical_extracts.append(f"[HTTP] {anomaly.strip()}")
+                # Preserve JWT tokens and Bearer auth
+                for jwt in _cre.findall(
+                    r"(?:Bearer\s+|token[\"']?\s*[:=]\s*[\"']?)(eyJ[A-Za-z0-9_-]+\.eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+)",
+                    ctext, _cre.IGNORECASE,
+                ):
+                    critical_extracts.append(f"[JWT] {jwt[:200]}")
+                # Preserve Set-Cookie values
+                for cookie in _cre.findall(
+                    r"(?:Set-Cookie|cookie)[:\s]*([^\n;]{5,150})",
+                    ctext, _cre.IGNORECASE,
+                ):
+                    critical_extracts.append(f"[COOKIE] {cookie.strip()}")
+                # Preserve discovered API endpoints (REST paths)
+                for endpoint in _cre.findall(
+                    r"(?:GET|POST|PUT|DELETE|PATCH)\s+(\/[a-zA-Z0-9/_\-.]+)",
+                    ctext,
+                ):
+                    critical_extracts.append(f"[ENDPOINT] {endpoint}")
+                # Preserve credentials found during scan
+                for cred in _cre.findall(
+                    r"(?:password|secret|api[_-]?key|admin)[:\s=]+([^\s\"']{3,80})",
+                    ctext, _cre.IGNORECASE,
+                ):
+                    critical_extracts.append(f"[CRED] {cred.strip()}")
+                # Preserve numeric IDs (for IDOR testing)
+                for idor in _cre.findall(
+                    r"(?:user[_-]?id|id|uid|basket[_-]?id)[\"']?\s*[:=]\s*(\d+)",
+                    ctext, _cre.IGNORECASE,
+                ):
+                    critical_extracts.append(f"[ID] {idor}")
 
             summary = _summarize_messages(chunk, model_name, self.timeout)
             if summary:

@@ -377,10 +377,10 @@ class TestLoopDetector:
 # PHT-015: credential redaction
 # ====================================================================
 
-class TestPHT015CredentialRedaction:
-    """Verify credentials are redacted when propagated to child agents."""
+class TestPHT015CredentialPropagation:
+    """Verify credentials are propagated to child agents for authenticated testing."""
 
-    def test_creds_redacted_in_summary(self):
+    def test_creds_propagated_to_subagents(self):
         from phantom.tools.agents_graph.agents_graph_actions import _build_smart_context
 
         history = [
@@ -399,15 +399,19 @@ class TestPHT015CredentialRedaction:
 
         context = _build_smart_context(history, mock_state)
 
-        # The summary section (parent_findings_summary) should have redacted creds
+        # The summary section should now include credentials so subagents
+        # can test authenticated vulnerabilities (IDOR, privilege escalation, etc.)
         summary_msgs = [
             msg for msg in context
             if isinstance(msg.get("content"), str)
             and "parent_findings_summary" in msg["content"]
         ]
-        for msg in summary_msgs:
-            assert "SuperSecret123" not in msg["content"]
-            assert "REDACTED" in msg["content"]
+        # Credentials should appear in the summary for subagent use
+        has_creds = any(
+            "password=" in msg["content"] or "api_key=" in msg["content"]
+            for msg in summary_msgs
+        )
+        assert has_creds, "Credentials should be propagated to subagents for authenticated testing"
 
 
 if __name__ == "__main__":

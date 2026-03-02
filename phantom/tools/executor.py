@@ -273,18 +273,34 @@ def _inject_auth_headers(
 ) -> dict[str, Any]:
     """Auto-inject auth headers into security tools that support extra_args.
 
-    Reads auth_headers from the scan config (via tracer) and appends
-    appropriate header flags to the tool's extra_args parameter.
+    Reads auth_headers from:
+    1. Scan config (user-provided at scan start)
+    2. Session token store (auto-captured during scanning from login responses)
+    Appends appropriate header flags to the tool's extra_args parameter.
     """
     if not tool_name or tool_name not in _AUTH_INJECTABLE_TOOLS:
         return tool_args
 
-    auth_headers: dict[str, str] | None = None
+    auth_headers: dict[str, str] = {}
+
+    # Source 1: User-provided auth headers from scan config
     try:
         from phantom.telemetry.tracer import get_global_tracer
         tracer = get_global_tracer()
         if tracer and tracer.scan_config:
-            auth_headers = tracer.scan_config.get("auth_headers")
+            config_headers = tracer.scan_config.get("auth_headers")
+            if config_headers:
+                auth_headers.update(config_headers)
+    except (ImportError, AttributeError):
+        pass
+
+    # Source 2: Auto-captured session tokens from proxy_manager
+    try:
+        from phantom.tools.proxy.proxy_manager import get_auth_token_store
+        session_tokens = get_auth_token_store()
+        for hdr_name, hdr_value in session_tokens.items():
+            if hdr_name not in auth_headers:
+                auth_headers[hdr_name] = hdr_value
     except (ImportError, AttributeError):
         pass
 
@@ -372,16 +388,17 @@ def _format_tool_result(tool_name: str, result: Any) -> tuple[str, list[dict[str
         final_result_str = f"Tool {tool_name} executed successfully"
     else:
         final_result_str = str(result_str)
-        if len(final_result_str) > 8000:
-            # H12 FIX: ensure truncation doesn't split multi-byte UTF-8
-            start_part = final_result_str[:3500]
-            end_part = final_result_str[-3500:]
+        if len(final_result_str) > 16000:
+            # Raised from 8K to 16K — security scanner output (nuclei, katana,
+            # sqlmap) is rich and truncation loses critical findings.
+            start_part = final_result_str[:7000]
+            end_part = final_result_str[-7000:]
             # Snap to nearest newline to avoid cutting mid-line/mid-tag
             last_nl = start_part.rfind('\n')
-            if last_nl > 2800:
+            if last_nl > 5500:
                 start_part = start_part[:last_nl]
             first_nl = end_part.find('\n')
-            if first_nl != -1 and first_nl < 700:
+            if first_nl != -1 and first_nl < 1400:
                 end_part = end_part[first_nl + 1:]
             omitted = len(final_result_str) - len(start_part) - len(end_part)
             final_result_str = (

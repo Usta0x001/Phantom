@@ -242,6 +242,7 @@ class LLM:
             "messages": messages,
             "timeout": self.config.timeout,
             "stream_options": {"include_usage": True},
+            "temperature": self.config.temperature,
         }
 
         # L2-FIX: Wire max_tokens from provider registry into the API call.

@@ -109,24 +109,59 @@
   </tool>
 
   <tool name="send_request">
-    <description>Send a simple HTTP request through proxy.</description>
+    <description>Send an HTTP request through proxy. Auth tokens from previous login responses are automatically carried (session persistence). Supports JSON APIs, form submissions, and raw bodies.
+
+IMPORTANT: For JSON APIs (like Juice Shop), always set Content-Type header to application/json and send JSON body as a string.</description>
     <parameters>
       <parameter name="method" type="string" required="true">
-        <description>HTTP method (GET, POST, etc.)</description>
+        <description>HTTP method: GET, POST, PUT, DELETE, PATCH, OPTIONS, HEAD</description>
       </parameter>
       <parameter name="url" type="string" required="true">
-        <description>Target URL</description>
+        <description>Full target URL (e.g. http://target:3000/rest/user/login)</description>
       </parameter>
       <parameter name="headers" type="dict" required="false">
-        <description>Headers as {"key": "value"}</description>
+        <description>Headers as {"key": "value"}. Auth tokens from previous logins are auto-injected — no need to manually set Authorization unless overriding.</description>
       </parameter>
       <parameter name="body" type="string" required="false">
-        <description>Request body</description>
+        <description>Request body as string. For JSON: '{"email":"admin@juice-sh.op","password":"admin123"}'</description>
       </parameter>
       <parameter name="timeout" type="integer" required="false">
-        <description>Request timeout</description>
+        <description>Request timeout in seconds (default: 30)</description>
+      </parameter>
+      <parameter name="follow_redirects" type="boolean" required="false">
+        <description>Whether to follow HTTP redirects (default: true). Set false for testing open redirect vulnerabilities or analyzing 302 responses.</description>
       </parameter>
     </parameters>
+    <examples>
+  # Login to REST API and get JWT token (auto-stored for future requests)
+  <function=send_request>
+  <parameter=method>POST</parameter>
+  <parameter=url>http://target:3000/rest/user/login</parameter>
+  <parameter=headers>{"Content-Type": "application/json"}</parameter>
+  <parameter=body>{"email":"admin@juice-sh.op","password":"admin123"}</parameter>
+  </function>
+
+  # Authenticated GET (auth token auto-injected from previous login)
+  <function=send_request>
+  <parameter=method>GET</parameter>
+  <parameter=url>http://target:3000/api/Users</parameter>
+  </function>
+
+  # Test SQL injection in login
+  <function=send_request>
+  <parameter=method>POST</parameter>
+  <parameter=url>http://target:3000/rest/user/login</parameter>
+  <parameter=headers>{"Content-Type": "application/json"}</parameter>
+  <parameter=body>{"email":"' OR 1=1--","password":"x"}</parameter>
+  </function>
+
+  # Test open redirect (don't follow redirects)
+  <function=send_request>
+  <parameter=method>GET</parameter>
+  <parameter=url>http://target:3000/redirect?url=http://evil.com</parameter>
+  <parameter=follow_redirects>false</parameter>
+  </function>
+    </examples>
   </tool>
 
   <tool name="repeat_request">

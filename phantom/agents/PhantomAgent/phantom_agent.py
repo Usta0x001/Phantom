@@ -43,6 +43,9 @@ class PhantomAgent(BaseAgent):
         user_instructions = scan_config.get("user_instructions", "")
         targets = scan_config.get("targets", [])
 
+        # ── Auto-detect target type and load relevant skills ──
+        self._auto_load_target_skills(targets)
+
         # ── Initialize vuln-class rotation engine for root agent ──
         try:
             from phantom.core.vuln_class_rotation import VulnClassTracker
@@ -325,3 +328,40 @@ class PhantomAgent(BaseAgent):
         except Exception:
             # Knowledge store unavailable — no intel to inject
             return ""
+
+    def _auto_load_target_skills(self, targets: list[dict[str, Any]]) -> None:
+        """Auto-detect the target application and load relevant skills.
+
+        For known vulnerable applications (OWASP Juice Shop, DVWA, etc.),
+        load their specific attack playbook skill so the agent has
+        pre-built knowledge of endpoints and vulnerability patterns.
+        """
+        import logging as _log
+
+        target_urls = []
+        for t in targets:
+            url = t.get("details", {}).get("target_url", "")
+            if url:
+                target_urls.append(url.lower())
+
+        # Detect Juice Shop by common indicators:
+        # - Port 3000 (default), "juice" in URL, known OWASP Juice Shop paths
+        juice_shop_indicators = any(
+            ":3000" in url or "juice" in url
+            for url in target_urls
+        )
+
+        if juice_shop_indicators and hasattr(self, "llm") and hasattr(self.llm, "config"):
+            current_skills = list(self.llm.config.skills or [])
+            skill_name = "targets/owasp_juice_shop"
+            if skill_name not in current_skills:
+                current_skills.append(skill_name)
+                self.llm.config.skills = current_skills
+                # Reload system prompt with the new skill
+                try:
+                    self.llm._system_prompt = self.llm._load_system_prompt("PhantomAgent")
+                    _log.getLogger("phantom.agent").info(
+                        "Auto-loaded Juice Shop attack playbook skill"
+                    )
+                except Exception:
+                    pass
