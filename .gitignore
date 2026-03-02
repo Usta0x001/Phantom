@@ -99,7 +99,7 @@ schema.graphql
 
 .opencode/
 
-# Audit & Security Reports (local only — never committed)
+# Audit & Security Reports (local only -- never committed)
 AUDIT_REPORT*.md
 ACADEMIC_REPORT.md
 ARCHITECTURE.md
@@ -110,14 +110,16 @@ SANDBOX_DOCKER_RUNTIME_AUDIT.md
 SYSTEM_SCORECARD*.md
 docs/AUDIT_REPORT*.md
 docs/ACADEMIC_REPORT.md
-docs/ARCHITECTURE.md
 docs/CONTINUATION_PROMPT.md
 docs/CODEBASE_AUDIT.md
 docs/DEEP_SECURITY_AUDIT.md
 docs/SECURITY_AUDIT_REPORT*.md
-docs/*.pdf
-docs/*.tex
-docs/generate_report_pdf.py
+
+# Allow docs that should be committed
+!docs/ARCHITECTURE.md
+!docs/DOCUMENTATION.md
+!docs/Phantom_Technical_Report.pdf
+!docs/Phantom_Presentation.pdf
 docker_output.txt
 docker_ps.txt
 scan_*.log
