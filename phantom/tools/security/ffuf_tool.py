@@ -224,7 +224,7 @@ def ffuf_directory_scan(
         "wordlist": wordlist,
         "total_found": len(findings),
         "findings": findings,
-        "raw_output": result.get("content", "")[:2000],
+        "raw_output": result.get("content", "")[:500],  # BUG-04 FIX: reduced from 2000
     }
 
 

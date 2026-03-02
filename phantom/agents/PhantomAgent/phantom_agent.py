@@ -216,6 +216,16 @@ class PhantomAgent(BaseAgent):
             task_description += "\n- Each sub-agent MUST use at least 1 security scanner tool (nuclei, sqlmap, ffuf, etc.)"
             task_description += "\n- Report IMMEDIATELY: call create_vulnerability_report as soon as you confirm a vuln — do NOT spawn a separate reporting agent"
             task_description += "\n- After finding a vuln: REPORT IT → MOVE ON to the next vulnerability CLASS — do NOT keep searching for more of the same type"
+
+            # ── Anti-premature-termination directive ──
+            task_description += "\n\nCRITICAL — DO NOT FINISH EARLY:"
+            task_description += f"\n- You have {max_iter} iterations. Use AT LEAST 50% of them."
+            task_description += "\n- DO NOT call finish_scan until you have tested ALL major vulnerability classes."
+            task_description += "\n- The finish_scan gate will REJECT premature attempts. If rejected, continue testing NEW vuln classes."
+            task_description += "\n- Target: find 20+ unique vulnerabilities across 8+ different vulnerability categories."
+            task_description += "\n- After recon, spawn SUBAGENTS for parallel testing of different vuln classes."
+            task_description += "\n- NEVER stop just because you found a few vulns or achieved 'good coverage' — there are dozens more to find."
+
             task_description += "\n--- END SCAN PROFILE ---"
 
         # ── Inject auth headers for authenticated scanning ──

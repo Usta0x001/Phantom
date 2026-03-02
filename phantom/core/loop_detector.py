@@ -25,7 +25,7 @@ DEFAULT_WINDOW_SIZE = 20         # Track last N tool calls
 DEFAULT_REPEAT_THRESHOLD = 3    # Block after N identical calls
 DEFAULT_RESPONSE_WINDOW = 10    # Track last N LLM responses
 DEFAULT_RESPONSE_THRESHOLD = 3  # Block after N similar responses
-DEFAULT_STAGNATION_WINDOW = 30  # Check for progress over N iterations
+DEFAULT_STAGNATION_WINDOW = 15  # Check for progress over N iterations (reduced from 30)
 
 
 @dataclass

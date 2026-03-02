@@ -124,8 +124,8 @@ def katana_crawl(
     api_endpoints = [u for u in unique if "/api/" in u.get("url", "") or "/rest/" in u.get("url", "")]
     forms = [u for u in unique if u.get("tag") == "form"]
 
-    # Cap output to prevent context bloat
-    _MAX_URLS = 80
+    # Cap output to prevent context bloat (reduced from 80 to 40 — BUG-04 FIX)
+    _MAX_URLS = 40
     truncated = len(unique) > _MAX_URLS
 
     return {
@@ -134,9 +134,9 @@ def katana_crawl(
         "total_urls": len(unique),
         "truncated": truncated,
         "urls": unique[:_MAX_URLS],
-        "js_files": js_files[:20],
-        "api_endpoints": api_endpoints[:30],
-        "forms": forms[:20],
+        "js_files": js_files[:10],
+        "api_endpoints": api_endpoints[:20],
+        "forms": forms[:10],
         "summary": {
             "total": len(unique),
             "js_files": len(js_files),

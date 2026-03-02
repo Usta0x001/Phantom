@@ -101,8 +101,8 @@ def nuclei_scan(
     raw_output = result.get("content", "")
     findings = _parse_nuclei_jsonl(raw_output)
 
-    # Cap findings list to avoid huge responses blowing up context
-    _MAX_FINDINGS = 30
+    # Cap findings list to avoid huge responses blowing up context (reduced 30→20 — BUG-04 FIX)
+    _MAX_FINDINGS = 20
     truncated = len(findings) > _MAX_FINDINGS
     if truncated:
         # Keep critical/high first, then truncate
@@ -131,7 +131,7 @@ def nuclei_scan(
         "findings_truncated": truncated,
         "findings": findings,
         "by_severity": {k: len(v) for k, v in severity_groups.items()},
-        "raw_output_tail": raw_output[-2000:] if len(raw_output) > 0 else "(no output)",
+        "raw_output_tail": raw_output[-500:] if len(raw_output) > 0 else "(no output)",
     }
 
 
