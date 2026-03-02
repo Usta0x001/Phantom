@@ -38,6 +38,37 @@ class DockerRuntime(AbstractRuntime):
         self._tool_server_port: int | None = None
         self._tool_server_token: str | None = None
 
+        # P1-FIX5: Clean up orphaned phantom containers from previous crashed runs
+        self._cleanup_orphaned_containers()
+
+    def _cleanup_orphaned_containers(self) -> None:
+        """P1-FIX5: Remove stale phantom-scan-* containers from previous crashed runs.
+        
+        On startup, checks for any stopped/exited containers with the phantom-scan-
+        prefix and removes them. Running containers are left alone (they belong to
+        an active scan in another process).
+        """
+        import logging as _log
+        _logger = _log.getLogger(__name__)
+        try:
+            containers = self.client.containers.list(
+                all=True,  # include stopped containers
+                filters={"name": "phantom-scan-"},
+            )
+            for container in containers:
+                try:
+                    container.reload()
+                    if container.status in ("exited", "dead", "created"):
+                        _logger.info(
+                            "Removing orphaned container: %s (status=%s)",
+                            container.name, container.status,
+                        )
+                        container.remove(force=True)
+                except Exception as e:  # noqa: BLE001
+                    _logger.debug("Failed to clean orphan %s: %s", container.name, e)
+        except DockerException as e:
+            _logger.debug("Orphan cleanup skipped: %s", e)
+
     def _find_available_port(self) -> int:
         """Find an available port with minimal TOCTOU window.
 
@@ -150,9 +181,11 @@ class DockerRuntime(AbstractRuntime):
                     name=container_name,
                     hostname=container_name,
                     ports={f"{CONTAINER_TOOL_SERVER_PORT}/tcp": ("127.0.0.1", self._tool_server_port)},
-                    # Sandbox needs standard caps for entrypoint (sudo, proxy config, CA trust).
-                    # Security hardening via resource limits below + network binding to 127.0.0.1.
+                    # P2-FIX10: Drop all capabilities, then add back only what's needed
+                    cap_drop=["ALL"],
                     cap_add=["NET_ADMIN", "NET_RAW"],
+                    # P2-FIX10: Prevent privilege escalation inside container
+                    security_opt=["no-new-privileges:true"],
                     labels={"phantom-scan-id": scan_id},
                     # PHT-006 FIX: Per-container resource limits to prevent DoS
                     mem_limit="4g",
@@ -160,6 +193,8 @@ class DockerRuntime(AbstractRuntime):
                     cpu_period=100000,
                     cpu_quota=200000,  # 2 CPUs max
                     pids_limit=512,    # Limit process spawning
+                    # P2-FIX9: Disk quota — prevent tools from filling host disk
+                    storage_opt={"size": "20g"},
                     environment={
                         "PYTHONUNBUFFERED": "1",
                         "TOOL_SERVER_PORT": str(CONTAINER_TOOL_SERVER_PORT),
@@ -213,6 +248,19 @@ class DockerRuntime(AbstractRuntime):
                 self._scan_container.reload()
                 if self._scan_container.status == "running":
                     return self._scan_container
+                # P2-FIX7: Container auto-recovery — if container died, recreate it
+                if self._scan_container.status in ("exited", "dead"):
+                    import logging as _log
+                    _log.getLogger(__name__).warning(
+                        "Container %s died (status=%s), auto-recovering...",
+                        container_name, self._scan_container.status,
+                    )
+                    with contextlib.suppress(Exception):
+                        self._scan_container.remove(force=True)
+                    self._scan_container = None
+                    self._tool_server_port = None
+                    self._tool_server_token = None
+                    return self._create_container(scan_id)
             except NotFound:
                 self._scan_container = None
                 self._tool_server_port = None

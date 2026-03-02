@@ -66,7 +66,24 @@ class LLM:
         self.agent_name = agent_name
         self.agent_id: str | None = None
         self._total_stats = RequestStats()
-        self.memory_compressor = MemoryCompressor(model_name=config.model_name)
+
+        # L1-FIX: Dynamic context window — use the provider registry to set
+        # the memory compressor threshold based on the ACTUAL model context
+        # window instead of the hardcoded 80K default.  Use 75% of the
+        # model's window as compression threshold (safety margin for the
+        # system prompt + response tokens).
+        from phantom.llm.provider_registry import get_context_window
+        model_context = get_context_window(config.model_name)
+        dynamic_max_tokens = int(model_context * 0.75)
+        self.memory_compressor = MemoryCompressor(
+            model_name=config.model_name,
+            max_tokens=dynamic_max_tokens,
+        )
+        logger.info(
+            "LLM context: model=%s window=%d compression_threshold=%d",
+            config.model_name, model_context, dynamic_max_tokens,
+        )
+
         self.system_prompt = self._load_system_prompt(agent_name)
 
         reasoning = Config.get("phantom_reasoning_effort")
@@ -227,13 +244,15 @@ class LLM:
             "stream_options": {"include_usage": True},
         }
 
-        # Resolve provider-specific API key / base from the registry.
-        # When a known provider preset exists, use ONLY its key + base —
-        # do NOT fall back to the generic LLM_API_BASE which may point to
-        # a different provider (e.g. OpenRouter) and break the request.
-        from phantom.llm.provider_registry import PROVIDER_PRESETS
+        # L2-FIX: Wire max_tokens from provider registry into the API call.
+        # Without this, the LLM response length is unconstrained (model default),
+        # which can waste output tokens on overly verbose responses.
+        from phantom.llm.provider_registry import PROVIDER_PRESETS, get_provider_max_tokens
 
         preset = PROVIDER_PRESETS.get(self.config.model_name.lower())
+        max_output_tokens = get_provider_max_tokens(self.config.model_name)
+        if max_output_tokens > 0:
+            args["max_tokens"] = max_output_tokens
         api_key: str | None = None
         api_base: str | None = None
 
@@ -305,6 +324,28 @@ class LLM:
                 cost = completion_cost(response) or 0.0
             except Exception:  # noqa: BLE001
                 cost = 0.0
+
+            # L4-FIX: Cost fallback estimator — when litellm.completion_cost()
+            # returns 0 (unsupported model, custom OpenRouter route, etc.),
+            # estimate cost from the provider registry's cost_per_1k rates.
+            # Without this, spend appears free and cost limits never trigger.
+            if cost == 0.0 and (input_tokens > 0 or output_tokens > 0):
+                try:
+                    from phantom.llm.provider_registry import PROVIDER_PRESETS
+                    model_key = self.config.model_name.lower()
+                    preset = PROVIDER_PRESETS.get(model_key)
+                    if preset and (preset.cost_per_1k_input > 0 or preset.cost_per_1k_output > 0):
+                        cost = (
+                            (input_tokens / 1000) * preset.cost_per_1k_input
+                            + (output_tokens / 1000) * preset.cost_per_1k_output
+                        )
+                        logger.debug(
+                            "L4-FIX: Estimated cost $%.4f from registry rates "
+                            "(%d in + %d out tokens)",
+                            cost, input_tokens, output_tokens,
+                        )
+                except (ImportError, AttributeError):
+                    pass
 
             self._total_stats.input_tokens += input_tokens
             self._total_stats.output_tokens += output_tokens

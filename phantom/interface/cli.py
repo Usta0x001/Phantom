@@ -257,11 +257,15 @@ async def run_cli(args: Any) -> None:  # noqa: PLR0915
         cleanup_runtime()
 
     def signal_handler(_signum: int, _frame: Any) -> None:
-        # Only set flag — let atexit handle actual cleanup to avoid I/O in signal handler
+        # P1-FIX1: Perform cleanup BEFORE setting done flag.
+        # Previous bug: setting _cleanup_done=True first caused atexit to skip cleanup,
+        # orphaning the Docker container on Ctrl+C.
         nonlocal _cleanup_done
         if not _cleanup_done:
-            _cleanup_done = True
-            # Schedule cleanup via atexit (already registered)
+            try:
+                cleanup_on_exit()
+            except Exception:  # noqa: BLE001
+                pass
         sys.exit(1)
 
     atexit.register(cleanup_on_exit)

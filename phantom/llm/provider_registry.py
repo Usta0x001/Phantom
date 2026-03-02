@@ -251,6 +251,23 @@ def get_context_window(model_name: str) -> int:
     return 128_000
 
 
+def get_provider_max_tokens(model_name: str) -> int:
+    """Get the max output tokens for a model.
+
+    L2-FIX: Returns the configured max_tokens for known providers,
+    or a sensible default (8192) for unknown models.  This value is
+    used to constrain LLM response length in API calls.
+    """
+    model = model_name.lower()
+
+    # Exact match in presets
+    if model in PROVIDER_PRESETS:
+        return PROVIDER_PRESETS[model].max_tokens
+
+    # Default — most models support at least 8K output
+    return 8192
+
+
 @dataclass
 class FallbackChain:
     """Ordered list of providers to try."""

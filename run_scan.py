@@ -158,11 +158,19 @@ async def run_headless_scan(target_url: str, scan_mode: str = "quick", resume_di
         logger.error("Scan failed: %s", e, exc_info=True)
         print(f"[4/6] Scan error: {type(e).__name__}: {e}")
         result = {"success": False, "error": str(e)}
-
-    print("[5/6] Cleaning up...")
-    tracer.cleanup()
-    from phantom.runtime import cleanup_runtime
-    cleanup_runtime()
+    finally:
+        # P1-FIX2: Cleanup in finally block — ensures container is removed even on
+        # unexpected exceptions (KeyboardInterrupt, OOM, etc.)
+        print("[5/6] Cleaning up...")
+        try:
+            tracer.cleanup()
+        except Exception as _cleanup_err:  # noqa: BLE001
+            logger.warning("Tracer cleanup error: %s", _cleanup_err)
+        try:
+            from phantom.runtime import cleanup_runtime
+            cleanup_runtime()
+        except Exception as _cleanup_err:  # noqa: BLE001
+            logger.warning("Runtime cleanup error: %s", _cleanup_err)
 
     run_dir = tracer.get_run_dir()
     print(f"[6/6] Results in: {run_dir}")

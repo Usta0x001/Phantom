@@ -446,6 +446,20 @@ class Tracer:
                         "tool_executions": tool_count,
                         "llm_usage": llm_stats,
                     }
+
+                    # L5-FIX: Include cost controller data in scan stats.
+                    # The cost controller has authoritative budget/limit info that
+                    # the per-agent LLM stats don't include (compression costs,
+                    # budget remaining, etc.)
+                    try:
+                        from phantom.core.cost_controller import get_cost_controller
+                        cc = get_cost_controller()
+                        if cc is not None:
+                            stats["cost_controller"] = cc.get_snapshot().to_dict()
+                            stats["cost_summary"] = cc.get_cost_summary()
+                    except (ImportError, AttributeError):
+                        pass
+
                     stats_path = run_dir / "scan_stats.json"
                     stats_path.write_text(_json.dumps(stats, indent=2), encoding="utf-8")
                     logger.info("Saved scan stats to: %s", stats_path)
