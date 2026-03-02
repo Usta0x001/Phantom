@@ -6,7 +6,7 @@ from phantom.tools.registry import register_tool
 RequestPart = Literal["request", "response"]
 
 
-@register_tool
+@register_tool(sandbox_execution=False)
 def list_requests(
     httpql_filter: str | None = None,
     start_page: int = 1,
@@ -33,7 +33,7 @@ def list_requests(
     )
 
 
-@register_tool
+@register_tool(sandbox_execution=False)
 def view_request(
     request_id: str,
     part: RequestPart = "request",
@@ -47,23 +47,24 @@ def view_request(
     return manager.view_request(request_id, part, search_pattern, page, page_size)
 
 
-@register_tool
+@register_tool(sandbox_execution=False)
 def send_request(
     method: str,
     url: str,
     headers: dict[str, str] | None = None,
     body: str = "",
     timeout: int = 30,
+    follow_redirects: bool = True,
 ) -> dict[str, Any]:
     from .proxy_manager import get_proxy_manager
 
     if headers is None:
         headers = {}
     manager = get_proxy_manager()
-    return manager.send_simple_request(method, url, headers, body, timeout)
+    return manager.send_simple_request(method, url, headers, body, timeout, follow_redirects)
 
 
-@register_tool
+@register_tool(sandbox_execution=False)
 def repeat_request(
     request_id: str,
     modifications: dict[str, Any] | None = None,
@@ -76,7 +77,7 @@ def repeat_request(
     return manager.repeat_request(request_id, modifications)
 
 
-@register_tool
+@register_tool(sandbox_execution=False)
 def scope_rules(
     action: Literal["get", "list", "create", "update", "delete"],
     allowlist: list[str] | None = None,
@@ -90,7 +91,7 @@ def scope_rules(
     return manager.scope_rules(action, allowlist, denylist, scope_id, scope_name)
 
 
-@register_tool
+@register_tool(sandbox_execution=False)
 def list_sitemap(
     scope_id: str | None = None,
     parent_id: str | None = None,
@@ -103,7 +104,7 @@ def list_sitemap(
     return manager.list_sitemap(scope_id, parent_id, depth, page)
 
 
-@register_tool
+@register_tool(sandbox_execution=False)
 def view_sitemap_entry(
     entry_id: str,
 ) -> dict[str, Any]:

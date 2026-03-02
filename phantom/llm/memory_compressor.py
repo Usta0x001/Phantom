@@ -146,7 +146,7 @@ def _summarize_messages(
         # LOGIC-004 FIX: Log compression calls to audit trail so data flows
         # to external LLM providers are visible and auditable.
         try:
-            from phantom.telemetry.audit_logger import get_global_audit_logger
+            from phantom.core.audit_logger import get_global_audit_logger
             _audit = get_global_audit_logger()
             if _audit:
                 _audit.log_event(
