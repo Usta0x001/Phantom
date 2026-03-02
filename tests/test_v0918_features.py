@@ -237,17 +237,17 @@ class TestCheckpointRoundTrip:
 class TestScanProfileOptimization:
     """Verify scan profiles have correct cost-optimized settings."""
 
-    def test_quick_profile_low_reasoning(self):
+    def test_quick_profile_medium_reasoning(self):
         from phantom.core.scan_profiles import get_profile
 
         profile = get_profile("quick")
-        assert profile.reasoning_effort == "low"
+        assert profile.reasoning_effort == "medium"
 
     def test_quick_profile_reduced_memory(self):
         from phantom.core.scan_profiles import get_profile
 
         profile = get_profile("quick")
-        assert profile.memory_threshold == 40_000
+        assert profile.memory_threshold == 50_000
 
     def test_standard_profile_medium_reasoning(self):
         from phantom.core.scan_profiles import get_profile
@@ -285,8 +285,8 @@ class TestScanProfileOptimization:
         assert merged.max_iterations == 200
         assert merged.reasoning_effort == "high"
         # Original unchanged
-        assert profile.max_iterations == 80
-        assert profile.reasoning_effort == "low"
+        assert profile.max_iterations == 100
+        assert profile.reasoning_effort == "medium"
 
     def test_unknown_profile_raises(self):
         from phantom.core.scan_profiles import get_profile

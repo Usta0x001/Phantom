@@ -69,7 +69,7 @@ def nuclei_scan(
     """
     from phantom.tools.terminal.terminal_actions import terminal_execute
 
-    cmd_parts = ["nuclei", "-u", shlex.quote(target), "-jsonl", "-nc"]  # JSON Lines output, no color
+    cmd_parts = ["nuclei", "-u", shlex.quote(target), "-jsonl", "-nc", "-stats"]  # JSON Lines output, no color, stats
 
     if severity != "all":
         cmd_parts.extend(["-severity", severity])
@@ -131,7 +131,7 @@ def nuclei_scan(
         "findings_truncated": truncated,
         "findings": findings,
         "by_severity": {k: len(v) for k, v in severity_groups.items()},
-        "raw_output": raw_output[:2000] if len(findings) == 0 else "",
+        "raw_output_tail": raw_output[-2000:] if len(raw_output) > 0 else "(no output)",
     }
 
 
