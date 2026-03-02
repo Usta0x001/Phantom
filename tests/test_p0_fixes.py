@@ -54,11 +54,12 @@ def test_auto001_blocks_below_minimum_iterations():
 
 
 def test_auto001_blocks_below_minimum_tools():
-    """AUTO-001: finish_scan must be blocked with fewer than 3 tool calls."""
+    """AUTO-001: finish_scan must be blocked with fewer tool calls than minimum."""
     from phantom.agents.state import AgentState
     from phantom.tools.finish.finish_actions import finish_scan
 
-    state = AgentState(iteration=6, actions_taken=[{}, {}])
+    # With default max_iterations=150, MIN_TOOL_CALLS = max(10, 150*0.15) = 22
+    state = AgentState(iteration=40, max_iterations=150, actions_taken=[{}, {}])
     result = finish_scan("summary", "method", "analysis", "recs", agent_state=state)
     assert result["success"] is False
     assert "AUTO-001" in result.get("blocked_by", "")
@@ -66,15 +67,27 @@ def test_auto001_blocks_below_minimum_tools():
 
 
 def test_auto001_allows_sufficient_work():
-    """AUTO-001: finish_scan must pass when minimum work is done."""
+    """AUTO-001: finish_scan must pass iteration and tool gates when sufficient work is done."""
     from phantom.agents.state import AgentState
     from phantom.tools.finish.finish_actions import finish_scan
 
-    state = AgentState(iteration=10, actions_taken=[{}, {}, {}, {}, {}])
+    # With max_iterations=150: MIN_ITERATIONS = max(15, 37) = 37, MIN_TOOL_CALLS = max(10, 22) = 22
+    # Provide enough iterations and tool calls, plus findings for diversity gate
+    actions = [{} for _ in range(25)]
+    state = AgentState(
+        iteration=40, max_iterations=150,
+        actions_taken=actions,
+        findings_ledger=[
+            "[vuln/nuclei] HIGH sqli at /api",
+            "[vuln/report] xss reflected",
+            "[vuln/report] idor access control",
+            "[vuln/report] auth jwt bypass",
+        ],
+    )
     result = finish_scan("summary", "method", "analysis", "recs", agent_state=state)
     # Should not be blocked by AUTO-001 (may fail for other reasons like no tracer)
     assert "AUTO-001" not in result.get("blocked_by", "")
-    print("AUTO-001 PASS: Allowed at iteration 10 with 5 tools")
+    print("AUTO-001 PASS: Allowed at iteration 40 with sufficient work")
 
 
 def test_arch003_unverified_findings_field():

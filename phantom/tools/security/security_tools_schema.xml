@@ -365,6 +365,9 @@ Use this BEFORE vulnerability scanning to build a full attack surface map. Essen
       <parameter name="js_crawl" type="boolean" required="false">
         <description>Also parse JavaScript files for hidden endpoints and API routes (default: true)</description>
       </parameter>
+      <parameter name="headless" type="boolean" required="false">
+        <description>Use headless browser for JavaScript-heavy Single Page Applications (Angular, React, Vue). Renders JS before crawling to discover dynamically loaded endpoints. (default: false)</description>
+      </parameter>
       <parameter name="scope_in_domain" type="boolean" required="false">
         <description>Stay within the target domain to avoid crawling external sites (default: true)</description>
       </parameter>

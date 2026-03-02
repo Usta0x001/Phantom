@@ -272,11 +272,20 @@ class BaseAgent(metaclass=AgentMeta):
                     if discovered > 0:
                         coverage_pct = (tested / discovered) * 100
                         if coverage_pct >= 80:
+                            if vuln_count >= 30:
+                                advice = ("Coverage and vuln count are HIGH. "
+                                          "Consider verifying existing findings and finishing.")
+                            else:
+                                advice = (
+                                    f"Coverage is high but only {vuln_count} vulns found. "
+                                    "DO NOT finish yet — switch to UNTESTED vulnerability classes "
+                                    "(try XSS, SSRF, JWT, business logic, file upload). "
+                                    "Create subagents for parallel testing if you haven't already."
+                                )
                             self.state.add_advisory(
                                 f"📊 COVERAGE UPDATE: {tested}/{discovered} endpoints tested "
                                 f"({coverage_pct:.0f}% coverage), {vuln_count} vulnerabilities found.\n"
-                                "Coverage is HIGH. If no new attack vectors remain, consider "
-                                "verifying existing findings and finishing with finish_scan.",
+                                f"{advice}",
                                 ttl=3,
                             )
                         elif self.state.iteration >= 40 and coverage_pct < 30:
@@ -611,6 +620,37 @@ class BaseAgent(metaclass=AgentMeta):
             raise
 
         self.state.messages = list(conversation_history)
+
+        # ── BUG-02 FIX: Wire vuln_rotation.record_finding() ──────────
+        # After tool execution, scan newly-added ledger entries for vuln
+        # indicators and call record_finding() so the rotation tracker
+        # accurately reflects class coverage.
+        if hasattr(self, "_vuln_rotation") and self._vuln_rotation is not None:
+            try:
+                ledger = getattr(self.state, "findings_ledger", [])
+                # Check last 5 entries (recently added by _auto_record_findings)
+                _vuln_class_map = {
+                    "sqli": "sqli", "sql inject": "sqli", "sqlmap": "sqli",
+                    "xss": "xss", "cross-site scripting": "xss",
+                    "idor": "idor", "access control": "idor",
+                    "auth": "auth_jwt", "jwt": "auth_jwt", "login": "auth_jwt",
+                    "traversal": "path_traversal", "lfi": "path_traversal",
+                    "ssrf": "ssrf",
+                    "disclosure": "info_disclosure", "exposure": "info_disclosure",
+                    "business": "business_logic", "race": "business_logic",
+                    "upload": "csrf_upload", "csrf": "csrf_upload",
+                    "xxe": "xxe_deser", "deserialization": "xxe_deser",
+                }
+                for entry in ledger[-5:]:
+                    if "[vuln/" in entry.lower() or "confirmed" in entry.lower():
+                        lower_e = entry.lower()
+                        for keyword, class_id in _vuln_class_map.items():
+                            if keyword in lower_e:
+                                self._vuln_rotation.record_finding(class_id)
+                                break
+            except Exception:  # noqa: BLE001
+                pass
+        # ── END BUG-02 FIX ───────────────────────────────────────────
 
         if should_agent_finish:
             # Finalize EnhancedAgentState scan tracking when available.

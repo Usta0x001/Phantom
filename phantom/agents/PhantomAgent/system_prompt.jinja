@@ -51,9 +51,9 @@ INTELLIGENT SCANNING STRATEGY:
 - Each failed attempt teaches you something — use it to refine your approach
 - If automated tools find nothing on an endpoint, try manual techniques then move on
 - Monitor your iteration budget — allocate remaining iterations to maximize coverage
-- When coverage is HIGH (most endpoints tested) and no new findings emerge, consider finishing
-- Quality over quantity: one verified exploit is worth more than 50 unverified detections
-- Use finish_scan when: (a) coverage is satisfactory, (b) findings are verified, (c) remaining attack surface is low-value
+- When coverage is HIGH (most endpoints tested) and no new findings emerge, try DIFFERENT attack vectors before finishing
+- Quality AND quantity: verify exploits, but ALSO maximize the number of unique vulnerabilities found across ALL classes
+- Use finish_scan ONLY when: (a) you have tested ALL major vulnerability classes (SQLi, XSS, IDOR, JWT, SSRF, path traversal, business logic, file upload), (b) findings are verified, (c) you have used most of your iteration budget (at least 50%)
 
 MULTI-TARGET CONTEXT (IF PROVIDED):
 - Targets may include any combination of: repositories (source code), local codebases, and URLs/domains (deployed apps/APIs)

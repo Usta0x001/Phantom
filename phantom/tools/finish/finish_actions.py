@@ -650,29 +650,36 @@ def finish_scan(
     if validation_error:
         return validation_error
 
-    # ── AUTO-001 FIX: Minimum-work gate ──────────────────────────────────
-    # Prevents premature termination (e.g. via indirect prompt injection
-    # telling the LLM to call finish_scan immediately).
-    MIN_ITERATIONS = 5
-    MIN_TOOL_CALLS = 3
-
+    # ── AUTO-001 FIX: Minimum-work gate (ENHANCED v2) ────────────────────
+    # Prevents premature termination. Uses dynamic thresholds based on
+    # the scan profile's max_iterations so the agent must use a meaningful
+    # fraction of its budget before finishing.
     if agent_state is not None:
         current_iteration = getattr(agent_state, "iteration", 0)
         actions_count = len(getattr(agent_state, "actions_taken", []))
+        max_iter = getattr(agent_state, "max_iterations", 150)
+
+        # Dynamic thresholds: at least 25% of iteration budget, 15% tool activity
+        MIN_ITERATIONS = max(15, int(max_iter * 0.25))
+        MIN_TOOL_CALLS = max(10, int(max_iter * 0.15))
 
         if current_iteration < MIN_ITERATIONS:
+            remaining = MIN_ITERATIONS - current_iteration
             _logger.warning(
-                "AUTO-001: finish_scan blocked — iteration %d < minimum %d",
-                current_iteration, MIN_ITERATIONS,
+                "AUTO-001: finish_scan blocked — iteration %d < minimum %d (25%% of %d)",
+                current_iteration, MIN_ITERATIONS, max_iter,
             )
             return {
                 "success": False,
                 "message": (
                     f"Cannot finish scan yet: only {current_iteration}/{MIN_ITERATIONS} "
-                    f"iterations completed. You MUST continue scanning — run more "
-                    f"reconnaissance and vulnerability testing before finishing."
+                    f"iterations completed (minimum 25% of {max_iter} budget). "
+                    f"You have {remaining} more iterations to go. "
+                    f"Continue testing — switch to a DIFFERENT vulnerability class "
+                    f"(XSS, IDOR, JWT, SSRF, path traversal, business logic)."
                 ),
                 "blocked_by": "AUTO-001_minimum_work_gate",
+                "iterations_remaining": remaining,
             }
 
         if actions_count < MIN_TOOL_CALLS:
@@ -684,16 +691,100 @@ def finish_scan(
                 "success": False,
                 "message": (
                     f"Cannot finish scan yet: only {actions_count}/{MIN_TOOL_CALLS} "
-                    f"tools invoked. You MUST run more security tools before finishing."
+                    f"tools invoked. Run more security scanners (sqlmap, ffuf, nuclei, "
+                    f"jwt_tool) and test more endpoints before finishing."
                 ),
                 "blocked_by": "AUTO-001_minimum_work_gate",
             }
 
+        # ── AUTO-002: Vuln-class diversity gate ──
+        # Require testing at least N different vulnerability classes
+        MIN_VULN_CLASSES = 4
+        vuln_categories_tested = set()
+        _vuln_keywords = {
+            "sqli": "sqli", "sql inject": "sqli", "sql": "sqli",
+            "xss": "xss", "cross-site scripting": "xss", "reflected": "xss",
+            "idor": "idor", "access control": "idor", "broken access": "idor",
+            "insecure direct": "idor",
+            "auth": "auth", "jwt": "auth", "login": "auth", "session": "auth",
+            "password": "auth",
+            "path traversal": "lfi", "lfi": "lfi", "local file": "lfi",
+            "directory traversal": "lfi",
+            "ssrf": "ssrf", "server-side request": "ssrf",
+            "upload": "upload", "file upload": "upload",
+            "csrf": "csrf", "cross-site request": "csrf",
+            "xxe": "xxe", "xml external": "xxe", "deserialization": "xxe",
+            "info": "info", "disclosure": "info", "exposure": "info",
+            "misconfiguration": "info",
+            "business": "business", "logic": "business", "race": "business",
+            "price": "business",
+        }
+        ledger = getattr(agent_state, "findings_ledger", [])
+        for entry in ledger:
+            lower_entry = entry.lower()
+            for keyword, category in _vuln_keywords.items():
+                if keyword in lower_entry:
+                    vuln_categories_tested.add(category)
+        # Also check actions_taken for tool usage diversity
+        tools_used_set = set()
+        for action in getattr(agent_state, "actions_taken", []):
+            tool = (action.get("action", {}).get("tool_name", "") or
+                    action.get("action", {}).get("name", ""))
+            if tool:
+                tools_used_set.add(tool)
+
+        if len(vuln_categories_tested) < MIN_VULN_CLASSES:
+            _logger.warning(
+                "AUTO-002: finish_scan blocked — %d/%d vuln classes tested: %s",
+                len(vuln_categories_tested), MIN_VULN_CLASSES,
+                vuln_categories_tested,
+            )
+            untested = {"sqli", "xss", "idor", "auth", "lfi", "ssrf", "info",
+                        "business"} - vuln_categories_tested
+            return {
+                "success": False,
+                "message": (
+                    f"Cannot finish: only {len(vuln_categories_tested)}/{MIN_VULN_CLASSES} "
+                    f"vulnerability classes tested ({', '.join(sorted(vuln_categories_tested))}). "
+                    f"You MUST test more diverse attack vectors. "
+                    f"Suggested next classes: {', '.join(sorted(list(untested)[:3]))}."
+                ),
+                "blocked_by": "AUTO-002_diversity_gate",
+                "classes_tested": sorted(vuln_categories_tested),
+                "suggested_next": sorted(list(untested)[:3]),
+            }
+
+        # ── AUTO-003: Security scanner enforcement gate ──
+        REQUIRED_SCANNERS = {"nuclei_scan", "sqlmap_test", "ffuf_directory_scan",
+                             "send_request", "katana_crawl", "nmap_scan",
+                             "nmap_vuln_scan", "sqlmap_forms",
+                             "nuclei_scan_cves", "nuclei_scan_misconfigs",
+                             "httpx_probe"}
+        scanner_tools_used = tools_used_set & REQUIRED_SCANNERS
+        MIN_SCANNER_TYPES = 3
+        if len(scanner_tools_used) < MIN_SCANNER_TYPES:
+            _logger.warning(
+                "AUTO-003: finish_scan blocked — only %d scanner types used: %s",
+                len(scanner_tools_used), scanner_tools_used,
+            )
+            return {
+                "success": False,
+                "message": (
+                    f"Cannot finish: only {len(scanner_tools_used)} security scanner types "
+                    f"used ({', '.join(sorted(scanner_tools_used))}). "
+                    f"Must use at least {MIN_SCANNER_TYPES} different scanner tools. "
+                    f"Try: sqlmap_test, nuclei_scan, ffuf_directory_scan, nmap_scan."
+                ),
+                "blocked_by": "AUTO-003_scanner_gate",
+            }
+
         _logger.info(
-            "AUTO-001: finish_scan allowed — iteration=%d, tools=%d",
+            "AUTO-001/002/003: finish_scan allowed — iteration=%d, tools=%d, "
+            "vuln_classes=%d, scanners=%d",
             current_iteration, actions_count,
+            len(vuln_categories_tested), len(scanner_tools_used),
         )
-    # ── END AUTO-001 ─────────────────────────────────────────────────────
+    # ── END AUTO-001/002/003 ──────────────────────────────────────────────
 
     active_agents_error = _check_active_agents(agent_state)
     if active_agents_error:

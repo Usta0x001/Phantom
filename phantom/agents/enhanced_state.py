@@ -379,6 +379,7 @@ class EnhancedAgentState(AgentState):
             "scan_id": self.scan_id,
             "target": self.context.get("target", "unknown"),
             "iteration": self.iteration,
+            "max_iterations": self.max_iterations,  # BUG-05 FIX: Persist max_iterations
             "phase": self.current_phase.value,
             "hosts": {k: h.to_summary() for k, h in self.hosts.items()},
             "subdomains": self.subdomains,
