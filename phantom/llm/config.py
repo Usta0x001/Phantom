@@ -9,6 +9,7 @@ class LLMConfig:
         skills: list[str] | None = None,
         timeout: int | None = None,
         scan_mode: str = "deep",
+        temperature: float | None = None,
     ):
         self.model_name = model_name or Config.get("phantom_llm")
 
@@ -21,3 +22,8 @@ class LLMConfig:
         self.timeout = timeout or int(Config.get("llm_timeout") or "300")
 
         self.scan_mode = scan_mode if scan_mode in ["quick", "standard", "deep"] else "deep"
+
+        # Temperature controls LLM creativity vs determinism.
+        # Lower values (0.2-0.4) = more methodical, systematic exploitation.
+        # Default 0.3 for security scanning — proven attack patterns over creativity.
+        self.temperature: float = temperature if temperature is not None else 0.3

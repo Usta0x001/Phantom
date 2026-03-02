@@ -903,9 +903,9 @@ class TestExecutor:
 
     def test_format_tool_result_truncation(self):
         from phantom.tools.executor import _format_tool_result
-        text, images = _format_tool_result("test_tool", "X" * 15000)
+        text, images = _format_tool_result("test_tool", "X" * 25000)
         assert "truncated" in text.lower()
-        assert len(text) < 12000
+        assert len(text) < 20000
 
     def test_format_tool_result_none(self):
         from phantom.tools.executor import _format_tool_result

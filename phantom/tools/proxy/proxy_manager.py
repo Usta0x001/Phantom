@@ -34,6 +34,58 @@ _DIRECT_TLS_VERIFY: bool = os.environ.get("PHANTOM_TLS_VERIFY", "0").lower() in 
 # they ARE the scan target — blocking them would break the scan.
 _ALLOWED_SSRF_HOSTS: set[str] = set()
 
+# ---- Session / Auth Token Store ----
+# Automatically captures auth tokens from login responses and carries them
+# across subsequent send_request calls so subagents don't need to re-login.
+# Thread-safe: uses a simple dict guarded by the GIL for reads/writes.
+_auth_token_store: dict[str, str] = {}  # header_name -> header_value
+
+
+def get_auth_token_store() -> dict[str, str]:
+    """Return the current auth token store (for injection into scanner tools)."""
+    return dict(_auth_token_store)
+
+
+def set_auth_token(header_name: str, header_value: str) -> None:
+    """Manually register an auth token for auto-injection."""
+    _auth_token_store[header_name] = header_value
+
+
+def _capture_auth_from_response(response_headers: dict, response_body: str) -> None:
+    """Auto-capture auth tokens from login-like responses.
+
+    Detects JWT tokens in response JSON and Set-Cookie headers,
+    stores them for auto-injection into subsequent requests.
+    """
+    import json as _json
+
+    # Capture Set-Cookie headers
+    set_cookie = response_headers.get("set-cookie", "") or response_headers.get("Set-Cookie", "")
+    if set_cookie:
+        # Store the cookie for future requests
+        _auth_token_store["Cookie"] = set_cookie.split(";")[0]  # first cookie value
+
+    # Capture JWT from JSON response body (common in REST APIs like Juice Shop)
+    if response_body:
+        try:
+            data = _json.loads(response_body[:5000])  # limit parsing
+            if isinstance(data, dict):
+                # Look for token fields in response
+                for key in ("token", "access_token", "accessToken", "jwt", "auth_token",
+                            "authentication", "id_token"):
+                    val = data.get(key)
+                    if not val:
+                        # Check nested: data.authentication.token
+                        auth_obj = data.get("authentication", {})
+                        if isinstance(auth_obj, dict):
+                            val = auth_obj.get("token") or auth_obj.get("access_token")
+                    if val and isinstance(val, str) and len(val) > 20:
+                        _auth_token_store["Authorization"] = f"Bearer {val}"
+                        _logger.info("Auto-captured auth token from response (field: %s)", key)
+                        break
+        except (_json.JSONDecodeError, ValueError, TypeError):
+            pass
+
 
 def allow_ssrf_host(hostname: str) -> None:
     """Register a hostname as safe for SSRF checks (scan target)."""
@@ -328,9 +380,17 @@ class ProxyManager:
         headers: dict[str, str] | None = None,
         body: str = "",
         timeout: int = 30,
+        follow_redirects: bool = True,
     ) -> dict[str, Any]:
         if headers is None:
             headers = {}
+
+        # Auto-inject stored auth tokens (from previous login responses)
+        # Only inject if the caller hasn't already set the header.
+        for hdr_name, hdr_value in _auth_token_store.items():
+            if hdr_name not in headers and hdr_name.lower() not in {k.lower() for k in headers}:
+                headers[hdr_name] = hdr_value
+
         if not _is_ssrf_safe(url):
             return {"error": "Blocked: URL targets a private/internal address", "url": url}
 
@@ -350,6 +410,7 @@ class ProxyManager:
                     proxies=current_proxies,
                     timeout=timeout,
                     verify=tls_verify,
+                    allow_redirects=follow_redirects,
                 )
                 response_time = int((time.time() - start_time) * 1000)
 
@@ -359,15 +420,21 @@ class ProxyManager:
                     continue
 
                 body_content = response.text
-                if len(body_content) > 10000:
-                    body_content = body_content[:10000] + "\n... [truncated]"
+
+                # Auto-capture auth tokens from successful login-like responses
+                if response.status_code in (200, 201) and method.upper() in ("POST", "PUT"):
+                    _capture_auth_from_response(dict(response.headers), body_content)
+
+                # Raise body truncation limit from 10K to 30K for richer context
+                if len(body_content) > 30000:
+                    body_content = body_content[:30000] + "\n... [truncated]"
 
                 msg = (
                     "Request sent through proxy - check list_requests() for captured traffic"
                     if proxy_mode == "proxy"
                     else "Request sent directly (proxy unavailable)"
                 )
-                return {
+                result = {
                     "status_code": response.status_code,
                     "headers": dict(response.headers),
                     "body": body_content,
@@ -375,6 +442,10 @@ class ProxyManager:
                     "url": response.url,
                     "message": msg,
                 }
+                # Show stored auth info to help the agent
+                if _auth_token_store:
+                    result["auto_auth_applied"] = list(_auth_token_store.keys())
+                return result
             except (ProxyError, ConnectionError) as e:
                 if proxy_mode == "proxy":
                     _logger.warning("Proxy error for %s (%s), retrying direct", url, e)

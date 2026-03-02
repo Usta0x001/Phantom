@@ -30,7 +30,7 @@ class TestScanProfilesV096:
     def test_quick_iterations_increased(self):
         from phantom.core.scan_profiles import get_profile
         p = get_profile("quick")
-        assert p.max_iterations == 100, "Quick must be 100 iterations"
+        assert p.max_iterations == 150, "Quick must be 150 iterations"
 
     def test_standard_iterations_increased(self):
         from phantom.core.scan_profiles import get_profile
@@ -101,7 +101,7 @@ class TestMemoryCompressorV096:
 
     def test_min_recent_messages_reduced(self):
         from phantom.llm.memory_compressor import MIN_RECENT_MESSAGES
-        assert MIN_RECENT_MESSAGES == 12, f"Expected 12, got {MIN_RECENT_MESSAGES}"
+        assert MIN_RECENT_MESSAGES == 20, f"Expected 20, got {MIN_RECENT_MESSAGES}"
 
 
 # =========================================================================
@@ -280,12 +280,12 @@ class TestKatanaTool:
 class TestToolOutputTruncation:
     """Validate executor truncates large tool outputs."""
 
-    def test_truncation_at_8000_chars(self):
+    def test_truncation_at_16000_chars(self):
         from phantom.tools.executor import _format_tool_result
-        big_result = "A" * 10000
+        big_result = "A" * 20000
         observation_xml, images = _format_tool_result("test_tool", big_result)
         # The truncated result should be smaller than original + XML overhead
-        assert len(observation_xml) < 9000, f"Output too large: {len(observation_xml)}"
+        assert len(observation_xml) < 18000, f"Output too large: {len(observation_xml)}"
         assert "characters truncated" in observation_xml
 
     def test_small_output_not_truncated(self):

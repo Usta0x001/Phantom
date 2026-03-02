@@ -241,13 +241,13 @@ class TestScanProfileOptimization:
         from phantom.core.scan_profiles import get_profile
 
         profile = get_profile("quick")
-        assert profile.reasoning_effort == "medium"
+        assert profile.reasoning_effort == "high"
 
     def test_quick_profile_reduced_memory(self):
         from phantom.core.scan_profiles import get_profile
 
         profile = get_profile("quick")
-        assert profile.memory_threshold == 50_000
+        assert profile.memory_threshold == 80_000
 
     def test_standard_profile_medium_reasoning(self):
         from phantom.core.scan_profiles import get_profile
@@ -285,8 +285,8 @@ class TestScanProfileOptimization:
         assert merged.max_iterations == 200
         assert merged.reasoning_effort == "high"
         # Original unchanged
-        assert profile.max_iterations == 100
-        assert profile.reasoning_effort == "medium"
+        assert profile.max_iterations == 150
+        assert profile.reasoning_effort == "high"
 
     def test_unknown_profile_raises(self):
         from phantom.core.scan_profiles import get_profile
@@ -308,30 +308,30 @@ class TestToolResultTruncation:
         assert "short result" in text
         assert "truncated" not in text
 
-    def test_long_result_truncated_at_8k(self):
+    def test_long_result_truncated_at_16k(self):
         from phantom.tools.executor import _format_tool_result
 
-        long_text = "A" * 15_000
+        long_text = "A" * 25_000
         text, images = _format_tool_result("test_tool", long_text)
         # Should be truncated
         assert "truncated" in text.lower() or "characters truncated" in text
-        # Final text should be under ~8500 chars (head + tail + overhead)
-        assert len(text) < 10000
+        # Final text should be under ~18000 chars (head + tail + overhead)
+        assert len(text) < 18000
 
-    def test_8k_boundary_not_truncated(self):
-        """Result exactly at 8000 chars should NOT be truncated (M22 raised limit)."""
+    def test_16k_boundary_not_truncated(self):
+        """Result exactly at 16000 chars should NOT be truncated."""
         from phantom.tools.executor import _format_tool_result
 
-        text_7999 = "B" * 7999
-        result, images = _format_tool_result("test_tool", text_7999)
+        text_15999 = "B" * 15999
+        result, images = _format_tool_result("test_tool", text_15999)
         assert "truncated" not in result
 
-    def test_8001_chars_is_truncated(self):
-        """Result at 8001 chars SHOULD be truncated (M22 limit = 8000)."""
+    def test_16001_chars_is_truncated(self):
+        """Result at 16001 chars SHOULD be truncated (limit = 16000)."""
         from phantom.tools.executor import _format_tool_result
 
-        text_8001 = "C" * 8001
-        result, images = _format_tool_result("test_tool", text_8001)
+        text_16001 = "C" * 16001
+        result, images = _format_tool_result("test_tool", text_16001)
         assert "truncated" in result.lower() or "characters truncated" in result
 
 

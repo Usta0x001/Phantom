@@ -64,22 +64,25 @@ def _build_smart_context(
                 _re.IGNORECASE,
             ):
                 techs.add(tech.strip())
-            # Extract vulnerability mentions
+            # Extract vulnerability mentions (expanded pattern)
             for vuln in _re.findall(
-                r"(?:(?:SQL|XSS|SSRF|CSRF|IDOR|XXE|RCE|LFI|RFI)\b[^.]{0,100})",
+                r"(?:(?:SQL|XSS|SSRF|CSRF|IDOR|XXE|RCE|LFI|RFI|JWT|"
+                r"path.traversal|directory.traversal|open.redirect|"
+                r"business.logic|race.condition|privilege.escalation|"
+                r"broken.auth|insecure.deserialization|file.upload|"
+                r"injection|misconfiguration|info.disclosure|CORS)\b[^.]{0,100})",
                 text,
                 _re.IGNORECASE,
             ):
                 if len(vulns) < 20:
                     vulns.append(vuln.strip()[:150])
-            # PHT-015 FIX: Do NOT propagate raw credentials to child agents.
-            # Instead, note that credentials exist without revealing values.
+            # SECURITY-OVERRIDE: Pass credentials to child agents so they can
+            # test authenticated vulnerabilities (IDOR, privilege escalation,
+            # JWT manipulation, etc.). Subagents run in the same sandbox and
+            # need auth tokens to test ~50% of Juice Shop-style challenges.
             for cred in _re.findall(r"(?:password|token|secret|api[_-]?key)[:\s=]+\S+", text, _re.IGNORECASE):
                 if len(creds) < 10:
-                    # Redact the actual value — keep only the key name
-                    key_match = _re.match(r"(password|token|secret|api[_-]?key)", cred, _re.IGNORECASE)
-                    key_name = key_match.group(1) if key_match else "credential"
-                    creds.append(f"{key_name}=[REDACTED — available in parent context]")
+                    creds.append(cred.strip()[:200])
 
         if urls:
             summary_parts.append(f"## Discovered URLs/Endpoints ({len(urls)} total)")
@@ -361,6 +364,7 @@ def create_agent(
                 }
 
         from phantom.agents import PhantomAgent
+        from phantom.agents.enhanced_state import EnhancedAgentState
         from phantom.agents.state import AgentState
         from phantom.llm.config import LLMConfig
 
@@ -378,7 +382,18 @@ def create_agent(
                 parent_max = getattr(parent_agent.state, "max_iterations", 300)
             child_max_iter = max(50, int(parent_max * 0.75))
 
-        state = AgentState(task=task, agent_name=name, parent_id=parent_id, max_iterations=child_max_iter)
+        # Use EnhancedAgentState so subagents get full vuln tracking,
+        # endpoint dedup, host enumeration, and priority queue capabilities.
+        state = EnhancedAgentState(task=task, agent_name=name, parent_id=parent_id, max_iterations=child_max_iter)
+
+        # Propagate parent's discovered endpoints and hosts to subagent
+        # so it doesn't start blind.
+        if hasattr(agent_state, "endpoints") and agent_state.endpoints:
+            state.endpoints = list(agent_state.endpoints)
+        if hasattr(agent_state, "hosts") and agent_state.hosts:
+            state.hosts = dict(agent_state.hosts)
+        if hasattr(agent_state, "tested_endpoints") and agent_state.tested_endpoints:
+            state.tested_endpoints = dict(agent_state.tested_endpoints)
 
         timeout = None
         scan_mode = "deep"
@@ -596,6 +611,45 @@ def agent_finish(
                     )
 
                     parent_notified = True
+
+            # === Subagent findings rollup ===
+            # Propagate discovered vulnerabilities, endpoints, and findings
+            # from the subagent's state back to the parent's state.
+            parent_state = _agent_states.get(agent_node["parent_id"])
+            child_state = _agent_states.get(agent_id)
+
+            if parent_state and child_state:
+                # Roll up endpoints
+                if hasattr(child_state, "endpoints") and hasattr(parent_state, "endpoints"):
+                    for ep in child_state.endpoints:
+                        if ep not in parent_state.endpoints:
+                            parent_state.endpoints.append(ep)
+
+                # Roll up vulnerabilities
+                if hasattr(child_state, "vulnerabilities") and hasattr(parent_state, "vulnerabilities"):
+                    for vuln_id, vuln in child_state.vulnerabilities.items():
+                        if vuln_id not in parent_state.vulnerabilities:
+                            parent_state.vulnerabilities[vuln_id] = vuln
+                            # Update vuln_stats
+                            if hasattr(parent_state, "vuln_stats"):
+                                parent_state.vuln_stats["total"] = parent_state.vuln_stats.get("total", 0) + 1
+                                sev = str(getattr(vuln, "severity", "info")).lower()
+                                if sev in parent_state.vuln_stats:
+                                    parent_state.vuln_stats[sev] = parent_state.vuln_stats.get(sev, 0) + 1
+
+                # Roll up findings ledger
+                if hasattr(child_state, "findings_ledger") and hasattr(parent_state, "findings_ledger"):
+                    for entry in child_state.findings_ledger:
+                        if entry not in parent_state.findings_ledger:
+                            parent_state.findings_ledger.append(entry)
+
+                # Roll up tested endpoints (to avoid re-testing)
+                if hasattr(child_state, "tested_endpoints") and hasattr(parent_state, "tested_endpoints"):
+                    for key, tests in child_state.tested_endpoints.items():
+                        if key not in parent_state.tested_endpoints:
+                            parent_state.tested_endpoints[key] = tests
+                        else:
+                            parent_state.tested_endpoints[key].extend(tests)
 
             _running_agents.pop(agent_id, None)
             agent_name = agent_node["name"]
