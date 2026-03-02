@@ -115,6 +115,16 @@ docs/CODEBASE_AUDIT.md
 docs/DEEP_SECURITY_AUDIT.md
 docs/SECURITY_AUDIT_REPORT*.md
 
+# LaTeX / PDF reports (local only)
+docs/*.pdf
+docs/*.tex
+docs/*.aux
+docs/*.log
+docs/*.out
+docs/*.toc
+docs/*.lof
+docs/*.lot
+
 docker_output.txt
 docker_ps.txt
 scan_*.log
