@@ -294,11 +294,11 @@ class MemoryCompressor:
             _get_message_tokens(msg, model_name) for msg in system_msgs + regular_msgs
         )
 
-        if total_tokens <= self.max_total_tokens * 0.60:
+        if total_tokens <= self.max_total_tokens * 0.82:
             # Even when no compression needed, inject the findings ledger
             # so the agent always has access to persistent discoveries.
-            # NOTE: Threshold lowered from 0.9 to 0.60 to trigger compression
-            # earlier, leaving more headroom for continued exploration.
+            # NOTE: Threshold at 0.82 — balances context preservation with headroom.
+            # Too low (0.6) causes death spiral: compress→lose context→repeat→compress.
             ledger_msg = self._build_ledger_message()
             if ledger_msg:
                 # Insert ledger just before the last few messages
