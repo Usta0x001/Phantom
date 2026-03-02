@@ -26,6 +26,8 @@ _ENDPOINT_TOOLS_MAP: dict[str, str] = {
     "nmap_vuln_scan": "vuln-scan",
     "httpx_probe": "httpx",
     "httpx_full_analysis": "httpx-full",
+    "send_request": "manual",
+    "repeat_request": "manual-repeat",
 }
 
 
@@ -574,7 +576,11 @@ def _auto_record_findings(tool_name: str, result: Any, agent_state: Any) -> None
     """Automatically record key findings from security tool results to the
     persistent findings ledger.  This ensures critical discoveries survive
     memory compression even if the agent forgets to call ``record_finding``."""
-    if not isinstance(result, dict) or not result.get("success"):
+    if not isinstance(result, dict):
+        return
+    # Tools with explicit "success" field: require it to be truthy.
+    # Tools WITHOUT "success" (e.g. send_request): allow through.
+    if "success" in result and not result.get("success"):
         return
     if not agent_state or not hasattr(agent_state, "add_finding"):
         return
@@ -718,6 +724,28 @@ def _auto_record_findings(tool_name: str, result: Any, agent_state: Any) -> None
                     f"[recon/subfinder] {len(subdomains)} subdomains: "
                     + ", ".join(subdomains[:10])
                 )
+
+        # --- Send Request (manual testing) ---
+        elif tool_name in ("send_request", "repeat_request"):
+            status = result.get("status_code", 0)
+            url = str(result.get("url", ""))
+            body = result.get("body", "")[:500].lower()
+            # Track endpoints
+            if url and hasattr(agent_state, "add_endpoint"):
+                agent_state.add_endpoint(url)
+            # Record interesting HTTP responses
+            if status in (200, 201, 301, 302, 403, 500) and url:
+                agent_state.add_finding(f"[recon/request] {url} (status={status})")
+            # Detect SQLi indicators in response
+            if any(kw in body for kw in ("sql", "syntax error", "sqlite", "sequelize",
+                                          "unrecognized token", "near \"")):
+                agent_state.add_finding(f"[vuln/sqli-indicator] SQL error in response from {url}")
+            # Detect XSS reflection
+            if "<script" in body or "javascript:" in body or "onerror" in body:
+                agent_state.add_finding(f"[vuln/xss-indicator] Script reflection at {url}")
+            # Detect sensitive data exposure
+            if any(kw in body for kw in ("password", "secret", "api_key", "private_key")):
+                agent_state.add_finding(f"[vuln/info-disclosure] Sensitive data at {url}")
 
     except Exception as exc:  # noqa: BLE001
         _logger.debug("auto-record findings swallowed: %s", exc, exc_info=True)
