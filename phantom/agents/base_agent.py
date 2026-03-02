@@ -197,6 +197,28 @@ class BaseAgent(metaclass=AgentMeta):
 
             self.state.increment_iteration()
 
+            # BUG-04 FIX: Automatic phase transitions based on iteration progress
+            if hasattr(self.state, "set_phase") and hasattr(self.state, "current_phase"):
+                try:
+                    from phantom.models.scan import ScanPhase
+                    pct = self.state.iteration / self.state.max_iterations
+                    findings_count = len(getattr(self.state, "findings_ledger", []))
+                    current = self.state.current_phase
+
+                    # RECON → EXPLOIT: after 25% of iterations OR when we have findings
+                    if current == ScanPhase.RECON and (pct >= 0.25 or findings_count >= 3):
+                        self.state.set_phase(ScanPhase.EXPLOIT)
+                        logger.info("Phase transition: RECON → EXPLOIT (iter=%d, findings=%d)",
+                                    self.state.iteration, findings_count)
+
+                    # EXPLOIT → REPORT: after 75% of iterations
+                    elif current == ScanPhase.EXPLOIT and pct >= 0.75:
+                        self.state.set_phase(ScanPhase.REPORT)
+                        logger.info("Phase transition: EXPLOIT → REPORT (iter=%d)",
+                                    self.state.iteration)
+                except (ImportError, Exception):  # noqa: BLE001
+                    pass
+
             # Periodic checkpoint for scan resume (every 10 iterations)
             if (
                 self.state.iteration % 10 == 0
@@ -220,24 +242,30 @@ class BaseAgent(metaclass=AgentMeta):
                 try:
                     discovered = len(self.state.endpoints)
                     tested = len(self.state.tested_endpoints)
+                    # BUG-08 FIX: Use findings_ledger count as vuln proxy
+                    # (vulnerabilities dict is often empty due to subagent state isolation)
+                    vuln_count = max(
+                        len(getattr(self.state, "vulnerabilities", {})),
+                        sum(1 for f in getattr(self.state, "findings_ledger", [])
+                            if "[vuln" in f.lower()),
+                    )
                     if discovered > 0:
                         coverage_pct = (tested / discovered) * 100
-                        vuln_count = len(getattr(self.state, "vulnerabilities", {}))
                         if coverage_pct >= 80:
-                            self.state.add_message(
-                                "user",
+                            self.state.add_advisory(
                                 f"📊 COVERAGE UPDATE: {tested}/{discovered} endpoints tested "
                                 f"({coverage_pct:.0f}% coverage), {vuln_count} vulnerabilities found.\n"
                                 "Coverage is HIGH. If no new attack vectors remain, consider "
                                 "verifying existing findings and finishing with finish_scan.",
+                                ttl=3,
                             )
                         elif self.state.iteration >= 40 and coverage_pct < 30:
-                            self.state.add_message(
-                                "user",
+                            self.state.add_advisory(
                                 f"📊 COVERAGE UPDATE: {tested}/{discovered} endpoints tested "
                                 f"({coverage_pct:.0f}% coverage), {vuln_count} vulnerabilities found.\n"
                                 "Coverage is LOW. Prioritize testing untested endpoints "
                                 "rather than re-testing the same ones.",
+                                ttl=3,
                             )
                 except Exception:  # noqa: BLE001
                     pass
@@ -277,12 +305,17 @@ class BaseAgent(metaclass=AgentMeta):
 
                 # P1-FIX4: Wire stagnation detector — record findings count each iteration
                 # so the loop detector can detect when no new vulns are being found.
+                # BUG-08 FIX: Use findings_ledger count (always populated) instead of
+                # vulnerabilities dict (empty due to subagent state isolation BUG-05).
                 try:
                     import phantom.core.loop_detector as _ld_stag
                     ld = getattr(_ld_stag, "_global_detector", None)
-                    if ld is not None and hasattr(self.state, "vulnerabilities"):
-                        vuln_count = len(self.state.vulnerabilities)
-                        stag_result = ld.record_findings_count(vuln_count)
+                    if ld is not None:
+                        # Prefer findings_ledger (always has data) over vulnerabilities (often empty)
+                        findings_count = len(getattr(self.state, "findings_ledger", []))
+                        vuln_count = len(getattr(self.state, "vulnerabilities", {}))
+                        effective_count = max(findings_count, vuln_count)
+                        stag_result = ld.record_findings_count(effective_count)
                         if stag_result.is_loop:
                             logger.warning(
                                 "Stagnation detected: %s", stag_result.details,

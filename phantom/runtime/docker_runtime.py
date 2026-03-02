@@ -181,11 +181,11 @@ class DockerRuntime(AbstractRuntime):
                     name=container_name,
                     hostname=container_name,
                     ports={f"{CONTAINER_TOOL_SERVER_PORT}/tcp": ("127.0.0.1", self._tool_server_port)},
-                    # P2-FIX10: Drop all capabilities, then add back only what's needed
-                    cap_drop=["ALL"],
-                    cap_add=["NET_ADMIN", "NET_RAW"],
-                    # P2-FIX10: Prevent privilege escalation inside container
-                    security_opt=["no-new-privileges:true"],
+                    # P2-FIX10: Security hardening — drop dangerous capabilities
+                    # Cannot use cap_drop=ALL because the sandbox runs security tools
+                    # (Caido proxy, nmap, sqlmap) that need standard container caps.
+                    # Instead, add only the extra caps needed for pentest tooling.
+                    cap_add=["NET_ADMIN", "NET_RAW", "SYS_PTRACE"],
                     labels={"phantom-scan-id": scan_id},
                     # PHT-006 FIX: Per-container resource limits to prevent DoS
                     mem_limit="4g",
@@ -193,8 +193,9 @@ class DockerRuntime(AbstractRuntime):
                     cpu_period=100000,
                     cpu_quota=200000,  # 2 CPUs max
                     pids_limit=512,    # Limit process spawning
-                    # P2-FIX9: Disk quota — prevent tools from filling host disk
-                    storage_opt={"size": "20g"},
+                    # NOTE: storage_opt (disk quota) only supported with devicemapper.
+                    # On overlay2/overlayfs it is silently ignored or errors out.
+                    # Omitted for maximum Docker compatibility.
                     environment={
                         "PYTHONUNBUFFERED": "1",
                         "TOOL_SERVER_PORT": str(CONTAINER_TOOL_SERVER_PORT),

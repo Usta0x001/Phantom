@@ -391,6 +391,8 @@ class EnhancedAgentState(AgentState):
             "false_positives": self.false_positives,
             "vuln_stats": self.vuln_stats,
             "tools_used": self.tools_used,
+            # BUG-09 FIX: Persist findings_ledger so scan resume retains all discoveries
+            "findings_ledger": list(getattr(self, "findings_ledger", [])),
             "saved_at": datetime.now(UTC).isoformat(),
         }
 
@@ -418,7 +420,7 @@ class EnhancedAgentState(AgentState):
             "scan_id", "target", "iteration", "phase", "hosts",
             "subdomains", "endpoints", "tested_endpoints",
             "vulnerabilities", "verified_vulns", "false_positives",
-            "vuln_stats", "tools_used", "saved_at",
+            "vuln_stats", "tools_used", "findings_ledger", "saved_at",
         }
         unexpected = set(data.keys()) - _ALLOWED_TOP_KEYS
         if unexpected:
@@ -455,9 +457,10 @@ class EnhancedAgentState(AgentState):
                 data[key] = dict(list(d.items())[:MAX_DICT_LEN])
         # ---- end PHT-019 validation ----
 
+        # BUG-14 FIX: Use default max_iterations (200) instead of hardcoded 300
         state = cls(
             agent_name="Root Agent (resumed)",
-            max_iterations=300,  # Will be overridden by caller if needed
+            max_iterations=200,
         )
 
         state.scan_id = data.get("scan_id")
@@ -469,6 +472,11 @@ class EnhancedAgentState(AgentState):
         state.false_positives = data.get("false_positives", [])
         state.vuln_stats = data.get("vuln_stats", state.vuln_stats)
         state.tools_used = data.get("tools_used", {})
+
+        # BUG-09 FIX: Restore findings_ledger from checkpoint
+        restored_ledger = data.get("findings_ledger", [])
+        if isinstance(restored_ledger, list):
+            state.findings_ledger = restored_ledger[:50_000]  # size guard
 
         # Restore phase
         phase_str = data.get("phase", "recon")
