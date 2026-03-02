@@ -12,6 +12,98 @@ from typing import Any, Literal
 from phantom.tools.registry import register_tool
 from phantom.tools.security.sanitizer import safe_temp_path, sanitize_extra_args
 
+# Built-in minimal wordlists so we NEVER need to download anything at runtime.
+# These cover the most common parameter names for web application testing.
+_BUILTIN_PARAM_WORDLIST = [
+    "id", "name", "email", "username", "password", "token", "key", "api_key",
+    "apikey", "secret", "session", "sessionid", "auth", "access_token",
+    "page", "limit", "offset", "sort", "order", "filter", "search", "q",
+    "query", "type", "action", "cmd", "command", "exec", "file", "path",
+    "dir", "url", "redirect", "next", "return", "callback", "continue",
+    "dest", "destination", "redir", "redirect_uri", "return_url",
+    "user", "user_id", "uid", "admin", "role", "group", "status",
+    "comment", "message", "body", "content", "text", "title", "description",
+    "category", "tag", "label", "format", "output", "debug", "test", "mode",
+    "lang", "language", "locale", "country", "region", "timezone",
+    "from", "to", "start", "end", "date", "time", "year", "month", "day",
+    "size", "width", "height", "count", "max", "min", "num", "number",
+    "price", "amount", "quantity", "total", "discount", "coupon", "code",
+    "product", "item", "sku", "order_id", "invoice", "payment", "method",
+    "address", "phone", "zip", "city", "state", "firstname", "lastname",
+    "display", "view", "template", "theme", "style", "css", "js",
+    "include", "require", "import", "load", "read", "write", "delete",
+    "create", "update", "edit", "remove", "add", "set", "get", "list",
+    "show", "hide", "enable", "disable", "activate", "deactivate",
+    "login", "logout", "register", "signup", "signin", "reset", "forgot",
+    "verify", "confirm", "approve", "deny", "accept", "reject",
+    "upload", "download", "export", "backup", "restore",
+    "config", "setting", "option", "preference", "param", "value", "data",
+    "json", "xml", "html", "csv", "pdf", "image", "photo", "avatar",
+    "version", "v", "api", "endpoint", "resource", "service", "module",
+    "class", "func", "function", "handler", "controller",
+    "table", "column", "field", "row", "record", "entry", "index",
+    "BasketId", "ProductId", "UserId",  # Juice Shop specific
+]
+
+_BUILTIN_VHOST_WORDLIST = [
+    "www", "mail", "ftp", "localhost", "webmail", "smtp", "pop", "ns1", "ns2",
+    "admin", "api", "dev", "staging", "test", "beta", "alpha", "demo",
+    "app", "portal", "dashboard", "panel", "console", "manage", "m",
+    "blog", "shop", "store", "cdn", "static", "assets", "media", "img",
+    "docs", "wiki", "help", "support", "status", "monitor", "grafana",
+    "git", "gitlab", "jenkins", "ci", "cd", "build", "deploy",
+    "db", "mysql", "postgres", "redis", "mongo", "elastic", "kibana",
+    "vpn", "proxy", "gateway", "auth", "sso", "oauth", "login",
+    "internal", "intranet", "private", "secure", "legacy", "old", "new",
+    "v1", "v2", "v3", "sandbox", "staging2", "preprod", "uat",
+]
+
+# Common directory/file entries for fallback when dirb wordlists are missing
+_BUILTIN_DIR_WORDLIST = [
+    "admin", "api", "app", "assets", "backup", "bin", "cgi-bin", "config",
+    "css", "data", "db", "debug", "docs", "download", "env", "error",
+    "files", "fonts", "help", "home", "images", "img", "includes", "js",
+    "lib", "log", "login", "logout", "media", "node_modules", "old",
+    "panel", "php", "private", "public", "redirect", "rest", "robots.txt",
+    "scripts", "search", "server", "sitemap.xml", "static", "status",
+    "storage", "swagger", "temp", "test", "tmp", "upload", "uploads",
+    "user", "users", "v1", "v2", "vendor", "web", "wp-admin", "wp-login",
+    ".env", ".git", ".htaccess", "package.json", "composer.json",
+    # Juice Shop / Node.js specific
+    "api", "rest", "socket.io", "ftp", "encryptionkeys", "promotion",
+    "video", "assets", "i18n", "redirect", "profile", "basket",
+    "track-order", "metrics", "security.txt", "main.js", "runtime.js",
+    "polyfills.js", "vendor.js", "snippet", "dataerasure", "accounting",
+    "b2b", "recycles", "deluxe-membership", "wallet",
+]
+
+
+def _ensure_wordlist(wordlist_path: str, fallback_words: list[str]) -> str:
+    """
+    Ensure a wordlist file exists. If the requested path doesn't exist,
+    generate a minimal built-in wordlist instead of downloading anything.
+    Returns the path to the usable wordlist.
+    """
+    from phantom.tools.terminal.terminal_actions import terminal_execute
+
+    # Check if the requested wordlist exists
+    check = terminal_execute(
+        command=f"test -f {shlex.quote(wordlist_path)} && echo EXISTS || echo MISSING",
+        timeout=5.0,
+    )
+    if "EXISTS" in check.get("content", ""):
+        return wordlist_path
+
+    # Generate a minimal built-in wordlist instead of downloading
+    builtin_path = f"/tmp/phantom_wordlist_{abs(hash(wordlist_path)) % 100000}.txt"
+    words_content = "\n".join(fallback_words)
+    # Use printf to handle newlines properly
+    terminal_execute(
+        command=f"printf '%s\\n' {' '.join(shlex.quote(w) for w in fallback_words)} > {shlex.quote(builtin_path)}",
+        timeout=10.0,
+    )
+    return builtin_path
+
 
 def _parse_ffuf_json(raw_output: str) -> list[dict[str, Any]]:
     """Parse FFuf JSON output into structured results."""
@@ -54,7 +146,7 @@ def _parse_ffuf_json(raw_output: str) -> list[dict[str, Any]]:
 @register_tool(sandbox_execution=True)
 def ffuf_directory_scan(
     url: str,
-    wordlist: str = "/usr/share/wordlists/dirb/common.txt",
+    wordlist: str = "/usr/share/wordlists/dirb/common.txt",  # Pre-installed in Kali
     extensions: str | None = None,
     filter_status: str | None = None,
     match_status: str = "200,204,301,302,307,401,403,405",
@@ -77,6 +169,9 @@ def ffuf_directory_scan(
         Discovered paths with status codes and sizes
     """
     from phantom.tools.terminal.terminal_actions import terminal_execute
+
+    # Ensure wordlist exists (dirb common.txt should always be there in Kali)
+    wordlist = _ensure_wordlist(wordlist, _BUILTIN_PARAM_WORDLIST)
 
     # Ensure FUZZ keyword is present
     if "FUZZ" not in url:
@@ -136,7 +231,7 @@ def ffuf_directory_scan(
 @register_tool(sandbox_execution=True)
 def ffuf_parameter_fuzz(
     url: str,
-    wordlist: str = "/usr/share/wordlists/seclists/Discovery/Web-Content/burp-parameter-names.txt",
+    wordlist: str = "/usr/share/wordlists/dirb/common.txt",  # Use pre-installed wordlist
     method: Literal["GET", "POST"] = "GET",
     data: str | None = None,
     filter_size: str | None = None,
@@ -157,6 +252,9 @@ def ffuf_parameter_fuzz(
         Discovered parameters
     """
     from phantom.tools.terminal.terminal_actions import terminal_execute
+
+    # Ensure wordlist exists; fall back to built-in parameter names
+    wordlist = _ensure_wordlist(wordlist, _BUILTIN_PARAM_WORDLIST)
 
     # For GET, add FUZZ as parameter name
     if method == "GET":
@@ -217,7 +315,7 @@ def ffuf_parameter_fuzz(
 @register_tool(sandbox_execution=True)
 def ffuf_vhost_fuzz(
     url: str,
-    wordlist: str = "/usr/share/wordlists/seclists/Discovery/DNS/subdomains-top1million-5000.txt",
+    wordlist: str = "/usr/share/wordlists/dirb/small.txt",  # Use pre-installed wordlist
     filter_size: str | None = None,
     rate: int = 100,
 ) -> dict[str, Any]:
@@ -234,6 +332,9 @@ def ffuf_vhost_fuzz(
         Discovered virtual hosts
     """
     from phantom.tools.terminal.terminal_actions import terminal_execute
+
+    # Ensure wordlist exists; fall back to built-in vhost names
+    wordlist = _ensure_wordlist(wordlist, _BUILTIN_VHOST_WORDLIST)
 
     # Extract the domain from the URL for the Host header
     from urllib.parse import urlparse
