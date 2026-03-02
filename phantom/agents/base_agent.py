@@ -210,12 +210,26 @@ class BaseAgent(metaclass=AgentMeta):
                         self.state.set_phase(ScanPhase.EXPLOIT)
                         logger.info("Phase transition: RECON → EXPLOIT (iter=%d, findings=%d)",
                                     self.state.iteration, findings_count)
+                        # R5-05 FIX: Notify LLM about phase change so it stops recon
+                        self.state.add_message("user",
+                            f"🔄 PHASE TRANSITION: RECON → EXPLOIT\n"
+                            f"You have used {self.state.iteration}/{self.state.max_iterations} iterations.\n"
+                            f"STOP all reconnaissance. START exploiting discovered endpoints NOW.\n"
+                            f"Run: sqlmap_test, nuclei_scan, ffuf with attack wordlists, "
+                            f"send_request with injection payloads.\n"
+                            f"Test EVERY vuln class: SQLi, XSS, IDOR, Auth/JWT, path traversal, SSRF."
+                        )
 
                     # EXPLOIT → REPORT: after 75% of iterations
                     elif current == ScanPhase.EXPLOIT and pct >= 0.75:
                         self.state.set_phase(ScanPhase.REPORT)
                         logger.info("Phase transition: EXPLOIT → REPORT (iter=%d)",
                                     self.state.iteration)
+                        self.state.add_message("user",
+                            f"🔄 PHASE TRANSITION: EXPLOIT → REPORT\n"
+                            f"You have used {self.state.iteration}/{self.state.max_iterations} iterations.\n"
+                            f"STOP testing. Call finish_scan NOW with a complete report."
+                        )
                 except (ImportError, Exception):  # noqa: BLE001
                     pass
 

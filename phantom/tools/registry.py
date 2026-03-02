@@ -17,6 +17,34 @@ _tools_by_name: dict[str, Callable[..., Any]] = {}
 _tool_param_schemas: dict[str, dict[str, Any]] = {}
 logger = logging.getLogger(__name__)
 
+# ── Tool profiles: which tools to include per scan mode ──
+# This dramatically reduces system prompt size for focused scans.
+QUICK_MODE_TOOLS: set[str] = {
+    # Core reasoning & control
+    "think", "finish_scan", "create_agent", "agent_finish", "send_message_to_agent",
+    # Findings persistence
+    "record_finding", "get_findings_ledger",
+    # Proxy / HTTP
+    "send_request", "repeat_request", "list_requests", "list_sitemap",
+    # Security scanners (one per category)
+    "nuclei_scan", "sqlmap_test", "ffuf_directory_scan",
+    "katana_crawl", "httpx_probe", "nmap_scan",
+    # Exploitation & scripting
+    "python_action", "terminal_execute", "browser_action",
+    # Reporting
+    "create_vulnerability_report",
+    # Research
+    "web_search",
+}
+
+TOOL_PROFILES: dict[str, set[str] | None] = {
+    "quick": QUICK_MODE_TOOLS,
+    "standard": None,  # None = include all
+    "deep": None,
+    "stealth": None,
+    "api_only": None,
+}
+
 
 class ImplementedInClientSideOnlyError(Exception):
     def __init__(
@@ -244,9 +272,16 @@ def should_execute_in_sandbox(tool_name: str) -> bool:
     return True
 
 
-def get_tools_prompt() -> str:
+def get_tools_prompt(include_only: set[str] | None = None, exclude: set[str] | None = None) -> str:
     tools_by_module: dict[str, list[dict[str, Any]]] = {}
     for tool in tools:
+        tool_name = tool.get("name", "")
+        # Filter by include_only (whitelist) if provided
+        if include_only is not None and tool_name not in include_only:
+            continue
+        # Filter by exclude (blacklist) if provided
+        if exclude is not None and tool_name in exclude:
+            continue
         module = tool.get("module", "unknown")
         if module not in tools_by_module:
             tools_by_module[module] = []
