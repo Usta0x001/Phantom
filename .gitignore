@@ -115,14 +115,10 @@ docs/CODEBASE_AUDIT.md
 docs/DEEP_SECURITY_AUDIT.md
 docs/SECURITY_AUDIT_REPORT*.md
 
-# Allow docs that should be committed
-!docs/ARCHITECTURE.md
-!docs/DOCUMENTATION.md
-!docs/Phantom_Technical_Report.pdf
-!docs/Phantom_Presentation.pdf
 docker_output.txt
 docker_ps.txt
 scan_*.log
 scan_*.txt
 *.spec
+!phantom.spec
 dist/

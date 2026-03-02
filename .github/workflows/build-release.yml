@@ -14,7 +14,7 @@ jobs:
         include:
           - os: macos-latest
             target: macos-arm64
-          - os: macos-15-intel
+          - os: macos-13
             target: macos-x86_64
           - os: ubuntu-latest
             target: linux-x86_64

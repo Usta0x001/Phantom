@@ -1,10 +1,8 @@
 <div align="center">
 
-# ☠ PHANTOM
+# PHANTOM
 
-### Autonomous Offensive Security Intelligence
-
-*" Why So Serious ?! "*
+### Autonomous Adversary Simulation Platform
 
 <br>
 
@@ -12,212 +10,242 @@
 [![Python](https://img.shields.io/badge/Python-3.12%2B-yellow.svg)](https://python.org)
 [![Docker](https://img.shields.io/badge/Docker-Ready-2496ED.svg)](https://hub.docker.com/r/redwan07/phantom)
 [![PyPI](https://img.shields.io/pypi/v/phantom-agent.svg)](https://pypi.org/project/phantom-agent/)
-[![Version](https://img.shields.io/badge/Version-0.9.19-purple.svg)](https://github.com/Usta0x001/Phantom/releases)
+[![Version](https://img.shields.io/badge/Version-0.9.20-purple.svg)](https://github.com/Usta0x001/Phantom/releases)
+[![Tests](https://img.shields.io/badge/Tests-808%20passing-brightgreen.svg)](#testing--quality)
 
-**AI-powered multi-agent penetration testing that thinks like a hacker.**
+**AI-driven penetration testing that reasons, adapts, and verifies like a human attacker.**
 
-[Quick Start](#-quick-start) · [Features](#-features) · [Architecture](#-architecture) · [Documentation](#-documentation) · [Contributing](#-contributing)
+[Quick Start](#quick-start) · [Features](#core-capabilities) · [Architecture](#system-architecture) · [Documentation](#documentation) · [Contributing](#contributing)
 
-> **585 tests passing** · **152-point security audit** · **E2E validated** · **$0.22/scan average cost**
+> **808+ tests passing** | **83-finding security audit resolved** | **7-layer defense-in-depth** | **30+ offensive tools**
 
 </div>
 
 ---
 
-## 📖 Table of Contents
+## Table of Contents
 
-- [Overview](#-overview)
-- [Features](#-features)
-- [Architecture](#-architecture)
-- [Quick Start](#-quick-start)
-- [Usage](#-usage)
-- [Configuration](#-configuration)
-- [CI/CD Integration](#-cicd-integration)
-- [Development](#-development)
-- [Documentation](#-documentation)
-- [Contributing](#-contributing)
-- [License](#-license)
+- [Overview](#overview)
+- [Core Capabilities](#core-capabilities)
+- [System Architecture](#system-architecture)
+- [Quick Start](#quick-start)
+- [Usage](#usage)
+- [Configuration](#configuration)
+- [CI/CD Integration](#cicd-integration)
+- [Development](#development)
+- [Testing and Quality](#testing-and-quality)
+- [Documentation](#documentation)
+- [Contributing](#contributing)
+- [License](#license)
 
-## 🎯 Overview
+## Overview
 
-Phantom deploys **autonomous AI agents** that act like expert penetration testers — they probe your systems dynamically, discover vulnerabilities, chain attack paths, and validate findings through real proof-of-concepts.
+Phantom is an autonomous AI-powered penetration testing agent that discovers and verifies real vulnerabilities in web applications, APIs, and network services. It uses large language models to reason about targets, plan attack strategies, chain exploits, and adapt its approach based on observed behavior.
 
-Unlike static scanners that just pattern-match, Phantom **thinks**: it reads responses, adapts strategy, exploits chained vulnerabilities, and proves every finding with working PoCs. No false positives. No manual triage.
+Unlike traditional scanners that rely on signatures and predefined rules, Phantom **thinks** — it reads responses, identifies attack surfaces, chains multi-step exploits, and produces proof-of-concept evidence for every confirmed vulnerability.
 
-> **Built for** security teams, bug bounty hunters, and developers who need fast, accurate offensive testing without the overhead of manual pentesting.
+> **Built for** security professionals, red teams, and developers who need accurate offensive testing at scale.
 
-### Why Phantom?
+### Traditional Scanners vs Phantom
 
-| Traditional Scanners | **Phantom** |
+| Traditional Scanners | Phantom |
 |---|---|
-| Pattern matching / signatures | AI reasoning + adaptive strategy |
-| High false positive rate | Every finding validated with PoC |
-| Single-pass scanning | Multi-agent collaboration & chaining |
-| Generic reports | MITRE ATT&CK mapped + compliance ready |
-| Manual triage needed | Actionable findings, remediation steps |
+| Signature and pattern matching | LLM-guided reasoning and adaptive strategy |
+| High false positive rate | Every finding verified with working PoC |
+| Single-pass scanning | Multi-phase attack with chained exploits |
+| Generic scan reports | MITRE ATT&CK mapped, compliance-ready reports |
+| Manual triage required | Actionable findings with remediation guidance |
 
-## 🆕 What's New in v0.9.19
+## Core Capabilities
 
-- **9 critical bug fixes** — Loop detector was dead code, tool firewall could be silently bypassed, report generation could crash on unknown severities, zombie agents could resurrect
-- **Scan resume** — Checkpoint-based system lets you `--resume` interrupted scans without losing progress
-- **Cost tracking** — `scan_stats.json` with per-scan cost breakdown, per-request cost ceiling
-- **SSRF bypass testing** — Built-in SSRF allowlist for testing internal services safely
-- **152-point security audit** — Full-spectrum adversarial audit across 5 domains
-- **585 tests passing** — Comprehensive regression suite covering all audit fixes
+**Autonomous Operation** — AI agents plan, execute, and adapt penetration tests with zero human intervention. The ReAct (Reason + Act) loop drives iterative discovery and exploitation.
 
-## ✨ Features
+**30+ Security Tools** — nmap, nuclei, sqlmap, ffuf, httpx, katana, semgrep, nikto, gobuster, arjun, and more — all executing inside an isolated Docker sandbox.
 
-- 🤖 **Fully Autonomous** — AI agents that think, adapt, and act like real pentesters
-- 🔬 **20+ Security Tools** — nmap, nuclei, sqlmap, ffuf, semgrep, katana, and more in a sandboxed Docker environment
-- 🛡️ **Secure Sandbox** — All operations inside isolated Docker containers. Zero risk to your host
-- 👥 **Multi-Agent System** — Specialized agent trees: discovery → exploitation → validation → reporting
-- 🎯 **Real PoCs** — Every vulnerability comes with working proof-of-concept code
-- 📊 **MITRE ATT&CK Mapping** — Findings automatically mapped to TTPs and techniques
-- 📋 **Compliance Reports** — OWASP Top 10, PCI DSS, SOC 2 mapping out of the box
-- 📦 **SARIF Output** — Native GitHub Security tab integration
-- 🔄 **Differential Scanning** — Track new/fixed vulnerabilities across scan runs
-- 🧠 **Knowledge Persistence** — Learns from past scans, avoids redundant work
-- 🔔 **Notifications** — Webhook & Slack alerts on critical findings
-- 🔌 **Plugin System** — Extend with custom tools and workflows
-- ⚡ **Multiple LLM Providers** — OpenAI, Anthropic, Google, Groq, DeepSeek, Ollama, and more via LiteLLM
-- 💰 **Cost Tracking** — Per-request cost ceiling, scan_stats.json with full cost breakdown
-- ⏸️ **Scan Resume** — Checkpoint-based resume after interruptions — never lose progress
-- 🔒 **Security Hardened** — 152-point security audit, tool firewall, scope validator, HMAC audit trail
+**Sandboxed Execution** — All offensive tools run inside ephemeral Docker containers with no host filesystem access, restricted capabilities, and automatic cleanup.
 
-## 🏗️ Architecture
+**Multi-Agent System** — Specialized agent delegation for parallel reconnaissance, exploitation, and validation tasks.
 
-### System Overview
+**Real Proof-of-Concepts** — Every vulnerability includes working exploit code, raw request/response evidence, and reproducible steps.
+
+**MITRE ATT&CK Mapping** — Automatic enrichment with CWE IDs, CAPEC attack patterns, and MITRE ATT&CK techniques.
+
+**Compliance Reports** — OWASP Top 10, PCI DSS, NIST, SOC 2 mapping generated automatically.
+
+**Browser Automation** — Full Playwright-based interaction for JavaScript-heavy applications, SPAs, and authenticated workflows.
+
+**Knowledge Persistence** — Cross-scan memory stores discovered hosts, vulnerabilities, and false positive signatures. The agent learns from past scans.
+
+**Scan Resume** — Checkpoint-based resume system lets you continue interrupted scans without data loss.
+
+**Cost Tracking** — Per-request cost monitoring with configurable budget limits. Every token counted, every dollar tracked.
+
+**7-Layer Security** — Scope validator, tool firewall, Docker sandbox, cost controller, time limits, HMAC audit trail, and output sanitizer.
+
+## System Architecture
+
+### High-Level Overview
 
 ```mermaid
 flowchart TB
-    classDef person fill:#08427B,stroke:#073B6F,color:#fff
-    classDef system fill:#9b59b6,stroke:#8e44ad,color:#fff
-    classDef external fill:#555555,stroke:#333333,color:#fff
+    classDef iface fill:#2c3e50,stroke:#1a252f,color:#fff
+    classDef core fill:#8e44ad,stroke:#6c3483,color:#fff
+    classDef security fill:#c0392b,stroke:#922b21,color:#fff
+    classDef exec fill:#2980b9,stroke:#1f618d,color:#fff
+    classDef output fill:#27ae60,stroke:#1e8449,color:#fff
 
-    user["👤 Security Engineer"]
+    subgraph Interface["Interface Layer"]
+        CLI["CLI / TUI"]
+        Stream["Streaming Parser"]
+    end
 
-    phantom["☠ PHANTOM<br/>Autonomous Pentest Agent"]
+    subgraph Orchestration["Orchestration Layer"]
+        Profile["Scan Profiles"]
+        Scope["Scope Validator"]
+        Cost["Cost Controller"]
+        Audit["Audit Logger"]
+    end
 
-    target["🎯 Target System<br/>(Web App / API / Network)"]
-    llm["🧠 LLM Provider<br/>(OpenAI / Anthropic / Groq / Ollama)"]
-    sandbox["🐳 Docker Sandbox<br/>(Kali Tools Environment)"]
+    subgraph AgentCore["Agent Core"]
+        Agent["BaseAgent (ReAct Loop)"]
+        State["Agent State Machine"]
+        LLM["LLM Client (LiteLLM)"]
+        Memory["Memory Compressor"]
+        Skills["Skills Engine"]
+    end
 
-    user --> |"Configure & Launch"| phantom
-    phantom --> |"Tests"| target
-    phantom --> |"Reasons & Plans"| llm
-    phantom --> |"Executes Tools"| sandbox
-    phantom --> |"Reports"| user
+    subgraph Security["Security Layer"]
+        Firewall["Tool Firewall"]
+        Verifier["Verification Engine"]
+        ScopeV["Scope Enforcement"]
+    end
 
-    class user person
-    class phantom system
-    class target,llm,sandbox external
+    subgraph Execution["Execution Layer"]
+        Docker["Docker Sandbox"]
+        ToolServer["Tool Server (HTTP)"]
+        Tools["30+ Security Tools"]
+        Browser["Playwright Browser"]
+    end
+
+    subgraph Output["Output Layer"]
+        Reports["JSON / HTML / Markdown"]
+        Graph["Attack Graph (NetworkX)"]
+        MITRE["MITRE ATT&CK Enrichment"]
+        Compliance["Compliance Mapper"]
+        Nuclei["Nuclei Template Generator"]
+    end
+
+    CLI --> Agent
+    Agent --> LLM
+    Agent --> Firewall
+    Firewall --> Docker
+    Docker --> ToolServer
+    ToolServer --> Tools
+    ToolServer --> Browser
+    Agent --> State
+    State --> Memory
+    Agent --> Output
+
+    class CLI,Stream iface
+    class Profile,Scope,Cost,Audit core
+    class Agent,State,LLM,Memory,Skills core
+    class Firewall,Verifier,ScopeV security
+    class Docker,ToolServer,Tools,Browser exec
+    class Reports,Graph,MITRE,Compliance,Nuclei output
 ```
 
-### Agent Architecture
-
-```mermaid
-flowchart TD
-    subgraph Orchestrator["☠ Root Agent (Orchestrator)"]
-        direction TB
-        A[Analyze Target] --> B[Create Strategy]
-        B --> C[Spawn Specialist Agents]
-    end
-
-    subgraph Discovery["🔍 Discovery Agents"]
-        D1[Port Scanner]
-        D2[Web Crawler]
-        D3[Tech Fingerprint]
-    end
-
-    subgraph Attack["⚔️ Attack Agents"]
-        E1[SQLi Specialist]
-        E2[XSS Specialist]
-        E3[SSRF / IDOR]
-        E4[Auth Bypass]
-    end
-
-    subgraph Validation["✅ Validation Agents"]
-        F1[PoC Builder]
-        F2[Impact Assessor]
-        F3[Report Generator]
-    end
-
-    C --> Discovery
-    C --> Attack
-    Discovery --> |Findings| Attack
-    Attack --> |Vulns| Validation
-
-    style Orchestrator fill:#9b59b6,stroke:#8e44ad,color:#fff
-    style Discovery fill:#3498db,stroke:#2980b9,color:#fff
-    style Attack fill:#e74c3c,stroke:#c0392b,color:#fff
-    style Validation fill:#2ecc71,stroke:#27ae60,color:#fff
-```
-
-<details>
-<summary><b>🔄 Scan Execution Flow</b> (click to expand)</summary>
+### Scan Execution Flow
 
 ```mermaid
 sequenceDiagram
-    participant U as User
-    participant P as Phantom CLI
-    participant O as Orchestrator Agent
-    participant S as Sandbox (Docker)
-    participant L as LLM Provider
-    participant T as Target
+    participant User
+    participant CLI as Phantom CLI
+    participant Agent as Agent (ReAct)
+    participant Firewall as Tool Firewall
+    participant Sandbox as Docker Sandbox
+    participant LLM as LLM Provider
+    participant Target
 
-    U->>P: phantom --target https://app.com
-    P->>S: Launch sandbox container
-    P->>O: Initialize with system prompt + tools
+    User->>CLI: phantom scan --target https://app.com
+    CLI->>Sandbox: Create ephemeral container
+    CLI->>Agent: Initialize with scope and profile
 
-    Note over O,L: Reconnaissance Phase
-    O->>L: Plan reconnaissance strategy
-    L-->>O: Use nmap, nuclei, httpx
-    O->>S: Execute: nmap -sV target
-    S->>T: TCP/UDP probes
-    T-->>S: Open ports & services
-    S-->>O: Port scan results
+    rect rgb(40, 40, 60)
+        Note over Agent,LLM: Reconnaissance Phase
+        Agent->>LLM: Analyze target, plan strategy
+        LLM-->>Agent: Use nmap, httpx, nuclei
+        Agent->>Firewall: Validate tool call
+        Firewall-->>Agent: Approved
+        Agent->>Sandbox: Execute nmap -sV target
+        Sandbox->>Target: TCP/UDP probes
+        Target-->>Sandbox: Open ports and services
+        Sandbox-->>Agent: Scan results (truncated 8KB)
+    end
 
-    O->>S: Execute: nuclei -u target
-    S->>T: Template-based checks
-    T-->>S: Vulnerability matches
-    S-->>O: Initial findings
+    rect rgb(60, 30, 30)
+        Note over Agent,LLM: Exploitation Phase
+        Agent->>LLM: Analyze findings, select attacks
+        LLM-->>Agent: SQLi on /api/users, XSS on /search
+        Agent->>Firewall: Validate sqlmap call
+        Firewall-->>Agent: Approved (scope and args checked)
+        Agent->>Sandbox: Execute sqlmap --url target/api
+        Sandbox->>Target: Injection payloads
+        Target-->>Sandbox: Database extracted
+        Sandbox-->>Agent: Confirmed SQLi
+    end
 
-    Note over O,L: Attack Phase
-    O->>L: Analyze findings, plan attacks
-    L-->>O: Spawn SQLi + XSS agents
-    O->>S: Execute: sqlmap --url target/api
-    S->>T: SQL injection payloads
-    T-->>S: Database extracted
-    S-->>O: Confirmed SQLi
+    rect rgb(30, 50, 30)
+        Note over Agent,LLM: Verification Phase
+        Agent->>LLM: Build PoC, verify independently
+        Agent->>Sandbox: Re-exploit with clean PoC
+        Sandbox->>Target: Reproduce attack
+        Target-->>Sandbox: Attack confirmed
+        Sandbox-->>Agent: PoC validated
+    end
 
-    Note over O,L: Validation Phase
-    O->>L: Build PoC for SQLi
-    L-->>O: Working exploit script
-    O->>S: Verify PoC execution
-    S->>T: Reproduce attack
-    T-->>S: Attack confirmed
-    S-->>O: PoC validated
-
-    O->>P: create_vulnerability_report()
-    P->>U: 📋 Report with PoCs
+    Agent->>CLI: Structured reports (JSON/HTML/MD)
+    CLI->>User: Findings with PoCs and compliance mapping
+    CLI->>Sandbox: Destroy container
 ```
 
-</details>
+### Agent Decision Loop
 
-<details>
-<summary><b>🐳 Sandbox Architecture</b> (click to expand)</summary>
+```mermaid
+stateDiagram-v2
+    [*] --> Observe: Scan initialized
+    Observe --> Reason: Receive tool results
+    Reason --> Plan: LLM analyzes context
+    Plan --> Act: Select tool and arguments
+    Act --> Validate: Tool Firewall check
+
+    Validate --> Execute: Approved
+    Validate --> Reason: Blocked (adjust approach)
+
+    Execute --> Record: Tool returns results
+    Record --> CheckStop: Update state and findings
+
+    CheckStop --> Observe: Continue (budget and time OK)
+    CheckStop --> Finalize: Stop condition met
+
+    Finalize --> Verify: Re-test HIGH and CRITICAL
+    Verify --> Enrich: MITRE and compliance mapping
+    Enrich --> Report: Generate JSON/HTML/MD
+    Report --> [*]: Scan complete
+```
+
+### Sandbox Architecture
 
 ```mermaid
 graph TB
-    subgraph Host["🖥️ Host Machine"]
+    subgraph Host["Host Machine"]
         CLI[Phantom CLI]
-        Docker[Docker Engine]
+        DockerEngine[Docker Engine]
     end
 
-    subgraph Sandbox["🐳 Phantom Sandbox Container"]
+    subgraph Container["Ephemeral Sandbox Container"]
         ToolServer[Tool Server API]
 
-        subgraph Tools["Security Tools"]
+        subgraph OffensiveTools["Offensive Tools"]
             nmap[nmap]
             nuclei[nuclei]
             sqlmap[sqlmap]
@@ -225,121 +253,118 @@ graph TB
             httpx[httpx]
             katana[katana]
             semgrep[semgrep]
-            arjun[arjun]
-            zap[ZAP Proxy]
-            more[+ 10 more...]
+            nikto[nikto]
+            gobuster[gobuster]
+            more[plus 15 more]
         end
 
-        subgraph Runtime["Execution Environment"]
+        subgraph Runtime["Runtime"]
             Shell[Bash Shell]
-            Python[Python Runtime]
-            Browser[Playwright Browser]
+            Python[Python]
+            PW[Playwright Browser]
         end
     end
 
     CLI --> |HTTP API| ToolServer
-    ToolServer --> Tools
+    ToolServer --> OffensiveTools
     ToolServer --> Runtime
-    Sandbox -.-> |"Isolated Network"| Target["🎯 Target"]
+    Container -.-> |Isolated Network| Target["Target System"]
 
-    style Host fill:#2c3e50,stroke:#1a252f,color:#fff
-    style Sandbox fill:#9b59b6,stroke:#8e44ad,color:#fff
-    style Tools fill:#3498db,stroke:#2980b9,color:#fff
-    style Runtime fill:#e74c3c,stroke:#c0392b,color:#fff
+    style Host fill:#1a1a2e,stroke:#16213e,color:#fff
+    style Container fill:#0f3460,stroke:#533483,color:#fff
+    style OffensiveTools fill:#e94560,stroke:#c0392b,color:#fff
+    style Runtime fill:#533483,stroke:#0f3460,color:#fff
 ```
 
-</details>
-
 <details>
-<summary><b>🧠 Knowledge & Memory System</b> (click to expand)</summary>
+<summary><b>Data Flow: Knowledge and Memory System</b> (expand)</summary>
 
 ```mermaid
 graph TB
-    subgraph "Persistent Knowledge"
-        KS[(Knowledge Store<br/>JSON Persistence)]
-        FP[False Positive<br/>Tracking]
-        History[Scan History<br/>& Statistics]
+    subgraph Persistent["Persistent Storage"]
+        KS[(Knowledge Store)]
+        FP[False Positive Registry]
+        History[Scan History]
     end
 
-    subgraph "Working Memory"
-        State[Agent State<br/>Messages & Context]
-        Tracer[Telemetry Tracer<br/>Run Data]
-        Graph[Attack Graph<br/>NetworkX DAG]
+    subgraph Working["Working Memory"]
+        State[Agent State]
+        Ledger[Findings Ledger]
+        Graph[Attack Graph]
     end
 
-    subgraph "Intelligence"
-        MITRE[MITRE ATT&CK<br/>Enrichment]
-        Compliance[Compliance<br/>Mapper]
-        Priority[Priority Queue<br/>Severity-Ranked]
+    subgraph Intelligence["Intelligence Pipeline"]
+        MITRE[MITRE ATT&CK]
+        Compliance[Compliance Mapper]
+        Priority[Priority Queue]
     end
 
-    State --> |Findings| KS
-    KS --> |Past Scans| State
-    State --> |Vulns| Graph
-    Graph --> |Attack Paths| MITRE
+    State --> |Discoveries| KS
+    KS --> |Past knowledge| State
+    State --> |Vulnerabilities| Graph
+    Graph --> |Attack paths| MITRE
     MITRE --> |TTPs| Compliance
     KS --> |Known FPs| FP
-    Tracer --> |Reports| History
+    Ledger --> |Permanent record| State
 
-    classDef persist fill:#f39c12,stroke:#e67e22,color:#000
-    classDef working fill:#3498db,stroke:#2980b9,color:#fff
-    classDef intel fill:#2ecc71,stroke:#27ae60,color:#fff
+    classDef persist fill:#d4ac0d,stroke:#b7950b,color:#000
+    classDef working fill:#2e86c1,stroke:#2874a6,color:#fff
+    classDef intel fill:#28b463,stroke:#1e8449,color:#fff
 
     class KS,FP,History persist
-    class State,Tracer,Graph working
+    class State,Ledger,Graph working
     class MITRE,Compliance,Priority intel
 ```
 
 </details>
 
 <details>
-<summary><b>📊 Vulnerability Lifecycle</b> (click to expand)</summary>
+<summary><b>Vulnerability Lifecycle</b> (expand)</summary>
 
 ```mermaid
 stateDiagram-v2
-    [*] --> Detected: Tool finds potential vuln
-    Detected --> Verified: PoC confirms exploitability
+    [*] --> Detected: Tool identifies potential vulnerability
+    Detected --> Verified: PoC confirms exploitation
     Detected --> FalsePositive: Validation fails
 
-    Verified --> Reported: create_vulnerability_report()
-    Verified --> Exploited: Successful exploitation
+    Verified --> Enriched: CVSS and CWE and MITRE assigned
+    Enriched --> Reported: Added to structured report
 
-    Exploited --> Reported: Impact documented
+    FalsePositive --> Stored: Signature saved to knowledge
+    Stored --> [*]: Future scans skip this pattern
 
     Reported --> [*]: Scan complete
 
-    FalsePositive --> [*]: Filtered out
-
     note right of Detected
-        Nuclei, sqlmap, or
-        manual testing finds
-        a potential issue
+        Nuclei, sqlmap, manual
+        testing, or browser
+        automation finds issue
     end note
 
     note right of Verified
-        Agent builds PoC
-        and confirms the
-        vulnerability works
+        Agent builds independent
+        PoC and re-exploits to
+        confirm the finding
     end note
 
-    note right of Reported
-        CVSS scored, MITRE mapped,
-        compliance tagged,
+    note right of Enriched
+        CVSS scored, CWE mapped,
+        MITRE ATT&CK tagged,
         remediation added
     end note
 ```
 
 </details>
 
-## 🚀 Quick Start
+## Quick Start
 
 ### Prerequisites
 
 - **Docker** (running) — [Install Docker](https://docs.docker.com/get-docker/)
 - **Python 3.12+** — [Install Python](https://python.org)
-- **An LLM API key** — [OpenAI](https://platform.openai.com/api-keys), [Anthropic](https://console.anthropic.com/), [Groq](https://console.groq.com/) (free), or any [LiteLLM provider](https://docs.litellm.ai/docs/providers)
+- **LLM API key** — [OpenAI](https://platform.openai.com/api-keys), [Anthropic](https://console.anthropic.com/), [Groq](https://console.groq.com/) (free), or any [LiteLLM provider](https://docs.litellm.ai/docs/providers)
 
-### Install & Run
+### Install and Run
 
 ```bash
 # Install via pip
@@ -349,7 +374,7 @@ pip install phantom-agent
 pipx install phantom-agent
 
 # Configure your LLM provider
-export PHANTOM_LLM="openai/gpt-4o"        # or groq/llama-3.3-70b-versatile (free!)
+export PHANTOM_LLM="openai/gpt-4o"
 export LLM_API_KEY="your-api-key"
 
 # Launch your first scan
@@ -359,7 +384,6 @@ phantom scan --target https://your-app.com
 ### Docker Quick Start
 
 ```bash
-# Pull and run directly
 docker run --rm -it \
   -e PHANTOM_LLM="openai/gpt-4o" \
   -e LLM_API_KEY="your-key" \
@@ -368,24 +392,23 @@ docker run --rm -it \
   scan --target https://your-app.com
 ```
 
-> [!NOTE]
-> First run automatically pulls the sandbox image (`ghcr.io/usta0x001/phantom-sandbox:latest`, ~14GB, Kali-based with 20+ security tools). Scan results save to `phantom_runs/`.
+> **Note:** First run automatically pulls the sandbox image (~14GB Kali-based environment with 30+ security tools). Results are saved to `phantom_runs/`.
 
-## 📦 Usage
+## Usage
 
 ### Basic Scans
 
 ```bash
-# Web application black-box scan
+# Standard web application scan
 phantom scan --target https://your-app.com
 
-# Quick scan (faster, less thorough)
+# Quick scan (faster, surface-level)
 phantom scan --target https://your-app.com --scan-mode quick
 
-# Deep scan (comprehensive, slower)
+# Deep scan (comprehensive, thorough)
 phantom scan --target https://your-app.com --scan-mode deep
 
-# Non-interactive / headless mode (for scripts & CI)
+# Headless mode (for scripts and CI)
 phantom scan --target https://your-app.com --non-interactive
 ```
 
@@ -400,99 +423,96 @@ phantom scan --target https://your-app.com \
 phantom scan --target https://api.your-app.com \
   --instruction "Focus on SQL injection and auth bypass in /api/v2 endpoints"
 
-# Interactive TUI mode (rich terminal interface)
+# Interactive TUI mode
 phantom --target https://your-app.com
 
 # Resume an interrupted scan
 phantom scan --target https://your-app.com --resume
 ```
 
-### Scan Modes & Profiles
+### Scan Profiles
 
 ```bash
-# View all scan profiles
+# View all available profiles
 phantom profiles
 ```
 
-| Mode | Iterations | Speed | Coverage | Best For |
-|------|:----------:|-------|----------|----------|
-| `quick` | 20 | ~10-20 min | Surface-level, common vulns | CI/CD gates, quick checks |
-| `standard` | 40 | ~30-60 min | Balanced depth | Regular security testing |
-| `deep` | 80 | ~1-3 hours | Full attack surface | Thorough pentests, audits |
-| `stealth` | 30 | ~20-40 min | Quiet probing, no noisy tools | Production systems, stealth recon |
-| `api_only` | 40 | ~30-60 min | API-focused, no browser | REST/GraphQL API testing |
+| Profile | Iterations | Duration | Coverage | Best For |
+|---------|:----------:|----------|----------|----------|
+| `quick` | 20 | 10-20 min | Surface-level reconnaissance | CI/CD gates, quick checks |
+| `standard` | 40 | 30-60 min | Balanced depth and speed | Regular security testing |
+| `deep` | 80 | 1-3 hours | Full attack surface | Comprehensive audits |
+| `stealth` | 30 | 20-40 min | Low-noise, no aggressive tools | Production systems |
+| `api_only` | 40 | 30-60 min | API-focused, no browser | REST/GraphQL testing |
 
-Each profile controls: iteration limit, tool allowlist/blocklist, browser permissions, reasoning effort, and sandbox timeout.
+### Post-Scan Pipeline
 
-### Post-Scan Enrichment
+Every scan automatically runs a 7-stage enrichment pipeline:
 
-Every scan automatically runs a 7-stage enrichment pipeline after completion:
+1. **MITRE ATT&CK** — CWE, CAPEC, and OWASP mapping for every finding
+2. **Compliance** — OWASP Top 10, PCI DSS, NIST mapping
+3. **Attack Graph** — NetworkX-based attack path analysis and visualization
+4. **Nuclei Templates** — Auto-generated YAML templates for reproducibility
+5. **Knowledge Store** — Cross-scan persistent memory updated with new findings
+6. **Notifications** — Webhook/Slack alerts for critical and high severity findings
+7. **Reports** — Structured JSON, HTML, and Markdown output
 
-1. **MITRE ATT&CK** — CWE/CAPEC/OWASP mapping for every finding
-2. **Compliance** — OWASP Top 10, PCI DSS, NIST mapping → `compliance_report.md`
-3. **Attack Graph** — NetworkX-based attack path analysis → `attack_graph.json` + `attack_paths.md`
-4. **Nuclei Templates** — Auto-generated YAML templates per vulnerability
-5. **Knowledge Store** — Persistent cross-scan memory (learns from past scans)
-6. **Notifications** — Webhook/Slack alerts for critical/high findings
-7. **Reports** — Structured JSON, HTML, and Markdown reports
-
-### Diff Scanning
+### Differential Scanning
 
 ```bash
-# Compare two scan runs to see what changed
+# Compare two scan runs to see new and fixed vulnerabilities
 phantom diff <run1> <run2>
 ```
 
-## ⚙️ Configuration
+## Configuration
 
 ### Environment Variables
 
-| Variable | Description | Example |
+| Variable | Description | Default |
 |----------|-------------|---------|
-| `PHANTOM_LLM` | LLM provider/model | `openai/gpt-4o` |
-| `LLM_API_KEY` | API key(s), comma-separated for rotation | `sk-...` |
+| `PHANTOM_LLM` | LLM provider and model | `openai/gpt-4o` |
+| `LLM_API_KEY` | API key (comma-separated for rotation) | — |
 | `PHANTOM_REASONING_EFFORT` | Thinking depth: `low`, `medium`, `high` | `high` |
-| `PHANTOM_SCAN_MODE` | Default scan mode | `standard` |
-| `PERPLEXITY_API_KEY` | Enable web search OSINT | `pplx-...` |
+| `PHANTOM_SCAN_MODE` | Default scan profile | `standard` |
 | `PHANTOM_IMAGE` | Custom sandbox Docker image | `ghcr.io/usta0x001/phantom-sandbox:latest` |
-| `PHANTOM_WEBHOOK_URL` | Webhook for critical findings | `https://hooks.slack.com/...` |
-| `PHANTOM_DISABLE_BROWSER` | Disable Playwright browser | `false` |
-| `PHANTOM_MAX_COST` | Maximum cost per scan (USD) | `10.0` |
+| `PHANTOM_MAX_COST` | Maximum cost per scan (USD) | `25.0` |
 | `PHANTOM_PER_REQUEST_CEILING` | Max cost per LLM request (USD) | `5.0` |
+| `PHANTOM_WEBHOOK_URL` | Webhook for critical findings | — |
+| `PHANTOM_DISABLE_BROWSER` | Disable Playwright browser | `false` |
+| `PERPLEXITY_API_KEY` | Enable web search OSINT | — |
 
 ### Supported LLM Providers
 
 | Provider | Model Example | Notes |
 |----------|--------------|-------|
-| **OpenAI** | `openai/gpt-4o` | Best overall |
-| **Anthropic** | `anthropic/claude-sonnet-4-20250514` | Excellent reasoning |
-| **Google** | `gemini/gemini-2.5-pro` | Large context |
-| **Groq** | `groq/llama-3.3-70b-versatile` | **Free tier** |
-| **Ollama** | `ollama/llama3.1` | Local, no API key |
+| **OpenAI** | `openai/gpt-4o` | Best overall performance |
+| **Anthropic** | `anthropic/claude-sonnet-4-20250514` | Strong reasoning |
+| **Google** | `gemini/gemini-2.5-pro` | Large context window |
+| **Groq** | `groq/llama-3.3-70b-versatile` | Free tier available |
 | **DeepSeek** | `deepseek/deepseek-chat` | Cost-effective |
 | **OpenRouter** | `openrouter/deepseek/deepseek-v3.2` | Multi-provider gateway |
-| **Azure** | `azure/gpt-4o` | Enterprise |
-| **AWS Bedrock** | `bedrock/anthropic.claude-v2` | Enterprise |
+| **Ollama** | `ollama/llama3.1` | Local inference, no API key |
+| **Azure** | `azure/gpt-4o` | Enterprise deployments |
 
-> Phantom uses [LiteLLM](https://github.com/BerriAI/litellm) — any [supported provider](https://docs.litellm.ai/docs/providers) works out of the box.
+> Phantom uses [LiteLLM](https://github.com/BerriAI/litellm) — any of the [100+ supported providers](https://docs.litellm.ai/docs/providers) work out of the box.
 
 ### Persistent Configuration
 
 ```bash
-# Save config so you don't re-enter it every time
+# Save settings
 phantom config set PHANTOM_LLM openai/gpt-4o
 phantom config set LLM_API_KEY sk-your-key
 
-# View current config
+# View current configuration
 phantom config show
 ```
 
-## 🔄 CI/CD Integration
+## CI/CD Integration
 
 ### GitHub Actions
 
 ```yaml
-name: Phantom Security Scan
+name: Security Scan
 
 on:
   pull_request:
@@ -520,7 +540,7 @@ jobs:
           sarif_file: phantom_runs/latest/results.sarif
 ```
 
-## 🔧 Development
+## Development
 
 ```bash
 # Clone the repository
@@ -532,10 +552,10 @@ python -m venv .venv
 source .venv/bin/activate  # Linux/Mac
 # .venv\Scripts\activate   # Windows
 
-# Install dependencies
+# Install with dev dependencies
 pip install -e ".[dev]"
 
-# Run tests
+# Run the full test suite
 pytest tests/ -v
 
 # Lint
@@ -546,82 +566,96 @@ ruff check phantom/
 
 ```
 phantom/
-├── phantom/                 # Core package
-│   ├── agents/              # AI agent system
-│   │   ├── PhantomAgent/    # Main agent + system prompt
-│   │   ├── base_agent.py    # Agent base class
-│   │   ├── state.py         # Thread-safe agent state
-│   │   └── enhanced_state.py
-│   ├── llm/                 # LLM integration
-│   │   ├── llm.py           # Core LLM client
-│   │   ├── provider_registry.py
-│   │   └── memory_compressor.py
-│   ├── core/                # Core modules (16 active engines)
-│   │   ├── scan_profiles.py     # quick/standard/deep/stealth/api_only
-│   │   ├── scope_validator.py   # Target authorization
-│   │   ├── knowledge_store.py   # Cross-scan persistence
-│   │   ├── mitre_enrichment.py  # CWE/CAPEC/OWASP mapping
-│   │   ├── attack_graph.py      # NetworkX attack DAG
-│   │   ├── attack_path_analyzer.py
-│   │   ├── compliance_mapper.py # OWASP/PCI/NIST mapping
-│   │   ├── report_generator.py  # JSON/HTML/MD reports
-│   │   ├── nuclei_templates.py  # Auto template generation
-│   │   ├── diff_scanner.py      # Cross-run comparison
-│   │   ├── notifier.py          # Webhook/Slack alerts
-│   │   ├── audit_logger.py      # JSONL audit trail
-│   │   ├── verification_engine.py
-│   │   └── priority_queue.py
-│   ├── tools/               # Security tool wrappers
-│   ├── interface/           # CLI, TUI, reporting
-│   ├── runtime/             # Docker sandbox management
-│   ├── telemetry/           # Local-only run tracking
-│   └── config/              # Configuration management
-├── tests/                   # Test suite (585+ tests)
-├── containers/              # Dockerfile for sandbox
-├── scripts/                 # Install & build scripts
-└── docs/                    # Documentation
+    phantom/                 # Core package
+        agents/              # AI agent system
+            base_agent.py    # ReAct reasoning loop (859 lines)
+            state.py         # Bounded state machine
+            enhanced_state.py# Vulnerability tracking
+        core/                # Security and reporting (20 modules)
+            scope_validator.py
+            tool_firewall.py
+            audit_logger.py
+            verification_engine.py
+            report_generator.py
+            knowledge_store.py
+            attack_graph.py
+            compliance_mapper.py
+            mitre_enrichment.py
+            nuclei_templates.py
+        tools/               # 30+ security tool wrappers
+        llm/                 # LLM client and memory compression
+        runtime/             # Docker sandbox management
+        interface/           # CLI, TUI, streaming
+        models/              # Pydantic domain models
+        skills/              # 50+ domain knowledge files
+        telemetry/           # Run tracing and statistics
+    tests/                   # 808+ tests
+    containers/              # Sandbox Dockerfile
+    scripts/                 # Build and install scripts
+    docs/                    # Documentation
 ```
 
-## 📚 Documentation
+## Testing and Quality
 
-| Topic | Description |
-|-------|-------------|
-| [Quick Start](#-quick-start) | Get scanning in 2 minutes |
-| [Configuration](#-configuration) | All settings and providers |
-| [Architecture](#-architecture) | How the agent system works |
-| [CI/CD](#-cicd-integration) | GitHub Actions integration |
-| [Contributing](#-contributing) | How to contribute |
+808+ tests across 6 test suites with 0 failures:
 
-## 🤝 Contributing
+| Suite | Tests | Scope |
+|-------|:-----:|-------|
+| `test_e2e_system.py` | 184 | Full system integration |
+| `test_v0920_audit_fixes.py` | 39 | Security fix verification |
+| `test_all_modules.py` | ~200 | Module-level unit tests |
+| `test_v0918_features.py` | ~100 | Feature regression |
+| `test_v0910_coverage.py` | ~80 | Coverage gap tests |
+| `test_security_fixes.py` | ~50 | Security-specific tests |
 
-We welcome contributions! See our [Contributing Guide](CONTRIBUTING.md) for details.
+### Security Audit
 
-- 🐛 **Bug Reports** — [Open an issue](https://github.com/Usta0x001/Phantom/issues)
-- 💡 **Feature Requests** — [Start a discussion](https://github.com/Usta0x001/Phantom/discussions)
-- 🔧 **Pull Requests** — Fork, branch, and submit a PR
+Two deep offensive audits performed on the codebase:
 
-## ⭐ Support
+- **83 findings** identified (8 Critical, 19 High, 34 Medium, 22 Low)
+- **All findings resolved** and verified with dedicated regression tests
+- **System score:** 8.0/10 after full remediation cycle
 
-**Love Phantom?** Give us a ⭐ on [GitHub](https://github.com/Usta0x001/Phantom)!
+## Documentation
 
-## 📄 License
+| Document | Description |
+|----------|-------------|
+| [Architecture](docs/ARCHITECTURE.md) | System design and technical architecture |
+| [Documentation](docs/DOCUMENTATION.md) | Complete system documentation v1 |
+| [Quick Start](#quick-start) | Get scanning in 2 minutes |
+| [Configuration](#configuration) | Settings, providers, and profiles |
+| [Contributing](CONTRIBUTING.md) | Development guidelines |
+
+## Contributing
+
+Contributions are welcome. See the [Contributing Guide](CONTRIBUTING.md) for development setup and guidelines.
+
+- **Bug Reports** — [Open an issue](https://github.com/Usta0x001/Phantom/issues)
+- **Feature Requests** — [Start a discussion](https://github.com/Usta0x001/Phantom/discussions)
+- **Pull Requests** — Fork, branch, test, and submit
+
+## License
 
 Apache License 2.0 — see [LICENSE](LICENSE) for details.
 
-## 🙏 Acknowledgements
+## Acknowledgements
 
-Phantom builds on incredible open-source projects:
-[LiteLLM](https://github.com/BerriAI/litellm) · [Nuclei](https://github.com/projectdiscovery/nuclei) · [Playwright](https://github.com/microsoft/playwright) · [Textual](https://github.com/Textualize/textual) · [Rich](https://github.com/Textualize/rich) · [NetworkX](https://github.com/networkx/networkx)
+Phantom builds on these open-source projects:
+[LiteLLM](https://github.com/BerriAI/litellm) /
+[Nuclei](https://github.com/projectdiscovery/nuclei) /
+[Playwright](https://github.com/microsoft/playwright) /
+[Textual](https://github.com/Textualize/textual) /
+[Rich](https://github.com/Textualize/rich) /
+[NetworkX](https://github.com/networkx/networkx)
 
 ---
 
 <div align="center">
 
-**☠ PHANTOM** · *" Why So Serious ?! "* · Autonomous Offensive Security Intelligence
+**PHANTOM** — Autonomous Adversary Simulation Platform
 
-Made with 🖤 by [Usta0x001](https://github.com/Usta0x001)
+Made by [Usta0x001](https://github.com/Usta0x001)
 
 </div>
 
-> [!WARNING]
-> **Only test systems you own or have explicit authorization to test.** You are fully responsible for using Phantom ethically and legally. Unauthorized access to computer systems is illegal.
+> **WARNING:** Only test systems you own or have explicit written authorization to test. Unauthorized access to computer systems is illegal. You are fully responsible for ensuring legal and ethical use of this tool.
