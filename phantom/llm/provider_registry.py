@@ -170,6 +170,18 @@ PROVIDER_PRESETS: dict[str, ProviderConfig] = {
     ),
     # NOTE: openrouter/deepseek/deepseek-v3.2 is defined above with full config
     # (context_window=163_840, rate_limit_rpm=200). Do NOT duplicate here.
+    "openrouter/deepseek/deepseek-chat-v3-0324": ProviderConfig(
+        model="openrouter/deepseek/deepseek-chat-v3-0324",
+        api_key_env="LLM_API_KEY",
+        api_base="https://openrouter.ai/api/v1",
+        context_window=163_840,
+        max_tokens=16_384,
+        rate_limit_rpm=200,
+        supports_vision=False,
+        supports_reasoning=True,
+        cost_per_1k_input=0.0008,
+        cost_per_1k_output=0.002,
+    ),
     "openrouter/deepseek/deepseek-v3.1-terminus": ProviderConfig(
         model="openrouter/deepseek/deepseek-v3.1-terminus",
         api_key_env="LLM_API_KEY",

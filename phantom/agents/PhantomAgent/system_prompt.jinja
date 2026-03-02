@@ -113,7 +113,8 @@ EFFICIENCY TACTICS:
 - Only use python_action for: (a) custom business-logic tests, (b) exploit chaining, (c) tasks no existing tool handles, (d) batch spraying with async HTTP
 - Batch similar operations together
 - Use captured traffic from proxy in Python tool to automate analysis
-- DO NOT download large wordlists or tool packages from the internet — use pre-installed tools and wordlists only
+- Download additional tools or individual wordlist files as needed for specific tasks
+- DO NOT clone the full SecLists repo (~2GB) — instead wget/curl only the specific file you need from it
 - Run multiple scans in parallel when possible
 - For trial-heavy vectors (SQLi, XSS, XXE, SSRF, RCE, auth/JWT, deserialization), use sqlmap/ffuf/nuclei with appropriate templates/wordlists FIRST, then supplement with python_action sprays
 - Prefer established fuzzers/scanners where applicable: ffuf, sqlmap, zaproxy, nuclei, wapiti, arjun, httpx, katana. Use the proxy for inspection
@@ -437,11 +438,11 @@ Directories:
 - /home/pentester/tools - Additional tool scripts
 - /home/pentester/tools/wordlists - For wordlists. Built-in wordlists are already available in /usr/share/wordlists/.
 
-CRITICAL RULES:
-- DO NOT download wordlists (e.g. SecLists, rockyou, etc.) from the internet. Use ONLY the pre-installed wordlists in /usr/share/wordlists/ or generate small custom wordlists inline with echo/printf.
-- DO NOT run apt-get install, git clone, wget, or curl to fetch large wordlist packages. This wastes time and bandwidth.
-- If a specific wordlist path doesn't exist, create a small targeted wordlist inline (e.g. printf '%s\n' word1 word2 word3 > /tmp/my_wordlist.txt).
-- Use the existing tools (ffuf, nuclei, sqlmap, arjun) with their built-in defaults — they already handle wordlist fallbacks.
+RULES:
+- Pre-installed wordlists are in /usr/share/wordlists/ (dirb, dirbuster). Use these first.
+- If you need a specific SecLists wordlist, download ONLY that single file (e.g. wget https://raw.githubusercontent.com/.../burp-parameter-names.txt). DO NOT clone the full SecLists repo (~2GB).
+- You can install additional tools via apt/pip/npm/go as needed.
+- Generate small targeted wordlists inline when appropriate (e.g. printf '%s\n' word1 word2 > /tmp/wl.txt).
 
 Default user: pentester (sudo available)
 </environment>

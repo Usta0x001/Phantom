@@ -171,7 +171,7 @@ def ffuf_directory_scan(
     from phantom.tools.terminal.terminal_actions import terminal_execute
 
     # Ensure wordlist exists (dirb common.txt should always be there in Kali)
-    wordlist = _ensure_wordlist(wordlist, _BUILTIN_PARAM_WORDLIST)
+    wordlist = _ensure_wordlist(wordlist, _BUILTIN_DIR_WORDLIST)
 
     # Ensure FUZZ keyword is present
     if "FUZZ" not in url:
@@ -256,6 +256,8 @@ def ffuf_parameter_fuzz(
     # Ensure wordlist exists; fall back to built-in parameter names
     wordlist = _ensure_wordlist(wordlist, _BUILTIN_PARAM_WORDLIST)
 
+    out_file = safe_temp_path("ffuf_params", ".json")
+
     # For GET, add FUZZ as parameter name
     if method == "GET":
         if "?" in url:
@@ -269,7 +271,7 @@ def ffuf_parameter_fuzz(
         "ffuf",
         "-u", shlex.quote(fuzz_url),
         "-w", shlex.quote(wordlist),
-        "-o", "/tmp/ffuf_params_$$.json",
+        "-o", out_file,
         "-of", "json",
         "-rate", str(rate),
     ]
@@ -297,7 +299,7 @@ def ffuf_parameter_fuzz(
         }
 
     # Read JSON output
-    read_result = terminal_execute(command="cat /tmp/ffuf_params_$$.json 2>/dev/null || echo '{}'", timeout=10.0)
+    read_result = terminal_execute(command=f"cat {shlex.quote(out_file)} 2>/dev/null || echo '{{}}'", timeout=10.0)
     json_output = read_result.get("content", "{}")
 
     findings = _parse_ffuf_json(json_output)
@@ -336,6 +338,8 @@ def ffuf_vhost_fuzz(
     # Ensure wordlist exists; fall back to built-in vhost names
     wordlist = _ensure_wordlist(wordlist, _BUILTIN_VHOST_WORDLIST)
 
+    out_file = safe_temp_path("ffuf_vhost", ".json")
+
     # Extract the domain from the URL for the Host header
     from urllib.parse import urlparse
     parsed = urlparse(url)
@@ -346,7 +350,7 @@ def ffuf_vhost_fuzz(
         "-u", shlex.quote(url),
         "-w", shlex.quote(wordlist),
         "-H", f"Host: FUZZ.{domain}",
-        "-o", "/tmp/ffuf_vhost_$$.json",
+        "-o", out_file,
         "-of", "json",
         "-rate", str(rate),
     ]
@@ -365,7 +369,7 @@ def ffuf_vhost_fuzz(
             "command": command,
         }
 
-    read_result = terminal_execute(command="cat /tmp/ffuf_vhost_$$.json 2>/dev/null || echo '{}'", timeout=10.0)
+    read_result = terminal_execute(command=f"cat {shlex.quote(out_file)} 2>/dev/null || echo '{{}}'", timeout=10.0)
     json_output = read_result.get("content", "{}")
 
     findings = _parse_ffuf_json(json_output)

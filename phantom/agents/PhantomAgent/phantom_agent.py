@@ -359,7 +359,7 @@ class PhantomAgent(BaseAgent):
                 self.llm.config.skills = current_skills
                 # Reload system prompt with the new skill
                 try:
-                    self.llm._system_prompt = self.llm._load_system_prompt("PhantomAgent")
+                    self.llm.system_prompt = self.llm._load_system_prompt("PhantomAgent")
                     _log.getLogger("phantom.agent").info(
                         "Auto-loaded Juice Shop attack playbook skill"
                     )

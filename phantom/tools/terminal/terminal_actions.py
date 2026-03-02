@@ -6,16 +6,13 @@ from phantom.tools.registry import register_tool
 
 _logger = logging.getLogger(__name__)
 
-# Patterns that indicate large wordlist/tool downloads we want to block.
-# These waste 10-30 minutes downloading multi-GB files at runtime.
+# Only block cloning/downloading the FULL SecLists repo (~2GB) or rockyou (~14GB).
+# Individual small wordlist files are fine to download.
 _BLOCKED_DOWNLOAD_PATTERNS = [
-    re.compile(r"(wget|curl).*SecLists", re.IGNORECASE),
-    re.compile(r"(wget|curl).*rockyou", re.IGNORECASE),
-    re.compile(r"git\s+clone.*SecLists", re.IGNORECASE),
-    re.compile(r"git\s+clone.*wordlist", re.IGNORECASE),
-    re.compile(r"git\s+clone.*rockyou", re.IGNORECASE),
+    re.compile(r"git\s+clone.*danielmiessler/SecLists", re.IGNORECASE),
+    re.compile(r"git\s+clone.*SecLists\.git", re.IGNORECASE),
     re.compile(r"apt(-get)?\s+install.*seclists", re.IGNORECASE),
-    re.compile(r"(wget|curl).*/danielmiessler/", re.IGNORECASE),
+    re.compile(r"(wget|curl).*rockyou\.txt\.gz", re.IGNORECASE),
 ]
 
 
@@ -39,16 +36,15 @@ def terminal_execute(
             "working_dir": None,
         }
 
-    # Block large wordlist/tool downloads that waste time
+    # Block only full SecLists repo clone (~2GB) and rockyou (~14GB)
     for pattern in _BLOCKED_DOWNLOAD_PATTERNS:
         if pattern.search(command):
-            _logger.warning("Blocked large download command: %s", command[:200])
+            _logger.warning("Blocked large download: %s", command[:200])
             return {
                 "error": (
-                    "BLOCKED: Do not download large wordlists. "
-                    "Use pre-installed wordlists in /usr/share/wordlists/ "
-                    "or generate small custom wordlists inline with: "
-                    "printf '%s\\n' word1 word2 word3 > /tmp/my_wordlist.txt"
+                    "BLOCKED: Do not clone the full SecLists repo (2GB+). "
+                    "Instead, download only the specific wordlist file you need, e.g.: "
+                    "wget https://raw.githubusercontent.com/danielmiessler/SecLists/master/Discovery/Web-Content/burp-parameter-names.txt -O /tmp/params.txt"
                 ),
                 "command": command,
                 "terminal_id": terminal_id or "default",

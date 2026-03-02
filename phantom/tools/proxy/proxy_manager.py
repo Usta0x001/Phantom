@@ -592,9 +592,9 @@ class ProxyManager:
                     continue
 
                 response_body = response.text
-                truncated = len(response_body) > 10000
+                truncated = len(response_body) > 30000
                 if truncated:
-                    response_body = response_body[:10000] + "\n... [truncated]"
+                    response_body = response_body[:30000] + "\n... [truncated]"
 
                 return {
                     "status_code": response.status_code,
