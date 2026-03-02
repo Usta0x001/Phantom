@@ -178,53 +178,10 @@ class PhantomAgent(BaseAgent):
 
             task_description += "\nCall create_vulnerability_report IMMEDIATELY after confirming each vulnerability."
 
-            # ── SPA recon guidance ──
-            task_description += "\n\nSPA/JAVASCRIPT APP RECON STRATEGY:"
-            task_description += "\nModern web apps (Angular, React, Vue) hide their API endpoints in JavaScript bundles."
-            task_description += "\nIf katana_crawl finds fewer than 10 URLs, the target is likely a SPA. In that case:"
-            task_description += "\n1. Run katana_crawl with headless=True to render JavaScript"
-            task_description += "\n2. Use ffuf with an API-focused wordlist to discover /api/ and /rest/ endpoints"
-            task_description += "\n3. Use browser to navigate the app and watch for API calls in the network tab (execute_js)"
-            task_description += "\n4. Probe common API paths with send_request: /api/Users, /api/Products, /api/Cards, /rest/user/login, /api-docs"
-
-            # ── Vuln-class rotation directive ──
-            task_description += "\n\nVULN-CLASS ROTATION (MANDATORY):"
-            task_description += "\nThe system will inject ROTATION messages telling you to switch vulnerability classes."
-            task_description += "\nWhen you receive a rotation message, you MUST immediately switch to the specified vulnerability class."
-            task_description += "\nDo NOT keep testing the same vuln type after finding it — report it and move on."
-            task_description += "\nGoal: test at least 6 different vulnerability classes (SQLi, XSS, Auth/JWT, IDOR, Path Traversal, SSRF, etc.)"
-
-            # ── Mandatory recon-first + efficiency directives ──
-            # Filter out any tools that are in skip_tools to avoid contradictions
-            mandatory_recon = [
-                ("nuclei_scan", "catches known CVEs & misconfigs — run with severity=all"),
-                ("katana_crawl", "discover all endpoints and JS files — if <10 URLs, re-run with headless=True"),
-                ("ffuf_directory_scan", "directory brute-forcing with common.txt, then API wordlists for /api/ and /rest/ paths"),
-                ("nmap_scan", "port/service discovery"),
-            ]
-            active_recon = [(t, d) for t, d in mandatory_recon if t not in (skip_tools or [])]
-            if active_recon:
-                task_description += "\n\nMANDATORY FIRST STEPS (do these BEFORE creating any sub-agents):"
-                for i, (tool, desc) in enumerate(active_recon, 1):
-                    task_description += f"\n{i}. Run {tool} against the target ({desc})"
-                task_description += "\nONLY AFTER these recon tools finish → analyze results → create targeted sub-agents."
-            task_description += "\n\nEFFICIENCY RULES:"
-            task_description += "\n- Do NOT use browser_action for API endpoints — use send_request or python_action instead"
-            task_description += "\n- LIMIT browser_action to max 10 total calls per scan — use it ONLY for DOM-based XSS, visual exploration, or SPA navigation"
-            task_description += "\n- Do NOT use update_todo/create_todo excessively — max 5 todo operations total"
-            task_description += "\n- Use SPECIALIZED TOOLS (nuclei, sqlmap, ffuf, jwt_tool, arjun, wapiti) first — only use python_action for custom logic no tool handles"
-            task_description += "\n- Each sub-agent MUST use at least 1 security scanner tool (nuclei, sqlmap, ffuf, etc.)"
-            task_description += "\n- Report IMMEDIATELY: call create_vulnerability_report as soon as you confirm a vuln — do NOT spawn a separate reporting agent"
-            task_description += "\n- After finding a vuln: REPORT IT → MOVE ON to the next vulnerability CLASS — do NOT keep searching for more of the same type"
-
-            # ── Anti-premature-termination directive ──
-            task_description += "\n\nCRITICAL — DO NOT FINISH EARLY:"
-            task_description += f"\n- You have {max_iter} iterations. Use AT LEAST 50% of them."
-            task_description += "\n- DO NOT call finish_scan until you have tested ALL major vulnerability classes."
-            task_description += "\n- The finish_scan gate will REJECT premature attempts. If rejected, continue testing NEW vuln classes."
-            task_description += "\n- Target: find 20+ unique vulnerabilities across 8+ different vulnerability categories."
-            task_description += "\n- After recon, spawn SUBAGENTS for parallel testing of different vuln classes."
-            task_description += "\n- NEVER stop just because you found a few vulns or achieved 'good coverage' — there are dozens more to find."
+            # NOTE: SPA recon strategy, vuln-class rotation, mandatory first steps,
+            # efficiency rules, and anti-premature-termination directives are already
+            # in the system prompt and quick.md skill.  Duplicating them here wastes
+            # ~2-3K tokens on every LLM request and accelerates context compression.
 
             task_description += "\n--- END SCAN PROFILE ---"
 

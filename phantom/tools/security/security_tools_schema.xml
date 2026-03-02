@@ -68,10 +68,13 @@
       <parameter name="rate_limit" type="integer" required="false">
         <description>Requests per second (default: 150)</description>
       </parameter>
+      <parameter name="extra_args" type="string" required="false">
+        <description>Additional nuclei command-line arguments (e.g., "-headless" or "-t custom-templates/")</description>
+      </parameter>
     </parameters>
     <returns type="Dict[str, Any]">
       <description>Structured findings with:
-      - findings: list of vulnerabilities with template_id, severity, host, matched_at, curl_command
+      - findings: list of vulnerabilities with template_id, severity, matched_at, description
       - by_severity: count of findings per severity level
       - total_findings: total count</description>
     </returns>

@@ -11,7 +11,7 @@ logger = logging.getLogger(__name__)
 
 MAX_TOTAL_TOKENS = 80_000
 MAX_MESSAGES = 150
-MIN_RECENT_MESSAGES = 20
+MIN_RECENT_MESSAGES = 8  # Reduced from 20 — 20 msgs = ~40K tokens uncompressible floor causing death spiral
 
 SUMMARY_PROMPT_TEMPLATE = """You are performing context condensation for a security
 assessment agent.  Compress the conversation while preserving every piece of
@@ -307,7 +307,7 @@ class MemoryCompressor:
             return messages
 
         compressed = []
-        chunk_size = 10
+        chunk_size = 25  # Raised from 10 — fewer LLM calls during compression
         for i in range(0, len(old_msgs), chunk_size):
             chunk = old_msgs[i : i + chunk_size]
 
