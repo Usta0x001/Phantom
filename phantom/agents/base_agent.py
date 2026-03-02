@@ -219,6 +219,26 @@ class BaseAgent(metaclass=AgentMeta):
                 except (ImportError, Exception):  # noqa: BLE001
                     pass
 
+            # ── Vuln-class rotation enforcement (root agent only) ──
+            if (
+                self.state.parent_id is None
+                and hasattr(self, "_vuln_rotation")
+                and self._vuln_rotation is not None
+            ):
+                try:
+                    rotation_msg = self._vuln_rotation.tick()
+                    if rotation_msg:
+                        self.state.add_message("user", rotation_msg)
+                        logger.info("Vuln rotation: %s", rotation_msg[:120])
+                    # Periodic diversity check every 8 iterations after recon phase
+                    elif self.state.iteration >= 15 and self.state.iteration % 8 == 0:
+                        div_msg = self._vuln_rotation.force_check(self.state.iteration)
+                        if div_msg:
+                            self.state.add_message("user", div_msg)
+                            logger.info("Vuln diversity check: %s", div_msg[:120])
+                except Exception:  # noqa: BLE001
+                    pass
+
             # Periodic checkpoint for scan resume (every 10 iterations)
             if (
                 self.state.iteration % 10 == 0

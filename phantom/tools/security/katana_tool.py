@@ -45,6 +45,7 @@ def katana_crawl(
     target: str,
     depth: int = 3,
     js_crawl: bool = True,
+    headless: bool = False,
     scope_in_domain: bool = True,
     rate_limit: int = 100,
     max_duration: int = 120,
@@ -55,12 +56,14 @@ def katana_crawl(
     endpoints, JavaScript files, API routes, and forms.
 
     Use this BEFORE vulnerability scanning to build a full attack surface
-    map.
+    map. For Single Page Applications (Angular, React, Vue), set headless=True
+    to use a headless browser that can render JavaScript.
 
     Args:
         target: Target URL to crawl (e.g., "http://target.com")
         depth: Crawl depth (default: 3)
         js_crawl: Also parse JavaScript files for endpoints (default: True)
+        headless: Use headless browser for JavaScript-heavy/SPA sites (default: False)
         scope_in_domain: Stay within the target domain (default: True)
         rate_limit: Requests per second (default: 100)
         max_duration: Max crawl duration in seconds (default: 120)
@@ -81,6 +84,9 @@ def katana_crawl(
         "-rl", str(int(rate_limit)),
         "-timeout", str(int(max_duration)),
     ]
+
+    if headless:
+        cmd_parts.extend(["-headless", "-no-sandbox"])  # headless Chrome for SPAs
 
     if js_crawl:
         cmd_parts.append("-jc")  # JavaScript crawl

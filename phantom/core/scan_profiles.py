@@ -93,10 +93,10 @@ PROFILES: dict[str, ScanProfile] = {
     # ------------------------------------------------------------------
     ProfileName.quick: ScanProfile(
         name="quick",
-        description="Time-boxed rapid assessment (~20 min). High-impact vulns only.",
-        max_iterations=80,
+        description="Time-boxed rapid assessment (~30 min). Broad vuln-class coverage.",
+        max_iterations=100,
         sandbox_timeout_s=90,
-        reasoning_effort="low",
+        reasoning_effort="medium",
         priority_tools=[
             "nuclei_scan",
             "katana_crawl",
@@ -104,6 +104,7 @@ PROFILES: dict[str, ScanProfile] = {
             "nmap_scan",
             "sqlmap_test",
             "ffuf_directory_scan",
+            "send_request",
         ],
         skip_tools=[
             "subfinder_enumerate",
@@ -111,7 +112,7 @@ PROFILES: dict[str, ScanProfile] = {
         max_concurrent_tools=3,
         enable_browser=True,
         nuclei_severity="medium,high,critical",
-        memory_threshold=40_000,  # quick: aggressive token savings
+        memory_threshold=50_000,  # quick: moderate token budget for diversity
     ),
     # ------------------------------------------------------------------
     ProfileName.standard: ScanProfile(

@@ -204,9 +204,14 @@ MANDATORY INITIAL PHASES:
 
 BLACK-BOX TESTING - PHASE 1 (RECON & MAPPING):
 - **MANDATORY**: Run katana_crawl tool FIRST to discover all endpoints, JS files, API routes, and forms
-- COMPLETE full reconnaissance: subdomain enumeration, port scanning, service detection
+- **SPA FALLBACK**: If katana finds fewer than 10 URLs, the target is likely a Single Page Application (Angular/React/Vue).
+  In that case: (1) Run katana_crawl again with headless=True for JavaScript rendering,
+  (2) Use ffuf_directory_scan with an API wordlist to discover /api/ and /rest/ endpoints,
+  (3) Use browser_action to navigate the app and identify all interactive elements,
+  (4) Use send_request or python_action to probe common API paths: /api/Users, /api/Products, /rest/user/login, /api-docs, /swagger.json
+- COMPLETE full reconnaissance: port scanning, service detection
 - MAP entire attack surface: all endpoints, parameters, APIs, forms, inputs
-- CRAWL thoroughly: spider all pages (authenticated and unauthenticated), discover hidden paths, analyze JS files
+- CRAWL thoroughly: spider all pages, discover hidden paths, parse JavaScript bundles for API URLs
 - ENUMERATE technologies: frameworks, libraries, versions, dependencies
 - Create an ENDPOINT LIST from crawl results and systematically test EACH endpoint for vulnerabilities
 - ONLY AFTER comprehensive mapping → proceed to vulnerability testing
@@ -240,9 +245,12 @@ SYSTEMATIC ATTACK CHECKLIST (test ALL of these in order):
 12. XXE / Deserialization — test any XML input, file import, or serialized data endpoint
 
 ITERATION BUDGET PER TARGET:
-- Max 5 iterations per endpoint per vulnerability class. If not confirmed by then → record_finding as dead-end → MOVE ON
+- Max 8 iterations per vulnerability class. If not confirmed by then → record_finding as dead-end → MOVE ON to the NEXT vuln class
+- The system will inject MANDATORY ROTATION messages telling you which vuln class to test next — FOLLOW THEM
 - After exhausting a vuln class across all endpoints → move to next class in the checklist
 - BREADTH FIRST: test more vulnerability classes across more endpoints rather than going deep on one
+- NEVER spend more than 15 iterations total on a single vulnerability type (e.g., don't keep trying SQLi everywhere)
+- If you find a vuln: report it immediately, then MOVE ON to the next class — don't keep searching for more of the same type
 
 WORKFLOW RULES:
 
@@ -326,10 +334,12 @@ REALISTIC TESTING OUTCOMES:
 
 COVERAGE AND PERSISTENCE:
 - BREADTH FIRST: cover ALL vulnerability classes and ALL endpoints before going deep on any single one
-- Use your iteration budget wisely: allocate ~5 iterations per vuln class per endpoint cluster
+- The system enforces vuln-class rotation — when you receive a ROTATION message, IMMEDIATELY switch to the specified class
+- Use your iteration budget wisely: allocate ~8 iterations per vuln class
 - If an approach yields nothing after 3-5 attempts on an endpoint → record_finding as dead-end → MOVE ON
 - When stuck, switch to a DIFFERENT vulnerability class or a DIFFERENT endpoint — don't burn iterations
-- The checklist above has 12 vuln classes — aim to test at least 8 of them before iterations run out
+- The checklist above has 12 vuln classes — aim to test at least 6-8 of them before iterations run out
+- DO NOT keep testing the same vuln type after finding it — move to the NEXT class
 - Chain low-impact findings into high-impact attack paths (e.g., info disclosure + IDOR = account takeover)
 - There are ALWAYS more attack vectors to explore — prioritize untested surfaces over retesting tested ones
 </multi_agent_system>
