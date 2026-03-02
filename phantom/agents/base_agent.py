@@ -549,15 +549,16 @@ class BaseAgent(metaclass=AgentMeta):
             pass
 
         if not content_stripped:
+            # Refund the iteration — empty response is not productive work
+            self.state.iteration = max(0, self.state.iteration - 1)
             corrective_message = (
                 "You MUST NOT respond with empty messages. "
-                "If you currently have nothing to do or say, use an appropriate tool instead:\n"
-                "- Use agents_graph_actions.wait_for_message to wait for messages "
-                "from user or other agents\n"
-                "- Use agents_graph_actions.agent_finish if you are a sub-agent "
-                "and your task is complete\n"
-                "- Use finish_actions.finish_scan if you are the root/main agent "
-                "and the scan is complete"
+                "Call a tool NOW. Suggested next actions:\n"
+                "- send_request to test an endpoint for vulnerabilities\n"
+                "- nuclei_scan / sqlmap_test / ffuf_directory_scan for automated scanning\n"
+                "- create_vulnerability_report if you have a confirmed finding\n"
+                "- record_finding to log a discovery\n"
+                "- finish_scan ONLY if you have tested 6+ vuln classes across all endpoints"
             )
             self.state.add_message("user", corrective_message)
             return False
@@ -581,6 +582,14 @@ class BaseAgent(metaclass=AgentMeta):
         if actions:
             return await self._execute_actions(actions, tracer)
 
+        # No tool call — refund the iteration and nudge the agent
+        self.state.iteration = max(0, self.state.iteration - 1)
+        self.state.add_message(
+            "user",
+            "WARNING: You sent text without a tool call. Every message MUST include a tool call. "
+            "Call a security tool NOW (send_request, nuclei_scan, sqlmap_test, ffuf_directory_scan, "
+            "create_vulnerability_report, etc.).",
+        )
         return False
 
     async def _execute_actions(self, actions: list[Any], tracer: Optional["Tracer"]) -> bool:
@@ -641,9 +650,9 @@ class BaseAgent(metaclass=AgentMeta):
                     "upload": "csrf_upload", "csrf": "csrf_upload",
                     "xxe": "xxe_deser", "deserialization": "xxe_deser",
                 }
-                for entry in ledger[-5:]:
-                    if "[vuln/" in entry.lower() or "confirmed" in entry.lower():
-                        lower_e = entry.lower()
+                for entry in ledger[-10:]:
+                    lower_e = entry.lower()
+                    if "[vuln" in lower_e or "confirmed" in lower_e or "[auth" in lower_e or "indicator" in lower_e:
                         for keyword, class_id in _vuln_class_map.items():
                             if keyword in lower_e:
                                 self._vuln_rotation.record_finding(class_id)

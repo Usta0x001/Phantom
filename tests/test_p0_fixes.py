@@ -71,17 +71,19 @@ def test_auto001_allows_sufficient_work():
     from phantom.agents.state import AgentState
     from phantom.tools.finish.finish_actions import finish_scan
 
-    # With max_iterations=150: MIN_ITERATIONS = max(15, 37) = 37, MIN_TOOL_CALLS = max(10, 22) = 22
+    # With max_iterations=150: MIN_ITERATIONS = max(30, 90) = 90, MIN_TOOL_CALLS = max(20, 45) = 45
     # Provide enough iterations and tool calls, plus findings for diversity gate
-    actions = [{} for _ in range(25)]
+    actions = [{} for _ in range(50)]
     state = AgentState(
-        iteration=40, max_iterations=150,
+        iteration=95, max_iterations=150,
         actions_taken=actions,
         findings_ledger=[
             "[vuln/nuclei] HIGH sqli at /api",
             "[vuln/report] xss reflected",
             "[vuln/report] idor access control",
             "[vuln/report] auth jwt bypass",
+            "[vuln/report] path traversal lfi /ftp",
+            "[vuln/report] info disclosure exposure",
         ],
     )
     result = finish_scan("summary", "method", "analysis", "recs", agent_state=state)

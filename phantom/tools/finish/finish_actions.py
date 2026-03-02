@@ -659,21 +659,21 @@ def finish_scan(
         actions_count = len(getattr(agent_state, "actions_taken", []))
         max_iter = getattr(agent_state, "max_iterations", 150)
 
-        # Dynamic thresholds: at least 25% of iteration budget, 15% tool activity
-        MIN_ITERATIONS = max(15, int(max_iter * 0.25))
-        MIN_TOOL_CALLS = max(10, int(max_iter * 0.15))
+        # Dynamic thresholds: at least 60% of iteration budget, 30% tool activity
+        MIN_ITERATIONS = max(30, int(max_iter * 0.60))
+        MIN_TOOL_CALLS = max(20, int(max_iter * 0.30))
 
         if current_iteration < MIN_ITERATIONS:
             remaining = MIN_ITERATIONS - current_iteration
             _logger.warning(
-                "AUTO-001: finish_scan blocked — iteration %d < minimum %d (25%% of %d)",
+                "AUTO-001: finish_scan blocked — iteration %d < minimum %d (60%% of %d)",
                 current_iteration, MIN_ITERATIONS, max_iter,
             )
             return {
                 "success": False,
                 "message": (
                     f"Cannot finish scan yet: only {current_iteration}/{MIN_ITERATIONS} "
-                    f"iterations completed (minimum 25% of {max_iter} budget). "
+                    f"iterations completed (minimum 60% of {max_iter} budget). "
                     f"You have {remaining} more iterations to go. "
                     f"Continue testing — switch to a DIFFERENT vulnerability class "
                     f"(XSS, IDOR, JWT, SSRF, path traversal, business logic)."
@@ -699,7 +699,7 @@ def finish_scan(
 
         # ── AUTO-002: Vuln-class diversity gate ──
         # Require testing at least N different vulnerability classes
-        MIN_VULN_CLASSES = 4
+        MIN_VULN_CLASSES = 6
         vuln_categories_tested = set()
         _vuln_keywords = {
             "sqli": "sqli", "sql inject": "sqli", "sql": "sqli",

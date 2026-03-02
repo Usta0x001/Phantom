@@ -198,3 +198,19 @@ class LoopDetector:
         self._response_hashes.clear()
         self._findings_count_history.clear()
         self._total_loops_detected = 0
+
+
+# ── Module-level singleton ──────────────────────────────────────────
+_global_detector: LoopDetector | None = None
+
+
+def init_global_detector(**kwargs: Any) -> LoopDetector:
+    """Create (or re-create) the module-level LoopDetector singleton."""
+    global _global_detector  # noqa: PLW0603
+    _global_detector = LoopDetector(**kwargs)
+    return _global_detector
+
+
+def get_global_detector() -> LoopDetector | None:
+    """Return the global detector, or None if not yet initialized."""
+    return _global_detector

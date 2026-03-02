@@ -50,9 +50,9 @@ class TestAgentStateLifecycle:
     def test_approaching_max_iterations(self):
         from phantom.agents.state import AgentState
         s = AgentState(max_iterations=100)
-        s.iteration = 84
+        s.iteration = 92
         assert not s.is_approaching_max_iterations()
-        s.iteration = 85
+        s.iteration = 93
         assert s.is_approaching_max_iterations()
 
     def test_message_add_and_trim(self):

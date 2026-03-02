@@ -175,6 +175,34 @@ async def check_duplicate(
             "reason": "No existing reports to compare against",
         }
 
+    # Fast path: if candidate endpoint+title doesn't overlap with ANY existing
+    # report, skip the expensive LLM call entirely.
+    cand_endpoint = (candidate.get("endpoint") or "").lower().strip()
+    cand_title = (candidate.get("title") or "").lower().strip()
+    has_overlap = False
+    for existing in existing_reports:
+        ex_endpoint = (existing.get("endpoint") or "").lower().strip()
+        ex_title = (existing.get("title") or "").lower().strip()
+        # Check for endpoint match + title similarity
+        if cand_endpoint and ex_endpoint and cand_endpoint == ex_endpoint:
+            has_overlap = True
+            break
+        # Check for title substring match (rough similarity)
+        if cand_title and ex_title:
+            _stopwords = {"in", "at", "the", "a", "via", "on", "for", "of", "to", "and"}
+            cand_words = set(cand_title.split()) - _stopwords
+            ex_words = set(ex_title.split()) - _stopwords
+            if len(cand_words & ex_words) >= 3:
+                has_overlap = True
+                break
+    if not has_overlap:
+        return {
+            "is_duplicate": False,
+            "duplicate_id": "",
+            "confidence": 0.95,
+            "reason": "Fast path: no endpoint/title overlap with existing reports",
+        }
+
     try:
         candidate_cleaned = _prepare_report_for_comparison(candidate)
         existing_cleaned = [_prepare_report_for_comparison(r) for r in existing_reports]

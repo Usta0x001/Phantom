@@ -173,16 +173,23 @@ def _summarize_messages(
         }
     except Exception:
         logger.exception("Failed to summarize messages")
-        # Return a single summary dict so the return type is consistent —
-        # returning the raw list defeats the compression budget.
+        # Fallback: keep the LAST few messages from the chunk (most recent = most useful)
+        # plus extract any critical data.  NEVER return an empty summary.
+        fallback_parts = []
+        for msg in messages[-3:]:  # keep last 3 messages from chunk
+            text = _extract_message_text(msg)
+            if text:
+                fallback_parts.append(text[:1000])
+        fallback_text = "\n---\n".join(fallback_parts) if fallback_parts else "(compression failed — no messages preserved)"
         error_summary = (
             "<context_summary message_count='{count}'>"
-            "[Summarization failed — original context contained {count} messages]"
+            "[Summarization failed — preserving last {kept} messages from chunk]\n"
+            "{text}"
             "</context_summary>"
         )
         return {
             "role": "assistant",
-            "content": error_summary.format(count=len(messages)),
+            "content": error_summary.format(count=len(messages), kept=min(3, len(messages)), text=fallback_text),
         }
 
 
