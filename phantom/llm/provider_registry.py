@@ -225,6 +225,31 @@ PROVIDER_PRESETS: dict[str, ProviderConfig] = {
         cost_per_1k_input=0.0025,
         cost_per_1k_output=0.01,
     ),
+    # ── Qwen (OpenRouter) ──
+    "openrouter/qwen/qwen3-next-80b-a3b-thinking": ProviderConfig(
+        model="openrouter/qwen/qwen3-next-80b-a3b-thinking",
+        api_key_env="LLM_API_KEY",
+        api_base="https://openrouter.ai/api/v1",
+        context_window=131_072,
+        max_tokens=16_384,
+        rate_limit_rpm=60,
+        supports_vision=False,
+        supports_reasoning=True,
+        cost_per_1k_input=0.00016,
+        cost_per_1k_output=0.0007,
+    ),
+    "openrouter/qwen/qwen3.5-35b-a3b": ProviderConfig(
+        model="openrouter/qwen/qwen3.5-35b-a3b",
+        api_key_env="LLM_API_KEY",
+        api_base="https://openrouter.ai/api/v1",
+        context_window=131_072,
+        max_tokens=16_384,
+        rate_limit_rpm=60,
+        supports_vision=False,
+        supports_reasoning=False,
+        cost_per_1k_input=0.00014,
+        cost_per_1k_output=0.0006,
+    ),
 }
 
 # ── Context window lookup (covers models not in presets) ────────────

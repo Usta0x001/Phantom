@@ -46,6 +46,10 @@ class PhantomAgent(BaseAgent):
         # ── Auto-detect target type and load relevant skills ──
         self._auto_load_target_skills(targets)
 
+        # R5-12 FIX: Inject mandatory first actions for Juice Shop targets
+        # (Juice Shop is an Angular SPA — katana alone finds < 5 URLs)
+        self._juice_shop_detected = getattr(self, "_juice_shop_detected", False)
+
         # ── Initialize vuln-class rotation engine for root agent ──
         try:
             from phantom.core.vuln_class_rotation import VulnClassTracker
@@ -54,8 +58,8 @@ class PhantomAgent(BaseAgent):
                 if self.scan_profile and hasattr(self.scan_profile, "max_iterations")
                 else 100
             )
-            # Budget per class = total iterations / number of classes (min 8)
-            per_class = max(8, max_iter // 10)
+            # Budget per class = total iterations / 15 (min 6) — faster rotation
+            per_class = max(6, max_iter // 15)
             self._vuln_rotation = VulnClassTracker(max_iters_per_class=per_class)
         except Exception:
             self._vuln_rotation = None
@@ -134,6 +138,22 @@ class PhantomAgent(BaseAgent):
             task_parts.extend(f"- {ip}" for ip in ip_addresses)
 
         task_description = " ".join(task_parts)
+
+        # R5-12 FIX: Inject mandatory first actions for Juice Shop
+        if getattr(self, "_juice_shop_detected", False):
+            task_description += (
+                "\n\n--- MANDATORY FIRST ACTIONS (Juice Shop SPA) ---"
+                "\nDo NOT run katana alone — Juice Shop is an Angular SPA with 100+ API endpoints."
+                "\n1. GET /api-docs → Swagger spec with ALL REST endpoints"
+                "\n2. GET /rest/products/search?q=test → test SQLi with q=test'))--"
+                "\n3. POST /rest/user/login with {\"email\":\"' OR 1=1--\",\"password\":\"x\"} → SQLi"
+                "\n4. GET /ftp → directory listing (path traversal via %2500)"
+                "\n5. GET /api/Users → user list without auth (IDOR)"
+                "\n6. GET /rest/basket/1, /rest/basket/2 → IDOR on baskets"
+                "\n7. POST /api/Feedbacks → XSS, POST /profile → file upload"
+                "\n8. GET /metrics, /api/Quantitys → info disclosure"
+                "\n--- END FIRST ACTIONS ---"
+            )
 
         # ── Inject scan profile constraints into task ──
         if self.scan_profile:
@@ -319,6 +339,7 @@ class PhantomAgent(BaseAgent):
         )
 
         if juice_shop_indicators and hasattr(self, "llm") and hasattr(self.llm, "config"):
+            self._juice_shop_detected = True
             current_skills = list(self.llm.config.skills or [])
             skill_name = "targets/owasp_juice_shop"
             if skill_name not in current_skills:

@@ -19,6 +19,7 @@ from phantom.llm.utils import (
 )
 from phantom.skills import load_skills
 from phantom.tools import get_tools_prompt
+from phantom.tools.registry import TOOL_PROFILES
 from phantom.utils.resource_paths import get_phantom_resource_path
 
 
@@ -89,10 +90,8 @@ class LLM:
         reasoning = Config.get("phantom_reasoning_effort")
         if reasoning:
             self._reasoning_effort = reasoning
-        elif config.scan_mode == "quick":
-            self._reasoning_effort = "medium"
         else:
-            self._reasoning_effort = "high"
+            self._reasoning_effort = "high"  # always high — profile overrides via scan_profile
 
     def _load_system_prompt(self, agent_name: str | None) -> str:
         if not agent_name:
@@ -113,8 +112,13 @@ class LLM:
             skill_content = load_skills(skills_to_load)
             env.globals["get_skill"] = lambda name: skill_content.get(name, "")
 
+            # R5-01 FIX: Filter tools by scan mode profile to reduce prompt size.
+            # Quick mode: 22 tools (~18K tokens) instead of 54 (~33K tokens).
+            tool_filter = TOOL_PROFILES.get(self.config.scan_mode)
+            tools_prompt_fn = lambda: get_tools_prompt(include_only=tool_filter)  # noqa: E731
+
             result = env.get_template("system_prompt.jinja").render(
-                get_tools_prompt=get_tools_prompt,
+                get_tools_prompt=tools_prompt_fn,
                 loaded_skill_names=list(skill_content.keys()),
                 **skill_content,
             )

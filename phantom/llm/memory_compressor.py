@@ -11,7 +11,7 @@ logger = logging.getLogger(__name__)
 
 MAX_TOTAL_TOKENS = 80_000
 MAX_MESSAGES = 150
-MIN_RECENT_MESSAGES = 8  # Reduced from 20 — 20 msgs = ~40K tokens uncompressible floor causing death spiral
+MIN_RECENT_MESSAGES = 4  # 4 msgs (~12K) keeps last tool call+result+response+next for continuity
 
 SUMMARY_PROMPT_TEMPLATE = """You are performing context condensation for a security
 assessment agent.  Compress the conversation while preserving every piece of
@@ -301,11 +301,11 @@ class MemoryCompressor:
             _get_message_tokens(msg, model_name) for msg in system_msgs + regular_msgs
         )
 
-        if total_tokens <= self.max_total_tokens * 0.82:
+        if total_tokens <= self.max_total_tokens * 0.65:
             # Even when no compression needed, inject the findings ledger
             # so the agent always has access to persistent discoveries.
-            # NOTE: Threshold at 0.82 — balances context preservation with headroom.
-            # Too low (0.6) causes death spiral: compress→lose context→repeat→compress.
+            # NOTE: Threshold at 0.65 — fires earlier to keep total input under
+            # effective attention range (~100K tokens).
             ledger_msg = self._build_ledger_message()
             if ledger_msg:
                 # Insert ledger just before the last few messages

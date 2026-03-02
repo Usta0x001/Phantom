@@ -224,19 +224,19 @@ class TestM19FindingDedup:
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# M22: Truncation limit raised to 8KB
+# M22: Truncation limit (now 6K, was 10K, was 16K)
 # ═══════════════════════════════════════════════════════════════════════
 
 class TestM22TruncationLimit:
-    def test_9999_not_truncated(self):
+    def test_5999_not_truncated(self):
         from phantom.tools.executor import _format_tool_result
-        text = "A" * 9999
+        text = "A" * 5999
         result, images = _format_tool_result("test_tool", text)
         assert "truncated" not in result
 
-    def test_10001_truncated(self):
+    def test_6001_truncated(self):
         from phantom.tools.executor import _format_tool_result
-        text = "B" * 10001
+        text = "B" * 6001
         result, images = _format_tool_result("test_tool", text)
         assert "truncated" in result.lower()
 

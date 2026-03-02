@@ -390,17 +390,17 @@ def _format_tool_result(tool_name: str, result: Any) -> tuple[str, list[dict[str
         final_result_str = f"Tool {tool_name} executed successfully"
     else:
         final_result_str = str(result_str)
-        if len(final_result_str) > 10000:
-            # Reduced from 16K to 10K — saves ~1.5K tokens/call, still
-            # preserves critical findings from nuclei/katana/sqlmap.
-            start_part = final_result_str[:4500]
-            end_part = final_result_str[-4500:]
+        if len(final_result_str) > 6000:
+            # Reduced from 10K to 6K — saves ~1K tokens/call.
+            # 2.5K start captures findings summary, 2.5K end captures trailing results.
+            start_part = final_result_str[:2500]
+            end_part = final_result_str[-2500:]
             # Snap to nearest newline to avoid cutting mid-line/mid-tag
             last_nl = start_part.rfind('\n')
-            if last_nl > 3500:
+            if last_nl > 2000:
                 start_part = start_part[:last_nl]
             first_nl = end_part.find('\n')
-            if first_nl != -1 and first_nl < 900:
+            if first_nl != -1 and first_nl < 500:
                 end_part = end_part[first_nl + 1:]
             omitted = len(final_result_str) - len(start_part) - len(end_part)
             final_result_str = (

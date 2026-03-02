@@ -24,6 +24,6 @@ class LLMConfig:
         self.scan_mode = scan_mode if scan_mode in ["quick", "standard", "deep"] else "deep"
 
         # Temperature controls LLM creativity vs determinism.
-        # Lower values (0.2-0.4) = more methodical, systematic exploitation.
-        # Default 0.3 for security scanning — proven attack patterns over creativity.
-        self.temperature: float = temperature if temperature is not None else 0.3
+        # 0.6 balances structured tool-calling with creative attack exploration.
+        # Industry benchmarks for agentic tool-calling: optimal at 0.5-0.7.
+        self.temperature: float = temperature if temperature is not None else 0.6
