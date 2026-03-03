@@ -197,6 +197,32 @@ class BaseAgent(metaclass=AgentMeta):
 
             self.state.increment_iteration()
 
+            # ── DESIGN-02: Deterministic scanner orders for first 4 iterations ──
+            # The LLM ignores "mandatory" instructions in the task description
+            # and defaults to send_request. Force scanner tools by injecting
+            # explicit orders right before the LLM call.
+            if self.state.iteration <= 4 and self.state.parent_id is None:
+                _scanner_orders = {
+                    1: ("You MUST call nuclei_scan as your FIRST tool. "
+                        "This is NOT optional. Run: nuclei_scan(target=<TARGET_URL>) "
+                        "to automatically discover known CVEs and vulnerabilities. "
+                        "Do NOT call send_request on iteration 1."),
+                    2: ("You MUST call nmap_scan as your SECOND tool. "
+                        "Run: nmap_scan(target=<TARGET_IP_OR_HOST>) with service detection. "
+                        "Do NOT call send_request yet."),
+                    3: ("You MUST call katana_crawl as your THIRD tool. "
+                        "Run: katana_crawl(target=<TARGET_URL>, headless=True) "
+                        "to discover all SPA routes and API endpoints. "
+                        "Do NOT call send_request yet."),
+                    4: ("You MUST call ffuf_directory_scan as your FOURTH tool. "
+                        "Run: ffuf_directory_scan(target=<TARGET_URL>, "
+                        "wordlist='/usr/share/wordlists/dirb/common.txt') "
+                        "to find hidden directories and files."),
+                }
+                order = _scanner_orders.get(self.state.iteration)
+                if order:
+                    self.state.add_message("user", f"🎯 MANDATORY TOOL ORDER (iteration {self.state.iteration}): {order}")
+
             # BUG-04 FIX: Automatic phase transitions based on iteration progress
             if hasattr(self.state, "set_phase") and hasattr(self.state, "current_phase"):
                 try:
@@ -205,8 +231,29 @@ class BaseAgent(metaclass=AgentMeta):
                     findings_count = len(getattr(self.state, "findings_ledger", []))
                     current = self.state.current_phase
 
-                    # RECON → EXPLOIT: after 25% of iterations OR when we have findings
-                    if current == ScanPhase.RECON and (pct >= 0.25 or findings_count >= 3):
+                    # Early scanner enforcement: fires at iterations 10, 20, 30
+                    # BUG-23 FIX: Fire multiple times, not just once at iteration 10.
+                    if self.state.iteration in (10, 20, 30) and hasattr(self.state, "tools_used"):
+                        tu = self.state.tools_used
+                        scanners_used = sum(tu.get(t, 0) for t in
+                                            ["nuclei_scan", "sqlmap_test", "katana_crawl",
+                                             "nmap_scan", "ffuf_directory_scan"])
+                        if scanners_used == 0:
+                            self.state.add_message("user",
+                                "🚨 SCANNER ALERT: You have NOT used any automated scanners "
+                                "in 10 iterations! Your NEXT action MUST be one of:\n"
+                                "1. nuclei_scan — finds known CVEs and misconfigurations\n"
+                                "2. sqlmap_test — finds SQL injection automatically\n"
+                                "3. katana_crawl — discovers all endpoints in SPAs\n"
+                                "These tools find 10x more vulns per iteration than manual requests. "
+                                "STOP using send_request and START using scanners NOW."
+                            )
+                            logger.info("Early scanner enforcement triggered at iteration 10")
+
+                    # RECON → EXPLOIT: after 15% of iterations OR when we have findings
+                    # BUG-07 FIX: 25% was too slow for quick mode (37 iterations of recon!).
+                    # 15% = ~22 iterations for quick mode, which is enough for katana+nmap+httpx.
+                    if current == ScanPhase.RECON and (pct >= 0.15 or findings_count >= 3):
                         self.state.set_phase(ScanPhase.EXPLOIT)
                         logger.info("Phase transition: RECON → EXPLOIT (iter=%d, findings=%d)",
                                     self.state.iteration, findings_count)
@@ -253,9 +300,48 @@ class BaseAgent(metaclass=AgentMeta):
                 except Exception:  # noqa: BLE001
                     pass
 
-            # Periodic checkpoint for scan resume (every 10 iterations)
+            # ── Tool diversity enforcement ──
+            # If the agent has been over-relying on send_request and hasn't
+            # used automated scanners, inject a corrective message.
             if (
-                self.state.iteration % 10 == 0
+                self.state.iteration >= 15
+                and self.state.iteration % 10 == 0
+                and hasattr(self.state, "tools_used")
+            ):
+                try:
+                    tu = self.state.tools_used
+                    total_calls = sum(tu.values()) if tu else 0
+                    send_req_calls = tu.get("send_request", 0) + tu.get("repeat_request", 0)
+                    scanner_tools = {"nuclei_scan", "sqlmap_test", "ffuf_directory_scan",
+                                     "katana_crawl", "nmap_scan", "httpx_probe"}
+                    scanner_calls = sum(tu.get(t, 0) for t in scanner_tools)
+
+                    if total_calls >= 10 and send_req_calls / total_calls > 0.6 and scanner_calls < 3:
+                        missing = [t for t in ["nuclei_scan", "sqlmap_test", "ffuf_directory_scan",
+                                               "katana_crawl"] if tu.get(t, 0) == 0]
+                        if missing:
+                            self.state.add_message("user",
+                                f"⚠️ TOOL DIVERSITY ALERT: {send_req_calls}/{total_calls} calls "
+                                f"({send_req_calls*100//total_calls}%) are send_request. "
+                                f"You MUST use automated scanners NOW.\n"
+                                f"UNUSED scanners: {', '.join(missing)}\n"
+                                f"Run nuclei_scan for CVE detection, sqlmap_test on login/search "
+                                f"endpoints, ffuf_directory_scan for hidden paths. "
+                                f"These tools find 10x more vulns than manual requests."
+                            )
+                            logger.info("Tool diversity alert: %d/%d send_request, scanners=%d",
+                                        send_req_calls, total_calls, scanner_calls)
+                except Exception:  # noqa: BLE001
+                    pass
+
+            # Periodic checkpoint for scan resume (every 10 iterations)
+            # BUG FIX: Only root agents save checkpoints — child agents were
+            # overwriting the root's checkpoint.json with their own smaller
+            # max_iterations (75% of parent), corrupting resume data.
+            is_root = not getattr(self.state, "parent_id", None)
+            if (
+                is_root
+                and self.state.iteration % 10 == 0
                 and hasattr(self.state, "save_checkpoint")
                 and tracer
                 and hasattr(tracer, "get_run_dir")
@@ -612,7 +698,8 @@ class BaseAgent(metaclass=AgentMeta):
             self.state.add_action(action)
             # Track tool usage on EnhancedAgentState when available
             if hasattr(self.state, "track_tool_usage"):
-                tool_name = action.get("tool_name") or action.get("name", "")
+                # BUG-03 FIX: parse_tool_invocations uses key "toolName", not "tool_name"
+                tool_name = action.get("toolName") or action.get("tool_name") or action.get("name", "")
                 if tool_name:
                     self.state.track_tool_usage(tool_name)
 
@@ -621,7 +708,7 @@ class BaseAgent(metaclass=AgentMeta):
                 import phantom.core.loop_detector as _ld_mod
                 ld = getattr(_ld_mod, "_global_detector", None)
                 if ld is not None:
-                    t_name = action.get("tool_name") or action.get("toolName") or action.get("name", "")
+                    t_name = action.get("toolName") or action.get("tool_name") or action.get("name", "")
                     t_args = action.get("args", {})
                     ld.record_tool_call(t_name, t_args)
             except ImportError:

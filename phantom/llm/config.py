@@ -21,9 +21,11 @@ class LLMConfig:
 
         self.timeout = timeout or int(Config.get("llm_timeout") or "300")
 
-        self.scan_mode = scan_mode if scan_mode in ["quick", "standard", "deep"] else "deep"
+        # BUG-01 FIX: Include all valid scan modes, not just quick/standard/deep
+        valid_modes = {"quick", "standard", "deep", "stealth", "api_only"}
+        self.scan_mode = scan_mode if scan_mode in valid_modes else "deep"
 
         # Temperature controls LLM creativity vs determinism.
         # 0.6 balances structured tool-calling with creative attack exploration.
         # Industry benchmarks for agentic tool-calling: optimal at 0.5-0.7.
-        self.temperature: float = temperature if temperature is not None else 0.6
+        self.temperature: float = temperature if temperature is not None else 0.4  # BUG-30 FIX: 0.4 for reliable tool-call formatting

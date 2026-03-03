@@ -58,8 +58,8 @@ class PhantomAgent(BaseAgent):
                 if self.scan_profile and hasattr(self.scan_profile, "max_iterations")
                 else 100
             )
-            # Budget per class = total iterations / 15 (min 6) — faster rotation
-            per_class = max(6, max_iter // 15)
+            # Budget per class = total iterations / 12 (min 8) — more breathing room
+            per_class = max(8, max_iter // 12)
             self._vuln_rotation = VulnClassTracker(max_iters_per_class=per_class)
         except Exception:
             self._vuln_rotation = None
@@ -142,17 +142,27 @@ class PhantomAgent(BaseAgent):
         # R5-12 FIX: Inject mandatory first actions for Juice Shop
         if getattr(self, "_juice_shop_detected", False):
             task_description += (
-                "\n\n--- MANDATORY FIRST ACTIONS (Juice Shop SPA) ---"
-                "\nDo NOT run katana alone — Juice Shop is an Angular SPA with 100+ API endpoints."
-                "\n1. GET /api-docs → Swagger spec with ALL REST endpoints"
-                "\n2. GET /rest/products/search?q=test → test SQLi with q=test'))--"
-                "\n3. POST /rest/user/login with {\"email\":\"' OR 1=1--\",\"password\":\"x\"} → SQLi"
-                "\n4. GET /ftp → directory listing (path traversal via %2500)"
-                "\n5. GET /api/Users → user list without auth (IDOR)"
-                "\n6. GET /rest/basket/1, /rest/basket/2 → IDOR on baskets"
-                "\n7. POST /api/Feedbacks → XSS, POST /profile → file upload"
-                "\n8. GET /metrics, /api/Quantitys → info disclosure"
-                "\n--- END FIRST ACTIONS ---"
+                "\n\n--- MANDATORY SCAN STRATEGY (Juice Shop SPA) ---"
+                "\nJuice Shop is an Angular SPA with 100+ API endpoints."
+                "\n"
+                "\nSTEP 1 — AUTOMATED SCANNERS (iterations 1-10):"
+                "\n  a) nuclei_scan against the target — finds known CVEs automatically"
+                "\n  b) katana_crawl with headless=True — discovers SPA routes & API endpoints"
+                "\n  c) nmap_scan — port scan and service detection"
+                "\n  d) ffuf_directory_scan with /usr/share/wordlists/dirb/common.txt"
+                "\n"
+                "\nSTEP 2 — TARGETED TOOL ATTACKS (iterations 11-30):"
+                "\n  a) sqlmap_test on /rest/user/login (POST, param=email)"
+                "\n  b) sqlmap_test on /rest/products/search (GET, param=q)"
+                "\n  c) ffuf_directory_scan with /usr/share/wordlists/dirbuster/directory-list-2.3-small.txt"
+                "\n  d) send_request: GET /api-docs, /ftp, /api/Users, /metrics, /api/Quantitys"
+                "\n"
+                "\nSTEP 3 — MANUAL EXPLOITATION (iterations 31+):"
+                "\n  Test IDOR (/rest/basket/1-5, /api/Users/N), JWT bypass, path traversal (/ftp/%2500),"
+                "\n  XSS (POST /api/Feedbacks, /api/Products), file upload (/profile), SSRF, business logic"
+                "\n"
+                "\nCRITICAL: Use nuclei_scan and sqlmap_test BEFORE send_request!"
+                "\n--- END STRATEGY ---"
             )
 
         # ── Inject scan profile constraints into task ──
@@ -171,6 +181,11 @@ class PhantomAgent(BaseAgent):
             priority_tools = profile.priority_tools if hasattr(profile, "priority_tools") else profile.get("priority_tools", [])
             if priority_tools:
                 task_description += f"\nPRIORITIZE these tools: {', '.join(priority_tools)}"
+
+            # BUG-19 FIX: Wire nuclei_severity from profile to task description
+            nuclei_sev = profile.nuclei_severity if hasattr(profile, "nuclei_severity") else profile.get("nuclei_severity", "")
+            if nuclei_sev and nuclei_sev != "all":
+                task_description += f"\nWhen running nuclei_scan, use severity='{nuclei_sev}'"
 
             enable_browser = profile.enable_browser if hasattr(profile, "enable_browser") else profile.get("enable_browser", True)
             if not enable_browser:

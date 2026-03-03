@@ -95,8 +95,8 @@ def nuclei_scan(
     raw_output = result.get("content", "")
     findings = _parse_nuclei_jsonl(raw_output)
 
-    # Cap findings list to avoid huge responses blowing up context (reduced 30→20 — BUG-04 FIX)
-    _MAX_FINDINGS = 20
+    # Cap findings list to avoid huge responses blowing up context
+    _MAX_FINDINGS = 40
     truncated = len(findings) > _MAX_FINDINGS
     if truncated:
         # Keep critical/high first, then truncate
