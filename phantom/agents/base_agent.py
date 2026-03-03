@@ -49,7 +49,7 @@ class AgentMeta(type):
 
 
 class BaseAgent(metaclass=AgentMeta):
-    max_iterations = 200  # M29 FIX: reduced from 300 to prevent runaway scans
+    max_iterations = 300  # v0.9.34: Match Strix (was 200, reduced from 300)
     agent_name: str = ""
     jinja_env: Environment
     default_llm_config: LLMConfig | None = None
@@ -197,41 +197,11 @@ class BaseAgent(metaclass=AgentMeta):
 
             self.state.increment_iteration()
 
-            # ── DESIGN-02: Deterministic scanner orders for first 6 iterations ──
-            # The LLM ignores "mandatory" instructions in the task description
-            # and defaults to send_request. Force scanner tools by injecting
-            # explicit orders right before the LLM call.
-            if self.state.iteration <= 6 and self.state.parent_id is None:
-                _scanner_orders = {
-                    1: ("You MUST call nuclei_scan as your FIRST tool. "
-                        "This is NOT optional. Run: nuclei_scan(target=<TARGET_URL>) "
-                        "to automatically discover known CVEs and vulnerabilities. "
-                        "Do NOT call send_request on iteration 1."),
-                    2: ("You MUST call nmap_scan as your SECOND tool. "
-                        "Run: nmap_scan(target=<TARGET_IP_OR_HOST>) with service detection. "
-                        "Do NOT call send_request yet."),
-                    3: ("You MUST call katana_crawl as your THIRD tool. "
-                        "Run: katana_crawl(target=<TARGET_URL>, headless=True) "
-                        "to discover all SPA routes and API endpoints. "
-                        "Do NOT call send_request yet."),
-                    4: ("You MUST call ffuf_directory_scan as your FOURTH tool. "
-                        "Run: ffuf_directory_scan(target=<TARGET_URL>, "
-                        "wordlist='/usr/share/wordlists/dirb/common.txt') "
-                        "to find hidden directories and files."),
-                    5: ("You MUST call sqlmap_test NOW on the login endpoint. "
-                        "Run: sqlmap_test(url='<TARGET>/rest/user/login', method='POST', "
-                        "data='email=test&password=test', level=3, risk=2) "
-                        "sqlmap finds SQLi automatically and is 10x faster than manual testing."),
-                    6: ("You MUST call sqlmap_test on a SECOND endpoint (search). "
-                        "Run: sqlmap_test(url='<TARGET>/rest/products/search?q=test', "
-                        "method='GET', level=3, risk=2) "
-                        "Also try nuclei_scan_cves for CVE-specific detection."),
-                }
-                order = _scanner_orders.get(self.state.iteration)
-                if order:
-                    self.state.add_message("user", f"🎯 MANDATORY TOOL ORDER (iteration {self.state.iteration}): {order}")
-
-            # BUG-04 FIX: Automatic phase transitions based on iteration progress
+            # ── v0.9.34: Lean phase transitions only (like Strix) ──
+            # Removed: scanner orders, scanner enforcement, tool diversity alerts,
+            # coverage updates, vuln-class rotation, stagnation detection.
+            # These injected 8+ control messages per iteration, drowning the LLM
+            # in contradictory instructions and consuming token budget.
             if hasattr(self.state, "set_phase") and hasattr(self.state, "current_phase"):
                 try:
                     from phantom.models.scan import ScanPhase
@@ -239,138 +209,27 @@ class BaseAgent(metaclass=AgentMeta):
                     findings_count = len(getattr(self.state, "findings_ledger", []))
                     current = self.state.current_phase
 
-                    # Early scanner enforcement: fires ONCE at iteration 10 only
-                    # Reduced from firing at 10,20,30 — too many control messages
-                    # drown out actual tool results and confuse the LLM.
-                    if self.state.iteration == 10 and hasattr(self.state, "tools_used"):
-                        tu = self.state.tools_used
-                        scanners_used = sum(tu.get(t, 0) for t in
-                                            ["nuclei_scan", "sqlmap_test", "katana_crawl",
-                                             "nmap_scan", "ffuf_directory_scan"])
-                        if scanners_used == 0:
-                            self.state.add_message("user",
-                                "🚨 SCANNER ALERT: You have NOT used any automated scanners "
-                                "in 10 iterations! Your NEXT action MUST be one of:\n"
-                                "1. nuclei_scan — finds known CVEs and misconfigurations\n"
-                                "2. sqlmap_test — finds SQL injection automatically\n"
-                                "3. katana_crawl — discovers all endpoints in SPAs\n"
-                                "These tools find 10x more vulns per iteration than manual requests. "
-                                "STOP using send_request and START using scanners NOW."
-                            )
-                            logger.info("Early scanner enforcement triggered at iteration 10")
-
-                    # RECON → EXPLOIT: after 15% of iterations OR when we have findings
-                    # BUG-07 FIX: 25% was too slow for quick mode (37 iterations of recon!).
-                    # 15% = ~22 iterations for quick mode, which is enough for katana+nmap+httpx.
-                    if current == ScanPhase.RECON and (pct >= 0.15 or findings_count >= 3):
+                    # RECON → EXPLOIT: after 10% of iterations OR when we have real findings
+                    if current == ScanPhase.RECON and (pct >= 0.10 or findings_count >= 3):
                         self.state.set_phase(ScanPhase.EXPLOIT)
                         logger.info("Phase transition: RECON → EXPLOIT (iter=%d, findings=%d)",
                                     self.state.iteration, findings_count)
-                        # R5-05 FIX: Notify LLM about phase change so it stops recon
-                        self.state.add_message("user",
-                            f"🔄 PHASE TRANSITION: RECON → EXPLOIT\n"
-                            f"You have used {self.state.iteration}/{self.state.max_iterations} iterations.\n"
-                            f"STOP all reconnaissance. START exploiting discovered endpoints NOW.\n"
-                            f"Run: sqlmap_test, nuclei_scan, ffuf with attack wordlists, "
-                            f"send_request with injection payloads.\n"
-                            f"Test EVERY vuln class: SQLi, XSS, IDOR, Auth/JWT, path traversal, SSRF."
-                        )
 
-                    # v0.9.33 HARD FALLBACK: If still RECON at 20%, force transition
-                    # Scan _3630 was stuck in RECON at iteration 40 (27%).
-                    elif current == ScanPhase.RECON and pct >= 0.20:
-                        self.state.set_phase(ScanPhase.EXPLOIT)
-                        logger.warning(
-                            "HARD FALLBACK: Still RECON at %.0f%% — force EXPLOIT (iter=%d)",
-                            pct * 100, self.state.iteration,
-                        )
-                        self.state.add_message("user",
-                            f"🚨 CRITICAL: You are STILL in RECON at iteration "
-                            f"{self.state.iteration}/{self.state.max_iterations}!\n"
-                            f"FORCED TRANSITION → EXPLOIT phase. "
-                            f"NO MORE reconnaissance allowed.\n"
-                            f"Run security scanners NOW: nuclei_scan, sqlmap_test, "
-                            f"ffuf_directory_scan. Test: SQLi, XSS, IDOR, Auth, SSRF."
-                        )
-
-                    # EXPLOIT → REPORT: after 90% of iterations
-                    # BUG-FIX: Was 75% — wasted 38 iterations in REPORT phase where
-                    # the LLM just bounces off finish_scan gate. 90% = only ~15
-                    # iterations for wrap-up, maximizing exploitation time.
-                    elif current == ScanPhase.EXPLOIT and pct >= 0.90:
+                    # EXPLOIT → REPORT: after 95% of iterations
+                    elif current == ScanPhase.EXPLOIT and pct >= 0.95:
                         self.state.set_phase(ScanPhase.REPORT)
                         logger.info("Phase transition: EXPLOIT → REPORT (iter=%d)",
                                     self.state.iteration)
                         self.state.add_message("user",
-                            f"🔄 PHASE TRANSITION: EXPLOIT → REPORT\n"
-                            f"You have used {self.state.iteration}/{self.state.max_iterations} iterations.\n"
-                            f"STOP testing. Call finish_scan NOW with a complete report."
+                            f"You have used {self.state.iteration}/{self.state.max_iterations} iterations. "
+                            f"Call finish_scan NOW with a complete report."
                         )
                 except ImportError:
-                    logger.debug("ScanPhase import failed — phase transitions disabled")
+                    pass
                 except Exception as exc:  # noqa: BLE001
-                    logger.warning("Phase transition error (NOT swallowed): %s", exc)
+                    logger.debug("Phase transition error: %s", exc)
 
-            # ── Vuln-class rotation enforcement (root agent only) ──
-            if (
-                self.state.parent_id is None
-                and hasattr(self, "_vuln_rotation")
-                and self._vuln_rotation is not None
-            ):
-                try:
-                    rotation_msg = self._vuln_rotation.tick()
-                    if rotation_msg:
-                        self.state.add_message("user", rotation_msg)
-                        logger.info("Vuln rotation: %s", rotation_msg[:120])
-                    # Periodic diversity check every 15 iterations after recon phase
-                    # Reduced from 8 — too many control messages drown out tool results
-                    elif self.state.iteration >= 15 and self.state.iteration % 15 == 0:
-                        div_msg = self._vuln_rotation.force_check(self.state.iteration)
-                        if div_msg:
-                            self.state.add_message("user", div_msg)
-                            logger.info("Vuln diversity check: %s", div_msg[:120])
-                except Exception:  # noqa: BLE001
-                    pass
-
-            # ── Tool diversity enforcement ──
-            # If the agent has been over-relying on send_request and hasn't
-            # used automated scanners, inject a corrective message.
-            # Fires every 20 iterations (was 10 — too spammy)
-            if (
-                self.state.iteration >= 15
-                and self.state.iteration % 20 == 0
-                and hasattr(self.state, "tools_used")
-            ):
-                try:
-                    tu = self.state.tools_used
-                    total_calls = sum(tu.values()) if tu else 0
-                    send_req_calls = tu.get("send_request", 0) + tu.get("repeat_request", 0)
-                    scanner_tools = {"nuclei_scan", "sqlmap_test", "ffuf_directory_scan",
-                                     "katana_crawl", "nmap_scan", "httpx_probe"}
-                    scanner_calls = sum(tu.get(t, 0) for t in scanner_tools)
-
-                    if total_calls >= 10 and send_req_calls / total_calls > 0.6 and scanner_calls < 3:
-                        missing = [t for t in ["nuclei_scan", "sqlmap_test", "ffuf_directory_scan",
-                                               "katana_crawl"] if tu.get(t, 0) == 0]
-                        if missing:
-                            self.state.add_message("user",
-                                f"⚠️ TOOL DIVERSITY ALERT: {send_req_calls}/{total_calls} calls "
-                                f"({send_req_calls*100//total_calls}%) are send_request. "
-                                f"You MUST use automated scanners NOW.\n"
-                                f"UNUSED scanners: {', '.join(missing)}\n"
-                                f"Run nuclei_scan for CVE detection, sqlmap_test on login/search "
-                                f"endpoints, ffuf_directory_scan for hidden paths. "
-                                f"These tools find 10x more vulns than manual requests."
-                            )
-                            logger.info("Tool diversity alert: %d/%d send_request, scanners=%d",
-                                        send_req_calls, total_calls, scanner_calls)
-                except Exception:  # noqa: BLE001
-                    pass
-
-            # Periodic checkpoint for scan resume (every 10 iterations)
-            # BUG FIX: Only root agents save checkpoints — child agents were
-            # overwriting the root's checkpoint.json with their own smaller
-            # max_iterations (75% of parent), corrupting resume data.
+            # Periodic checkpoint for scan resume (every 10 iterations, root agent only)
             is_root = not getattr(self.state, "parent_id", None)
             if (
                 is_root
@@ -383,54 +242,6 @@ class BaseAgent(metaclass=AgentMeta):
                     self.state.save_checkpoint(tracer.get_run_dir())
                 except Exception as e:
                     logger.warning("Checkpoint save failed: %s", e)
-
-            # P2-FIX6: Coverage-based stopping signals
-            # Every 10 iterations, compute coverage % and inject advisory if plateauing
-            if (
-                self.state.iteration % 10 == 0
-                and self.state.iteration >= 20
-                and hasattr(self.state, "endpoints")
-                and hasattr(self.state, "tested_endpoints")
-            ):
-                try:
-                    discovered = len(self.state.endpoints)
-                    tested = len(self.state.tested_endpoints)
-                    # BUG-08 FIX: Use findings_ledger count as vuln proxy
-                    # (vulnerabilities dict is often empty due to subagent state isolation)
-                    vuln_count = max(
-                        len(getattr(self.state, "vulnerabilities", {})),
-                        sum(1 for f in getattr(self.state, "findings_ledger", [])
-                            if "[vuln" in f.lower()),
-                    )
-                    if discovered > 0:
-                        coverage_pct = (tested / discovered) * 100
-                        if coverage_pct >= 80:
-                            if vuln_count >= 30:
-                                advice = ("Coverage and vuln count are HIGH. "
-                                          "Consider verifying existing findings and finishing.")
-                            else:
-                                advice = (
-                                    f"Coverage is high but only {vuln_count} vulns found. "
-                                    "DO NOT finish yet — switch to UNTESTED vulnerability classes "
-                                    "(try XSS, SSRF, JWT, business logic, file upload). "
-                                    "Create subagents for parallel testing if you haven't already."
-                                )
-                            self.state.add_advisory(
-                                f"📊 COVERAGE UPDATE: {tested}/{discovered} endpoints tested "
-                                f"({coverage_pct:.0f}% coverage), {vuln_count} vulnerabilities found.\n"
-                                f"{advice}",
-                                ttl=3,
-                            )
-                        elif self.state.iteration >= 40 and coverage_pct < 30:
-                            self.state.add_advisory(
-                                f"📊 COVERAGE UPDATE: {tested}/{discovered} endpoints tested "
-                                f"({coverage_pct:.0f}% coverage), {vuln_count} vulnerabilities found.\n"
-                                "Coverage is LOW. Prioritize testing untested endpoints "
-                                "rather than re-testing the same ones.",
-                                ttl=3,
-                            )
-                except Exception:  # noqa: BLE001
-                    pass
 
             if (
                 self.state.is_approaching_max_iterations()
@@ -464,35 +275,6 @@ class BaseAgent(metaclass=AgentMeta):
                 self._current_task = iteration_task
                 should_finish = await iteration_task
                 self._current_task = None
-
-                # P1-FIX4: Wire stagnation detector — record findings count each iteration
-                # so the loop detector can detect when no new vulns are being found.
-                # BUG-08 FIX: Use findings_ledger count (always populated) instead of
-                # vulnerabilities dict (empty due to subagent state isolation BUG-05).
-                try:
-                    import phantom.core.loop_detector as _ld_stag
-                    ld = getattr(_ld_stag, "_global_detector", None)
-                    if ld is not None:
-                        # Prefer findings_ledger (always has data) over vulnerabilities (often empty)
-                        findings_count = len(getattr(self.state, "findings_ledger", []))
-                        vuln_count = len(getattr(self.state, "vulnerabilities", {}))
-                        effective_count = max(findings_count, vuln_count)
-                        stag_result = ld.record_findings_count(effective_count)
-                        if stag_result.is_loop:
-                            logger.warning(
-                                "Stagnation detected: %s", stag_result.details,
-                            )
-                            self.state.add_advisory(
-                                f"\u26a0\ufe0f STAGNATION: {stag_result.details}\n"
-                                "No new vulnerabilities found in recent iterations.\n"
-                                "Consider:\n"
-                                "- Switching to a completely different attack vector\n"
-                                "- Testing different endpoints or parameters\n"
-                                "- If you've tested all reasonable vectors, use finish_scan",
-                                ttl=2,
-                            )
-                except (ImportError, AttributeError):
-                    pass
 
                 if should_finish:
                     if self.non_interactive:

@@ -93,8 +93,8 @@ PROFILES: dict[str, ScanProfile] = {
     # ------------------------------------------------------------------
     ProfileName.quick: ScanProfile(
         name="quick",
-        description="Time-boxed rapid assessment (~45 min). Broad vuln-class coverage.",
-        max_iterations=150,
+        description="Time-boxed rapid assessment (~60 min). Broad vuln-class coverage.",
+        max_iterations=300,
         sandbox_timeout_s=120,
         reasoning_effort="high",
         priority_tools=[

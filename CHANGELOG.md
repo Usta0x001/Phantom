@@ -2,6 +2,53 @@
 
 All notable changes to Phantom will be documented in this file.
 
+## [0.9.34] - 2026-03-05
+
+### Return to Strix Philosophy — Remove Harmful Orchestration Bloat
+
+Deep comparative audit of Strix vs Phantom revealed that 3000+ lines of "improvements" 
+collectively made Phantom WORSE at vulnerability discovery. Strix (the base system) finds 
+dozens of bugs on OWASP Juice Shop; Phantom with all its added complexity found only 2. 
+This release strips harmful additions while keeping genuinely helpful ones.
+
+#### Root Cause Analysis (7 root causes identified)
+1. **Context window pollution** — 8+ control messages injected per iteration drowning the LLM
+2. **Iteration budget halved** — Quick profile had 150 (Strix uses 300)
+3. **Contradictory scanning strategies** — 4 competing strategy sections in prompt
+4. **Shallow-testing prompts** — "Move on after 3-4 attempts" vs Strix's "Be relentless"
+5. **Tool firewall** — Blocked browser_action/python_action in first 8 iterations
+6. **Low temperature (0.4)** — Killed creative exploitation; Strix uses provider default
+7. **Aggressive finish gates** — 40% iteration minimum + 4 vuln classes + 3 scanner types
+
+#### Changes Applied (10 fixes)
+
+- **System prompt rewritten** — Replaced "INTELLIGENT SCANNING STRATEGY" with Strix's 
+  "AGGRESSIVE SCANNING MANDATE" (GO SUPER HARD, 2000+ steps, UNLEASH FULL CAPABILITY). 
+  Replaced rigid MANDATORY PHASES (25/50/25%) with lean WORKFLOW GUIDANCE.
+- **Temperature default removed** — No longer hardcodes 0.4; uses provider default (~0.7-1.0)
+  like Strix. Conditionally omits temperature from API calls when None.
+- **max_iterations restored to 300** — Quick profile 150→300, base_agent default 200→300.
+- **VulnClassTracker disabled** — Was forcing rotation every 10 iterations, abandoning 
+  promising attack vectors. Strix doesn't have one.
+- **Tool firewall removed** — v0.9.33 addition that blocked browser/python tools early.
+- **Control message injection gutted** — Removed ~200 lines: scanner orders (iter 1-6), 
+  scanner enforcement (iter 10), verbose phase messages, diversity alerts, coverage updates, 
+  stagnation detector. Kept only lean phase transitions.
+- **Finish gates dramatically lowered** — From MIN_ITERATIONS=120/MIN_TOOL_CALLS=60/4 vuln 
+  classes/3 scanners → MIN_ITERATIONS=10/MIN_TOOL_CALLS=8. AUTO-002 and AUTO-003 removed.
+- **MIN_RECENT_MESSAGES 12→15** — Matches Strix, preserves more context for exploit chains.
+- **Stagnation detector removed** — Too aggressive at 15 iterations.
+- **Bug bounty mindset in prompt** — "If it wouldn't earn $500+, keep searching."
+
+#### Kept from Phantom (genuinely helpful additions)
+- Findings ledger (persistent vulnerability storage)
+- Auto-report pipeline for scanner findings
+- CDATA wrapping in tool results
+- Provider registry with model presets
+- Post-scan enrichment (MITRE, compliance mapping)
+- "ANY agent can report" workflow
+- Wordlist guidance for fuzzing tools
+
 ## [0.9.25] - 2026-03-03
 
 ### Deep System Audit — 13 Critical Architectural Fixes

@@ -50,20 +50,11 @@ class PhantomAgent(BaseAgent):
         # (Juice Shop is an Angular SPA — katana alone finds < 5 URLs)
         self._juice_shop_detected = getattr(self, "_juice_shop_detected", False)
 
-        # ── Initialize vuln-class rotation engine for root agent ──
-        try:
-            from phantom.core.vuln_class_rotation import VulnClassTracker
-            max_iter = (
-                self.scan_profile.max_iterations
-                if self.scan_profile and hasattr(self.scan_profile, "max_iterations")
-                else 100
-            )
-            # Budget per class = total iterations / 8 (min 10) — enough to discover, exploit, and report
-            # Was //12 (=12 iters) — not enough to run sqlmap + verify + create_vulnerability_report
-            per_class = max(10, max_iter // 8)
-            self._vuln_rotation = VulnClassTracker(max_iters_per_class=per_class)
-        except Exception:
-            self._vuln_rotation = None
+        # ── v0.9.34: VulnClassTracker DISABLED ──
+        # The rotation engine forces abandoning promising attack vectors after
+        # just 10 tool calls (too shallow). Strix doesn't have this and finds
+        # more vulns. The LLM naturally rotates when it exhausts a vector.
+        self._vuln_rotation = None
 
         # Initialize EnhancedAgentState scan tracking if available
         if isinstance(self.state, EnhancedAgentState) and targets:

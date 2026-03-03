@@ -247,8 +247,11 @@ class LLM:
             "messages": messages,
             "timeout": self.config.timeout,
             "stream_options": {"include_usage": True},
-            "temperature": self.config.temperature,
         }
+        # v0.9.34: Only set temperature if explicitly configured.
+        # When None, use the provider's default (like Strix).
+        if self.config.temperature is not None:
+            args["temperature"] = self.config.temperature
 
         # L2-FIX: Wire max_tokens from provider registry into the API call.
         # Without this, the LLM response length is unconstrained (model default),

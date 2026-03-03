@@ -439,36 +439,6 @@ async def _execute_single_tool(
     execution_id = None
     should_agent_finish = False
 
-    # ── v0.9.33: Tool firewall — block manual tools in first 8 iterations ──
-    # Root cause RC4: LLM wastes 50%+ of calls on browser_action/python_action
-    # instead of using automated scanners.  Hard-block these in early iterations
-    # for ROOT agents only (sub-agents can use them freely).
-    _FIREWALL_BLOCKED = {"browser_action", "python_action"}
-    _FIREWALL_ITERATIONS = 8
-    if (
-        tool_name in _FIREWALL_BLOCKED
-        and agent_state is not None
-        and getattr(agent_state, "parent_id", "not_none") is None  # root agent only
-        and hasattr(agent_state, "iteration")
-        and agent_state.iteration <= _FIREWALL_ITERATIONS
-    ):
-        firewall_msg = (
-            f"🚫 TOOL BLOCKED: '{tool_name}' is not available in the first "
-            f"{_FIREWALL_ITERATIONS} iterations. Use automated security scanners instead:\n"
-            f"  • nmap_scan — port discovery\n"
-            f"  • katana_crawl — endpoint discovery\n"
-            f"  • nuclei_scan — CVE and misconfig detection\n"
-            f"  • sqlmap_test — SQL injection testing\n"
-            f"  • ffuf_directory_scan — directory/file brute-force\n"
-            f"These find 10x more vulnerabilities per iteration than manual browsing."
-        )
-        _logger.info("Tool firewall blocked %s at iteration %d", tool_name, agent_state.iteration)
-        observation_xml = (
-            f"<tool_result>\n<tool_name>{_xml_escape(tool_name)}</tool_name>\n"
-            f"<result><![CDATA[{firewall_msg}]]></result>\n</tool_result>"
-        )
-        return observation_xml, [], False
-
     if tracer:
         execution_id = tracer.log_tool_execution_start(agent_id, tool_name, args)
 

@@ -187,18 +187,16 @@ class TestReconFirstEnforcement:
 # ── System prompt improvements ──
 
 class TestSystemPromptImprovements:
-    """Test that system prompt includes iteration budget discipline."""
+    """Test that system prompt includes scanning mandate and workflow guidance."""
 
     def test_prompt_has_budget_discipline(self):
-        """System prompt includes ITERATION BUDGET DISCIPLINE section."""
+        """System prompt includes AGGRESSIVE SCANNING MANDATE section (v0.9.34)."""
         prompt_path = Path(__file__).parent.parent / "phantom" / "agents" / "PhantomAgent" / "system_prompt.jinja"
         content = prompt_path.read_text()
 
-        assert "ITERATION BUDGET DISCIPLINE" in content
-        assert "update_todo" in content
-        assert "think tool" in content  # relaxed: exact phrasing changed in v0.9.28
-        assert "view_agent_graph" in content
-        assert "browser_action for API" in content
+        assert "AGGRESSIVE SCANNING MANDATE" in content
+        assert "think" in content
+        assert "WORKFLOW GUIDANCE" in content
 
 
 # ── Integration: scan coverage analysis ──
