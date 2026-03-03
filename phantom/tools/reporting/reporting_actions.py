@@ -50,7 +50,6 @@ def _validate_required_fields(**kwargs: str | None) -> list[str]:
         "target": "Target cannot be empty",
         "technical_analysis": "Technical analysis cannot be empty",
         "poc_description": "PoC description cannot be empty",
-        "poc_script_code": "PoC script/code is REQUIRED - provide the actual exploit/payload",
         "remediation_steps": "Remediation steps cannot be empty",
     }
 
@@ -58,6 +57,17 @@ def _validate_required_fields(**kwargs: str | None) -> list[str]:
         value = kwargs.get(field_name)
         if not value or not str(value).strip():
             validation_errors.append(error_msg)
+
+    # poc_script_code is strongly recommended but not blocking — a good
+    # poc_description is sufficient.  This avoids rejecting real findings
+    # because the LLM couldn't generate a perfect exploit script.
+    poc_code = kwargs.get("poc_script_code")
+    if not poc_code or not str(poc_code).strip():
+        poc_desc = kwargs.get("poc_description", "")
+        if not poc_desc or len(str(poc_desc).strip()) < 20:
+            validation_errors.append(
+                "Either poc_script_code or a detailed poc_description (20+ chars) is required"
+            )
 
     return validation_errors
 

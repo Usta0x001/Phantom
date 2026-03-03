@@ -25,10 +25,12 @@ QUICK_MODE_TOOLS: set[str] = {
     # Findings persistence
     "record_finding", "get_findings_ledger",
     # Proxy / HTTP
-    "send_request", "repeat_request", "list_requests", "list_sitemap",
-    # Security scanners (one per category)
-    "nuclei_scan", "sqlmap_test", "ffuf_directory_scan",
-    "katana_crawl", "httpx_probe", "nmap_scan",
+    "send_request", "repeat_request", "list_requests", "list_sitemap", "view_request",
+    # Security scanners (full set — each finds different vuln types)
+    "nuclei_scan", "nuclei_scan_cves", "nuclei_scan_misconfigs",
+    "sqlmap_test", "sqlmap_forms",
+    "ffuf_directory_scan", "katana_crawl", "httpx_probe",
+    "nmap_scan", "nmap_vuln_scan",
     # Exploitation & scripting
     "python_action", "terminal_execute", "browser_action",
     # Reporting

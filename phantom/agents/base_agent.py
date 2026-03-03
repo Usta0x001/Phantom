@@ -197,11 +197,11 @@ class BaseAgent(metaclass=AgentMeta):
 
             self.state.increment_iteration()
 
-            # ── DESIGN-02: Deterministic scanner orders for first 4 iterations ──
+            # ── DESIGN-02: Deterministic scanner orders for first 6 iterations ──
             # The LLM ignores "mandatory" instructions in the task description
             # and defaults to send_request. Force scanner tools by injecting
             # explicit orders right before the LLM call.
-            if self.state.iteration <= 4 and self.state.parent_id is None:
+            if self.state.iteration <= 6 and self.state.parent_id is None:
                 _scanner_orders = {
                     1: ("You MUST call nuclei_scan as your FIRST tool. "
                         "This is NOT optional. Run: nuclei_scan(target=<TARGET_URL>) "
@@ -218,6 +218,14 @@ class BaseAgent(metaclass=AgentMeta):
                         "Run: ffuf_directory_scan(target=<TARGET_URL>, "
                         "wordlist='/usr/share/wordlists/dirb/common.txt') "
                         "to find hidden directories and files."),
+                    5: ("You MUST call sqlmap_test NOW on the login endpoint. "
+                        "Run: sqlmap_test(url='<TARGET>/rest/user/login', method='POST', "
+                        "data='email=test&password=test', level=3, risk=2) "
+                        "sqlmap finds SQLi automatically and is 10x faster than manual testing."),
+                    6: ("You MUST call sqlmap_test on a SECOND endpoint (search). "
+                        "Run: sqlmap_test(url='<TARGET>/rest/products/search?q=test', "
+                        "method='GET', level=3, risk=2) "
+                        "Also try nuclei_scan_cves for CVE-specific detection."),
                 }
                 order = _scanner_orders.get(self.state.iteration)
                 if order:
@@ -231,9 +239,10 @@ class BaseAgent(metaclass=AgentMeta):
                     findings_count = len(getattr(self.state, "findings_ledger", []))
                     current = self.state.current_phase
 
-                    # Early scanner enforcement: fires at iterations 10, 20, 30
-                    # BUG-23 FIX: Fire multiple times, not just once at iteration 10.
-                    if self.state.iteration in (10, 20, 30) and hasattr(self.state, "tools_used"):
+                    # Early scanner enforcement: fires ONCE at iteration 10 only
+                    # Reduced from firing at 10,20,30 — too many control messages
+                    # drown out actual tool results and confuse the LLM.
+                    if self.state.iteration == 10 and hasattr(self.state, "tools_used"):
                         tu = self.state.tools_used
                         scanners_used = sum(tu.get(t, 0) for t in
                                             ["nuclei_scan", "sqlmap_test", "katana_crawl",
@@ -267,8 +276,11 @@ class BaseAgent(metaclass=AgentMeta):
                             f"Test EVERY vuln class: SQLi, XSS, IDOR, Auth/JWT, path traversal, SSRF."
                         )
 
-                    # EXPLOIT → REPORT: after 75% of iterations
-                    elif current == ScanPhase.EXPLOIT and pct >= 0.75:
+                    # EXPLOIT → REPORT: after 90% of iterations
+                    # BUG-FIX: Was 75% — wasted 38 iterations in REPORT phase where
+                    # the LLM just bounces off finish_scan gate. 90% = only ~15
+                    # iterations for wrap-up, maximizing exploitation time.
+                    elif current == ScanPhase.EXPLOIT and pct >= 0.90:
                         self.state.set_phase(ScanPhase.REPORT)
                         logger.info("Phase transition: EXPLOIT → REPORT (iter=%d)",
                                     self.state.iteration)
@@ -291,8 +303,9 @@ class BaseAgent(metaclass=AgentMeta):
                     if rotation_msg:
                         self.state.add_message("user", rotation_msg)
                         logger.info("Vuln rotation: %s", rotation_msg[:120])
-                    # Periodic diversity check every 8 iterations after recon phase
-                    elif self.state.iteration >= 15 and self.state.iteration % 8 == 0:
+                    # Periodic diversity check every 15 iterations after recon phase
+                    # Reduced from 8 — too many control messages drown out tool results
+                    elif self.state.iteration >= 15 and self.state.iteration % 15 == 0:
                         div_msg = self._vuln_rotation.force_check(self.state.iteration)
                         if div_msg:
                             self.state.add_message("user", div_msg)
@@ -303,9 +316,10 @@ class BaseAgent(metaclass=AgentMeta):
             # ── Tool diversity enforcement ──
             # If the agent has been over-relying on send_request and hasn't
             # used automated scanners, inject a corrective message.
+            # Fires every 20 iterations (was 10 — too spammy)
             if (
                 self.state.iteration >= 15
-                and self.state.iteration % 10 == 0
+                and self.state.iteration % 20 == 0
                 and hasattr(self.state, "tools_used")
             ):
                 try:

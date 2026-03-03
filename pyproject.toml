@@ -48,7 +48,7 @@ phantom = "phantom.interface.cli_app:cli_main"
 [tool.poetry.dependencies]
 python = "^3.12"
 # Core CLI dependencies
-litellm = { version = "~1.81.1", extras = ["proxy"] }
+litellm = "~1.81.1"
 tenacity = "^9.0.0"
 pydantic = {extras = ["email"], version = "^2.11.3"}
 rich = "^13.9"

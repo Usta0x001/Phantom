@@ -425,9 +425,10 @@ class ProxyManager:
                 if response.status_code in (200, 201) and method.upper() in ("POST", "PUT"):
                     _capture_auth_from_response(dict(response.headers), body_content)
 
-                # Body truncation: 3K for HTML (boilerplate-heavy), 5K for other content
+                # Body truncation: 8K for HTML (need to see XSS reflections, SQL errors),
+                # 10K for JSON/API responses (need full data for IDOR/auth analysis)
                 content_type = response.headers.get("content-type", "")
-                body_limit = 3000 if "text/html" in content_type else 5000
+                body_limit = 8000 if "text/html" in content_type else 10000
                 if len(body_content) > body_limit:
                     body_content = body_content[:body_limit] + "\n... [truncated]"
 

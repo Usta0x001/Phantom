@@ -1,0 +1,184 @@
+# Phantom Sandbox — Optimized Build (~6-7GB instead of 14GB)
+# Removes tools the AI agent never calls: ZAP, Trivy, Semgrep, Trufflehog, Caido, Wapiti
+# Uses multi-stage build to discard Go build cache
+# ============================================================================
+
+# Stage 1: Build Go tools in a temp layer (discards 2GB+ of build cache)
+FROM golang:1.22-bookworm AS go-builder
+
+RUN go install -v github.com/projectdiscovery/httpx/cmd/httpx@v1.6.9 && \
+    go install -v github.com/projectdiscovery/katana/cmd/katana@v1.1.2 && \
+    go install -v github.com/projectdiscovery/cvemap/cmd/cvemap@v0.0.7 && \
+    go install -v github.com/jaeles-project/gospider@v1.1.6 && \
+    go install -v github.com/projectdiscovery/interactsh/cmd/interactsh-client@v1.2.2
+
+# ============================================================================
+# Stage 2: Final image — Kali Rolling with only essential tools
+FROM kalilinux/kali-rolling:latest
+
+LABEL description="Phantom AI Agent Penetration Testing Sandbox (optimized)"
+
+# Single apt layer to minimize image layers
+RUN apt-get update && \
+    apt-get install -y kali-archive-keyring sudo && \
+    apt-get update && \
+    apt-get install -y --no-install-recommends \
+    # Core utilities
+    wget curl git vim nano unzip tar jq less procps \
+    ca-certificates gnupg lsb-release \
+    # Build essentials (needed for some pip packages)
+    build-essential gcc libc6-dev pkg-config libpcap-dev libssl-dev \
+    # Python
+    python3 python3-pip python3-dev python3-venv python3-setuptools \
+    # Networking
+    net-tools dnsutils whois iproute2 iputils-ping netcat-traditional \
+    # Security tools the agent ACTUALLY uses
+    nmap ncat ndiff \
+    sqlmap nuclei subfinder naabu ffuf \
+    # Node.js (for retire.js)
+    nodejs npm pipx \
+    # Capabilities
+    libcap2-bin \
+    # Playwright dependencies (headless Chromium)
+    libnss3 libnspr4 libdbus-1-3 libatk1.0-0 libatk-bridge2.0-0 libcups2 \
+    libdrm2 libatspi2.0-0 libxcomposite1 libxdamage1 libxfixes3 libxrandr2 \
+    libgbm1 libxkbcommon0 libpango-1.0-0 libcairo2 libasound2t64 \
+    fonts-unifont fonts-noto-color-emoji fonts-freefont-ttf fonts-dejavu-core \
+    libnss3-tools && \
+    # Clean up apt cache in the same layer (saves ~300MB)
+    apt-get autoremove -y && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
+
+# Create pentester user with limited sudo
+RUN useradd -m -s /bin/bash pentester && \
+    touch /home/pentester/.hushlogin && \
+    echo "pentester ALL=(root) NOPASSWD: /usr/bin/nmap, /usr/bin/ncat, /usr/sbin/arp, /sbin/ip" >> /etc/sudoers.d/pentester && \
+    chmod 0440 /etc/sudoers.d/pentester
+
+# Create directory structure
+RUN mkdir -p /home/pentester/configs \
+             /home/pentester/wordlists \
+             /home/pentester/output \
+             /home/pentester/scripts \
+             /home/pentester/tools \
+             /app/runtime /app/tools /app/certs && \
+    chown -R pentester:pentester /app/certs /home/pentester/tools
+
+# Set nmap capabilities
+RUN setcap cap_net_raw+eip $(which nmap)
+
+# Copy pre-built Go binaries from builder stage (no 2GB Go cache!)
+COPY --from=go-builder /root/go/bin/httpx /usr/local/bin/
+COPY --from=go-builder /root/go/bin/katana /usr/local/bin/
+COPY --from=go-builder /root/go/bin/cvemap /usr/local/bin/
+COPY --from=go-builder /root/go/bin/gospider /usr/local/bin/
+COPY --from=go-builder /root/go/bin/interactsh-client /usr/local/bin/
+
+# Generate TLS certs for proxy
+USER pentester
+RUN openssl ecparam -name prime256v1 -genkey -noout -out /app/certs/ca.key && \
+    openssl req -x509 -new -key /app/certs/ca.key \
+    -out /app/certs/ca.crt \
+    -days 3650 \
+    -subj "/C=US/ST=CA/O=Security Testing/CN=Testing Root CA" \
+    -addext "basicConstraints=critical,CA:TRUE" \
+    -addext "keyUsage=critical,digitalSignature,keyEncipherment,keyCertSign" && \
+    openssl pkcs12 -export \
+    -out /app/certs/ca.p12 \
+    -inkey /app/certs/ca.key \
+    -in /app/certs/ca.crt \
+    -passout pass:"" \
+    -name "Testing Root CA" && \
+    chmod 644 /app/certs/ca.crt && \
+    chmod 600 /app/certs/ca.key /app/certs/ca.p12
+
+USER root
+RUN cp /app/certs/ca.crt /usr/local/share/ca-certificates/ca.crt && \
+    update-ca-certificates
+
+# Install Poetry
+RUN curl -sSL https://install.python-poetry.org | POETRY_HOME=/opt/poetry python3 - && \
+    ln -s /opt/poetry/bin/poetry /usr/local/bin/poetry && \
+    chmod +x /usr/local/bin/poetry && \
+    python3 -m venv /app/venv && \
+    chown -R pentester:pentester /app/venv /opt/poetry
+
+# Nuclei templates
+USER pentester
+RUN nuclei -update-templates
+
+# Python security tools via pipx (only the ones the agent uses)
+RUN pipx install arjun && \
+    pipx install dirsearch && \
+    pipx inject dirsearch setuptools && \
+    pipx install wafw00f
+
+# NPM tools (only retire.js — agent actually uses it)
+ENV NPM_CONFIG_PREFIX=/home/pentester/.npm-global
+RUN mkdir -p /home/pentester/.npm-global && \
+    npm install -g retire@5.0.0
+
+# JWT tool (agent uses it for JWT attacks)
+WORKDIR /home/pentester/tools
+RUN git clone --depth 1 https://github.com/ticarpi/jwt_tool.git && \
+    chmod +x jwt_tool/jwt_tool.py
+
+# JS analysis tools (lightweight, used by agent)
+RUN git clone --depth 1 https://github.com/aravind0x7/JS-Snooper.git && \
+    chmod +x JS-Snooper/js_snooper.sh
+
+USER root
+
+# Environment
+ENV PATH="/home/pentester/go/bin:/home/pentester/.local/bin:/home/pentester/.npm-global/bin:/app/venv/bin:$PATH"
+ENV VIRTUAL_ENV="/app/venv"
+ENV POETRY_HOME="/opt/poetry"
+ENV PHANTOM_SANDBOX_MODE=true
+ENV PYTHONPATH=/app
+ENV REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
+ENV SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
+
+WORKDIR /app
+
+# Copy and install Python dependencies
+RUN mkdir -p /workspace && chown -R pentester:pentester /workspace /app
+COPY --chown=pentester:pentester pyproject.toml poetry.lock ./
+
+USER pentester
+RUN poetry lock && poetry install --no-root --without dev --extras sandbox
+RUN poetry run playwright install chromium
+
+# Install jwt_tool requirements
+RUN /app/venv/bin/pip install -r /home/pentester/tools/jwt_tool/requirements.txt && \
+    ln -s /home/pentester/tools/jwt_tool/jwt_tool.py /home/pentester/.local/bin/jwt_tool
+
+RUN echo "# Phantom Sandbox (optimized)" > README.md
+
+# Copy phantom source code (only what the sandbox needs)
+COPY phantom/__init__.py phantom/
+COPY phantom/config/ /app/phantom/config/
+COPY phantom/utils/ /app/phantom/utils/
+COPY phantom/telemetry/ /app/phantom/telemetry/
+COPY phantom/runtime/tool_server.py phantom/runtime/__init__.py phantom/runtime/runtime.py /app/phantom/runtime/
+COPY phantom/tools/__init__.py phantom/tools/registry.py phantom/tools/executor.py phantom/tools/argument_parser.py phantom/tools/context.py /app/phantom/tools/
+COPY phantom/tools/browser/ /app/phantom/tools/browser/
+COPY phantom/tools/file_edit/ /app/phantom/tools/file_edit/
+COPY phantom/tools/notes/ /app/phantom/tools/notes/
+COPY phantom/tools/python/ /app/phantom/tools/python/
+COPY phantom/tools/terminal/ /app/phantom/tools/terminal/
+COPY phantom/tools/proxy/ /app/phantom/tools/proxy/
+COPY phantom/tools/security/ /app/phantom/tools/security/
+
+# Shell PATH
+RUN echo 'export PATH="/home/pentester/go/bin:/home/pentester/.local/bin:/home/pentester/.npm-global/bin:$PATH"' >> /home/pentester/.bashrc && \
+    echo 'export PATH="/home/pentester/go/bin:/home/pentester/.local/bin:/home/pentester/.npm-global/bin:$PATH"' >> /home/pentester/.profile
+
+USER root
+COPY containers/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+RUN chmod +x /usr/local/bin/docker-entrypoint.sh
+
+USER pentester
+WORKDIR /workspace
+
+ENTRYPOINT ["docker-entrypoint.sh"]

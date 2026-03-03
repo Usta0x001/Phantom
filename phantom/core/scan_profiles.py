@@ -111,7 +111,7 @@ PROFILES: dict[str, ScanProfile] = {
         ],
         max_concurrent_tools=3,
         enable_browser=True,
-        nuclei_severity="medium,high,critical",
+        nuclei_severity="low,medium,high,critical",  # include low — catches missing headers, dir listings, exposed docs
         memory_threshold=120_000,  # quick: raised from 80K — was causing compression death spiral
     ),
     # ------------------------------------------------------------------

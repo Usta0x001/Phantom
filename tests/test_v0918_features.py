@@ -308,30 +308,30 @@ class TestToolResultTruncation:
         assert "short result" in text
         assert "truncated" not in text
 
-    def test_long_result_truncated_at_6k(self):
+    def test_long_result_truncated_at_8k(self):
         from phantom.tools.executor import _format_tool_result
 
         long_text = "A" * 25_000
         text, images = _format_tool_result("test_tool", long_text)
         # Should be truncated
         assert "truncated" in text.lower() or "characters truncated" in text
-        # Final text should be under ~7000 chars (head + tail + overhead)
-        assert len(text) < 7000
+        # Final text should be under ~9000 chars (head + tail + overhead)
+        assert len(text) < 9000
 
-    def test_6k_boundary_not_truncated(self):
-        """Result exactly at 5999 chars should NOT be truncated."""
+    def test_8k_boundary_not_truncated(self):
+        """Result exactly at 7999 chars should NOT be truncated."""
         from phantom.tools.executor import _format_tool_result
 
-        text_5999 = "B" * 5999
-        result, images = _format_tool_result("test_tool", text_5999)
+        text_7999 = "B" * 7999
+        result, images = _format_tool_result("test_tool", text_7999)
         assert "truncated" not in result
 
-    def test_6001_chars_is_truncated(self):
-        """Result at 6001 chars SHOULD be truncated (limit = 6000)."""
+    def test_8001_chars_is_truncated(self):
+        """Result at 8001 chars SHOULD be truncated (limit = 8000)."""
         from phantom.tools.executor import _format_tool_result
 
-        text_6001 = "C" * 6001
-        result, images = _format_tool_result("test_tool", text_6001)
+        text_8001 = "C" * 8001
+        result, images = _format_tool_result("test_tool", text_8001)
         assert "truncated" in result.lower() or "characters truncated" in result
 
 

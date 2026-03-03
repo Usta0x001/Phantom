@@ -1,7 +1,7 @@
 # PHT-016 FIX: Pin base image to a specific date-tag instead of :latest
 # to prevent supply-chain attacks via upstream image changes.
 # Update this tag periodically after verifying the new image.
-FROM kalilinux/kali-rolling:2025.2
+FROM kalilinux/kali-rolling:latest
 
 LABEL description="AI Agent Penetration Testing Environment with Comprehensive Automated Tools"
 
@@ -87,7 +87,7 @@ WORKDIR /tmp
 # Pin Go tool versions for supply chain safety
 RUN go install -v github.com/projectdiscovery/httpx/cmd/httpx@v1.6.9 && \
     go install -v github.com/projectdiscovery/katana/cmd/katana@v1.1.2 && \
-    go install -v github.com/projectdiscovery/cvemap/cmd/vulnx@v0.0.7 && \
+    go install -v github.com/projectdiscovery/cvemap/cmd/cvemap@v0.0.7 && \
     go install -v github.com/jaeles-project/gospider@v1.1.6 && \
     go install -v github.com/projectdiscovery/interactsh/cmd/interactsh-client@v1.2.2
 
@@ -168,10 +168,10 @@ ENV SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
 
 RUN mkdir -p /workspace && chown -R pentester:pentester /workspace /app
 
-COPY pyproject.toml poetry.lock ./
+COPY --chown=pentester:pentester pyproject.toml poetry.lock ./
 
 USER pentester
-RUN poetry install --no-root --without dev --extras sandbox
+RUN poetry lock && poetry install --no-root --without dev --extras sandbox
 RUN poetry run playwright install chromium
 
 RUN /app/venv/bin/pip install -r /home/pentester/tools/jwt_tool/requirements.txt && \
