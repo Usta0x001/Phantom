@@ -392,10 +392,13 @@ def _format_tool_result(tool_name: str, result: Any) -> tuple[str, list[dict[str
         final_result_str = str(result_str)
         # BUG-05 FIX: Scanner tools (nuclei, sqlmap, nmap, ffuf) need higher
         # limits — their structured output contains multiple findings that get
-        # destroyed by aggressive truncation. 12K for scanners, 6K for others.
+        # destroyed by aggressive truncation. 18K for scanners, 8K for others.
+        # Increased from 12K/6K — nuclei now returns richer fields (references,
+        # curl commands, extracted results) that need more space.
         _scanner_tools = {"nuclei_scan", "sqlmap_test", "sqlmap_forms", "nmap_scan",
-                          "ffuf_directory_scan", "katana_crawl", "httpx_probe"}
-        _trunc_limit = 12000 if tool_name in _scanner_tools else 6000
+                          "ffuf_directory_scan", "katana_crawl", "httpx_probe",
+                          "nuclei_scan_cves", "nuclei_scan_misconfigs", "nmap_vuln_scan"}
+        _trunc_limit = 18000 if tool_name in _scanner_tools else 8000
         _start_chars = _trunc_limit // 2
         _end_chars = _trunc_limit // 2
         if len(final_result_str) > _trunc_limit:

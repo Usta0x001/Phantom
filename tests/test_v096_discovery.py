@@ -99,9 +99,9 @@ class TestMemoryCompressorV096:
         from phantom.llm.memory_compressor import MAX_MESSAGES
         assert MAX_MESSAGES == 150, f"Expected 150, got {MAX_MESSAGES}"
 
-    def test_min_recent_messages_reduced(self):
+    def test_min_recent_messages_increased(self):
         from phantom.llm.memory_compressor import MIN_RECENT_MESSAGES
-        assert MIN_RECENT_MESSAGES == 6, f"Expected 6, got {MIN_RECENT_MESSAGES}"
+        assert MIN_RECENT_MESSAGES == 12, f"Expected 12, got {MIN_RECENT_MESSAGES}"
 
 
 # =========================================================================

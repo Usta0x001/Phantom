@@ -14,7 +14,15 @@ from phantom.tools.security.sanitizer import sanitize_extra_args
 
 
 def _parse_nuclei_jsonl(raw_output: str) -> list[dict[str, Any]]:
-    """Parse nuclei JSONL output into structured findings."""
+    """Parse nuclei JSONL output into structured findings.
+
+    Preserves critical fields the LLM needs to chain exploits:
+    - name + description: What the vuln is and how it works
+    - reference: URLs linking to exploitation guides/PoCs
+    - tags: Quick classification (sqli, xss, cve, etc.)
+    - curl_command: Ready-to-use PoC command
+    - extracted_results: Data the template captured (versions, tokens, etc.)
+    """
     findings: list[dict[str, Any]] = []
 
     for line in raw_output.splitlines():
@@ -23,13 +31,43 @@ def _parse_nuclei_jsonl(raw_output: str) -> list[dict[str, Any]]:
             continue
         try:
             finding = json.loads(line)
-            findings.append({
+            info = finding.get("info", {})
+
+            # Build a rich finding dict — every field helps the LLM exploit
+            parsed: dict[str, Any] = {
                 "template_id": finding.get("template-id", ""),
-                "severity": finding.get("info", {}).get("severity", "unknown"),
+                "name": info.get("name", ""),
+                "severity": info.get("severity", "unknown"),
                 "matched_at": finding.get("matched-at", ""),
-                "description": (finding.get("info", {}).get("description", "") or "")[:150],
+                "description": (info.get("description", "") or "")[:500],
                 "matcher_name": finding.get("matcher-name", ""),
-            })
+                "tags": ", ".join(info.get("tags", [])) if info.get("tags") else "",
+            }
+
+            # Reference URLs — exploitation guides, CVE details, PoCs
+            refs = info.get("reference")
+            if refs and isinstance(refs, list):
+                parsed["references"] = refs[:5]  # Top 5 refs
+
+            # Curl command — ready-to-use PoC
+            curl_cmd = finding.get("curl-command", "")
+            if curl_cmd:
+                parsed["curl_command"] = curl_cmd[:500]
+
+            # Extracted results — versions, tokens, sensitive data nuclei captured
+            extracted = finding.get("extracted-results")
+            if extracted:
+                if isinstance(extracted, list):
+                    parsed["extracted_results"] = extracted[:5]
+                else:
+                    parsed["extracted_results"] = str(extracted)[:300]
+
+            # Type of detection (http, dns, network, etc.)
+            det_type = finding.get("type", "")
+            if det_type:
+                parsed["type"] = det_type
+
+            findings.append(parsed)
         except json.JSONDecodeError:
             continue
 
@@ -126,9 +164,14 @@ def nuclei_scan(
         "findings": findings,
         "by_severity": {k: len(v) for k, v in severity_groups.items()},
     }
-    # Only include raw output when no findings were parsed (helps debug failures)
+    # Include raw output tail to surface info not captured in JSON parsing
     if len(findings) == 0:
-        result["raw_output_tail"] = raw_output[-500:] if len(raw_output) > 0 else "(no output)"
+        result["raw_output_tail"] = raw_output[-1000:] if len(raw_output) > 0 else "(no output)"
+    elif len(raw_output) > 200:
+        # Even with findings, include tail for non-JSON stats/info lines
+        non_json_lines = [l for l in raw_output.splitlines()[-30:] if l.strip() and not l.strip().startswith("{")]
+        if non_json_lines:
+            result["scan_stats"] = "\n".join(non_json_lines[-10:])
     return result
 
 

@@ -58,8 +58,9 @@ class PhantomAgent(BaseAgent):
                 if self.scan_profile and hasattr(self.scan_profile, "max_iterations")
                 else 100
             )
-            # Budget per class = total iterations / 12 (min 8) — more breathing room
-            per_class = max(8, max_iter // 12)
+            # Budget per class = total iterations / 8 (min 10) — enough to discover, exploit, and report
+            # Was //12 (=12 iters) — not enough to run sqlmap + verify + create_vulnerability_report
+            per_class = max(10, max_iter // 8)
             self._vuln_rotation = VulnClassTracker(max_iters_per_class=per_class)
         except Exception:
             self._vuln_rotation = None

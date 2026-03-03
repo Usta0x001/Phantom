@@ -11,7 +11,7 @@ logger = logging.getLogger(__name__)
 
 MAX_TOTAL_TOKENS = 80_000
 MAX_MESSAGES = 150
-MIN_RECENT_MESSAGES = 6  # 6 msgs (~18K) keeps last 3 tool rounds for better continuity
+MIN_RECENT_MESSAGES = 12  # 12 msgs (~36K) keeps last 6 tool rounds — critical for exploit continuity
 
 SUMMARY_PROMPT_TEMPLATE = """You are performing context condensation for a security
 assessment agent.  Compress the conversation while preserving every piece of

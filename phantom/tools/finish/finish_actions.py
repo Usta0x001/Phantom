@@ -659,9 +659,11 @@ def finish_scan(
         actions_count = len(getattr(agent_state, "actions_taken", []))
         max_iter = getattr(agent_state, "max_iterations", 150)
 
-        # Dynamic thresholds: at least 60% of iteration budget, 30% tool activity
-        MIN_ITERATIONS = max(30, int(max_iter * 0.60))
-        MIN_TOOL_CALLS = max(20, int(max_iter * 0.30))
+        # Dynamic thresholds: at least 40% of iteration budget, 20% tool activity
+        # (45% was still causing bouncing — agent enters REPORT at 90% so gate
+        # must allow finish well before that to avoid wasting iterations)
+        MIN_ITERATIONS = max(20, int(max_iter * 0.40))
+        MIN_TOOL_CALLS = max(12, int(max_iter * 0.20))
 
         if current_iteration < MIN_ITERATIONS:
             remaining = MIN_ITERATIONS - current_iteration
@@ -699,7 +701,9 @@ def finish_scan(
 
         # ── AUTO-002: Vuln-class diversity gate ──
         # Require testing at least N different vulnerability classes
-        MIN_VULN_CLASSES = 6
+        # Lowered from 6 to 4 — finding 15+ vulns across 4 classes is better
+        # than forcing the agent to test 6 classes with 0 findings each
+        MIN_VULN_CLASSES = 4
         vuln_categories_tested = set()
         _vuln_keywords = {
             "sqli": "sqli", "sql inject": "sqli", "sql": "sqli",
