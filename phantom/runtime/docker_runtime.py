@@ -213,11 +213,12 @@ class DockerRuntime(AbstractRuntime):
                 )
 
                 self._scan_container = container
-                # Give entrypoint time to start Caido + tool server
-                time.sleep(2)
-                self._wait_for_tool_server()
-                # Docker has bound the port — release our reservation socket
+                # Release port reservation BEFORE health check — Docker needs the port
                 self._release_port_reservation()
+                # Give entrypoint time to start Caido + tool server
+                # Entrypoint takes ~15-20s: Caido start, token fetch, project create, proxy config
+                time.sleep(10)
+                self._wait_for_tool_server()
 
             except (DockerException, RequestsConnectionError, RequestsTimeout, SandboxInitializationError) as e:
                 last_error = e

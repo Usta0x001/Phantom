@@ -1,0 +1,10 @@
+# Force Unix LF line endings for shell scripts (Docker containers require LF)
+*.sh text eol=lf
+containers/*.sh text eol=lf
+containers/docker-entrypoint.sh text eol=lf
+Dockerfile text eol=lf
+containers/Dockerfile text eol=lf
+containers/Dockerfile.* text eol=lf
+
+# Keep Windows batch files as CRLF
+*.bat text eol=crlf

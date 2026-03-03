@@ -1,0 +1,10 @@
+﻿FROM ghcr.io/usta0x001/phantom-sandbox:latest
+USER root
+# Fix: entrypoint needs sudo for tee, certutil, iptables — grant full NOPASSWD
+RUN echo "pentester ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/pentester && \
+    chmod 0440 /etc/sudoers.d/pentester
+COPY containers/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+RUN sed -i 's/\r$//' /usr/local/bin/docker-entrypoint.sh && chmod +x /usr/local/bin/docker-entrypoint.sh
+USER pentester
+WORKDIR /workspace
+ENTRYPOINT ["docker-entrypoint.sh"]
