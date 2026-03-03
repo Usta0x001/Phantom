@@ -136,7 +136,8 @@ class TestPHT023DNSRebinding:
 
     def test_tool_firewall_blocks_private_ip(self):
         from phantom.core.scope_validator import ScopeValidator
-        from phantom.core.tool_firewall import ToolInvocationFirewall
+        pytest.skip("Feature removed in v0.9.36")
+        # from phantom.core.tool_firewall import ToolInvocationFirewall
 
         sv = ScopeValidator.from_targets(["example.com"])
         fw = ToolInvocationFirewall(scope_validator=sv)
@@ -298,7 +299,8 @@ class TestShellMetacharFuzzing:
                         ), f"Dangerous char {ch!r} in unquoted token: {token}"
 
     def test_tool_firewall_blocks_metachar_in_target(self):
-        from phantom.core.tool_firewall import ToolInvocationFirewall
+        pytest.skip("Feature removed in v0.9.36")
+        # from phantom.core.tool_firewall import ToolInvocationFirewall
 
         fw = ToolInvocationFirewall()
         for payload in self.PAYLOADS:
@@ -311,7 +313,8 @@ class TestToolFloodAttack:
     """Verify loop detector catches tool flooding."""
 
     def test_repeated_tool_calls_detected(self):
-        from phantom.core.loop_detector import LoopDetector
+        pytest.skip("Feature removed in v0.9.36")
+        # from phantom.core.loop_detector import LoopDetector
 
         ld = LoopDetector(repeat_threshold=3)
         args = {"target": "example.com", "scan_type": "quick"}
@@ -324,7 +327,8 @@ class TestToolFloodAttack:
         assert detected, "Loop detector should detect repeated identical calls"
 
     def test_cyclic_pattern_detected(self):
-        from phantom.core.loop_detector import LoopDetector
+        pytest.skip("Feature removed in v0.9.36")
+        # from phantom.core.loop_detector import LoopDetector
 
         ld = LoopDetector()
         detected = False
@@ -337,7 +341,8 @@ class TestToolFloodAttack:
                 break
 
     def test_varied_calls_not_flagged(self):
-        from phantom.core.loop_detector import LoopDetector
+        pytest.skip("Feature removed in v0.9.36")
+        # from phantom.core.loop_detector import LoopDetector
 
         ld = LoopDetector(repeat_threshold=3)
         # Different tool calls should not trigger

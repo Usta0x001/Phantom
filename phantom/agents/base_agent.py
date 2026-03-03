@@ -465,7 +465,7 @@ class BaseAgent(metaclass=AgentMeta):
             self.state.add_error("Tool execution cancelled by user")
             raise
 
-        self.state.messages = list(conversation_history)
+        self.state.messages = conversation_history
 
         if should_agent_finish:
             # Finalize EnhancedAgentState scan tracking when available.
