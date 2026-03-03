@@ -852,7 +852,7 @@ def _auto_record_findings(tool_name: str, result: Any, agent_state: Any) -> None
             _auto_report_scanner_findings("sqlmap", [result], agent_state)
 
         # --- Send Request (manual testing) ---
-        elif tool_name in ("send_request", "repeat_request"):
+        if tool_name in ("send_request", "repeat_request"):
             status = result.get("status_code", 0)
             url = str(result.get("url", ""))
             body = result.get("body", "")[:2000].lower()
