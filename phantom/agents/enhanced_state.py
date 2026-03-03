@@ -144,8 +144,10 @@ class EnhancedAgentState(AgentState):
                 self.scan_result.add_subdomain(subdomain)
     
     def add_endpoint(self, endpoint: str) -> None:
-        """Register discovered endpoint."""
+        """Register discovered endpoint (capped at 10,000 to prevent unbounded growth)."""
         if endpoint not in self.endpoints:
+            if len(self.endpoints) >= 10_000:
+                return  # silently cap
             self.endpoints.append(endpoint)
             if self.scan_result:
                 self.scan_result.add_endpoint(endpoint)
@@ -158,11 +160,14 @@ class EnhancedAgentState(AgentState):
         
         The agent should call this BEFORE running an exploit against an
         endpoint to avoid wasting iterations on repeated tests.
+        Capped at 10,000 entries to prevent unbounded growth.
         """
         key = f"{method.upper()} {url} {parameter}".strip()
         if key in self.tested_endpoints:
             self.tested_endpoints[key].append(test_type)
             return True  # duplicate
+        if len(self.tested_endpoints) >= 10_000:
+            return False  # silently cap
         self.tested_endpoints[key] = [test_type]
         return False
     
@@ -418,7 +423,7 @@ class EnhancedAgentState(AgentState):
 
         # ---- PHT-019 FIX: checkpoint validation ----
         _ALLOWED_TOP_KEYS = {
-            "scan_id", "target", "iteration", "phase", "hosts",
+            "scan_id", "target", "iteration", "max_iterations", "phase", "hosts",
             "subdomains", "endpoints", "tested_endpoints",
             "vulnerabilities", "verified_vulns", "false_positives",
             "vuln_stats", "tools_used", "findings_ledger", "saved_at",
@@ -458,10 +463,10 @@ class EnhancedAgentState(AgentState):
                 data[key] = dict(list(d.items())[:MAX_DICT_LEN])
         # ---- end PHT-019 validation ----
 
-        # BUG-14 FIX: Use default max_iterations (200) instead of hardcoded 300
+        # BUG-14 FIX: Restore max_iterations from checkpoint (default 300)
         state = cls(
             agent_name="Root Agent (resumed)",
-            max_iterations=200,
+            max_iterations=data.get("max_iterations", 300),
         )
 
         state.scan_id = data.get("scan_id")

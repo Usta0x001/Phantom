@@ -52,7 +52,6 @@ class PhantomAgent(BaseAgent):
         # The rotation engine forces abandoning promising attack vectors after
         # just 10 tool calls (too shallow). Strix doesn't have this and finds
         # more vulns. The LLM naturally rotates when it exhausts a vector.
-        self._vuln_rotation = None
 
         # Initialize EnhancedAgentState scan tracking if available
         if isinstance(self.state, EnhancedAgentState) and targets:

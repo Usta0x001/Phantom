@@ -487,7 +487,6 @@ await agent.run()
 | `phantom.agents.base_agent` | `BaseAgent` | ReAct loop engine |
 | `phantom.agents.state` | `AgentState` | State machine |
 | `phantom.agents.enhanced_state` | `EnhancedAgentState` | Vuln/host tracking |
-| `phantom.core.tool_firewall` | `ToolInvocationFirewall` | Security firewall |
 | `phantom.core.scope_validator` | `ScopeValidator` | Target authorization |
 | `phantom.core.audit_logger` | `AuditLogger` | Tamper-evident logging |
 | `phantom.core.cost_controller` | `CostController` | Budget management |

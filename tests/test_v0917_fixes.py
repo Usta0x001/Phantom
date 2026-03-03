@@ -21,40 +21,18 @@ import pytest
 
 
 class TestAuthorizationSignature:
-    """Verify authorization signature uses full SHA-256."""
+    """Verify authorization signature uses full SHA-256.
+    NOTE: authorization.py removed in v0.9.37 (dead code — never used in scan pipeline).
+    """
 
     def test_signature_is_full_sha256(self):
-        from phantom.core.authorization import AuthorizationRecord
-
-        record = AuthorizationRecord(
-            targets=["http://example.com"],
-            method="interactive",
-            authorized_by="test-user",
-        )
-        # Full SHA-256 is 64 hex chars
-        assert len(record.signature) == 64
-        # Verify it's valid hex
-        int(record.signature, 16)
+        pytest.skip("authorization.py removed in v0.9.37 (dead code)")
 
     def test_signature_not_truncated(self):
-        """Old behavior: 16 chars (truncated). New: 64 chars."""
-        from phantom.core.authorization import AuthorizationRecord
-
-        record = AuthorizationRecord(
-            targets=["http://example.com"],
-            method="interactive",
-            authorized_by="test-user",
-        )
-        # Must be longer than old 16-char truncated hash
-        assert len(record.signature) > 16
+        pytest.skip("authorization.py removed in v0.9.37 (dead code)")
 
     def test_signature_source_code_no_truncation(self):
-        """Verify [:16] truncation is removed from source."""
-        src = Path(__file__).parent.parent / "phantom" / "core" / "authorization.py"
-        content = src.read_text()
-        assert "hexdigest()[:16]" not in content, (
-            "authorization.py still truncates SHA-256 hash"
-        )
+        pytest.skip("authorization.py removed in v0.9.37 (dead code)")
 
 
 # ── LOGIC-003: DNS pinning ──────────────────────────────────────────────────
