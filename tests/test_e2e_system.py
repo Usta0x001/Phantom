@@ -34,7 +34,7 @@ class TestAgentStateLifecycle:
         s = AgentState()
         assert s.agent_name == "phantom Agent"
         assert s.iteration == 0
-        assert s.max_iterations == 200
+        assert s.max_iterations == 300
         assert s.completed is False
         assert s.messages == []
         assert s.findings_ledger == []
@@ -164,13 +164,14 @@ class TestAgentStateLifecycle:
         d = s.model_dump()
         assert "sandbox_token" not in d
 
-    def test_conversation_history_returns_copy(self):
+    def test_conversation_history_returns_reference(self):
+        """v0.9.36: get_conversation_history returns direct reference (like Strix)
+        so in-place memory compression persists across iterations."""
         from phantom.agents.state import AgentState
         s = AgentState()
         s.add_message("user", "hello")
         history = s.get_conversation_history()
-        history.append({"role": "injected"})
-        assert len(s.messages) == 1
+        assert history is s.messages  # Must be same object for compression
 
     def test_get_execution_summary(self):
         from phantom.agents.state import AgentState
@@ -323,7 +324,8 @@ class TestToolFirewallComprehensive:
     """Every firewall rule exercised."""
 
     def _fw(self):
-        from phantom.core.tool_firewall import ToolInvocationFirewall
+        pytest.skip("Feature removed in v0.9.36")
+        # from phantom.core.tool_firewall import ToolInvocationFirewall
         return ToolInvocationFirewall()
 
     # --- Injection detection ---
@@ -447,7 +449,8 @@ class TestToolFirewallComprehensive:
 
     # --- Global firewall mgmt ---
     def test_init_and_get_firewall(self):
-        from phantom.core.tool_firewall import get_tool_firewall, init_tool_firewall
+        pytest.skip("Feature removed in v0.9.36")
+        # from phantom.core.tool_firewall import get_tool_firewall, init_tool_firewall
         fw = init_tool_firewall()
         assert get_tool_firewall() is fw
         assert fw.enabled
@@ -1264,7 +1267,8 @@ class TestFullScanLifecycleSimulation:
         from phantom.core.audit_logger import AuditLogger
         from phantom.core.cost_controller import CostController
         from phantom.core.report_generator import ReportGenerator
-        from phantom.core.tool_firewall import ToolInvocationFirewall
+        pytest.skip("Feature removed in v0.9.36")
+        # from phantom.core.tool_firewall import ToolInvocationFirewall
         from phantom.models.host import Host
         from phantom.models.scan import ScanPhase
         from phantom.models.vulnerability import Vulnerability
@@ -1451,7 +1455,6 @@ class TestModuleImports:
         "phantom.agents.base_agent",
         "phantom.tools.executor",
         "phantom.tools.registry",
-        "phantom.core.tool_firewall",
         "phantom.core.audit_logger",
         "phantom.core.scope_validator",
         "phantom.core.cost_controller",
@@ -1489,11 +1492,7 @@ class TestRegressionGuards:
 
     def test_no_variable_width_lookbehind(self):
         """Python 3.14 requires fixed-width lookbehinds."""
-        import ast
-        from pathlib import Path as P
-        fw_source = P("phantom/core/tool_firewall.py").read_text(encoding="utf-8")
-        # Should NOT contain (?<!https?:) — variable width
-        assert "(?<!https?:)" not in fw_source
+        pytest.skip("tool_firewall.py removed in v0.9.36")
 
     def test_no_bare_except_pass(self):
         """No bare 'except: pass' in core modules."""
@@ -1507,9 +1506,9 @@ class TestRegressionGuards:
             if re.search(r"except\s*:\s*\n\s*pass", content):
                 pytest.fail(f"Bare 'except: pass' found in {f}")
 
-    def test_max_iterations_is_200(self):
+    def test_max_iterations_is_300(self):
         from phantom.agents.state import AgentState
-        assert AgentState.model_fields["max_iterations"].default == 200
+        assert AgentState.model_fields["max_iterations"].default == 300
 
     def test_max_cost_is_25(self):
         from phantom.core.cost_controller import DEFAULT_MAX_COST_USD

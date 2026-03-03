@@ -2,6 +2,32 @@
 
 All notable changes to Phantom will be documented in this file.
 
+## [0.9.36] - 2026-03-03
+
+### Critical Memory Bug Fix + Deep Cleanup
+
+**CRITICAL FIX:**
+- **Memory compression was BROKEN** since v0.9.35 — `get_conversation_history()` returned a copy,
+  so in-place compression in llm.py operated on a disconnected copy that was discarded.
+  Context grew unbounded until the brutal 500-message hard trim kicked in.
+  Fixed: now returns direct reference like Strix.
+
+**Strix Alignment:**
+- `max_iterations` default restored to 300 (was wrongly lowered to 200)
+- Wall-clock time limit disabled by default (Strix has none)
+- Juice Shop auto-detection narrowed (no longer fires for ANY port-3000 target)
+- `_execute_actions` now assigns reference directly (not redundant copy)
+
+**Dead Code Removed:**
+- Deleted `phantom/core/loop_detector.py` (never imported)
+- Deleted `phantom/core/vuln_class_rotation.py` (never imported)
+- Deleted `phantom/core/tool_firewall.py` (never imported)
+- Deleted `test_vuln_rotation.py` (tests deleted module)
+- Deleted 10 debug scripts from repo root
+- Deleted 11 old audit markdown files from repo root
+
+**Tests:** 737 passed, 91 skipped (dead feature tests auto-skipped), 0 failures
+
 ## [0.9.35] - 2026-03-03
 
 ### Guarantee Strix Power — Remove ALL Remaining Overhead (17 Harmful Diffs)

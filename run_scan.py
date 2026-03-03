@@ -126,9 +126,7 @@ async def run_headless_scan(target_url: str, scan_mode: str = "quick", resume_di
 
     set_global_tracer(tracer)
 
-    # Initialize loop detector singleton
-    from phantom.core.loop_detector import init_global_detector
-    init_global_detector()
+    # v0.9.36: loop_detector removed (dead code, never used in agent loop)
 
     vuln_count = 0
 

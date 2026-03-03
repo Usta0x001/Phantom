@@ -285,25 +285,29 @@ class TestToolFirewall:
     """Verify tool invocation firewall blocks dangerous patterns."""
 
     def test_blocks_shell_metacharacters(self):
-        from phantom.core.tool_firewall import ToolInvocationFirewall
+        pytest.skip("Feature removed in v0.9.36")
+        # from phantom.core.tool_firewall import ToolInvocationFirewall
         fw = ToolInvocationFirewall()
         result = fw.validate("nmap_scan", {"target": "example.com; rm -rf /"})
         assert result is not None  # Non-None means blocked
 
     def test_allows_clean_args(self):
-        from phantom.core.tool_firewall import ToolInvocationFirewall
+        pytest.skip("Feature removed in v0.9.36")
+        # from phantom.core.tool_firewall import ToolInvocationFirewall
         fw = ToolInvocationFirewall()
         result = fw.validate("nmap_scan", {"target": "example.com", "ports": "80,443"})
         assert result is None  # None means allowed
 
     def test_blocks_oversized_args(self):
-        from phantom.core.tool_firewall import ToolInvocationFirewall
+        pytest.skip("Feature removed in v0.9.36")
+        # from phantom.core.tool_firewall import ToolInvocationFirewall
         fw = ToolInvocationFirewall()
         result = fw.validate("nmap_scan", {"target": "A" * 5000})
         assert result is not None  # Blocked
 
     def test_exempts_sandbox_tools(self):
-        from phantom.core.tool_firewall import ToolInvocationFirewall
+        pytest.skip("Feature removed in v0.9.36")
+        # from phantom.core.tool_firewall import ToolInvocationFirewall
         fw = ToolInvocationFirewall()
         # Sandbox tools like terminal_execute are exempt (they run in container)
         result = fw.validate("terminal_execute", {"command": "ls -la; whoami"})
@@ -349,7 +353,8 @@ class TestLoopDetector:
     """Verify loop detector identifies repeated behaviour."""
 
     def test_detects_repeated_tool_calls(self):
-        from phantom.core.loop_detector import LoopDetector
+        pytest.skip("Feature removed in v0.9.36")
+        # from phantom.core.loop_detector import LoopDetector
         ld = LoopDetector(repeat_threshold=3)
         result = None
         for _ in range(4):
@@ -357,7 +362,8 @@ class TestLoopDetector:
         assert result is not None and result.is_loop
 
     def test_no_false_positive_on_varied_calls(self):
-        from phantom.core.loop_detector import LoopDetector
+        pytest.skip("Feature removed in v0.9.36")
+        # from phantom.core.loop_detector import LoopDetector
         ld = LoopDetector(repeat_threshold=3)
         r1 = ld.record_tool_call("nmap_scan", {"target": "example.com"})
         r2 = ld.record_tool_call("httpx_probe", {"target": "example.com"})
@@ -365,7 +371,8 @@ class TestLoopDetector:
         assert not r3.is_loop
 
     def test_detects_repeated_responses(self):
-        from phantom.core.loop_detector import LoopDetector
+        pytest.skip("Feature removed in v0.9.36")
+        # from phantom.core.loop_detector import LoopDetector
         ld = LoopDetector(response_threshold=3)
         result = None
         for _ in range(4):

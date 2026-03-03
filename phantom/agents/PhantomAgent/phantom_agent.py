@@ -277,10 +277,10 @@ class PhantomAgent(BaseAgent):
             if url:
                 target_urls.append(url.lower())
 
-        # Detect Juice Shop by common indicators:
-        # - Port 3000 (default), "juice" in URL, known OWASP Juice Shop paths
+        # Detect Juice Shop by strong indicators only (not just port 3000,
+        # which Express/Rails/React all use)
         juice_shop_indicators = any(
-            ":3000" in url or "juice" in url
+            "juice" in url
             for url in target_urls
         )
 

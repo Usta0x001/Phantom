@@ -22,7 +22,7 @@ class AgentState(BaseModel):
 
     task: str = ""
     iteration: int = 0
-    max_iterations: int = 200  # M29 FIX: lowered from 300 to 200
+    max_iterations: int = 300  # Match Strix default
     completed: bool = False
     stop_requested: bool = False
     waiting_for_input: bool = False
@@ -31,9 +31,9 @@ class AgentState(BaseModel):
     final_result: dict[str, Any] | None = None
     max_iterations_warning_sent: bool = False
 
-    # LOGIC-005 FIX: Wall-clock time limit (seconds) — prevents unbounded
-    # autonomous operation.  Default 4 hours; configurable per scan profile.
-    max_scan_duration_seconds: int = 14400  # 4 hours
+    # Wall-clock time limit (seconds). 0 = disabled (like Strix).
+    # Can be set via scan profile for production use.
+    max_scan_duration_seconds: int = 0
 
     messages: list[dict[str, Any]] = Field(default_factory=list)
     context: dict[str, Any] = Field(default_factory=dict)
@@ -238,8 +238,9 @@ class AgentState(BaseModel):
         return True
 
     def get_conversation_history(self) -> list[dict[str, Any]]:
-        # L21 FIX: return a shallow copy to prevent external mutation
-        return list(self.messages)
+        # Return direct reference (like Strix) so in-place memory
+        # compression in llm.py persists across iterations.
+        return self.messages
 
     def get_execution_summary(self) -> dict[str, Any]:
         return {
