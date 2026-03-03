@@ -30,7 +30,7 @@ class TestScanProfilesV096:
     def test_quick_iterations_increased(self):
         from phantom.core.scan_profiles import get_profile
         p = get_profile("quick")
-        assert p.max_iterations == 150, "Quick must be 150 iterations"
+        assert p.max_iterations == 300, "Quick must be 300 iterations"
 
     def test_standard_iterations_increased(self):
         from phantom.core.scan_profiles import get_profile
@@ -101,7 +101,7 @@ class TestMemoryCompressorV096:
 
     def test_min_recent_messages_increased(self):
         from phantom.llm.memory_compressor import MIN_RECENT_MESSAGES
-        assert MIN_RECENT_MESSAGES == 12, f"Expected 12, got {MIN_RECENT_MESSAGES}"
+        assert MIN_RECENT_MESSAGES == 15, f"Expected 15, got {MIN_RECENT_MESSAGES}"
 
 
 # =========================================================================

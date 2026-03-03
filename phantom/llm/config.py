@@ -25,7 +25,7 @@ class LLMConfig:
         valid_modes = {"quick", "standard", "deep", "stealth", "api_only"}
         self.scan_mode = scan_mode if scan_mode in valid_modes else "deep"
 
-        # Temperature controls LLM creativity vs determinism.
-        # 0.6 balances structured tool-calling with creative attack exploration.
-        # Industry benchmarks for agentic tool-calling: optimal at 0.5-0.7.
-        self.temperature: float = temperature if temperature is not None else 0.4  # BUG-30 FIX: 0.4 for reliable tool-call formatting
+        # v0.9.34: Temperature NOT set by default (like Strix).
+        # Let the model use its native default (typically 0.7-1.0).
+        # Low temperature (0.4) was killing creative attack exploration.
+        self.temperature: float | None = temperature
