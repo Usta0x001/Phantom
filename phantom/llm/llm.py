@@ -188,9 +188,10 @@ class LLM:
             if delta:
                 accumulated += delta
                 if "</function>" in accumulated:
-                    accumulated = accumulated[
-                        : accumulated.find("</function>") + len("</function>")
-                    ]
+                    # BUG-04 FIX: Use rfind to get LAST </function> — find() cuts at
+                    # embedded </function> inside parameter values.
+                    last_idx = accumulated.rfind("</function>")
+                    accumulated = accumulated[:last_idx + len("</function>")]
                     yield LLMResponse(content=accumulated)
                     done_streaming = 1
                     continue

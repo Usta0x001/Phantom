@@ -1,26 +1,9 @@
 <tools>
   <tool name="python_action">
     <description>Perform Python actions using persistent interpreter sessions for cybersecurity tasks.</description>
-    <details>Common Use Cases:
-      - Security script development and testing (payload generation, exploit scripts)
-      - Data analysis of security logs, network traffic, or vulnerability scans
-      - Cryptographic operations and security tool automation
-      - Interactive penetration testing workflows and proof-of-concept development
-      - Processing security data formats (JSON, XML, CSV from security tools)
-      - HTTP proxy interaction for web security testing (all proxy functions are pre-imported)
-
-      Each session instance is PERSISTENT and maintains its own global and local namespaces
-      until explicitly closed, allowing for multi-step security workflows and stateful computations.
-
-      PROXY FUNCTIONS PRE-IMPORTED:
-      All proxy action functions are automatically imported into every Python session, enabling
-      seamless HTTP traffic analysis and web security testing
-
-      This is particularly useful for:
-      - Analyzing captured HTTP traffic during web application testing
-      - Automating request manipulation and replay attacks
-      - Building custom security testing workflows combining proxy data with Python analysis
-      - Correlating multiple requests for advanced attack scenarios</details>
+    <details>Security scripting: payload gen, exploit scripts, data analysis, crypto ops, HTTP proxy interaction.
+      Sessions are PERSISTENT — maintain namespaces until closed.
+      All proxy functions (list_requests, view_request, repeat_request) are pre-imported.</details>
     <parameters>
       <parameter name="action" type="string" required="true">
         <description>The Python action to perform:     - new_session: Create a new Python interpreter session. This MUST be the first       action for each session.     - execute: Execute Python code in the specified session.     - close: Close the specified session instance.     - list_sessions: List all active Python sessions.</description>

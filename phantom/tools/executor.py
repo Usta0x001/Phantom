@@ -390,11 +390,17 @@ def _format_tool_result(tool_name: str, result: Any) -> tuple[str, list[dict[str
         final_result_str = f"Tool {tool_name} executed successfully"
     else:
         final_result_str = str(result_str)
-        if len(final_result_str) > 6000:
-            # Reduced from 10K to 6K — saves ~1K tokens/call.
-            # 2.5K start captures findings summary, 2.5K end captures trailing results.
-            start_part = final_result_str[:2500]
-            end_part = final_result_str[-2500:]
+        # BUG-05 FIX: Scanner tools (nuclei, sqlmap, nmap, ffuf) need higher
+        # limits — their structured output contains multiple findings that get
+        # destroyed by aggressive truncation. 12K for scanners, 6K for others.
+        _scanner_tools = {"nuclei_scan", "sqlmap_test", "sqlmap_forms", "nmap_scan",
+                          "ffuf_directory_scan", "katana_crawl", "httpx_probe"}
+        _trunc_limit = 12000 if tool_name in _scanner_tools else 6000
+        _start_chars = _trunc_limit // 2
+        _end_chars = _trunc_limit // 2
+        if len(final_result_str) > _trunc_limit:
+            start_part = final_result_str[:_start_chars]
+            end_part = final_result_str[-_end_chars:]
             # Snap to nearest newline to avoid cutting mid-line/mid-tag
             last_nl = start_part.rfind('\n')
             if last_nl > 2000:
@@ -409,9 +415,11 @@ def _format_tool_result(tool_name: str, result: Any) -> tuple[str, list[dict[str
                 + end_part
             )
 
+    # BUG-17 FIX: Use CDATA to avoid double-encoding security payloads
+    # (XSS/SQLi payloads in results were being HTML-escaped, hiding reflections)
     observation_xml = (
         f"<tool_result>\n<tool_name>{_xml_escape(tool_name)}</tool_name>\n"
-        f"<result>{_xml_escape(final_result_str)}</result>\n</tool_result>"
+        f"<result><![CDATA[{final_result_str}]]></result>\n</tool_result>"
     )
 
     return observation_xml, images
@@ -691,7 +699,8 @@ def _auto_record_findings(tool_name: str, result: Any, agent_state: Any) -> None
         elif tool_name in ("sqlmap_test", "sqlmap_forms", "sqlmap_dump_database"):
             if result.get("vulnerable"):
                 url = result.get("url", result.get("target", "?"))
-                params = result.get("vulnerable_params", [])
+                # BUG-13 FIX: sqlmap returns "injection_points", not "vulnerable_params"
+                params = result.get("injection_points", result.get("vulnerable_params", []))
                 agent_state.add_finding(
                     f"[vuln/sqlmap] SQLi CONFIRMED at {url} params={params}"
                 )
