@@ -447,40 +447,18 @@ class TestPHT045UserInfoInURL:
 
 
 class TestPHT046AuthSkipBehavior:
-    """Document and verify PHANTOM_SKIP_AUTHORIZATION behavior."""
+    """Document and verify PHANTOM_SKIP_AUTHORIZATION behavior.
+    NOTE: authorization.py removed in v0.9.37 (dead code — never used in scan pipeline).
+    """
 
     def test_skip_accepts_true(self):
-        from phantom.core.authorization import AuthorizationGate
-
-        os.environ["PHANTOM_SKIP_AUTHORIZATION"] = "true"
-        try:
-            gate = AuthorizationGate()
-            record = gate.verify_authorization(["example.com"])
-            assert record.method == "env_skip"
-        finally:
-            del os.environ["PHANTOM_SKIP_AUTHORIZATION"]
+        pytest.skip("authorization.py removed in v0.9.37 (dead code)")
 
     def test_skip_accepts_1(self):
-        from phantom.core.authorization import AuthorizationGate
-
-        os.environ["PHANTOM_SKIP_AUTHORIZATION"] = "1"
-        try:
-            gate = AuthorizationGate()
-            record = gate.verify_authorization(["example.com"])
-            assert record.method == "env_skip"
-        finally:
-            del os.environ["PHANTOM_SKIP_AUTHORIZATION"]
+        pytest.skip("authorization.py removed in v0.9.37 (dead code)")
 
     def test_skip_rejects_random_string(self):
-        from phantom.core.authorization import AuthorizationError, AuthorizationGate
-
-        os.environ["PHANTOM_SKIP_AUTHORIZATION"] = "maybe"
-        try:
-            gate = AuthorizationGate()
-            with pytest.raises(AuthorizationError):
-                gate.verify_authorization(["example.com"], non_interactive=True)
-        finally:
-            del os.environ["PHANTOM_SKIP_AUTHORIZATION"]
+        pytest.skip("authorization.py removed in v0.9.37 (dead code)")
 
 
 # ====================================================================

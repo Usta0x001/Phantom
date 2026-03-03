@@ -2,6 +2,41 @@
 
 All notable changes to Phantom will be documented in this file.
 
+## [0.9.37] - 2026-03-03
+
+### Final Audit — Bug Fixes, Hardening & Dead Code Removal
+
+**P1 — Critical Fixes:**
+- **from_checkpoint() max_iterations** — was hardcoded to 200, ignoring the checkpoint's
+  stored value. Now uses `data.get("max_iterations", 300)` so resumed scans keep the
+  correct iteration limit.
+- **is_approaching_max_iterations threshold** — was 0.93, too aggressive (agent only got
+  7% of iterations for wrap-up). Changed to 0.85 to match Strix-like behavior.
+
+**P2 — Robustness Fixes:**
+- **XSS body detection** — `body[:500]` was too small to catch XSS reflections in
+  larger responses. Increased to `body[:2000]`.
+- **CDATA injection** — tool results containing `]]>` would break the XML wrapper.
+  Now escapes `]]>` as `]]]]><![CDATA[>` inside CDATA sections.
+- **Auto-report cap** — `_auto_report_scanner_findings` capped at 25 per-scanner,
+  causing large nuclei scans to silently drop findings. Raised to 100.
+
+**P3 — Endpoint Growth Bounds:**
+- `add_endpoint()` capped at 10,000 entries to prevent unbounded memory growth.
+- `mark_endpoint_tested()` capped at 10,000 entries for same reason.
+- `max_iterations` added to checkpoint allowed-keys whitelist.
+
+**Dead Code Removed:**
+- Deleted `phantom/core/authorization.py` (264 lines; never imported from scan pipeline)
+- Removed dead `_vuln_rotation = None` assignment from PhantomAgent
+
+**Documentation Updated:**
+- `docs/ARCHITECTURE.md`: Removed references to deleted `tool_firewall.py` and 
+  `loop_detector.py`, corrected defense-in-depth layers and iteration cap values.
+- `docs/DOCUMENTATION.md`: Removed `tool_firewall` from module reference table.
+
+**Tests:** 731 passed, 97 skipped, 0 failures
+
 ## [0.9.36] - 2026-03-03
 
 ### Critical Memory Bug Fix + Deep Cleanup

@@ -409,7 +409,7 @@ def _format_tool_result(tool_name: str, result: Any) -> tuple[str, list[dict[str
     # (XSS/SQLi payloads in results were being HTML-escaped, hiding reflections)
     observation_xml = (
         f"<tool_result>\n<tool_name>{_xml_escape(tool_name)}</tool_name>\n"
-        f"<result><![CDATA[{final_result_str}]]></result>\n</tool_result>"
+        f"<result><![CDATA[{final_result_str.replace(']]>', ']]]]><![CDATA[>')}]]></result>\n</tool_result>"
     )
 
     return observation_xml, images
@@ -676,7 +676,7 @@ def _auto_report_scanner_findings(scanner: str, findings: list[dict], agent_stat
                 existing_titles.add(title.lower())
                 reported += 1
 
-            if reported >= 25:  # Safety cap per scanner call
+            if reported >= 100:  # Safety cap per scanner call
                 break
 
         if reported > 0:
@@ -855,7 +855,7 @@ def _auto_record_findings(tool_name: str, result: Any, agent_state: Any) -> None
         elif tool_name in ("send_request", "repeat_request"):
             status = result.get("status_code", 0)
             url = str(result.get("url", ""))
-            body = result.get("body", "")[:500].lower()
+            body = result.get("body", "")[:2000].lower()
             # Track endpoints
             if url and hasattr(agent_state, "add_endpoint"):
                 agent_state.add_endpoint(url)

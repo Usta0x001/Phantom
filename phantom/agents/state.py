@@ -206,7 +206,7 @@ class AgentState(BaseModel):
     def has_reached_max_iterations(self) -> bool:
         return self.iteration >= self.max_iterations
 
-    def is_approaching_max_iterations(self, threshold: float = 0.93) -> bool:
+    def is_approaching_max_iterations(self, threshold: float = 0.85) -> bool:
         return self.iteration >= int(self.max_iterations * threshold)
 
     def has_waiting_timeout(self) -> bool:

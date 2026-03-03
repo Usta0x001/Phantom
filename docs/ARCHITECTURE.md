@@ -73,7 +73,6 @@ phantom/
 │   └── PhantomAgent/          # Main agent persona with prompts
 │
 ├── core/                      # Security & Domain Logic
-│   ├── tool_firewall.py       # Runtime tool invocation firewall
 │   ├── scope_validator.py     # Target authorization with DNS pinning
 │   ├── verification_engine.py # Vulnerability confirmation (SQLi, XSS, RCE, OOB)
 │   ├── audit_logger.py        # Crash-safe HMAC-chained JSONL audit trail
@@ -87,7 +86,6 @@ phantom/
 │   ├── mitre_enrichment.py    # MITRE ATT&CK technique tagging
 │   ├── interactsh_client.py   # Out-of-band callback verification
 │   ├── priority_queue.py      # CVSS-based vulnerability triage
-│   ├── loop_detector.py       # Agent loop/repetition detection
 │   ├── nuclei_templates.py    # Dynamic Nuclei template generation
 │   ├── diff_scanner.py        # Differential scanning
 │   ├── notifier.py            # Alert dispatch
@@ -263,12 +261,11 @@ LLM Response → parse_tool_invocations()
 | Layer | Component | Protection |
 |-------|-----------|------------|
 | **L1: Authorization** | `ScopeValidator` | Whitelist-based target auth, CIDR/domain/regex rules, DNS pinning to prevent rebinding |
-| **L2: Input Firewall** | `ToolFirewall` | Injection pattern detection (8 patterns), extra_args whitelist per tool, arg length limits, sandbox dangerous command blocking |
-| **L3: Sandbox Isolation** | `DockerRuntime` | Ephemeral container, no host network, no privileged mode, restricted capabilities, port reservation with minimal TOCTOU window |
-| **L4: Cost Control** | `CostController` | Hard budget limit ($25 default), per-request tracking, warning at 80% threshold |
-| **L5: Time Control** | `AgentState` | Wall-clock limit (4h), cumulative across resumes, iteration cap (200) |
-| **L6: Audit Trail** | `AuditLogger` | Append-only JSONL, HMAC-SHA256 chain for tamper detection, verified on resume, file rotation |
-| **L7: Output Sanitization** | `ReportGenerator` | CSV formula injection prevention, credential scrubbing, Jinja2 autoescape |
+| **L2: Sandbox Isolation** | `DockerRuntime` | Ephemeral container, no host network, no privileged mode, restricted capabilities, port reservation with minimal TOCTOU window |
+| **L3: Cost Control** | `CostController` | Hard budget limit ($25 default), per-request tracking, warning at 80% threshold |
+| **L4: Iteration Control** | `AgentState` | Iteration cap (300), approaching-max threshold at 85% |
+| **L5: Audit Trail** | `AuditLogger` | Append-only JSONL, HMAC-SHA256 chain for tamper detection, verified on resume, file rotation |
+| **L6: Output Sanitization** | `ReportGenerator` | CSV formula injection prevention, credential scrubbing, Jinja2 autoescape |
 
 ### 4.2 Threat Model
 
