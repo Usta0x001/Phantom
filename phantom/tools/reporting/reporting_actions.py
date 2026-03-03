@@ -3,6 +3,106 @@ from typing import Any
 from phantom.tools.registry import register_tool
 
 
+# ── v0.9.33: Simplified vulnerability reporter ─────────────────────────
+#
+# The original create_vulnerability_report has 16+ params which is a
+# huge barrier for the LLM to use correctly.  This lightweight wrapper
+# needs only 5 params and auto-computes CVSS from severity string.
+
+_SEVERITY_CVSS_DEFAULTS: dict[str, dict[str, str]] = {
+    "critical": {"AV": "N", "AC": "L", "PR": "N", "UI": "N", "S": "C", "C": "H", "I": "H", "A": "H"},
+    "high":     {"AV": "N", "AC": "L", "PR": "N", "UI": "N", "S": "U", "C": "H", "I": "H", "A": "N"},
+    "medium":   {"AV": "N", "AC": "L", "PR": "N", "UI": "R", "S": "U", "C": "L", "I": "L", "A": "N"},
+    "low":      {"AV": "N", "AC": "H", "PR": "L", "UI": "R", "S": "U", "C": "L", "I": "N", "A": "N"},
+}
+
+
+@register_tool(sandbox_execution=False)
+async def report_vulnerability(
+    title: str,
+    target: str,
+    severity: str,
+    description: str,
+    proof: str,
+) -> dict[str, Any]:
+    """Report a discovered vulnerability with minimal friction.
+
+    This is the PREFERRED way to report vulnerabilities.  Only 5 parameters
+    required.  Use this instead of create_vulnerability_report for speed.
+
+    Args:
+        title: Short vulnerability title (e.g. "SQL Injection in /api/login")
+        target: The URL or target where the vulnerability was found
+        severity: One of: critical, high, medium, low
+        description: Description of the vulnerability and its impact
+        proof: Proof of concept — curl command, HTTP request, or steps to reproduce
+    """
+    severity = severity.strip().lower()
+    if severity not in _SEVERITY_CVSS_DEFAULTS:
+        return {"success": False, "message": f"Invalid severity '{severity}'. Must be critical/high/medium/low."}
+
+    if not title or not title.strip():
+        return {"success": False, "message": "Title cannot be empty."}
+    if not target or not target.strip():
+        return {"success": False, "message": "Target cannot be empty."}
+    if not description or len(description.strip()) < 10:
+        return {"success": False, "message": "Description must be at least 10 characters."}
+
+    cvss_map = _SEVERITY_CVSS_DEFAULTS[severity]
+    cvss_score, severity_str, cvss_vector = calculate_cvss_and_severity(
+        cvss_map["AV"], cvss_map["AC"], cvss_map["PR"], cvss_map["UI"],
+        cvss_map["S"], cvss_map["C"], cvss_map["I"], cvss_map["A"],
+    )
+
+    # Auto-derive fields the LLM shouldn't need to fill in manually
+    impact = f"{severity.upper()} severity: {description[:200]}"
+    remediation = f"Investigate and remediate: {title}"
+
+    try:
+        from phantom.telemetry.tracer import get_global_tracer
+
+        tracer = get_global_tracer()
+        if not tracer:
+            return {"success": False, "message": "Tracer unavailable — report not stored."}
+
+        # Light title-based dedup (avoids expensive LLM-based dedup call)
+        existing = tracer.get_existing_vulnerabilities()
+        for r in existing:
+            if r.get("title", "").lower().strip() == title.lower().strip():
+                return {
+                    "success": False,
+                    "message": f"Duplicate: '{title}' already reported.",
+                    "duplicate_of": r.get("id", ""),
+                }
+
+        report_id = tracer.add_vulnerability_report(
+            title=title.strip(),
+            description=description[:1000],
+            severity=severity_str,
+            impact=impact,
+            target=target.strip(),
+            technical_analysis=description[:500],
+            poc_description=proof[:1000],
+            poc_script_code="",
+            remediation_steps=remediation,
+            cvss=cvss_score,
+            cvss_breakdown=cvss_map,
+            endpoint=target.split("?")[0] if "?" in target else target,
+            method="GET",
+        )
+
+        return {
+            "success": True,
+            "message": f"Vulnerability '{title}' reported successfully!",
+            "report_id": report_id,
+            "severity": severity_str,
+            "cvss_score": cvss_score,
+        }
+
+    except Exception as e:
+        return {"success": False, "message": f"Report failed: {e!s}"}
+
+
 def calculate_cvss_and_severity(
     attack_vector: str,
     attack_complexity: str,

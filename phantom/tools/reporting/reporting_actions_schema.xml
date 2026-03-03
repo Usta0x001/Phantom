@@ -160,4 +160,52 @@ print(r.json())</parameter>
 </function>
     </examples>
   </tool>
+
+  <tool name="report_vulnerability">
+    <description>Report a discovered vulnerability quickly with minimal parameters.
+
+This is the FAST, PREFERRED way to report vulnerabilities. Use this instead of create_vulnerability_report for speed.
+Only 5 parameters required — CVSS score is auto-computed from severity.
+
+Use this tool for EVERY confirmed vulnerability you find. If unsure between this and create_vulnerability_report, USE THIS ONE.
+
+DEDUPLICATION: Title-based — if you already reported it, it will be rejected.
+
+Rules:
+- One report per vulnerability (don't combine multiple vulns)
+- Include proof of concept (curl, HTTP request, or steps)
+- Use the correct severity level
+</description>
+    <parameters>
+      <parameter name="title" type="string" required="true">
+        <description>Short vulnerability title, e.g. "SQL Injection in /api/login" or "XSS in /search q parameter"</description>
+      </parameter>
+      <parameter name="target" type="string" required="true">
+        <description>URL or target where the vulnerability was found, e.g. "http://target:3000/rest/products/search"</description>
+      </parameter>
+      <parameter name="severity" type="string" required="true">
+        <description>Severity level. Must be one of: critical, high, medium, low</description>
+      </parameter>
+      <parameter name="description" type="string" required="true">
+        <description>Description of the vulnerability and its impact (at least 10 characters)</description>
+      </parameter>
+      <parameter name="proof" type="string" required="true">
+        <description>Proof of concept: curl command, HTTP request, payload, or steps to reproduce</description>
+      </parameter>
+    </parameters>
+    <returns type="Dict[str, Any]">
+      <description>Response containing:
+- On success: success=true, message, report_id, severity, cvss_score
+- On duplicate: success=false, message (duplicate info), duplicate_of</description>
+    </returns>
+    <examples>
+<function=report_vulnerability>
+<parameter=title>SQL Injection in /rest/products/search</parameter>
+<parameter=target>http://target:3000/rest/products/search?q=test</parameter>
+<parameter=severity>critical</parameter>
+<parameter=description>The q parameter is vulnerable to SQL injection. UNION-based extraction allows reading all database tables including Users with credentials.</parameter>
+<parameter=proof>curl "http://target:3000/rest/products/search?q=test'))%20UNION%20SELECT%20email,password,3,4,5,6,7,8,9%20FROM%20Users--"</parameter>
+</function>
+    </examples>
+  </tool>
 </tools>

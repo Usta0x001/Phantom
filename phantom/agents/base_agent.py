@@ -276,6 +276,23 @@ class BaseAgent(metaclass=AgentMeta):
                             f"Test EVERY vuln class: SQLi, XSS, IDOR, Auth/JWT, path traversal, SSRF."
                         )
 
+                    # v0.9.33 HARD FALLBACK: If still RECON at 20%, force transition
+                    # Scan _3630 was stuck in RECON at iteration 40 (27%).
+                    elif current == ScanPhase.RECON and pct >= 0.20:
+                        self.state.set_phase(ScanPhase.EXPLOIT)
+                        logger.warning(
+                            "HARD FALLBACK: Still RECON at %.0f%% — force EXPLOIT (iter=%d)",
+                            pct * 100, self.state.iteration,
+                        )
+                        self.state.add_message("user",
+                            f"🚨 CRITICAL: You are STILL in RECON at iteration "
+                            f"{self.state.iteration}/{self.state.max_iterations}!\n"
+                            f"FORCED TRANSITION → EXPLOIT phase. "
+                            f"NO MORE reconnaissance allowed.\n"
+                            f"Run security scanners NOW: nuclei_scan, sqlmap_test, "
+                            f"ffuf_directory_scan. Test: SQLi, XSS, IDOR, Auth, SSRF."
+                        )
+
                     # EXPLOIT → REPORT: after 90% of iterations
                     # BUG-FIX: Was 75% — wasted 38 iterations in REPORT phase where
                     # the LLM just bounces off finish_scan gate. 90% = only ~15
@@ -289,8 +306,10 @@ class BaseAgent(metaclass=AgentMeta):
                             f"You have used {self.state.iteration}/{self.state.max_iterations} iterations.\n"
                             f"STOP testing. Call finish_scan NOW with a complete report."
                         )
-                except (ImportError, Exception):  # noqa: BLE001
-                    pass
+                except ImportError:
+                    logger.debug("ScanPhase import failed — phase transitions disabled")
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("Phase transition error (NOT swallowed): %s", exc)
 
             # ── Vuln-class rotation enforcement (root agent only) ──
             if (

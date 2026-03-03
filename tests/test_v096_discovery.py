@@ -397,9 +397,10 @@ class TestAutoRecordFindings:
             ],
         }
         _auto_record_findings("nuclei_scan", result, state)
-        # Only critical should be recorded (info is skipped)
-        assert len(state.findings_ledger) == 1
+        # v0.9.33: Both critical AND info findings are now recorded
+        assert len(state.findings_ledger) == 2
         assert "sqli-test" in state.findings_ledger[0]
+        assert "tech-detect" in state.findings_ledger[1]
 
     def test_nmap_ports_auto_recorded(self):
         from phantom.tools.executor import _auto_record_findings

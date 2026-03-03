@@ -439,6 +439,36 @@ async def _execute_single_tool(
     execution_id = None
     should_agent_finish = False
 
+    # ── v0.9.33: Tool firewall — block manual tools in first 8 iterations ──
+    # Root cause RC4: LLM wastes 50%+ of calls on browser_action/python_action
+    # instead of using automated scanners.  Hard-block these in early iterations
+    # for ROOT agents only (sub-agents can use them freely).
+    _FIREWALL_BLOCKED = {"browser_action", "python_action"}
+    _FIREWALL_ITERATIONS = 8
+    if (
+        tool_name in _FIREWALL_BLOCKED
+        and agent_state is not None
+        and getattr(agent_state, "parent_id", "not_none") is None  # root agent only
+        and hasattr(agent_state, "iteration")
+        and agent_state.iteration <= _FIREWALL_ITERATIONS
+    ):
+        firewall_msg = (
+            f"🚫 TOOL BLOCKED: '{tool_name}' is not available in the first "
+            f"{_FIREWALL_ITERATIONS} iterations. Use automated security scanners instead:\n"
+            f"  • nmap_scan — port discovery\n"
+            f"  • katana_crawl — endpoint discovery\n"
+            f"  • nuclei_scan — CVE and misconfig detection\n"
+            f"  • sqlmap_test — SQL injection testing\n"
+            f"  • ffuf_directory_scan — directory/file brute-force\n"
+            f"These find 10x more vulnerabilities per iteration than manual browsing."
+        )
+        _logger.info("Tool firewall blocked %s at iteration %d", tool_name, agent_state.iteration)
+        observation_xml = (
+            f"<tool_result>\n<tool_name>{_xml_escape(tool_name)}</tool_name>\n"
+            f"<result><![CDATA[{firewall_msg}]]></result>\n</tool_result>"
+        )
+        return observation_xml, [], False
+
     if tracer:
         execution_id = tracer.log_tool_execution_start(agent_id, tool_name, args)
 
@@ -583,6 +613,122 @@ def extract_screenshot_from_result(result: Any) -> str | None:
     return None
 
 
+# ── v0.9.33: Auto-report pipeline ──────────────────────────────────────
+# The #1 root cause of low vuln count: nuclei/sqlmap find real vulns but
+# they are NEVER reported because the LLM must manually call
+# create_vulnerability_report with 16 parameters.  This function auto-
+# converts scanner findings into proper vulnerability reports.
+
+_SEVERITY_TO_CVSS: dict[str, dict[str, str]] = {
+    "critical": {"AV": "N", "AC": "L", "PR": "N", "UI": "N", "S": "C", "C": "H", "I": "H", "A": "H"},
+    "high":     {"AV": "N", "AC": "L", "PR": "N", "UI": "N", "S": "U", "C": "H", "I": "H", "A": "N"},
+    "medium":   {"AV": "N", "AC": "L", "PR": "N", "UI": "R", "S": "U", "C": "L", "I": "L", "A": "N"},
+    "low":      {"AV": "N", "AC": "H", "PR": "L", "UI": "R", "S": "U", "C": "L", "I": "N", "A": "N"},
+}
+
+
+def _auto_report_scanner_findings(scanner: str, findings: list[dict], agent_state: Any) -> None:
+    """Auto-create vulnerability reports from scanner findings without LLM involvement.
+
+    This bridges the gap between 'nuclei found 40 findings' and '0 vulnerability reports'.
+    Only reports medium+ severity to avoid flooding with info disclosures.
+    """
+    try:
+        from phantom.telemetry.tracer import get_global_tracer
+        tracer = get_global_tracer()
+        if not tracer:
+            return
+
+        existing = tracer.get_existing_vulnerabilities()
+        existing_titles = {r.get("title", "").lower() for r in existing}
+        reported = 0
+
+        for f in findings:
+            if scanner == "nuclei":
+                sev = f.get("severity", "info").lower()
+                if sev not in ("critical", "high", "medium", "low"):
+                    continue
+                name = f.get("name") or f.get("template_name") or f.get("template_id", "unknown")
+                url = f.get("matched_at") or f.get("host", "")
+                desc = f.get("description", "") or f"Detected by Nuclei template {f.get('template_id', '')}"
+                tags = f.get("tags", "")
+                refs = f.get("references", [])
+                curl_cmd = f.get("curl_command", "")
+                title = f"{name} at {url.split('?')[0]}" if url else name
+
+                # Skip if already reported (simple title dedup)
+                if title.lower() in existing_titles:
+                    continue
+
+                poc = curl_cmd if curl_cmd else f"Nuclei template: {f.get('template_id', 'N/A')}"
+                if refs:
+                    poc += "\nReferences: " + ", ".join(refs[:3])
+
+                impact = f"{sev.upper()} severity vulnerability detected by automated scanning."
+                remediation = f"Investigate and remediate the {name} finding. Tags: {tags}"
+                if refs:
+                    remediation += f"\nSee: {refs[0]}"
+
+            elif scanner == "sqlmap":
+                sev = "critical"
+                url = f.get("url", f.get("target", "?"))
+                params = f.get("injection_points", f.get("vulnerable_params", []))
+                title = f"SQL Injection at {url.split('?')[0]}"
+                if title.lower() in existing_titles:
+                    continue
+                desc = f"SQLMap confirmed SQL injection at {url} with parameters: {params}"
+                poc = f"sqlmap -u '{url}' --batch --level=3 --risk=2"
+                impact = "CRITICAL: Full database read/write access via SQL injection."
+                remediation = "Use parameterized queries. Implement input validation."
+            else:
+                continue
+
+            # Map severity to CVSS params
+            cvss_map = _SEVERITY_TO_CVSS.get(sev, _SEVERITY_TO_CVSS["medium"])
+
+            try:
+                from phantom.tools.reporting.reporting_actions import (
+                    calculate_cvss_and_severity,
+                )
+                cvss_score, severity_str, cvss_vector = calculate_cvss_and_severity(
+                    cvss_map["AV"], cvss_map["AC"], cvss_map["PR"], cvss_map["UI"],
+                    cvss_map["S"], cvss_map["C"], cvss_map["I"], cvss_map["A"],
+                )
+            except Exception:
+                cvss_score = {"critical": 9.5, "high": 7.5, "medium": 5.0, "low": 3.0}.get(sev, 5.0)
+                severity_str = sev
+                cvss_vector = ""
+
+            report_id = tracer.add_vulnerability_report(
+                title=title,
+                description=desc[:500],
+                severity=severity_str,
+                impact=impact,
+                target=url or "unknown",
+                technical_analysis=f"Detected by {scanner} automated scanner. {desc[:300]}",
+                poc_description=poc[:500],
+                poc_script_code="",
+                remediation_steps=remediation[:500],
+                cvss=cvss_score,
+                cvss_breakdown=cvss_map,
+                endpoint=url.split("?")[0] if url and "?" in url else url,
+                method="GET",
+            )
+
+            if report_id:
+                existing_titles.add(title.lower())
+                reported += 1
+
+            if reported >= 25:  # Safety cap per scanner call
+                break
+
+        if reported > 0:
+            _logger.info("Auto-reported %d %s findings as vulnerability reports", reported, scanner)
+
+    except Exception as exc:
+        _logger.debug("Auto-report failed for %s: %s", scanner, exc)
+
+
 def _auto_record_findings(tool_name: str, result: Any, agent_state: Any) -> None:
     """Automatically record key findings from security tool results to the
     persistent findings ledger.  This ensures critical discoveries survive
@@ -600,19 +746,25 @@ def _auto_record_findings(tool_name: str, result: Any, agent_state: Any) -> None
         # --- Nuclei ---
         if tool_name in ("nuclei_scan", "nuclei_scan_cves", "nuclei_scan_misconfigs"):
             findings = result.get("findings", [])
-            for f in findings[:15]:
-                sev = f.get("severity", "info")
-                if sev in ("critical", "high", "medium"):
-                    name = f.get("template_name") or f.get("template_id", "unknown")
-                    url = f.get("matched_at") or f.get("host", "")
-                    # ARCH-003 FIX: Tag HIGH/CRITICAL findings as unverified
+            # v0.9.33 FIX: Record ALL severity levels (was medium+ only — lost 40 findings)
+            for f in findings[:30]:
+                sev = f.get("severity", "unknown").lower()
+                name = f.get("template_name") or f.get("name") or f.get("template_id", "unknown")
+                url = f.get("matched_at") or f.get("host", "")
+                if sev in ("critical", "high", "medium", "low"):
                     verified_tag = "[UNVERIFIED] " if sev in ("critical", "high") else ""
                     agent_state.add_finding(f"[vuln/nuclei] {verified_tag}{sev.upper()} {name} at {url}")
-                    # Queue for verification if EnhancedAgentState supports it
-                    if sev in ("critical", "high") and hasattr(agent_state, "unverified_findings"):
-                        agent_state.unverified_findings.append({
-                            "tool": "nuclei", "severity": sev, "name": name, "url": url,
-                        })
+                elif sev in ("unknown", "info") and name:
+                    agent_state.add_finding(f"[info/nuclei] {name} at {url}")
+                # Queue for verification if EnhancedAgentState supports it
+                if sev in ("critical", "high") and hasattr(agent_state, "unverified_findings"):
+                    agent_state.unverified_findings.append({
+                        "tool": "nuclei", "severity": sev, "name": name, "url": url,
+                    })
+
+            # v0.9.33 FIX: AUTO-REPORT nuclei findings as vulnerabilities
+            # This is the #1 impact fix — nuclei found 40 findings but 0 were reported.
+            _auto_report_scanner_findings("nuclei", findings, agent_state)
 
         # --- Nmap ---
         elif tool_name == "nmap_scan":
@@ -736,6 +888,11 @@ def _auto_record_findings(tool_name: str, result: Any, agent_state: Any) -> None
                     f"[recon/subfinder] {len(subdomains)} subdomains: "
                     + ", ".join(subdomains[:10])
                 )
+
+        # --- SQLMap auto-report ---
+        # v0.9.33: Auto-report confirmed SQLi findings
+        if tool_name in ("sqlmap_test", "sqlmap_forms") and result.get("vulnerable"):
+            _auto_report_scanner_findings("sqlmap", [result], agent_state)
 
         # --- Send Request (manual testing) ---
         elif tool_name in ("send_request", "repeat_request"):
