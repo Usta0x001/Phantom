@@ -437,6 +437,8 @@ class EnhancedAgentState(AgentState):
         # Type guards
         if not isinstance(data.get("iteration", 0), int):
             data["iteration"] = 0
+        if not isinstance(data.get("max_iterations", 300), int):
+            data["max_iterations"] = 300
         if not isinstance(data.get("subdomains", []), list):
             data["subdomains"] = []
         if not isinstance(data.get("endpoints", []), list):
