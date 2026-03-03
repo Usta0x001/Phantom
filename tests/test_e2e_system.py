@@ -1547,9 +1547,9 @@ class TestRegressionGuards:
         import inspect
         from phantom.agents import base_agent
         source = inspect.getsource(base_agent)
-        # Uses select_autoescape() with default_for_string=True
+        # v0.9.35: Matches Strix — autoescape disabled for prompts containing XML tags
         assert "select_autoescape" in source
-        assert "default_for_string=True" in source
+        assert "default_for_string=False" in source
 
     def test_sandbox_token_excluded(self):
         from phantom.agents.state import AgentState

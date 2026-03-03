@@ -46,9 +46,7 @@ class PhantomAgent(BaseAgent):
         # ── Auto-detect target type and load relevant skills ──
         self._auto_load_target_skills(targets)
 
-        # R5-12 FIX: Inject mandatory first actions for Juice Shop targets
-        # (Juice Shop is an Angular SPA — katana alone finds < 5 URLs)
-        self._juice_shop_detected = getattr(self, "_juice_shop_detected", False)
+        # R5-12 FIX: Juice Shop auto-detection DISABLED in v0.9.35 (H-11)
 
         # ── v0.9.34: VulnClassTracker DISABLED ──
         # The rotation engine forces abandoning promising attack vectors after
@@ -131,86 +129,27 @@ class PhantomAgent(BaseAgent):
 
         task_description = " ".join(task_parts)
 
-        # R5-12 FIX: Inject mandatory first actions for Juice Shop
-        if getattr(self, "_juice_shop_detected", False):
-            task_description += (
-                "\n\n--- MANDATORY SCAN STRATEGY (Juice Shop SPA) ---"
-                "\nJuice Shop is an Angular SPA with 100+ API endpoints."
-                "\n"
-                "\nSTEP 1 — AUTOMATED SCANNERS (iterations 1-10):"
-                "\n  a) nuclei_scan against the target — finds known CVEs automatically"
-                "\n  b) katana_crawl with headless=True — discovers SPA routes & API endpoints"
-                "\n  c) nmap_scan — port scan and service detection"
-                "\n  d) ffuf_directory_scan with /usr/share/wordlists/dirb/common.txt"
-                "\n"
-                "\nSTEP 2 — TARGETED TOOL ATTACKS (iterations 11-30):"
-                "\n  a) sqlmap_test on /rest/user/login (POST, param=email)"
-                "\n  b) sqlmap_test on /rest/products/search (GET, param=q)"
-                "\n  c) ffuf_directory_scan with /usr/share/wordlists/dirbuster/directory-list-2.3-small.txt"
-                "\n  d) send_request: GET /api-docs, /ftp, /api/Users, /metrics, /api/Quantitys"
-                "\n"
-                "\nSTEP 3 — MANUAL EXPLOITATION (iterations 31+):"
-                "\n  Test IDOR (/rest/basket/1-5, /api/Users/N), JWT bypass, path traversal (/ftp/%2500),"
-                "\n  XSS (POST /api/Feedbacks, /api/Products), file upload (/profile), SSRF, business logic"
-                "\n"
-                "\nCRITICAL: Use nuclei_scan and sqlmap_test BEFORE send_request!"
-                "\n--- END STRATEGY ---"
-            )
+        # v0.9.35: Juice Shop auto-detection and strategy injection REMOVED (H-11).
+        # Hardcoded strategies prevent the LLM from adapting to discoveries.
+        # Port 3000 is too broad (Express, Rails, React all use it).
+        # Strix has no hardcoded strategies — the LLM figures it out.
 
-        # ── Inject scan profile constraints into task ──
+        # ── v0.9.35: Minimal scan profile injection (H-15) ──
+        # Only inject max_iterations. Skip_tools, priority_tools, rates, etc.
+        # are redundant (already in system prompt) or restrictive.
+        # Strix has NO profile injection at all.
         if self.scan_profile:
             profile = self.scan_profile
-            profile_name = profile.name if hasattr(profile, "name") else str(profile.get("name", "unknown"))
             max_iter = profile.max_iterations if hasattr(profile, "max_iterations") else profile.get("max_iterations", 300)
-            task_description += f"\n\n--- SCAN PROFILE: {profile_name} ---"
-            task_description += f"\nYou have a STRICT LIMIT of {max_iter} tool-call iterations."
-            task_description += "\nBe efficient and focused. Report vulnerabilities as soon as you find them."
+            task_description += f"\n\nYou have {max_iter} iterations. Be thorough and relentless."
 
-            skip_tools = profile.skip_tools if hasattr(profile, "skip_tools") else profile.get("skip_tools", [])
-            if skip_tools:
-                task_description += f"\nDO NOT use these tools: {', '.join(skip_tools)}"
-
-            priority_tools = profile.priority_tools if hasattr(profile, "priority_tools") else profile.get("priority_tools", [])
-            if priority_tools:
-                task_description += f"\nPRIORITIZE these tools: {', '.join(priority_tools)}"
-
-            # BUG-19 FIX: Wire nuclei_severity from profile to task description
-            nuclei_sev = profile.nuclei_severity if hasattr(profile, "nuclei_severity") else profile.get("nuclei_severity", "")
-            if nuclei_sev and nuclei_sev != "all":
-                task_description += f"\nWhen running nuclei_scan, use severity='{nuclei_sev}'"
-
-            enable_browser = profile.enable_browser if hasattr(profile, "enable_browser") else profile.get("enable_browser", True)
-            if not enable_browser:
-                task_description += "\nDo NOT use browser-based tools (open_browser, browser_navigate, etc.)."
-
-            # Consume custom_flags (e.g. stealth rate_limit / delay_ms)
-            custom_flags = profile.custom_flags if hasattr(profile, "custom_flags") else profile.get("custom_flags", {})
-            # P2-FIX8: Register active profile flags for stealth enforcement middleware
+            # Register active profile flags for stealth enforcement middleware
             try:
                 from phantom.core.scan_profiles import set_active_profile_flags
+                custom_flags = profile.custom_flags if hasattr(profile, "custom_flags") else profile.get("custom_flags", {})
                 set_active_profile_flags(custom_flags or {})
             except ImportError:
                 pass
-            if custom_flags:
-                rate_limit = custom_flags.get("rate_limit")
-                delay_ms = custom_flags.get("delay_ms")
-                if rate_limit:
-                    task_description += f"\nRATE LIMIT: Max {rate_limit} requests per second."
-                if delay_ms:
-                    task_description += f"\nDELAY: Wait at least {delay_ms}ms between requests."
-                # Pass any remaining flags generically
-                other_flags = {k: v for k, v in custom_flags.items() if k not in ("rate_limit", "delay_ms")}
-                if other_flags:
-                    task_description += f"\nAdditional flags: {other_flags}"
-
-            task_description += "\nCall create_vulnerability_report IMMEDIATELY after confirming each vulnerability."
-
-            # NOTE: SPA recon strategy, vuln-class rotation, mandatory first steps,
-            # efficiency rules, and anti-premature-termination directives are already
-            # in the system prompt and quick.md skill.  Duplicating them here wastes
-            # ~2-3K tokens on every LLM request and accelerates context compression.
-
-            task_description += "\n--- END SCAN PROFILE ---"
 
         # ── Inject auth headers for authenticated scanning ──
         auth_headers = scan_config.get("auth_headers")
@@ -346,7 +285,6 @@ class PhantomAgent(BaseAgent):
         )
 
         if juice_shop_indicators and hasattr(self, "llm") and hasattr(self.llm, "config"):
-            self._juice_shop_detected = True
             current_skills = list(self.llm.config.skills or [])
             skill_name = "targets/owasp_juice_shop"
             if skill_name not in current_skills:

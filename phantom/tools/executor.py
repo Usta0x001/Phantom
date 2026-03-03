@@ -228,23 +228,10 @@ async def execute_tool_invocation(tool_inv: dict[str, Any], agent_state: Any | N
     tool_name = tool_inv.get("toolName")
     tool_args = tool_inv.get("args", {})
 
-    # ---- Tool Firewall check (PHT security controls) ----
-    try:
-        from phantom.core.tool_firewall import get_tool_firewall
-        fw = get_tool_firewall()
-        if fw is not None:
-            violation = fw.validate(tool_name or "", tool_args)
-            if violation is not None:
-                import logging as _fw_log
-                _fw_log.getLogger("phantom.security.firewall").warning(
-                    "Tool call BLOCKED by firewall: %s — %s", tool_name, violation.get("error")
-                )
-                return violation
-    except ImportError:
-        import logging as _fw_log
-        _fw_log.getLogger("phantom.security.firewall").critical(
-            "Tool firewall module UNAVAILABLE — security controls degraded"
-        )
+    # v0.9.35: Tool firewall DISABLED (H-02). The injection pattern matching
+    # blocks legitimate pentest payloads: SQLi (;), SSTI (${...}), command
+    # injection (`...`), boolean SQLi (||). Strix has no firewall.
+    # The sandbox already provides isolation.
 
     # Auto-inject auth headers for security tools that support extra_args
     tool_args = _inject_auth_headers(tool_name, tool_args, agent_state)

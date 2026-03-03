@@ -19,7 +19,6 @@ from phantom.llm.utils import (
 )
 from phantom.skills import load_skills
 from phantom.tools import get_tools_prompt
-from phantom.tools.registry import TOOL_PROFILES
 from phantom.utils.resource_paths import get_phantom_resource_path
 
 
@@ -112,10 +111,10 @@ class LLM:
             skill_content = load_skills(skills_to_load)
             env.globals["get_skill"] = lambda name: skill_content.get(name, "")
 
-            # R5-01 FIX: Filter tools by scan mode profile to reduce prompt size.
-            # Quick mode: 22 tools (~18K tokens) instead of 54 (~33K tokens).
-            tool_filter = TOOL_PROFILES.get(self.config.scan_mode)
-            tools_prompt_fn = lambda: get_tools_prompt(include_only=tool_filter)  # noqa: E731
+            # v0.9.35: TOOL_PROFILES filtering REMOVED (H-12). Strix always
+            # includes ALL tools. Filtering hides tools like ffuf_parameter_fuzz,
+            # arjun, jwt_tool, etc. which the agent needs for deep exploitation.
+            tools_prompt_fn = lambda: get_tools_prompt()  # noqa: E731
 
             result = env.get_template("system_prompt.jinja").render(
                 get_tools_prompt=tools_prompt_fn,
@@ -154,7 +153,7 @@ class LLM:
     async def generate(
         self, conversation_history: list[dict[str, Any]]
     ) -> AsyncIterator[LLMResponse]:
-        messages = await asyncio.to_thread(self._prepare_messages, conversation_history)
+        messages = self._prepare_messages(conversation_history)
         max_retries = int(Config.get("phantom_llm_max_retries") or "5")
 
         for attempt in range(max_retries + 1):
@@ -224,13 +223,11 @@ class LLM:
                 }
             )
 
-        compressed = list(self.memory_compressor.compress_history(
-            list(conversation_history)  # operate on a copy to avoid destroying caller's history
-        ))
-        # NOTE: Do NOT mutate conversation_history here — this method may run
-        # in a background thread via asyncio.to_thread while the event loop
-        # still references the same list.  The caller (agent loop) is
-        # responsible for replacing its history reference if needed.
+        # v0.9.35: In-place compression like Strix. Previously operated on a
+        # copy, causing unbounded memory growth across 300 iterations.
+        compressed = list(self.memory_compressor.compress_history(conversation_history))
+        conversation_history.clear()
+        conversation_history.extend(compressed)
         messages.extend(compressed)
 
         if self._is_anthropic() and self.config.enable_prompt_caching:
@@ -248,20 +245,18 @@ class LLM:
             "timeout": self.config.timeout,
             "stream_options": {"include_usage": True},
         }
-        # v0.9.34: Only set temperature if explicitly configured.
+        # v0.9.35: Only set temperature if explicitly configured.
         # When None, use the provider's default (like Strix).
         if self.config.temperature is not None:
             args["temperature"] = self.config.temperature
 
-        # L2-FIX: Wire max_tokens from provider registry into the API call.
-        # Without this, the LLM response length is unconstrained (model default),
-        # which can waste output tokens on overly verbose responses.
+        # v0.9.35: max_tokens cap REMOVED (H-01). Strix does NOT set max_tokens.
+        # When set to 8192/16384, it truncates complex tool calls mid-output,
+        # causing XML parse failures and lost exploitation progress.
+
         from phantom.llm.provider_registry import PROVIDER_PRESETS, get_provider_max_tokens
 
         preset = PROVIDER_PRESETS.get(self.config.model_name.lower())
-        max_output_tokens = get_provider_max_tokens(self.config.model_name)
-        if max_output_tokens > 0:
-            args["max_tokens"] = max_output_tokens
         api_key: str | None = None
         api_base: str | None = None
 

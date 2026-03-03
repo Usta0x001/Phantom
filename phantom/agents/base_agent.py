@@ -39,10 +39,7 @@ class AgentMeta(type):
         new_cls.agent_name = name
         new_cls.jinja_env = Environment(
             loader=FileSystemLoader(prompt_dir),
-            autoescape=select_autoescape(
-                enabled_extensions=("html", "xml"),
-                default_for_string=True,
-            ),
+            autoescape=select_autoescape(enabled_extensions=(), default_for_string=False),
         )
 
         return new_cls
@@ -196,38 +193,6 @@ class BaseAgent(metaclass=AgentMeta):
                 continue
 
             self.state.increment_iteration()
-
-            # ── v0.9.34: Lean phase transitions only (like Strix) ──
-            # Removed: scanner orders, scanner enforcement, tool diversity alerts,
-            # coverage updates, vuln-class rotation, stagnation detection.
-            # These injected 8+ control messages per iteration, drowning the LLM
-            # in contradictory instructions and consuming token budget.
-            if hasattr(self.state, "set_phase") and hasattr(self.state, "current_phase"):
-                try:
-                    from phantom.models.scan import ScanPhase
-                    pct = self.state.iteration / self.state.max_iterations
-                    findings_count = len(getattr(self.state, "findings_ledger", []))
-                    current = self.state.current_phase
-
-                    # RECON → EXPLOIT: after 10% of iterations OR when we have real findings
-                    if current == ScanPhase.RECON and (pct >= 0.10 or findings_count >= 3):
-                        self.state.set_phase(ScanPhase.EXPLOIT)
-                        logger.info("Phase transition: RECON → EXPLOIT (iter=%d, findings=%d)",
-                                    self.state.iteration, findings_count)
-
-                    # EXPLOIT → REPORT: after 95% of iterations
-                    elif current == ScanPhase.EXPLOIT and pct >= 0.95:
-                        self.state.set_phase(ScanPhase.REPORT)
-                        logger.info("Phase transition: EXPLOIT → REPORT (iter=%d)",
-                                    self.state.iteration)
-                        self.state.add_message("user",
-                            f"You have used {self.state.iteration}/{self.state.max_iterations} iterations. "
-                            f"Call finish_scan NOW with a complete report."
-                        )
-                except ImportError:
-                    pass
-                except Exception as exc:  # noqa: BLE001
-                    logger.debug("Phase transition error: %s", exc)
 
             # Periodic checkpoint for scan resume (every 10 iterations, root agent only)
             is_root = not getattr(self.state, "parent_id", None)
@@ -439,41 +404,16 @@ class BaseAgent(metaclass=AgentMeta):
 
         content_stripped = (final_response.content or "").strip()
 
-        # ---- Loop Detector: check for repeated LLM responses ----
-        try:
-            from phantom.core.loop_detector import LoopDetector
-            # Use module-level singleton if available; otherwise skip
-            import phantom.core.loop_detector as _ld_mod
-            ld = getattr(_ld_mod, "_global_detector", None)
-            if ld is not None and content_stripped:
-                result = ld.record_response(content_stripped)
-                if result.is_loop:
-                    logger.warning(
-                        "Loop detected (%s) — injecting corrective prompt",
-                        result.details,
-                    )
-                    self.state.add_message(
-                        "user",
-                        f"⚠️ LOOP DETECTED: {result.details}\n"
-                        "You are repeating yourself. Change your approach:\n"
-                        "- Try a DIFFERENT tool or technique\n"
-                        "- Target a DIFFERENT endpoint or parameter\n"
-                        "- If truly stuck, use finish_scan to conclude",
-                    )
-        except ImportError:
-            pass
-
         if not content_stripped:
-            # Refund the iteration — empty response is not productive work
-            self.state.iteration = max(0, self.state.iteration - 1)
             corrective_message = (
                 "You MUST NOT respond with empty messages. "
-                "Call a tool NOW. Suggested next actions:\n"
-                "- send_request to test an endpoint for vulnerabilities\n"
-                "- nuclei_scan / sqlmap_test / ffuf_directory_scan for automated scanning\n"
-                "- create_vulnerability_report if you have a confirmed finding\n"
-                "- record_finding to log a discovery\n"
-                "- finish_scan ONLY if you have tested 6+ vuln classes across all endpoints"
+                "If you currently have nothing to do or say, use an appropriate tool instead:\n"
+                "- Use agents_graph_actions.wait_for_message to wait for messages "
+                "from user or other agents\n"
+                "- Use agents_graph_actions.agent_finish if you are a sub-agent "
+                "and your task is complete\n"
+                "- Use finish_actions.finish_scan if you are the root/main agent "
+                "and the scan is complete"
             )
             self.state.add_message("user", corrective_message)
             return False
@@ -497,14 +437,7 @@ class BaseAgent(metaclass=AgentMeta):
         if actions:
             return await self._execute_actions(actions, tracer)
 
-        # No tool call — refund the iteration and nudge the agent
-        self.state.iteration = max(0, self.state.iteration - 1)
-        self.state.add_message(
-            "user",
-            "WARNING: You sent text without a tool call. Every message MUST include a tool call. "
-            "Call a security tool NOW (send_request, nuclei_scan, sqlmap_test, ffuf_directory_scan, "
-            "create_vulnerability_report, etc.).",
-        )
+        # No tool call — Strix behavior: silently continue (no prescriptive nudge)
         return False
 
     async def _execute_actions(self, actions: list[Any], tracer: Optional["Tracer"]) -> bool:
@@ -513,21 +446,9 @@ class BaseAgent(metaclass=AgentMeta):
             self.state.add_action(action)
             # Track tool usage on EnhancedAgentState when available
             if hasattr(self.state, "track_tool_usage"):
-                # BUG-03 FIX: parse_tool_invocations uses key "toolName", not "tool_name"
                 tool_name = action.get("toolName") or action.get("tool_name") or action.get("name", "")
                 if tool_name:
                     self.state.track_tool_usage(tool_name)
-
-            # ---- Loop Detector: record tool call fingerprint ----
-            try:
-                import phantom.core.loop_detector as _ld_mod
-                ld = getattr(_ld_mod, "_global_detector", None)
-                if ld is not None:
-                    t_name = action.get("toolName") or action.get("tool_name") or action.get("name", "")
-                    t_args = action.get("args", {})
-                    ld.record_tool_call(t_name, t_args)
-            except ImportError:
-                pass
 
         conversation_history = self.state.get_conversation_history()
 
@@ -545,37 +466,6 @@ class BaseAgent(metaclass=AgentMeta):
             raise
 
         self.state.messages = list(conversation_history)
-
-        # ── BUG-02 FIX: Wire vuln_rotation.record_finding() ──────────
-        # After tool execution, scan newly-added ledger entries for vuln
-        # indicators and call record_finding() so the rotation tracker
-        # accurately reflects class coverage.
-        if hasattr(self, "_vuln_rotation") and self._vuln_rotation is not None:
-            try:
-                ledger = getattr(self.state, "findings_ledger", [])
-                # Check last 5 entries (recently added by _auto_record_findings)
-                _vuln_class_map = {
-                    "sqli": "sqli", "sql inject": "sqli", "sqlmap": "sqli",
-                    "xss": "xss", "cross-site scripting": "xss",
-                    "idor": "idor", "access control": "idor",
-                    "auth": "auth_jwt", "jwt": "auth_jwt", "login": "auth_jwt",
-                    "traversal": "path_traversal", "lfi": "path_traversal",
-                    "ssrf": "ssrf",
-                    "disclosure": "info_disclosure", "exposure": "info_disclosure",
-                    "business": "business_logic", "race": "business_logic",
-                    "upload": "csrf_upload", "csrf": "csrf_upload",
-                    "xxe": "xxe_deser", "deserialization": "xxe_deser",
-                }
-                for entry in ledger[-10:]:
-                    lower_e = entry.lower()
-                    if "[vuln" in lower_e or "confirmed" in lower_e or "[auth" in lower_e or "indicator" in lower_e:
-                        for keyword, class_id in _vuln_class_map.items():
-                            if keyword in lower_e:
-                                self._vuln_rotation.record_finding(class_id)
-                                break
-            except Exception:  # noqa: BLE001
-                pass
-        # ── END BUG-02 FIX ───────────────────────────────────────────
 
         if should_agent_finish:
             # Finalize EnhancedAgentState scan tracking when available.
