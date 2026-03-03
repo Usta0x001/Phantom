@@ -2,6 +2,60 @@
 
 All notable changes to Phantom will be documented in this file.
 
+## [0.9.35] - 2026-03-03
+
+### Guarantee Strix Power — Remove ALL Remaining Overhead (17 Harmful Diffs)
+
+Post-v0.9.34 deep code audit found 17 remaining differences still making Phantom 
+weaker than Strix. This release eliminates every one of them while keeping the 10 
+genuinely helpful Phantom additions.
+
+#### Removed (Proven Harmful)
+
+- **H-01: max_tokens cap removed** — Was truncating LLM output at 8192/16384 tokens, 
+  causing tool calls to be cut mid-XML → parse failures → "agent does nothing" cycles.
+  Strix has no cap.
+- **H-02: Tool firewall disabled** — Injection pattern matching blocked legitimate 
+  pentest payloads (SQLi `;`, SSTI `${}`, command injection backticks). Strix has none.
+- **H-03: Loop detector removed** — False positives when methodically testing similar 
+  endpoints. Injected "change your approach" messages abandoned productive attack vectors.
+- **H-04: Phase transition system removed** — RECON→EXPLOIT→REPORT phases with 
+  "Call finish_scan NOW" at 95% stole the last 15 iterations. Strix has no phases.
+- **H-05: "No tool call" prescriptive nudge removed** — Was listing specific tools 
+  the agent should use. Now matches Strix: silently continues.
+- **H-06: Empty response handler simplified** — Removed prescriptive tool suggestions 
+  and hidden "6+ vuln classes" gate. Now matches Strix's simple corrective.
+- **H-07: "Move on after 3-5 attempts" REMOVED** — THE biggest single weakness. 
+  Replaced with Strix's "each failure teaches you something, the REAL work begins 
+  when tools fail". Most real vulns need 10-50+ attempts.
+- **H-08: "Follow ROTATION messages" removed** — Vestigial from disabled VulnClassTracker.
+- **H-09: Full vulnerability methodology restored** — Restored Strix's detailed 
+  EXPLOITATION APPROACH (basic→advanced→super-advanced), VULNERABILITY KNOWLEDGE BASE, 
+  and "A single high-impact vulnerability is worth more than dozens of low-severity findings."
+- **H-10: Python restriction removed** — "TOOLS FIRST / Only use python_action for 4 
+  categories" replaced with Strix's open "Automate with Python scripts for complex 
+  workflows and repetitive tasks."
+- **H-11: Juice Shop strategy injection removed** — Hardcoded STEP 1/2/3 checklist 
+  for port 3000 targets. Strix lets the LLM figure it out.
+- **H-12: TOOL_PROFILES filtering removed** — Quick mode was hiding 15+ tools 
+  (arjun, jwt_tool, ffuf_parameter_fuzz, etc.). Now ALL tools visible always.
+- **H-13: In-place memory compression** — Was copying conversation_history, causing 
+  unbounded growth across 300 iterations. Now matches Strix: compress in-place.
+  Also removed unnecessary asyncio.to_thread wrapper.
+- **H-14: ITERATION BUDGET DISCIPLINE removed** — "No wasted iterations" created 
+  anxiety about exploration. Security testing REQUIRES speculative tests.
+- **H-15: Scan profile injection minimized** — Was injecting skip_tools, priority_tools, 
+  rates, nuclei_severity (~500+ tokens per request). Now only injects iteration count.
+- **H-16: Jinja autoescape fixed** — Was HTML-escaping XML tags in prompts. Now 
+  matches Strix: `default_for_string=False`.
+- **H-17: Stealth delay verified** — delay_ms defaults to 0, harmless.
+
+#### Kept (Proven Helpful — K-01 through K-10)
+- Auto-report scanner findings, CDATA wrapping, findings ledger, critical data 
+  extraction, auto-record findings, EnhancedAgentState, post-scan enrichment, 
+  sandbox timeout 600s, reasoning effort "high", prior intel from knowledge store,
+  Juice Shop skill loading (reference knowledge, not restrictive strategy)
+
 ## [0.9.34] - 2026-03-05
 
 ### Return to Strix Philosophy — Remove Harmful Orchestration Bloat
