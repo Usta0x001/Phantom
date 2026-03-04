@@ -1,17 +1,19 @@
-# Phantom LLM Selection Study
-**Version:** 1.0 | **Date:** July 2025 | **Author:** Gadouri Rodwan | **Supervisor:** Dr. Allama Oussama
+# Phantom LLM Selection Guide
+**Version:** 1.0 | **Date:** March 2026 | **Author:** [Usta0x001](https://github.com/Usta0x001)
 
 ---
 
-## 1. Executive Summary
+## 1. Overview
 
-Phantom is an LLM-agnostic autonomous penetration testing platform. Through LiteLLM, it supports **100+ LLM providers** and can run on any model that speaks the OpenAI-compatible API. This study evaluates **35 models** across **8 providers**, scores them for Phantom workloads, and provides concrete recommendations.
+Phantom is LLM-agnostic — it works with **any model** that speaks the OpenAI-compatible API through [LiteLLM](https://github.com/BerriAI/litellm). This guide evaluates **35 models** across **8 providers** to help you pick the right one for your scans.
 
-**Key Finding:** DeepSeek V3.2 via OpenRouter delivers the best cost-to-performance ratio for Phantom: 7 vulnerabilities found in 26 iterations at $0.36/scan.
+**Bottom Line:** DeepSeek V3.2 via OpenRouter delivers the best bang for your buck — 7 vulnerabilities found in 26 iterations at **$0.36/scan**.
 
 ---
 
-## 2. Requirements for Phantom-Compatible LLMs
+## 2. What Makes a Good LLM for Phantom?
+
+Before picking a model, here's what Phantom actually needs from it:
 
 | Requirement | Why | Minimum |
 |---|---|---|
@@ -25,9 +27,9 @@ Phantom is an LLM-agnostic autonomous penetration testing platform. Through Lite
 
 ---
 
-## 3. Pre-Configured Presets (18 models in `provider_registry.py`)
+## 3. Pre-Configured Models (Ready to Use)
 
-These models are pre-configured in Phantom with verified context windows and cost data:
+These 18 models are already pre-configured in Phantom — just set `PHANTOM_LLM` and go:
 
 | # | Model ID | Provider | Context Window | Cost/1K In | Cost/1K Out | Vision | Reasoning |
 |---|---|---|---|---|---|---|---|
@@ -52,9 +54,9 @@ These models are pre-configured in Phantom with verified context windows and cos
 
 ---
 
-## 4. Comprehensive 35-Model Evaluation
+## 4. Full 35-Model Comparison
 
-### 4.1 Tier 1: Recommended for Phantom (Best Performance)
+### 4.1 Tier 1 — Top Picks (Best Performance)
 
 #### 1. DeepSeek V3.2 (via OpenRouter)
 - **Model ID:** `openrouter/deepseek/deepseek-v3.2`
@@ -106,7 +108,7 @@ These models are pre-configured in Phantom with verified context windows and cos
 
 ---
 
-### 4.2 Tier 2: Strong Alternatives
+### 4.2 Tier 2 — Strong Alternatives
 
 #### 7. DeepSeek Chat V3-0324 (via OpenRouter)
 - **Model ID:** `openrouter/deepseek/deepseek-chat-v3-0324`
@@ -166,7 +168,7 @@ These models are pre-configured in Phantom with verified context windows and cos
 
 ---
 
-### 4.3 Tier 3: Budget / Free Options
+### 4.3 Tier 3 — Budget & Free Options
 
 #### 15. Llama 3.3 70B Instruct (OpenRouter Free)
 - **Model ID:** `openrouter/meta-llama/llama-3.3-70b-instruct:free`
@@ -247,7 +249,7 @@ These models are pre-configured in Phantom with verified context windows and cos
 
 ---
 
-### 4.4 Tier 4: Self-Hosted / Local (Ollama)
+### 4.4 Tier 4 — Self-Hosted / Local (Ollama)
 
 #### 26. Llama 3:70B (Ollama)
 - **Model ID:** `ollama/llama3:70b`
@@ -288,7 +290,7 @@ These models are pre-configured in Phantom with verified context windows and cos
 
 ---
 
-### 4.5 Tier 5: Premium / Enterprise
+### 4.5 Tier 5 — Premium / Enterprise
 
 #### 31. Claude Opus 4 (Anthropic)
 - **Model ID:** `anthropic/claude-opus-4`
@@ -328,7 +330,7 @@ These models are pre-configured in Phantom with verified context windows and cos
 
 ---
 
-## 5. Cost Comparison Matrix
+## 5. Cost at a Glance
 
 | Model | Est. Cost per Scan* | Vulns Expected | Cost per Vuln |
 |---|---|---|---|
@@ -348,9 +350,11 @@ These models are pre-configured in Phantom with verified context windows and cos
 
 ---
 
-## 6. Recommended Configurations
+## 6. Recommended Setups
 
-### 6.1 Best Overall (Cost-Performance Champion)
+Here are the configurations we recommend depending on your situation:
+
+### 6.1 Best All-Round (Cost-Performance Champion)
 ```bash
 export PHANTOM_LLM="openrouter/deepseek/deepseek-v3.2"
 export LLM_API_KEY="sk-or-v1-..."
@@ -391,7 +395,7 @@ export PHANTOM_LLM="ollama/llama3:70b"
 - **Why:** No data leaves your network, free inference
 - **When:** Classified environments, regulatory requirements (ITAR, HIPAA)
 
-### 6.6 Multi-Model Routing (Future v0.10.x)
+### 6.6 Multi-Model Routing (Coming in v0.10.x)
 ```bash
 # Cheap model for recon, expensive for exploitation
 export PHANTOM_LLM_RECON="gemini/gemini-2.5-flash"
@@ -400,7 +404,9 @@ export PHANTOM_LLM_EXPLOIT="anthropic/claude-sonnet-4-20250514"
 
 ---
 
-## 7. Provider Availability & Reliability
+## 7. Provider Reliability
+
+Who stays up and who has limits:
 
 | Provider | Uptime | Rate Limits | Payment | Notes |
 |---|---|---|---|---|
@@ -416,9 +422,9 @@ export PHANTOM_LLM_EXPLOIT="anthropic/claude-sonnet-4-20250514"
 
 ---
 
-## 8. Benchmark Predictions by Model
+## 8. Expected Performance by Model
 
-Based on Juice Shop benchmark (v0.9.37 engine):
+Based on the Juice Shop benchmark (v0.9.38 engine):
 
 | Model | Expected Vulns | Expected Time | Expected Cost | Confidence |
 |---|---|---|---|---|
@@ -434,11 +440,11 @@ Based on Juice Shop benchmark (v0.9.37 engine):
 
 ## 9. Conclusion
 
-Phantom's LiteLLM integration provides exceptional flexibility in model selection. For production use, **DeepSeek V3.2** via OpenRouter offers the optimal balance of cost ($0.36/scan), performance (7+ vulns), and reliability. For maximum capability, **Claude Sonnet 4** provides the deepest reasoning at higher cost. For zero-cost operation, **Groq's Llama 3.3 70B** with OpenRouter free-tier fallbacks provides a viable scan capability.
+Phantom’s LiteLLM integration gives you exceptional flexibility. For everyday scanning, **DeepSeek V3.2** via OpenRouter is the sweet spot — $0.36/scan for 7+ vulnerabilities. For maximum capability, **Claude Sonnet 4** gives you the deepest reasoning at higher cost. For zero-cost operation, **Groq’s Llama 3.3 70B** with free-tier fallbacks gets the job done.
 
-The system's model-agnostic design means new models can be used immediately by setting `PHANTOM_LLM` to any LiteLLM-compatible model identifier, even without a pre-configured preset.
+The system is fully model-agnostic: any new model can be used immediately by setting `PHANTOM_LLM` to any LiteLLM-compatible identifier, even without a pre-configured preset.
 
 ---
 
-*This study was prepared as part of the Phantom System Documentation project.*  
-*Author: Gadouri Rodwan | Supervisor: Dr. Allama Oussama*
+*Part of the [Phantom](https://github.com/Usta0x001/Phantom) documentation.*  
+*Author: [Usta0x001](https://github.com/Usta0x001)*
