@@ -8,6 +8,7 @@ from typing import Any
 import httpx
 
 from phantom.config import Config
+from phantom.core.exceptions import SecurityViolationError, ResourceExhaustedError, ScopeViolationError
 
 _logger = logging.getLogger(__name__)
 
@@ -260,7 +261,13 @@ async def execute_tool_with_validation(
 
     try:
         result = await execute_tool(tool_name, agent_state, **kwargs)
+    except (SecurityViolationError, ResourceExhaustedError):
+        raise  # v0.9.39: NEVER catch security/resource errors
     except Exception as e:  # noqa: BLE001
+        # v0.9.39: Check for wrapped security errors
+        cause = e.__cause__ or e.__context__
+        if isinstance(cause, (SecurityViolationError, ResourceExhaustedError)):
+            raise cause from e
         error_str = str(e)
         if len(error_str) > 500:
             error_str = error_str[:500] + "... [truncated]"
@@ -273,14 +280,50 @@ async def execute_tool_invocation(tool_inv: dict[str, Any], agent_state: Any | N
     tool_name = tool_inv.get("toolName")
     tool_args = tool_inv.get("args", {})
 
-    # v0.9.35: Tool firewall DISABLED (H-02). The injection pattern matching
-    # blocks legitimate pentest payloads: SQLi (;), SSTI (${...}), command
-    # injection (`...`), boolean SQLi (||). The sandbox provides isolation.
+    # v0.9.39: Scope enforcement — validate URLs/IPs before execution
+    from phantom.core.feature_flags import is_enabled
+    if is_enabled("PHANTOM_FF_SCOPE_ENFORCEMENT"):
+        scope_validator = _get_scope_validator()
+        if scope_validator and tool_name:
+            try:
+                tool_args = scope_validator.enforce_scope(tool_name, tool_args)
+            except ScopeViolationError as e:
+                _logger.warning("SCOPE VIOLATION: tool=%s target=%s — %s", tool_name, e.target, e)
+                try:
+                    from phantom.core.audit_logger import get_global_audit_logger
+                    _audit = get_global_audit_logger()
+                    if _audit:
+                        _audit.log_scope_violation(
+                            target=e.target,
+                            reason=str(e),
+                            tool_name=tool_name or "",
+                        )
+                except Exception:  # noqa: BLE001
+                    pass
+                raise  # SecurityViolationError → propagates up
+
+    # v0.9.39: Tool firewall re-enabled with allowlist approach
+    if is_enabled("PHANTOM_FF_TOOL_FIREWALL"):
+        from phantom.tools.registry import get_tool_names
+        if tool_name and tool_name not in get_tool_names():
+            return f"Error: Tool '{tool_name}' is not registered."
 
     # Auto-inject auth headers for security tools that support extra_args
     tool_args = _inject_auth_headers(tool_name, tool_args, agent_state)
 
     return await execute_tool_with_validation(tool_name, agent_state, **tool_args)
+
+
+def _get_scope_validator() -> Any:
+    """Retrieve ScopeValidator from scan context, if available."""
+    try:
+        from phantom.telemetry.tracer import get_global_tracer
+        tracer = get_global_tracer()
+        if tracer and hasattr(tracer, 'scope_validator'):
+            return tracer.scope_validator
+    except (ImportError, AttributeError):
+        pass
+    return None
 
 
 # Tools that accept extra_args and support header-style flags
@@ -451,6 +494,14 @@ def _format_tool_result(tool_name: str, result: Any) -> tuple[str, list[dict[str
 
     # BUG-17 FIX: Use CDATA to avoid double-encoding security payloads
     # (XSS/SQLi payloads in results were being HTML-escaped, hiding reflections)
+    # v0.9.39: Sanitize tool output before it enters LLM context
+    from phantom.core.feature_flags import is_enabled as _ff_enabled
+    if _ff_enabled("PHANTOM_FF_OUTPUT_SANITIZER"):
+        from phantom.tools.output_sanitizer import sanitize_tool_output, tag_tool_output
+        raw_for_hash = final_result_str
+        final_result_str = sanitize_tool_output(final_result_str, tool_name)
+        final_result_str = tag_tool_output(tool_name, raw_for_hash, final_result_str)
+
     observation_xml = (
         f"<tool_result>\n<tool_name>{_xml_escape(tool_name)}</tool_name>\n"
         f"<result><![CDATA[{final_result_str.replace(']]>', ']]]]><![CDATA[>')}]]></result>\n</tool_result>"

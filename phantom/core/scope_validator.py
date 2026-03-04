@@ -118,6 +118,39 @@ class ScopeValidator:
     - Strict mode fails closed (unknown targets are denied)
     """
 
+    # v0.9.39: Mapping of tool names → parameter names that contain targets.
+    # enforce_scope() checks every value listed here against is_in_scope().
+    _SCOPE_CHECKED_PARAMS: dict[str, list[str]] = {
+        # HTTP tools
+        "http_request": ["url"],
+        "http_get": ["url"],
+        "http_post": ["url"],
+        "fetch_url": ["url"],
+        "curl": ["url"],
+        # Scanner / recon tools
+        "nmap_scan": ["target", "host"],
+        "port_scan": ["target", "host"],
+        "dns_lookup": ["domain", "target"],
+        "subdomain_enum": ["domain", "target"],
+        "directory_brute": ["url", "target"],
+        "nuclei_scan": ["target", "url"],
+        "ffuf_fuzz": ["url", "target"],
+        "sqlmap_scan": ["url", "target"],
+        "nikto_scan": ["target", "host"],
+        "wpscan": ["url"],
+        # Browser / proxy tools
+        "browse": ["url"],
+        "navigate": ["url"],
+        "screenshot": ["url"],
+        # Network tools
+        "connect": ["host", "target"],
+        "ssh_connect": ["host"],
+        "ftp_connect": ["host"],
+    }
+
+    # Generic parameter names that always get checked (fallback for unknown tools)
+    _GENERIC_SCOPE_PARAMS: set[str] = {"url", "target", "host", "domain"}
+
     def __init__(self, config: ScopeConfig | None = None) -> None:
         self.config = config or ScopeConfig()
         self._violation_log: list[dict[str, Any]] = []
@@ -142,6 +175,48 @@ class ScopeValidator:
         """Create a permissive validator (allow all). For testing only."""
         config = ScopeConfig(default_action="allow", strict_mode=False)
         return cls(config)
+
+    def enforce_scope(self, tool_name: str, tool_args: dict[str, Any]) -> dict[str, Any]:
+        """
+        v0.9.39: Per-request scope enforcement for tool invocations.
+
+        Inspects the tool's parameters for URLs/IPs/hostnames and validates
+        each one against the configured scope rules (is_in_scope).
+
+        Returns:
+            The original tool_args dict (pass-through) if all targets are in scope.
+
+        Raises:
+            ScopeViolationError: If any target parameter is out of scope.
+        """
+        from phantom.core.exceptions import ScopeViolationError
+
+        # Determine which parameters to check
+        params_to_check = self._SCOPE_CHECKED_PARAMS.get(tool_name)
+        if params_to_check is None:
+            # Fallback: check any generic-named params
+            params_to_check = [
+                k for k in tool_args if k.lower() in self._GENERIC_SCOPE_PARAMS
+            ]
+
+        for param_name in params_to_check:
+            value = tool_args.get(param_name)
+            if not value or not isinstance(value, str):
+                continue
+
+            # Skip empty/placeholder values
+            if value.strip() in ("", "localhost", "127.0.0.1"):
+                continue
+
+            if not self.is_in_scope(value):
+                raise ScopeViolationError(
+                    message=f"Tool '{tool_name}' parameter '{param_name}' targets "
+                            f"'{value}' which is outside the declared scope.",
+                    tool_name=tool_name,
+                    target=value,
+                )
+
+        return tool_args
 
     def is_in_scope(self, target: str) -> bool:
         """Check if a target is within the defined scope."""
