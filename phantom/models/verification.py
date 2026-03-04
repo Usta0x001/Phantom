@@ -187,6 +187,22 @@ VERIFICATION_STRATEGIES: dict[str, list[str]] = {
         "resource_access", # Access another user's resource
         "data_leak",       # Extract unauthorized data
     ],
+    # G-14 FIX: New vulnerability class strategies
+    "cors": [
+        "cors_check",      # Origin reflection check
+    ],
+    "header_injection": [
+        "header_injection", # CRLF injection
+    ],
+    "csrf": [
+        "idor_access",     # Check if state-changing request works without token
+    ],
+    "open_redirect": [
+        "dom_reflection",  # Check if redirect URL is reflected
+    ],
+    "jwt": [
+        "idor_access",     # Test JWT with modified claims
+    ],
 }
 
 

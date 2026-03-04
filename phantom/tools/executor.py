@@ -11,6 +11,13 @@ from phantom.config import Config
 
 _logger = logging.getLogger(__name__)
 
+# ── G-03 FIX: Circuit breaker ───────────────────────────────────────
+# After N consecutive failures of the same tool, temporarily disable it
+# to prevent the agent from wasting iterations on broken tools.
+_circuit_breaker: dict[str, dict[str, Any]] = {}
+_CB_THRESHOLD = 3       # consecutive failures before tripping
+_CB_COOLDOWN_S = 300.0  # seconds to skip the tool after tripping
+
 # L17 FIX: module-level constant instead of per-call recreation
 _ENDPOINT_TOOLS_MAP: dict[str, str] = {
     "sqlmap_test": "sqli",
@@ -56,13 +63,51 @@ except (ValueError, TypeError):
 
 
 async def execute_tool(tool_name: str, agent_state: Any | None = None, **kwargs: Any) -> Any:
+    # ── G-03: Circuit breaker check ──────────────────────────────────
+    if tool_name in _circuit_breaker:
+        cb = _circuit_breaker[tool_name]
+        if cb["failures"] >= _CB_THRESHOLD:
+            if _time.time() < cb["cooldown_until"]:
+                _logger.warning(
+                    "G-03: Circuit breaker OPEN for '%s' (%d consecutive failures). "
+                    "Cooldown expires in %.0fs.",
+                    tool_name, cb["failures"],
+                    cb["cooldown_until"] - _time.time(),
+                )
+                return (
+                    f"⚠️ Tool '{tool_name}' is temporarily disabled — circuit breaker "
+                    f"tripped after {cb['failures']} consecutive failures. "
+                    f"Try a different tool or wait ~{int(cb['cooldown_until'] - _time.time())}s."
+                )
+            # Cooldown expired — reset and allow one retry
+            del _circuit_breaker[tool_name]
+
     execute_in_sandbox = should_execute_in_sandbox(tool_name)
     sandbox_mode = os.getenv("PHANTOM_SANDBOX_MODE", "false").lower() == "true"
 
-    if execute_in_sandbox and not sandbox_mode:
-        return await _execute_tool_in_sandbox(tool_name, agent_state, **kwargs)
+    try:
+        if execute_in_sandbox and not sandbox_mode:
+            result = await _execute_tool_in_sandbox(tool_name, agent_state, **kwargs)
+        else:
+            result = await _execute_tool_locally(tool_name, agent_state, **kwargs)
 
-    return await _execute_tool_locally(tool_name, agent_state, **kwargs)
+        # ── G-03: Success — reset circuit breaker for this tool
+        _circuit_breaker.pop(tool_name, None)
+        return result
+
+    except Exception:
+        # ── G-03: Track failure in circuit breaker
+        if tool_name not in _circuit_breaker:
+            _circuit_breaker[tool_name] = {"failures": 0, "cooldown_until": 0.0}
+        _circuit_breaker[tool_name]["failures"] += 1
+        if _circuit_breaker[tool_name]["failures"] >= _CB_THRESHOLD:
+            _circuit_breaker[tool_name]["cooldown_until"] = _time.time() + _CB_COOLDOWN_S
+            _logger.warning(
+                "G-03: Circuit breaker TRIPPED for '%s' after %d failures. "
+                "Cooldown: %.0fs.",
+                tool_name, _circuit_breaker[tool_name]["failures"], _CB_COOLDOWN_S,
+            )
+        raise
 
 
 async def _execute_tool_in_sandbox(tool_name: str, agent_state: Any, **kwargs: Any) -> Any:
@@ -555,6 +600,117 @@ async def process_tool_invocations(
         observation_content = "Tool Results:\n\n" + "\n\n".join(observation_parts)
         conversation_history.append({"role": "user", "content": observation_content})
 
+    return should_agent_finish
+
+
+# ── G-01 FIX: Parallel recon batch execution ────────────────────────────
+# Independent recon tools (httpx, nmap, nuclei, katana, ffuf) can run
+# concurrently inside the sandbox.  This function wraps asyncio.gather()
+# with per-tool error isolation so one failure doesn't block the batch.
+
+# Tools that are safe to run concurrently (read-only recon, no shared state)
+_PARALLELIZABLE_TOOLS: frozenset[str] = frozenset({
+    "nmap_scan", "nmap_vuln_scan",
+    "httpx_probe", "httpx_full_analysis",
+    "nuclei_scan", "nuclei_scan_cves", "nuclei_scan_misconfigs",
+    "ffuf_directory_scan", "ffuf_parameter_fuzz", "ffuf_vhost_fuzz",
+    "katana_crawl",
+    "subfinder_scan",
+})
+
+
+async def batch_execute_tools(
+    tool_invocations: list[dict[str, Any]],
+    conversation_history: list[dict[str, Any]],
+    agent_state: Any | None = None,
+    *,
+    max_concurrency: int = 4,
+) -> bool:
+    """Execute multiple independent tool invocations in parallel.
+
+    Splits *tool_invocations* into parallelizable and sequential buckets.
+    Parallelizable tools run via ``asyncio.gather`` (bounded by a semaphore
+    to avoid sandbox overload).  Sequential tools (e.g. ``finish_scan``) run
+    one-by-one afterwards.
+
+    Returns ``True`` if any tool signals the agent should finish.
+    """
+    import asyncio as _aio
+
+    parallel: list[dict[str, Any]] = []
+    sequential: list[dict[str, Any]] = []
+
+    for inv in tool_invocations:
+        name = inv.get("toolName", "")
+        if name in _PARALLELIZABLE_TOOLS:
+            parallel.append(inv)
+        else:
+            sequential.append(inv)
+
+    # If nothing is parallelizable, fall back to the sequential path
+    if not parallel:
+        return await process_tool_invocations(tool_invocations, conversation_history, agent_state)
+
+    observation_parts: list[str] = []
+    all_images: list[dict[str, Any]] = []
+    should_agent_finish = False
+
+    tracer, agent_id = _get_tracer_and_agent_id(agent_state)
+
+    # ── Run parallel batch ───────────────────────────────────────────
+    sem = _aio.Semaphore(max_concurrency)
+
+    async def _guarded(inv: dict[str, Any]) -> tuple[str, list[dict[str, Any]], bool]:
+        async with sem:
+            try:
+                return await _execute_single_tool(inv, agent_state, tracer, agent_id)
+            except Exception as exc:  # noqa: BLE001
+                tname = inv.get("toolName", "unknown")
+                err = f"Error executing {tname}: {str(exc)[:500]}"
+                xml = (
+                    f"<tool_result>\n<tool_name>{_xml_escape(tname)}</tool_name>\n"
+                    f"<result>{_xml_escape(err)}</result>\n</tool_result>"
+                )
+                return xml, [], False
+
+    results = await _aio.gather(*[_guarded(inv) for inv in parallel])
+    for obs_xml, imgs, finish in results:
+        observation_parts.append(obs_xml)
+        all_images.extend(imgs)
+        if finish:
+            should_agent_finish = True
+
+    # ── Run sequential remainder ─────────────────────────────────────
+    for inv in sequential:
+        try:
+            obs_xml, imgs, finish = await _execute_single_tool(inv, agent_state, tracer, agent_id)
+        except Exception as exc:  # noqa: BLE001
+            tname = inv.get("toolName", "unknown")
+            err = f"Error executing {tname}: {str(exc)[:500]}"
+            obs_xml = (
+                f"<tool_result>\n<tool_name>{_xml_escape(tname)}</tool_name>\n"
+                f"<result>{_xml_escape(err)}</result>\n</tool_result>"
+            )
+            imgs = []
+            finish = False
+        observation_parts.append(obs_xml)
+        all_images.extend(imgs)
+        if finish:
+            should_agent_finish = True
+
+    # ── Append combined results to conversation ──────────────────────
+    if all_images:
+        content = [{"type": "text", "text": "Tool Results:\n\n" + "\n\n".join(observation_parts)}]
+        content.extend(all_images)
+        conversation_history.append({"role": "user", "content": content})
+    else:
+        observation_content = "Tool Results:\n\n" + "\n\n".join(observation_parts)
+        conversation_history.append({"role": "user", "content": observation_content})
+
+    _logger.info(
+        "G-01: batch_execute_tools — %d parallel + %d sequential tools processed.",
+        len(parallel), len(sequential),
+    )
     return should_agent_finish
 
 

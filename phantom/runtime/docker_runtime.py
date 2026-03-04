@@ -2,6 +2,7 @@ import contextlib
 import os
 import secrets
 import socket
+import threading
 import time
 from pathlib import Path
 from typing import cast
@@ -37,6 +38,8 @@ class DockerRuntime(AbstractRuntime):
         self._scan_container: Container | None = None
         self._tool_server_port: int | None = None
         self._tool_server_token: str | None = None
+        # G-11 FIX: Thread-safe cleanup to prevent double-cleanup race
+        self._cleanup_lock = threading.Lock()
 
         # P1-FIX5: Clean up orphaned phantom containers from previous crashed runs
         self._cleanup_orphaned_containers()
@@ -444,8 +447,8 @@ class DockerRuntime(AbstractRuntime):
     async def destroy_sandbox(self, container_id: str) -> None:
         try:
             container = self.client.containers.get(container_id)
-            container.stop()
-            container.remove()
+            container.stop(timeout=5)
+            container.remove(force=True)  # G-12 FIX: force=True for reliable cleanup
             self._scan_container = None
             self._tool_server_port = None
             self._tool_server_token = None
@@ -453,18 +456,20 @@ class DockerRuntime(AbstractRuntime):
             pass
 
     def cleanup(self) -> None:
-        if self._scan_container is not None:
-            container = self._scan_container
-            self._scan_container = None
-            self._tool_server_port = None
-            self._tool_server_token = None
+        # G-11 FIX: Acquire lock to prevent double-cleanup race condition
+        with self._cleanup_lock:
+            if self._scan_container is not None:
+                container = self._scan_container
+                self._scan_container = None
+                self._tool_server_port = None
+                self._tool_server_token = None
 
-            # Use Docker SDK (already initialised) instead of fire-and-forget subprocess
-            try:
-                container.stop(timeout=5)
-                container.remove(force=True)
-            except Exception as exc:  # noqa: BLE001
-                import logging
-                logging.getLogger(__name__).warning(
-                    "Container cleanup failed for %s: %s", getattr(container, 'id', '?'), exc
-                )
+                # Use Docker SDK (already initialised) instead of fire-and-forget subprocess
+                try:
+                    container.stop(timeout=5)
+                    container.remove(force=True)
+                except Exception as exc:  # noqa: BLE001
+                    import logging
+                    logging.getLogger(__name__).warning(
+                        "Container cleanup failed for %s: %s", getattr(container, 'id', '?'), exc
+                    )

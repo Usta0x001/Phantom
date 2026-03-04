@@ -568,8 +568,27 @@ def generate_all_reports(
     """
     generator = ReportGenerator(output_dir)
     
-    return {
+    reports: dict[str, Path] = {
         "json": generator.generate_json_report(scan_id, target, vulnerabilities, hosts, scan_result),
         "html": generator.generate_html_report(scan_id, target, vulnerabilities, hosts, scan_result),
         "markdown": generator.generate_markdown_report(scan_id, target, vulnerabilities, hosts, scan_result),
     }
+
+    # G-09 FIX: PDF report export (optional — requires fpdf2)
+    try:
+        from phantom.interface.formatters.pdf_formatter import generate_pdf_report
+
+        pdf_path = generate_pdf_report(
+            scan_id=scan_id,
+            target=target,
+            vulnerabilities=vulnerabilities,
+            hosts=hosts,
+            scan_result=scan_result,
+            output_path=Path(output_dir) / f"phantom_report_{scan_id}.pdf",
+        )
+        if pdf_path is not None:
+            reports["pdf"] = pdf_path
+    except Exception:  # noqa: BLE001
+        pass  # PDF is optional; failures are logged inside the formatter
+
+    return reports

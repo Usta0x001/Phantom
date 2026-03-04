@@ -19,7 +19,10 @@ if not SANDBOX_MODE:
     raise RuntimeError("Tool server should only run in sandbox mode (PHANTOM_SANDBOX_MODE=true)")
 
 parser = argparse.ArgumentParser(description="Start phantom tool server")
-parser.add_argument("--token", required=True, help="Authentication token")
+# G-07 FIX: Support --token-file to avoid leaking token via /proc/PID/cmdline.
+# Falls back to --token for backward compatibility.
+parser.add_argument("--token", default=None, help="Authentication token (deprecated: use --token-file)")
+parser.add_argument("--token-file", default=None, help="Path to file containing auth token")
 # PHT-005 FIX: Bind to 127.0.0.1 by default to prevent network-adjacent attacks
 parser.add_argument("--host", default="127.0.0.1", help="Host to bind to")
 parser.add_argument("--port", type=int, required=True, help="Port to bind to")
@@ -31,7 +34,23 @@ parser.add_argument(
 )
 
 args = parser.parse_args()
-EXPECTED_TOKEN = args.token
+
+# G-07 FIX: Prefer token-file over CLI arg to prevent /proc/PID/cmdline leak
+if args.token_file:
+    try:
+        with open(args.token_file) as _tf:
+            EXPECTED_TOKEN = _tf.read().strip()
+    except (OSError, IOError) as _e:
+        print(f"ERROR: Cannot read token file {args.token_file}: {_e}", file=sys.stderr)
+        sys.exit(1)
+elif args.token:
+    EXPECTED_TOKEN = args.token
+else:
+    # Final fallback: read from environment variable
+    EXPECTED_TOKEN = os.getenv("TOOL_SERVER_TOKEN", "")
+    if not EXPECTED_TOKEN:
+        print("ERROR: No token provided. Use --token-file, --token, or TOOL_SERVER_TOKEN env.", file=sys.stderr)
+        sys.exit(1)
 REQUEST_TIMEOUT = args.timeout
 
 app = FastAPI()

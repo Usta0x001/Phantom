@@ -394,6 +394,31 @@ class MemoryCompressor:
         if ledger_msg:
             result.append(ledger_msg)
         result.extend(recent_msgs)
+
+        # ── G-06 FIX: Post-compression token validation ─────────────
+        # Verify the compressed result actually fits within the context
+        # budget.  If not, perform emergency truncation to prevent
+        # context overflow on the next LLM call.
+        result_tokens = sum(_get_message_tokens(msg, model_name) for msg in result)
+        if result_tokens > self.max_total_tokens:
+            logger.warning(
+                "G-06: Post-compression tokens (%d) exceed budget (%d). "
+                "Emergency truncation: keeping system + ledger + last %d messages.",
+                result_tokens, self.max_total_tokens, MIN_RECENT_MESSAGES,
+            )
+            emergency = system_msgs[:]
+            if ledger_msg:
+                emergency.append(ledger_msg)
+            # Keep only the most recent messages that fit
+            for msg in reversed(recent_msgs):
+                msg_tokens = _get_message_tokens(msg, model_name)
+                result_tokens = sum(_get_message_tokens(m, model_name) for m in emergency)
+                if result_tokens + msg_tokens < self.max_total_tokens * 0.85:
+                    emergency.insert(len(system_msgs) + (1 if ledger_msg else 0), msg)
+                else:
+                    break
+            result = emergency
+
         return result
 
     # ------------------------------------------------------------------

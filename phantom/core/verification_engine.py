@@ -119,6 +119,12 @@ class VerificationEngine:
             "oob_dns": self._verify_oob_dns,
             "known_file": self._verify_known_file,
             "math_eval": self._verify_math_eval,
+            # G-14 FIX: New verification strategies
+            "idor_access": self._verify_idor,
+            "resource_access": self._verify_idor,
+            "data_leak": self._verify_idor,
+            "cors_check": self._verify_cors,
+            "header_injection": self._verify_header_injection,
         }
         
         verifier = verifiers.get(strategy, self._verify_generic)
@@ -131,13 +137,19 @@ class VerificationEngine:
         return attempt
     
     async def _verify_time_based(self, vuln: Vulnerability) -> ExploitAttempt:
-        """Verify using time-based technique (SQLi, RCE)."""
+        """Verify using time-based technique (SQLi, RCE).
+        
+        G-02 FIX: Supports both GET and POST methods based on the original
+        vulnerability's HTTP method.
+        """
         attempt = ExploitAttempt(
             vulnerability_id=vuln.id,
             method="time_based",
             tool="verification_engine",
             payload="",
         )
+        
+        http_method = getattr(vuln, "http_method", "GET").upper()
         
         if vuln.vulnerability_class == "sqli":
             # Time-based SQLi payloads
@@ -151,13 +163,16 @@ class VerificationEngine:
             for payload in payloads:
                 attempt.payload = payload
                 
-                # Construct URL with payload
-                target_url = self._inject_payload(vuln.target, vuln.parameter, payload)
-                
                 if self.http_client:
                     start = time.time()
                     try:
-                        await self.http_client.get(target_url, timeout=10)
+                        if http_method == "POST":
+                            # G-02 FIX: POST-based verification
+                            data = {vuln.parameter or "id": payload}
+                            await self.http_client.post(vuln.target, data=data, timeout=10)
+                        else:
+                            target_url = self._inject_payload(vuln.target, vuln.parameter, payload)
+                            await self.http_client.get(target_url, timeout=10)
                         elapsed = time.time() - start
                         
                         attempt.response_time_ms = elapsed * 1000
@@ -181,12 +196,16 @@ class VerificationEngine:
             
             for payload in payloads:
                 attempt.payload = payload
-                target_url = self._inject_payload(vuln.target, vuln.parameter, payload)
                 
                 if self.http_client:
                     start = time.time()
                     try:
-                        await self.http_client.get(target_url, timeout=10)
+                        if http_method == "POST":
+                            data = {vuln.parameter or "cmd": payload}
+                            await self.http_client.post(vuln.target, data=data, timeout=10)
+                        else:
+                            target_url = self._inject_payload(vuln.target, vuln.parameter, payload)
+                            await self.http_client.get(target_url, timeout=10)
                         elapsed = time.time() - start
                         
                         if elapsed >= 4.5:
@@ -203,13 +222,18 @@ class VerificationEngine:
         return attempt
     
     async def _verify_error_based(self, vuln: Vulnerability) -> ExploitAttempt:
-        """Verify using error-based technique (SQLi)."""
+        """Verify using error-based technique (SQLi).
+        
+        G-02 FIX: Supports both GET and POST methods.
+        """
         attempt = ExploitAttempt(
             vulnerability_id=vuln.id,
             method="error_based",
             tool="verification_engine",
             payload="",
         )
+        
+        http_method = getattr(vuln, "http_method", "GET").upper()
         
         error_indicators = [
             r"SQL syntax.*MySQL",
@@ -224,11 +248,15 @@ class VerificationEngine:
         
         for payload in payloads:
             attempt.payload = payload
-            target_url = self._inject_payload(vuln.target, vuln.parameter, payload)
             
             if self.http_client:
                 try:
-                    response = await self.http_client.get(target_url)
+                    if http_method == "POST":
+                        data = {vuln.parameter or "id": payload}
+                        response = await self.http_client.post(vuln.target, data=data)
+                    else:
+                        target_url = self._inject_payload(vuln.target, vuln.parameter, payload)
+                        response = await self.http_client.get(target_url)
                     body = response.text if hasattr(response, 'text') else str(response.content)
                     
                     for pattern in error_indicators:
@@ -541,6 +569,174 @@ class VerificationEngine:
             success=False,
             evidence="No specific verification method available",
         )
+    
+    # ── G-14 FIX: New verification strategies ────────────────────────
+    
+    async def _verify_idor(self, vuln: Vulnerability) -> ExploitAttempt:
+        """Verify IDOR by accessing a resource with a different ID.
+        
+        G-14 FIX: New strategy for Insecure Direct Object Reference.
+        Tests whether changing a resource ID in the URL/params returns
+        a different user's data (horizontal privilege escalation).
+        """
+        attempt = ExploitAttempt(
+            vulnerability_id=vuln.id,
+            method="idor_access",
+            tool="verification_engine",
+            payload="",
+        )
+        
+        if not self.http_client or not vuln.target:
+            attempt.evidence = "No HTTP client available for IDOR verification"
+            return attempt
+        
+        http_method = getattr(vuln, "http_method", "GET").upper()
+        # Try accessing resource with ID=1 (common admin/first-user ID)
+        test_ids = ["1", "2", "0", "admin", "999999"]
+        
+        for test_id in test_ids:
+            attempt.payload = f"IDOR test: {vuln.parameter}={test_id}"
+            try:
+                if http_method == "POST":
+                    data = {vuln.parameter or "id": test_id}
+                    response = await self.http_client.post(vuln.target, data=data)
+                else:
+                    target_url = self._inject_payload(vuln.target, vuln.parameter, test_id)
+                    response = await self.http_client.get(target_url)
+                
+                body = response.text if hasattr(response, "text") else str(response.content)
+                status_code = getattr(response, "status_code", 0)
+                
+                # IDOR confirmed if we get 200 with data that shouldn't be ours
+                if status_code == 200 and len(body) > 50:
+                    # Check for PII/data indicators
+                    pii_indicators = ["email", "username", "password", "address", "phone", "ssn"]
+                    for indicator in pii_indicators:
+                        if indicator in body.lower():
+                            attempt.success = True
+                            attempt.confidence = 0.75
+                            attempt.evidence = (
+                                f"IDOR: Accessed resource with {vuln.parameter}={test_id}, "
+                                f"response contains '{indicator}' (HTTP {status_code}, {len(body)} bytes)"
+                            )
+                            return attempt
+            except Exception as e:
+                attempt.error = str(e)
+        
+        return attempt
+    
+    async def _verify_cors(self, vuln: Vulnerability) -> ExploitAttempt:
+        """Verify CORS misconfiguration.
+        
+        G-14 FIX: Tests whether the target reflects arbitrary Origin headers
+        in Access-Control-Allow-Origin, allowing cross-origin attacks.
+        """
+        attempt = ExploitAttempt(
+            vulnerability_id=vuln.id,
+            method="cors_check",
+            tool="verification_engine",
+            payload="",
+        )
+        
+        if not self.http_client or not vuln.target:
+            attempt.evidence = "No HTTP client available for CORS verification"
+            return attempt
+        
+        evil_origins = [
+            "https://evil.com",
+            "https://attacker.example.com",
+            "null",  # null origin — often reflected
+        ]
+        
+        for origin in evil_origins:
+            attempt.payload = f"Origin: {origin}"
+            try:
+                headers = {"Origin": origin}
+                response = await self.http_client.get(vuln.target, headers=headers)
+                
+                acao = ""
+                if hasattr(response, "headers"):
+                    acao = str(response.headers.get("access-control-allow-origin", ""))
+                
+                if acao == origin or acao == "*":
+                    # Check if credentials are also allowed (most dangerous)
+                    acac = str(response.headers.get("access-control-allow-credentials", "")).lower()
+                    
+                    if acac == "true" and acao != "*":
+                        attempt.success = True
+                        attempt.confidence = 0.95
+                        attempt.evidence = (
+                            f"CORS misconfiguration: Origin '{origin}' reflected in "
+                            f"ACAO with credentials allowed (ACAC: true)"
+                        )
+                        return attempt
+                    elif acao == "*":
+                        attempt.success = True
+                        attempt.confidence = 0.7
+                        attempt.evidence = (
+                            f"CORS: Wildcard ACAO (*) — allows any origin to read responses"
+                        )
+                        return attempt
+                    else:
+                        attempt.success = True
+                        attempt.confidence = 0.8
+                        attempt.evidence = (
+                            f"CORS: Origin '{origin}' reflected in ACAO header"
+                        )
+                        return attempt
+            except Exception as e:
+                attempt.error = str(e)
+        
+        return attempt
+    
+    async def _verify_header_injection(self, vuln: Vulnerability) -> ExploitAttempt:
+        """Verify HTTP header injection / response splitting.
+        
+        G-14 FIX: Tests whether injecting CRLF sequences into parameters
+        causes new headers to appear in the response.
+        """
+        attempt = ExploitAttempt(
+            vulnerability_id=vuln.id,
+            method="header_injection",
+            tool="verification_engine",
+            payload="",
+        )
+        
+        if not self.http_client or not vuln.target:
+            attempt.evidence = "No HTTP client available for header injection verification"
+            return attempt
+        
+        # CRLF injection payloads
+        payloads = [
+            "test%0d%0aX-Injected: phantom",
+            "test\r\nX-Injected: phantom",
+            "test%0aX-Injected: phantom",
+        ]
+        
+        for payload in payloads:
+            attempt.payload = payload
+            try:
+                target_url = self._inject_payload(vuln.target, vuln.parameter, payload)
+                response = await self.http_client.get(target_url)
+                
+                if hasattr(response, "headers"):
+                    if "x-injected" in str(response.headers).lower():
+                        attempt.success = True
+                        attempt.confidence = 0.95
+                        attempt.evidence = "Header injection confirmed: X-Injected header present in response"
+                        return attempt
+                    
+                    # Check if the payload appears in any header value
+                    for hdr_name, hdr_val in response.headers.items():
+                        if "phantom" in str(hdr_val).lower():
+                            attempt.success = True
+                            attempt.confidence = 0.85
+                            attempt.evidence = f"Header injection: 'phantom' found in {hdr_name} header"
+                            return attempt
+            except Exception as e:
+                attempt.error = str(e)
+        
+        return attempt
     
     def _inject_payload(self, url: str, parameter: str | None, payload: str) -> str:
         """Inject payload into URL parameter.

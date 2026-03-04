@@ -139,7 +139,7 @@ class TestTimeoutConfig:
         # Verify the source code default is 600, not 120
         source = importlib.util.find_spec("phantom.tools.executor")
         src_path = source.origin
-        with open(src_path, "r") as f:
+        with open(src_path, "r", encoding="utf-8") as f:
             content = f.read()
         # Find the default timeout string
         assert 'or "600"' in content, (
