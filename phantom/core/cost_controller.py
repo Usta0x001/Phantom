@@ -258,6 +258,10 @@ def get_cost_controller() -> CostController | None:
     return _global_cost_controller
 
 
+# v0.9.39: Alias for consistent naming
+get_global_cost_controller = get_cost_controller
+
+
 def set_cost_controller(controller: CostController) -> None:
     global _global_cost_controller  # noqa: PLW0603
     _global_cost_controller = controller

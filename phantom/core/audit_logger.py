@@ -46,7 +46,19 @@ class AuditLogger:
         self.max_size = max_size
         self._lock = threading.Lock()
         self._ensure_directory()
-        # PHT-017 FIX: HMAC chain for tamper detection
+
+        # v0.9.39: Ed25519 audit chain signer (replaces HMAC when enabled)
+        self._signer = None
+        try:
+            from phantom.core.feature_flags import is_enabled
+            if is_enabled("PHANTOM_FF_ED25519_AUDIT"):
+                from phantom.core.audit_signer import AuditSigner
+                self._signer = AuditSigner()
+                _logger.info("Ed25519 audit signing enabled")
+        except Exception as exc:  # noqa: BLE001
+            _logger.warning("Ed25519 audit signer unavailable: %s — falling back to HMAC", exc)
+
+        # PHT-017 FIX: HMAC chain for tamper detection (legacy / fallback)
         # SEC-004 FIX: No more hardcoded default key — generate unique per-run key
         import hashlib
         import secrets
@@ -168,13 +180,18 @@ class AuditLogger:
         with self._lock:
             self._rotate_if_needed()
             try:
-                # PHT-017 FIX: add HMAC chain fields for tamper detection
-                entry["_prev_hash"] = self._prev_hash
-                line = json.dumps(entry, default=str, ensure_ascii=False)
-                entry_hmac = self._compute_hmac(self._prev_hash + line)
-                entry["_hmac"] = entry_hmac
-                self._prev_hash = entry_hmac
-                line = json.dumps(entry, default=str, ensure_ascii=False)
+                # v0.9.39: Ed25519 signing (preferred) or HMAC chain (fallback)
+                if self._signer:
+                    entry = self._signer.sign_entry(entry)
+                    line = json.dumps(entry, default=str, ensure_ascii=False)
+                else:
+                    # Legacy HMAC chain
+                    entry["_prev_hash"] = self._prev_hash
+                    line = json.dumps(entry, default=str, ensure_ascii=False)
+                    entry_hmac = self._compute_hmac(self._prev_hash + line)
+                    entry["_hmac"] = entry_hmac
+                    self._prev_hash = entry_hmac
+                    line = json.dumps(entry, default=str, ensure_ascii=False)
 
                 with self.log_path.open("a", encoding="utf-8") as f:
                     f.write(line + "\n")
