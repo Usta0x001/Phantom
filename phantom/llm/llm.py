@@ -67,6 +67,13 @@ class LLM:
         self.agent_id: str | None = None
         self._total_stats = RequestStats()
 
+        # G-04 FIX: Model fallback chain — if the primary model fails after
+        # all retries (rate limit, quota, outage), automatically switch to
+        # the next model in PHANTOM_LLM_FALLBACK before giving up.
+        from phantom.llm.provider_registry import FallbackChain
+        self._fallback_chain = FallbackChain.from_config()
+        self._model_override: str | None = None  # Set when fallback activates
+
         # L1-FIX: Dynamic context window — use the provider registry to set
         # the memory compressor threshold based on the ACTUAL model context
         # window instead of the hardcoded 80K default.  Use 75% of the
@@ -150,23 +157,49 @@ class LLM:
         """Override the memory compression threshold (e.g. from scan profile)."""
         self.memory_compressor.max_total_tokens = max_tokens
 
+    @property
+    def _active_model(self) -> str:
+        """Return the currently active model (primary or fallback)."""
+        return self._model_override or self.config.model_name
+
     async def generate(
         self, conversation_history: list[dict[str, Any]]
     ) -> AsyncIterator[LLMResponse]:
-        messages = self._prepare_messages(conversation_history)
+        # G-07 FIX: Run memory compression in a thread pool so it doesn't
+        # block the event loop (compression uses sync litellm.completion).
+        messages = await asyncio.to_thread(self._prepare_messages, conversation_history)
         max_retries = int(Config.get("phantom_llm_max_retries") or "5")
 
-        for attempt in range(max_retries + 1):
-            try:
-                async for response in self._stream(messages):
-                    yield response
-                return  # noqa: TRY300
-            except Exception as e:  # noqa: BLE001
-                if attempt >= max_retries or not self._should_retry(e):
-                    self._raise_error(e)
-                import random as _rand
-                wait = min(10, 2 * (2**attempt)) + _rand.uniform(0, 1)
-                await asyncio.sleep(wait)
+        last_error: Exception | None = None
+        # G-04 FIX: Outer loop tries each model in the fallback chain
+        while True:
+            for attempt in range(max_retries + 1):
+                try:
+                    async for response in self._stream(messages):
+                        yield response
+                    # Success — reset fallback to primary for next call
+                    self._model_override = None
+                    return  # noqa: TRY300
+                except Exception as e:  # noqa: BLE001
+                    last_error = e
+                    if attempt >= max_retries or not self._should_retry(e):
+                        break  # Exit retry loop, try fallback
+                    import random as _rand
+                    wait = min(10, 2 * (2**attempt)) + _rand.uniform(0, 1)
+                    await asyncio.sleep(wait)
+
+            # All retries exhausted for current model — try fallback
+            next_model = self._fallback_chain.advance()
+            if next_model is None:
+                # No more fallbacks — raise the last error
+                assert last_error is not None
+                self._raise_error(last_error)
+                return  # unreachable
+            logger.warning(
+                "G-04: Model %s failed, falling back to %s",
+                self._active_model, next_model,
+            )
+            self._model_override = next_model
 
     async def _stream(self, messages: list[dict[str, Any]]) -> AsyncIterator[LLMResponse]:
         accumulated = ""
@@ -239,8 +272,11 @@ class LLM:
         if not self._supports_vision():
             messages = self._strip_images(messages)
 
+        # G-04 FIX: Use _active_model (respects fallback override)
+        model_name = self._active_model
+
         args: dict[str, Any] = {
-            "model": self.config.model_name,
+            "model": model_name,
             "messages": messages,
             "timeout": self.config.timeout,
             "stream_options": {"include_usage": True},
@@ -256,7 +292,7 @@ class LLM:
 
         from phantom.llm.provider_registry import PROVIDER_PRESETS, get_provider_max_tokens
 
-        preset = PROVIDER_PRESETS.get(self.config.model_name.lower())
+        preset = PROVIDER_PRESETS.get(model_name.lower())
         api_key: str | None = None
         api_base: str | None = None
 

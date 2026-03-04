@@ -124,8 +124,10 @@ class ScopeValidator:
         # LOGIC-003 FIX: DNS pin cache — record resolved IPs at first check
         # to detect and prevent DNS rebinding attacks (TOCTOU mitigation).
         # M7 FIX: Bounded to prevent memory exhaustion
-        self._dns_pin_cache: dict[str, set[str]] = {}
+        # G-08 FIX: Each entry stores (ips, timestamp) for TTL expiry
+        self._dns_pin_cache: dict[str, tuple[set[str], float]] = {}
         self._DNS_PIN_CACHE_MAX = 10_000
+        self._DNS_PIN_TTL = 300.0  # G-08 FIX: 5-minute TTL for pinned entries
 
     @classmethod
     def from_targets(cls, targets: list[str]) -> ScopeValidator:
@@ -182,8 +184,13 @@ class ScopeValidator:
 
                 # DNS pinning: compare against cached resolution
                 if host in self._dns_pin_cache:
-                    pinned_ips = self._dns_pin_cache[host]
-                    if current_ips != pinned_ips:
+                    pinned_ips, pin_time = self._dns_pin_cache[host]
+                    # G-08 FIX: Expire stale pins after TTL
+                    import time as _time
+                    if _time.time() - pin_time > self._DNS_PIN_TTL:
+                        # Pin expired — re-pin with current resolution
+                        del self._dns_pin_cache[host]
+                    elif current_ips != pinned_ips:
                         new_ips = current_ips - pinned_ips
                         self._log_violation(
                             target, "dns_pin_violation",
@@ -191,13 +198,15 @@ class ScopeValidator:
                             f"(pinned: {pinned_ips})"
                         )
                         return False
-                else:
-                    # Pin the first resolution
+
+                if host not in self._dns_pin_cache:
+                    # Pin the first resolution (or refresh after TTL expiry)
                     # M7 FIX: evict oldest entries if cache is full
                     if len(self._dns_pin_cache) >= self._DNS_PIN_CACHE_MAX:
                         oldest_key = next(iter(self._dns_pin_cache))
                         del self._dns_pin_cache[oldest_key]
-                    self._dns_pin_cache[host] = current_ips
+                    import time as _time
+                    self._dns_pin_cache[host] = (current_ips, _time.time())
             except _socket.gaierror:
                 pass  # DNS resolution failed — continue with rule-based check
 

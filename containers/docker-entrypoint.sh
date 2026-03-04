@@ -179,9 +179,12 @@ fi
 echo "Using Python: $PYTHON_BIN"
 # Inside Docker, bind to 0.0.0.0 so Docker port forwarding works.
 # Security is handled at the Docker level: host binds to 127.0.0.1.
+# PHT-018 / G-07 FIX: Read token from file instead of CLI arg to prevent
+# token leaking via /proc/PID/cmdline.  The --token-file flag tells the
+# tool server to read from the tmpfs file.
 sudo -E -u pentester env PATH="$PATH:/app/venv/bin" PYTHONPATH=/app PHANTOM_SANDBOX_MODE=true \
   $PYTHON_BIN -m phantom.runtime.tool_server \
-  --token="$TOOL_SERVER_TOKEN" \
+  --token-file="$TOKEN_FILE" \
   --host=0.0.0.0 \
   --port="$TOOL_SERVER_PORT" \
   --timeout="$TOOL_SERVER_TIMEOUT" > "$TOOL_SERVER_LOG" 2>&1 &
