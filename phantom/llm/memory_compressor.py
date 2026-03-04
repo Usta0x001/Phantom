@@ -143,6 +143,42 @@ def _summarize_messages(
         response = litellm.completion(**completion_args)
         summary = response.choices[0].message.content or ""
 
+        # v0.9.39 FIX (ARC-006): Track compression cost — previously untracked
+        try:
+            from phantom.core.cost_controller import get_global_cost_controller
+            cc = get_global_cost_controller()
+            if cc and hasattr(response, "usage") and response.usage:
+                usage = response.usage
+                try:
+                    cost = litellm.completion_cost(
+                        model=model,
+                        prompt=str(usage.prompt_tokens),
+                        completion=str(usage.completion_tokens),
+                    )
+                except Exception:
+                    cost = (
+                        (usage.prompt_tokens or 0) * 0.00001
+                        + (usage.completion_tokens or 0) * 0.00003
+                    )
+                cc.record_usage(
+                    input_tokens=usage.prompt_tokens or 0,
+                    output_tokens=usage.completion_tokens or 0,
+                    cached_tokens=getattr(usage, "cached_tokens", 0) or 0,
+                    cost_usd=cost,
+                    is_compression=True,
+                )
+        except Exception as _cost_exc:  # noqa: BLE001
+            logger.debug("Failed to track compression cost: %s", _cost_exc)
+
+        # v0.9.39 FIX (MEM-002): Sanitize compression output
+        try:
+            from phantom.core.feature_flags import is_enabled
+            if is_enabled("PHANTOM_FF_COMPRESSOR_SANITIZE"):
+                from phantom.tools.output_sanitizer import sanitize_tool_output
+                summary = sanitize_tool_output(summary, tool_name="_memory_compression")
+        except Exception:  # noqa: BLE001
+            pass
+
         # LOGIC-004 FIX: Log compression calls to audit trail so data flows
         # to external LLM providers are visible and auditable.
         try:
