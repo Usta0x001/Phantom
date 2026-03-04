@@ -118,6 +118,7 @@ docs/SECURITY_AUDIT_REPORT*.md
 # LaTeX / PDF reports (local only)
 docs/*.pdf
 docs/*.tex
+!docs/phantom_system_report.tex
 docs/*.aux
 docs/*.log
 docs/*.out
