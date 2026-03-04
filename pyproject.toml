@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "phantom-agent"
-version = "0.9.38"
+version = "0.9.39"
 description = "Autonomous Offensive Security Intelligence — AI-powered penetration testing"
 authors = ["Usta0x001 <r_gadouri@estin.dz>"]
 readme = "README.md"
@@ -59,6 +59,7 @@ xmltodict = "^0.13.0"
 requests = "^2.32.0"
 cvss = "^3.2"
 networkx = "^3.4"
+cryptography = ">=43.0,<45.0"  # Ed25519 audit signer + ephemeral TLS
 
 # Optional LLM provider dependencies
 google-cloud-aiplatform = { version = ">=1.38", optional = true }
@@ -92,6 +93,7 @@ pytest = "^8.4.0"
 pytest-asyncio = "^1.0.0"
 pytest-cov = "^6.1.1"
 pytest-mock = "^3.14.1"
+hypothesis = ">=6.100"  # Property-based testing
 
 # Development tools
 pre-commit = "^4.2.0"

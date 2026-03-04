@@ -654,31 +654,47 @@ def finish_scan(
     # v0.9.34: Dramatically lowered from over-controlling gates.
     # We keep a minimal safety net only to prevent the agent from
     # finishing in the first few iterations.
+    # v0.9.39: Feature-flagged + findings count check added
     if agent_state is not None:
-        current_iteration = getattr(agent_state, "iteration", 0)
-        actions_count = len(getattr(agent_state, "actions_taken", []))
+        from phantom.core.feature_flags import is_enabled
+        if is_enabled("PHANTOM_FF_FINISH_GUARD"):
+            current_iteration = getattr(agent_state, "iteration", 0)
+            actions_count = len(getattr(agent_state, "actions_taken", []))
+            findings_count = len(getattr(agent_state, "findings_ledger", []))
 
-        # Minimal gate: at least 10 iterations and 8 tool calls
-        MIN_ITERATIONS = 10
-        MIN_TOOL_CALLS = 8
+            # Minimal gate: at least 10 iterations and 8 tool calls
+            MIN_ITERATIONS = 10
+            MIN_TOOL_CALLS = 8
+            MIN_FINDINGS_FOR_EARLY_FINISH = 3
 
-        if current_iteration < MIN_ITERATIONS:
-            remaining = MIN_ITERATIONS - current_iteration
-            _logger.warning(
-                "AUTO-001: finish_scan blocked — iteration %d < minimum %d",
-                current_iteration, MIN_ITERATIONS,
-            )
-            return {
-                "success": False,
-                "message": (
-                    f"Cannot finish scan yet: only {current_iteration}/{MIN_ITERATIONS} "
-                    f"iterations completed. Keep testing!"
-                ),
-                "blocked_by": "AUTO-001_minimum_work_gate",
-                "iterations_remaining": remaining,
-            }
+            if current_iteration < MIN_ITERATIONS:
+                # v0.9.39: Allow early finish ONLY if meaningful findings exist
+                if findings_count >= MIN_FINDINGS_FOR_EARLY_FINISH:
+                    _logger.info(
+                        "AUTO-001: finish_scan allowed early — %d findings found "
+                        "despite only %d iterations",
+                        findings_count, current_iteration,
+                    )
+                else:
+                    remaining = MIN_ITERATIONS - current_iteration
+                    _logger.warning(
+                        "AUTO-001: finish_scan blocked — iteration %d < minimum %d",
+                        current_iteration, MIN_ITERATIONS,
+                    )
+                    return {
+                        "success": False,
+                        "message": (
+                            f"Cannot finish scan yet: only {current_iteration}/{MIN_ITERATIONS} "
+                            f"iterations completed and only {findings_count} findings recorded. "
+                            f"Continue scanning to discover more vulnerabilities. "
+                            f"Use tools like nuclei_scan, sqlmap_test, ffuf_directory_scan "
+                            f"to find vulnerabilities before finishing."
+                        ),
+                        "blocked_by": "AUTO-001_minimum_work_gate",
+                        "iterations_remaining": remaining,
+                    }
 
-        if actions_count < MIN_TOOL_CALLS:
+            if actions_count < MIN_TOOL_CALLS:
             _logger.warning(
                 "AUTO-001: finish_scan blocked — %d tool calls < minimum %d",
                 actions_count, MIN_TOOL_CALLS,

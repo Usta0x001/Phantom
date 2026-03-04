@@ -129,6 +129,14 @@ class AgentState(BaseModel):
         such as confirmed vulnerabilities, discovered endpoints, credentials,
         and technology versions.
         """
+        # v0.9.39 FIX (ARC-007): Sanitize before persisting
+        try:
+            from phantom.core.feature_flags import is_enabled
+            if is_enabled("PHANTOM_FF_LEDGER_SANITIZE"):
+                finding = self._sanitize_finding(finding)
+        except Exception:  # noqa: BLE001
+            pass
+
         # M19 FIX: Normalize whitespace for dedup to avoid near-duplicates
         normalized = " ".join(finding.split()).strip().lower()
         for existing in self.findings_ledger:
@@ -139,6 +147,39 @@ class AgentState(BaseModel):
             self.findings_ledger = self.findings_ledger[-self._MAX_FINDINGS // 2 :]
         self.findings_ledger.append(finding)
         self.last_updated = datetime.now(UTC).isoformat()
+
+    @staticmethod
+    def _sanitize_finding(text: str) -> str:
+        """Strip tool grammar and injection patterns from finding text."""
+        import re
+        import unicodedata
+
+        # Normalize unicode
+        text = unicodedata.normalize("NFKC", text)
+        # Strip invisible characters
+        text = re.sub(
+            r"[\u200b-\u200f\u202a-\u202e\u2060-\u2069\ufeff]", "", text,
+        )
+        # Strip tool grammar
+        text = re.sub(r"<function[=\s][^>]*>", "", text, flags=re.IGNORECASE)
+        text = re.sub(r"</function>", "", text, flags=re.IGNORECASE)
+        text = re.sub(
+            r"<tool_call>.*?</tool_call>", "", text,
+            flags=re.IGNORECASE | re.DOTALL,
+        )
+        # Strip prompt override patterns
+        text = re.sub(
+            r"ignore\s+(all\s+)?previous\s+instructions?",
+            "[filtered]", text, flags=re.IGNORECASE,
+        )
+        text = re.sub(
+            r"you\s+are\s+now\s+", "[filtered]", text, flags=re.IGNORECASE,
+        )
+        text = re.sub(r"system:\s*", "[filtered]", text, flags=re.IGNORECASE)
+        # Enforce max length per finding (prevent context stuffing)
+        if len(text) > 500:
+            text = text[:500] + "...[truncated]"
+        return text.strip()
 
     def get_findings_summary(self) -> str:
         """Return the findings ledger as a newline-delimited string."""

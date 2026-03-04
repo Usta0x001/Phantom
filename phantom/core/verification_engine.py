@@ -32,7 +32,13 @@ class VerificationEngine:
     before marking them as confirmed. This reduces false positives.
     """
     
-    def __init__(self, terminal_execute_fn: Any = None, http_client: Any = None, interactsh_client: Any = None):
+    def __init__(
+        self,
+        terminal_execute_fn: Any = None,
+        http_client: Any = None,
+        interactsh_client: Any = None,
+        scope_validator: Any = None,
+    ):
         """
         Initialize verification engine.
         
@@ -40,10 +46,12 @@ class VerificationEngine:
             terminal_execute_fn: Async function to execute commands in sandbox
             http_client: HTTP client for making requests (httpx or aiohttp)
             interactsh_client: InteractshClient instance for OOB callback verification
+            scope_validator: v0.9.39 — ScopeValidator to check targets before probing
         """
         self.terminal_execute = terminal_execute_fn
         self.http_client = http_client
         self.interactsh = interactsh_client
+        self._scope_validator = scope_validator
         self._results: dict[str, VerificationResult] = {}
     
     async def verify(self, vuln: Vulnerability) -> VerificationResult:
@@ -57,6 +65,19 @@ class VerificationEngine:
             vulnerability_class=vuln.vulnerability_class,
         )
         result.start_verification()
+
+        # v0.9.39: Scope check before verification probes (ARC-010)
+        if self._scope_validator and hasattr(vuln, "url") and vuln.url:
+            try:
+                if not self._scope_validator.is_in_scope(vuln.url):
+                    result.notes.append(
+                        f"Target URL '{vuln.url}' is out of scope — verification skipped",
+                    )
+                    result.end_verification()
+                    self._results[vuln.id] = result
+                    return result
+            except Exception as scope_exc:
+                logger.warning("Scope check failed for %s: %s", vuln.id, scope_exc)
         
         strategies = get_verification_strategy(vuln.vulnerability_class)
         
