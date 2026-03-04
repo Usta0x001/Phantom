@@ -707,6 +707,7 @@ async def batch_execute_tools(
     Returns ``True`` if any tool signals the agent should finish.
     """
     import asyncio as _aio
+    from phantom.core.feature_flags import is_enabled
 
     parallel: list[dict[str, Any]] = []
     sequential: list[dict[str, Any]] = []
@@ -733,8 +734,25 @@ async def batch_execute_tools(
 
     async def _guarded(inv: dict[str, Any]) -> tuple[str, list[dict[str, Any]], bool]:
         async with sem:
+            # v0.9.39: Per-tool timeout + security error propagation
             try:
-                return await _execute_single_tool(inv, agent_state, tracer, agent_id)
+                return await _aio.wait_for(
+                    _execute_single_tool(inv, agent_state, tracer, agent_id),
+                    timeout=SANDBOX_EXECUTION_TIMEOUT,
+                )
+            except _aio.TimeoutError:
+                tname = inv.get("toolName", "unknown")
+                _logger.warning(
+                    "Parallel tool %s timed out after %ds",
+                    tname, SANDBOX_EXECUTION_TIMEOUT,
+                )
+                xml = (
+                    f"<tool_result>\n<tool_name>{_xml_escape(tname)}</tool_name>\n"
+                    f"<result>Error: Tool execution timed out</result>\n</tool_result>"
+                )
+                return xml, [], False
+            except (SecurityViolationError, ResourceExhaustedError):
+                raise  # Propagate security errors — must terminate scan
             except Exception as exc:  # noqa: BLE001
                 tname = inv.get("toolName", "unknown")
                 err = f"Error executing {tname}: {str(exc)[:500]}"
@@ -750,6 +768,16 @@ async def batch_execute_tools(
         all_images.extend(imgs)
         if finish:
             should_agent_finish = True
+
+    # v0.9.39: Cost check between parallel and sequential batches
+    if is_enabled("PHANTOM_FF_PARALLEL_SAFETY"):
+        try:
+            from phantom.core.cost_controller import get_cost_controller
+            cc = get_cost_controller()
+            if cc:
+                cc._check_limits()  # noqa: SLF001
+        except (ImportError, AttributeError):
+            pass
 
     # ── Run sequential remainder ─────────────────────────────────────
     for inv in sequential:
