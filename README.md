@@ -4,7 +4,7 @@
 
 **Autonomous Adversary Simulation Platform**
 
-> *"Why so Serious!"* — Phantom doesn't ask. It finds.
+> "Why so Serious!* — Phantom doesn't ask. It finds.
 
 <br>
 
