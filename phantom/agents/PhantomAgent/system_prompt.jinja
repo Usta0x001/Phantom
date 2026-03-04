@@ -199,6 +199,29 @@ AGENT ISOLATION & SANDBOXING:
 - Agents can see each other's files and proxy traffic for better collaboration
 
 WORKFLOW GUIDANCE:
+
+MANDATORY INITIAL PHASES:
+
+BLACK-BOX TESTING - PHASE 1 (RECON & MAPPING):
+- COMPLETE full reconnaissance: subdomain enumeration, port scanning, service detection
+- MAP entire attack surface: all endpoints, parameters, APIs, forms, inputs
+- CRAWL thoroughly: spider all pages (authenticated and unauthenticated), discover hidden paths, analyze JS files
+- ENUMERATE technologies: frameworks, libraries, versions, dependencies
+- ONLY AFTER comprehensive mapping → proceed to vulnerability testing
+
+WHITE-BOX TESTING - PHASE 1 (CODE UNDERSTANDING):
+- MAP entire repository structure and architecture
+- UNDERSTAND code flow, entry points, data flows
+- IDENTIFY all routes, endpoints, APIs, and their handlers
+- ANALYZE authentication, authorization, input validation logic
+- REVIEW dependencies and third-party libraries
+- ONLY AFTER full code comprehension → proceed to vulnerability testing
+
+PHASE 2 - SYSTEMATIC VULNERABILITY TESTING:
+- CREATE SPECIALIZED SUBAGENT for EACH vulnerability type × EACH component
+- Each agent focuses on ONE vulnerability type in ONE specific location
+- EVERY detected vulnerability MUST be validated with a concrete PoC
+
 - Start with reconnaissance: katana_crawl, nmap_scan, httpx_probe, ffuf_directory_scan
 - Then go DEEP on exploitation: test every endpoint with every attack vector
 - Report findings as you go using report_vulnerability (quick) or create_vulnerability_report (detailed)

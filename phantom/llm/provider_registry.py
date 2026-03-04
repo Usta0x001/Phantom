@@ -170,6 +170,18 @@ PROVIDER_PRESETS: dict[str, ProviderConfig] = {
     ),
     # NOTE: openrouter/deepseek/deepseek-v3.2 is defined above with full config
     # (context_window=163_840, rate_limit_rpm=200). Do NOT duplicate here.
+    "openrouter/google/gemini-2.5-flash": ProviderConfig(
+        model="openrouter/google/gemini-2.5-flash",
+        api_key_env="LLM_API_KEY",
+        api_base="https://openrouter.ai/api/v1",
+        context_window=1_000_000,
+        max_tokens=16_384,
+        rate_limit_rpm=200,
+        supports_vision=True,
+        supports_reasoning=True,
+        cost_per_1k_input=0.00015,
+        cost_per_1k_output=0.0006,
+    ),
     "openrouter/deepseek/deepseek-chat-v3-0324": ProviderConfig(
         model="openrouter/deepseek/deepseek-chat-v3-0324",
         api_key_env="LLM_API_KEY",

@@ -165,7 +165,7 @@ class TestAgentStateLifecycle:
         assert "sandbox_token" not in d
 
     def test_conversation_history_returns_reference(self):
-        """v0.9.36: get_conversation_history returns direct reference (like Strix)
+        """v0.9.36: get_conversation_history returns direct reference
         so in-place memory compression persists across iterations."""
         from phantom.agents.state import AgentState
         s = AgentState()
@@ -1546,7 +1546,7 @@ class TestRegressionGuards:
         import inspect
         from phantom.agents import base_agent
         source = inspect.getsource(base_agent)
-        # v0.9.35: Matches Strix — autoescape disabled for prompts containing XML tags
+        # v0.9.35: autoescape disabled for prompts containing XML tags
         assert "select_autoescape" in source
         assert "default_for_string=False" in source
 

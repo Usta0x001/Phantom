@@ -111,8 +111,8 @@ class LLM:
             skill_content = load_skills(skills_to_load)
             env.globals["get_skill"] = lambda name: skill_content.get(name, "")
 
-            # v0.9.35: TOOL_PROFILES filtering REMOVED (H-12). Strix always
-            # includes ALL tools. Filtering hides tools like ffuf_parameter_fuzz,
+            # v0.9.35: TOOL_PROFILES filtering REMOVED (H-12). Always
+            # include ALL tools. Filtering hides tools like ffuf_parameter_fuzz,
             # arjun, jwt_tool, etc. which the agent needs for deep exploitation.
             tools_prompt_fn = lambda: get_tools_prompt()  # noqa: E731
 
@@ -223,7 +223,7 @@ class LLM:
                 }
             )
 
-        # v0.9.35: In-place compression like Strix. Previously operated on a
+        # v0.9.35: In-place compression. Previously operated on a
         # copy, causing unbounded memory growth across 300 iterations.
         compressed = list(self.memory_compressor.compress_history(conversation_history))
         conversation_history.clear()
@@ -246,11 +246,11 @@ class LLM:
             "stream_options": {"include_usage": True},
         }
         # v0.9.35: Only set temperature if explicitly configured.
-        # When None, use the provider's default (like Strix).
+        # When None, use the provider's default.
         if self.config.temperature is not None:
             args["temperature"] = self.config.temperature
 
-        # v0.9.35: max_tokens cap REMOVED (H-01). Strix does NOT set max_tokens.
+            # v0.9.35: max_tokens cap REMOVED (H-01). Do NOT set max_tokens.
         # When set to 8192/16384, it truncates complex tool calls mid-output,
         # causing XML parse failures and lost exploitation progress.
 

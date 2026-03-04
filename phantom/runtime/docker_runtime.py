@@ -20,7 +20,7 @@ from .runtime import AbstractRuntime, SandboxInfo
 
 
 HOST_GATEWAY_HOSTNAME = "host.docker.internal"
-DOCKER_TIMEOUT = 60
+DOCKER_TIMEOUT = 180  # Increased from 60 — prevents NpipeHTTPConnectionPool Read timeouts on slow Docker Desktop
 CONTAINER_TOOL_SERVER_PORT = 48081
 
 
@@ -416,9 +416,18 @@ class DockerRuntime(AbstractRuntime):
         )
 
     async def get_sandbox_url(self, container_id: str, port: int) -> str:
+        # Cache the resolved URL to avoid hitting Docker API on every tool call.
+        # The NpipeHTTPConnectionPool timeout (60s→180s) still applies but we
+        # skip the Docker round-trip entirely for subsequent calls.
+        cache_key = f"_url_cache_{container_id}_{port}"
+        cached = getattr(self, cache_key, None)
+        if cached:
+            return cached
         try:
             self.client.containers.get(container_id)
-            return f"http://{self._resolve_docker_host()}:{port}"
+            url = f"http://{self._resolve_docker_host()}:{port}"
+            setattr(self, cache_key, url)
+            return url
         except NotFound:
             raise ValueError(f"Container {container_id} not found.") from None
 

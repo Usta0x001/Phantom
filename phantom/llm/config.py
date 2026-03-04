@@ -25,7 +25,7 @@ class LLMConfig:
         valid_modes = {"quick", "standard", "deep", "stealth", "api_only"}
         self.scan_mode = scan_mode if scan_mode in valid_modes else "deep"
 
-        # v0.9.34: Temperature NOT set by default (like Strix).
+        # v0.9.34: Temperature NOT set by default.
         # Let the model use its native default (typically 0.7-1.0).
         # Low temperature (0.4) was killing creative attack exploration.
         self.temperature: float | None = temperature

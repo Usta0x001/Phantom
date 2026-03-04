@@ -281,7 +281,7 @@ class TestM26ViolationsAuditLogged:
 
 class TestM29MaxIterationsDefault:
     def test_default_is_300(self):
-        """v0.9.36: max_iterations restored to 300 (matching Strix)."""
+        """v0.9.36: max_iterations restored to 300."""
         from phantom.agents.state import AgentState
         field = AgentState.model_fields["max_iterations"]
         assert field.default == 300
@@ -378,7 +378,7 @@ class TestH16Jinja2Autoescape:
 
 class TestL21ConversationHistoryReference:
     def test_returns_reference(self):
-        """v0.9.36: Returns direct reference for in-place compression (like Strix)."""
+        """v0.9.36: Returns direct reference for in-place compression."""
         from phantom.agents.state import AgentState
         state = AgentState(agent_name="test", max_iterations=100)
         state.add_message("user", "hello")

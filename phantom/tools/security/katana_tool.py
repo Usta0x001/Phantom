@@ -92,7 +92,7 @@ def katana_crawl(
         cmd_parts.append("-jc")  # JavaScript crawl
 
     if scope_in_domain:
-        cmd_parts.append("-fs")  # field-scope – restrict to same domain
+        cmd_parts.extend(["-fs", "dn"])  # field-scope domain name – restrict to same domain
 
     cmd_parts.extend(sanitize_extra_args(extra_args))
 

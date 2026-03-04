@@ -10,8 +10,8 @@ logger = logging.getLogger(__name__)
 
 
 MAX_TOTAL_TOKENS = 80_000
-MAX_MESSAGES = 150
-MIN_RECENT_MESSAGES = 15  # 15 msgs (~45K) keeps last 7-8 tool rounds — matches Strix for exploit continuity
+MAX_MESSAGES = 500  # Raised from 150 — no cap needed. 150 caused silent loss of early recon data on deep scans.
+MIN_RECENT_MESSAGES = 15  # 15 msgs (~45K) keeps last 7-8 tool rounds for exploit continuity
 
 SUMMARY_PROMPT_TEMPLATE = """You are performing context condensation for a security
 assessment agent.  Compress the conversation while preserving every piece of
@@ -301,13 +301,10 @@ class MemoryCompressor:
             _get_message_tokens(msg, model_name) for msg in system_msgs + regular_msgs
         )
 
-        if total_tokens <= self.max_total_tokens * 0.80:
-            # Even when no compression needed, inject the findings ledger
-            # so the agent always has access to persistent discoveries.
-            # NOTE: Threshold at 0.80 — fires at 80% of max_total_tokens.
-            # With 120K max (quick profile), compression fires at 96K tokens.
-            # Previous 0.65 threshold caused 38 compressions in 86 tool calls,
-            # wasting time/money on LLM compression calls and losing context.
+        if total_tokens <= self.max_total_tokens * 0.90:
+            # Fire at 90% of max_total_tokens.
+            # Previous 0.80 threshold was too aggressive — caused premature
+            # compression, wasting LLM tokens and losing exploit context.
             ledger_msg = self._build_ledger_message()
             if ledger_msg:
                 # Insert ledger just before the last few messages

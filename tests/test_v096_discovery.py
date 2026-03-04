@@ -95,9 +95,11 @@ class TestMemoryCompressorV096:
         from phantom.llm.memory_compressor import MAX_TOTAL_TOKENS
         assert MAX_TOTAL_TOKENS == 80_000, f"Expected 80K, got {MAX_TOTAL_TOKENS}"
 
-    def test_max_messages_reduced(self):
+    def test_max_messages_raised(self):
         from phantom.llm.memory_compressor import MAX_MESSAGES
-        assert MAX_MESSAGES == 150, f"Expected 150, got {MAX_MESSAGES}"
+        # Raised from 150 → 500 in v0.9.35 to prevent silent loss of early
+        # recon data on deep scans.
+        assert MAX_MESSAGES == 500, f"Expected 500, got {MAX_MESSAGES}"
 
     def test_min_recent_messages_increased(self):
         from phantom.llm.memory_compressor import MIN_RECENT_MESSAGES
@@ -333,7 +335,7 @@ class TestNmapRateLimiting:
 class TestVersion096:
     def test_version_is_current(self):
         from phantom import __version__
-        assert __version__ == "0.9.20"
+        assert __version__ == "0.9.38"
 
 
 # =========================================================================

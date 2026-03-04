@@ -651,9 +651,9 @@ def finish_scan(
         return validation_error
 
     # ── AUTO-001: Lightweight minimum-work gate ────────────────────────
-    # v0.9.34: Dramatically lowered from Phantom's over-controlling gates.
-    # Strix has NO gates at all. We keep a minimal safety net only to
-    # prevent the agent from finishing in the first few iterations.
+    # v0.9.34: Dramatically lowered from over-controlling gates.
+    # We keep a minimal safety net only to prevent the agent from
+    # finishing in the first few iterations.
     if agent_state is not None:
         current_iteration = getattr(agent_state, "iteration", 0)
         actions_count = len(getattr(agent_state, "actions_taken", []))
