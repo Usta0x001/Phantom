@@ -29,13 +29,8 @@ DEFAULT_MAX_SINGLE_REQUEST_COST = 5.0  # PHT-021: Per-request ceiling
 DEFAULT_MAX_COMPRESSION_CALLS = 50  # PHT-022: Prevent compression spirals
 
 
-class CostLimitExceeded(Exception):
-    """Raised when scan cost exceeds the configured limit."""
-
-    def __init__(self, message: str, current_cost: float, limit: float):
-        super().__init__(message)
-        self.current_cost = current_cost
-        self.limit = limit
+# v0.9.39: Import from centralized exception hierarchy
+from phantom.core.exceptions import CostLimitExceeded
 
 
 @dataclass
@@ -144,6 +139,9 @@ class CostController:
             self._state.total_cached_tokens += cached_tokens
             self._state.total_cost_usd += cost_usd
             self._state.total_requests += 1
+
+            # v0.9.39: Monotonicity invariant — cost can never decrease
+            assert self._state.total_cost_usd >= 0, "Cost went negative — invariant violated"
 
             if is_compression:
                 self._state.compression_calls += 1

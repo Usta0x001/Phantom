@@ -117,8 +117,8 @@ PROVIDER_PRESETS: dict[str, ProviderConfig] = {
         rate_limit_rpm=200,
         supports_vision=False,
         supports_reasoning=True,
-        cost_per_1k_input=0.00025,
-        cost_per_1k_output=0.0004,
+        cost_per_1k_input=0.00027,
+        cost_per_1k_output=0.0011,
     ),
     "openrouter/meta-llama/llama-3.3-70b-instruct": ProviderConfig(
         model="openrouter/meta-llama/llama-3.3-70b-instruct",
