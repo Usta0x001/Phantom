@@ -15,6 +15,7 @@ class TestFinishGuard:
         state.agent_type = "root"
         state.agent_id = "root"
         state.parent_agent_id = None
+        state.parent_id = None
         return state
 
     def test_blocked_before_min_iterations(self, monkeypatch):
