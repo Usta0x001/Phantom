@@ -695,18 +695,18 @@ def finish_scan(
                     }
 
             if actions_count < MIN_TOOL_CALLS:
-            _logger.warning(
-                "AUTO-001: finish_scan blocked — %d tool calls < minimum %d",
-                actions_count, MIN_TOOL_CALLS,
-            )
-            return {
-                "success": False,
-                "message": (
-                    f"Cannot finish scan yet: only {actions_count}/{MIN_TOOL_CALLS} "
-                    f"tools invoked. Keep scanning!"
-                ),
-                "blocked_by": "AUTO-001_minimum_work_gate",
-            }
+                _logger.warning(
+                    "AUTO-001: finish_scan blocked — %d tool calls < minimum %d",
+                    actions_count, MIN_TOOL_CALLS,
+                )
+                return {
+                    "success": False,
+                    "message": (
+                        f"Cannot finish scan yet: only {actions_count}/{MIN_TOOL_CALLS} "
+                        f"tools invoked. Keep scanning!"
+                    ),
+                    "blocked_by": "AUTO-001_minimum_work_gate",
+                }
 
         _logger.info(
             "AUTO-001: finish_scan allowed — iteration=%d, tools=%d",

@@ -59,7 +59,7 @@ class AuditSigner:
             # Save public key
             pub_pem = self._private_key.public_key().public_bytes(
                 serialization.Encoding.PEM,
-                serialization.SubjectPublicKeyInfo,
+                serialization.PublicFormat.SubjectPublicKeyInfo,
             )
             self._public_key_path.write_bytes(pub_pem)
             _logger.info(

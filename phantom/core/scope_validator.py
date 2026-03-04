@@ -237,12 +237,12 @@ class ScopeValidator:
                 explicitly_allowed = True
                 break
 
-        # PHT-023: DNS rebinding defense — for targets NOT explicitly allowed,
-        # resolve hostname and check if it points to a private/internal IP.
-        # Skip for explicitly-listed targets (user authorized them).
+        # PHT-023: DNS rebinding defense — ALWAYS check resolved IPs.
+        # Even explicitly-allowed domains (e.g. *.target.com) must not resolve
+        # to private/internal IPs — user authorized the domain, not 10.x/169.254.x.
         # LOGIC-003 FIX: DNS pinning — record resolved IPs on first check and
         # reject if subsequent resolutions return different IPs (TOCTOU defense).
-        if not explicitly_allowed and not is_private_ip(host):
+        if not is_private_ip(host):
             import socket as _socket
             try:
                 resolved_ips = _socket.getaddrinfo(host, None)
