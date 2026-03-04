@@ -93,7 +93,7 @@ PROFILES: dict[str, ScanProfile] = {
     # ------------------------------------------------------------------
     ProfileName.quick: ScanProfile(
         name="quick",
-        description="Time-boxed rapid assessment (~60 min). Broad vuln-class coverage.",
+        description="Rapid assessment with broad vuln-class coverage (30\u201360 min).",
         max_iterations=300,
         sandbox_timeout_s=120,
         reasoning_effort="high",
@@ -117,7 +117,7 @@ PROFILES: dict[str, ScanProfile] = {
     # ------------------------------------------------------------------
     ProfileName.standard: ScanProfile(
         name="standard",
-        description="Balanced assessment with systematic methodology (~45 min).",
+        description="Balanced assessment with systematic methodology (20\u201345 min).",
         max_iterations=120,
         sandbox_timeout_s=120,
         reasoning_effort="medium",
@@ -138,7 +138,7 @@ PROFILES: dict[str, ScanProfile] = {
     # ------------------------------------------------------------------
     ProfileName.deep: ScanProfile(
         name="deep",
-        description="Exhaustive assessment with maximum coverage and vuln chaining.",
+        description="Exhaustive assessment with maximum coverage and vuln chaining (1\u20133 hours).",
         max_iterations=300,
         sandbox_timeout_s=180,
         reasoning_effort="high",
@@ -163,7 +163,7 @@ PROFILES: dict[str, ScanProfile] = {
     # ------------------------------------------------------------------
     ProfileName.stealth: ScanProfile(
         name="stealth",
-        description="Low-noise scan to avoid IDS/WAF detection. Slow, rate-limited.",
+        description="Low-noise scan to avoid IDS/WAF detection. Rate-limited (30\u201360 min).",
         max_iterations=60,
         sandbox_timeout_s=60,
         reasoning_effort="medium",
@@ -186,7 +186,7 @@ PROFILES: dict[str, ScanProfile] = {
     # ------------------------------------------------------------------
     ProfileName.api_only: ScanProfile(
         name="api_only",
-        description="API-focused assessment. No browser, no subdomain discovery.",
+        description="API-focused assessment. No browser, no subdomain discovery (20\u201345 min).",
         max_iterations=100,
         sandbox_timeout_s=120,
         reasoning_effort="medium",

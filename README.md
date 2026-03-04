@@ -358,19 +358,19 @@ docker run --rm -it \
 ### 🎯 Scan Modes
 
 ```bash
-# Quick scan (~15 min, great for CI/CD)
+# Quick scan (30–60 min, great for CI/CD)
 phantom scan --target https://app.com --scan-mode quick
 
-# Standard scan (~45 min)
+# Standard scan (20–45 min)
 phantom scan --target https://app.com
 
 # Deep scan (1–3 hours, exhaustive)
 phantom scan --target https://app.com --scan-mode deep
 
-# Stealth mode (low-noise, IDS/WAF evasion)
+# Stealth mode (30–60 min, low-noise, IDS/WAF evasion)
 phantom scan --target https://app.com --scan-mode stealth
 
-# API-only scan (REST/GraphQL, no browser)
+# API-only scan (20–45 min, REST/GraphQL, no browser)
 phantom scan --target https://api.app.com --scan-mode api_only
 ```
 
@@ -395,11 +395,11 @@ phantom scan --target https://app.com --non-interactive
 
 | Profile | Iterations | Duration | Best For |
 |:--------|:----------:|:--------:|:---------|
-| `quick` | 60 | ~15 min | CI/CD · rapid checks |
-| `standard` | 120 | ~45 min | Regular testing |
+| `quick` | 300 | 30–60 min | CI/CD · rapid checks |
+| `standard` | 120 | 20–45 min | Regular testing |
 | `deep` | 300 | 1–3 hours | Comprehensive audit |
-| `stealth` | 60 | ~30 min | Production · IDS evasion |
-| `api_only` | 100 | ~45 min | REST / GraphQL APIs |
+| `stealth` | 60 | 30–60 min | Production · IDS evasion |
+| `api_only` | 100 | 20–45 min | REST / GraphQL APIs |
 
 ### 🔄 Post-Scan Pipeline
 
