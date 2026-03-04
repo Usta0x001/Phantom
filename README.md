@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="docs/images/logo.png" alt="Phantom Logo" width="120">
+
 
 # PHANTOM
 
