@@ -206,6 +206,10 @@ class DockerRuntime(AbstractRuntime):
                         "PHANTOM_SANDBOX_EXECUTION_TIMEOUT": str(execution_timeout),
                         "HOST_GATEWAY": HOST_GATEWAY_HOSTNAME,
                         "PHANTOM_SANDBOX_MODE": "true",
+                        # v0.9.39: Egress enforcement flag for hardened entrypoint
+                        "PHANTOM_EGRESS_ENFORCEMENT": os.getenv(
+                            "PHANTOM_EGRESS_ENFORCEMENT", "strict",
+                        ),
                         # Bypass proxy for target hosts — prevents 502 when Caido
                         # proxy becomes unreachable or overloaded.
                         "no_proxy": f"{HOST_GATEWAY_HOSTNAME},localhost,127.0.0.1",
