@@ -17,6 +17,7 @@ from phantom.llm.utils import clean_content
 from phantom.runtime import SandboxInitializationError
 from phantom.tools import process_tool_invocations
 from phantom.utils.resource_paths import get_phantom_resource_path
+from phantom.core.exceptions import SecurityViolationError, ResourceExhaustedError
 
 from .state import AgentState
 
@@ -280,9 +281,43 @@ class BaseAgent(metaclass=AgentMeta):
                     await self._enter_waiting_state(tracer, error_occurred=True)
                     continue
 
+            # ── v0.9.39 FIX (ARC-003): NEVER swallow security/resource errors ──
+            except (SecurityViolationError, ResourceExhaustedError) as e:
+                error_msg = f"SECURITY/RESOURCE ABORT at iteration {self.state.iteration}: {e!s}"
+                logger.critical(error_msg)
+                self.state.add_error(error_msg)
+                self._save_partial_results_on_crash(tracer, error_msg)
+                self.state.set_completed({
+                    "success": False,
+                    "error": error_msg,
+                    "terminated_by": type(e).__name__,
+                })
+                if tracer:
+                    tracer.update_agent_status(self.state.agent_id, "security_abort")
+                try:
+                    from phantom.core.audit_logger import get_global_audit_logger
+                    _audit = get_global_audit_logger()
+                    if _audit:
+                        _audit.log_event(
+                            event_type="security_abort",
+                            severity="critical",
+                            category="security",
+                            data={"error": error_msg, "type": type(e).__name__},
+                            agent_id=self.state.agent_id,
+                        )
+                except Exception:  # noqa: BLE001
+                    pass
+                if self.non_interactive:
+                    return {"success": False, "error": error_msg}
+                raise  # In interactive mode, propagate to caller
+
             except Exception as e:  # noqa: BLE001
                 # Catch-all for unexpected errors (KeyError, AttributeError, etc.)
                 # that would otherwise crash the agent loop with no cleanup.
+                # v0.9.39: Check if wrapping a security error
+                cause = e.__cause__ or e.__context__
+                if isinstance(cause, (SecurityViolationError, ResourceExhaustedError)):
+                    raise cause from e
                 error_msg = f"Unexpected error in iteration {self.state.iteration}: {e!s}"
                 logger.exception(error_msg)
                 self.state.add_error(error_msg)
