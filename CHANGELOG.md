@@ -2,6 +2,46 @@
 
 All notable changes to Phantom will be documented in this file.
 
+## [0.9.38] - 2026-03-04
+
+### Zero-Base Audit — P0/P1/P2 Fixes
+
+**P0 — Critical Fixes (4):**
+- **Race condition in `cancel_current_execution()`** — `self._current_task` was read
+  twice without a local snapshot, creating a TOCTOU window; `except RuntimeError` didn't
+  catch `AttributeError`. Now snapshots into a local variable and catches both.
+- **Unbounded auth token store** — `_auth_token_store` had no max size. Added
+  `_MAX_AUTH_TOKENS = 50` with FIFO eviction via `set_auth_token()`.
+- **Cross-domain token confusion** — `_capture_auth_from_response()` ran on ALL 200/201
+  POST responses globally. Now scoped to `_ALLOWED_SSRF_HOSTS` (scan targets only).
+- **Auth header credential leak** — Raw auth header values were embedded in the
+  conversation history (checkpointed/logged). Now registered via proxy token store;
+  only header *names* appear in the prompt.
+
+**P1 — High-Impact Fixes (2):**
+- **Lock-less reads in CostController** — `get_remaining_budget()` and
+  `get_cost_summary()` read `self._state` without `self._lock`. Both now wrapped.
+- **f-string in logger** — `logger.warning(f"Error checking agent messages: {e}")`
+  replaced with lazy `%s` formatting in `base_agent.py`.
+
+**P2 — Robustness Fixes (5):**
+- **`mark_endpoint_tested()` wrong return at cap** — returned `False` when 10,000 cap
+  hit, meaning the agent would retry the same endpoint. Now returns `True` (= "already
+  tested, skip it").
+- **Stale message reference** — `self.state.messages = conversation_history` in
+  `_execute_actions` overwrote any trimming done by the LLM loop. Removed reassignment.
+- **`max_iterations - 3` misfires** — injected a critical-warning when
+  `max_iterations <= 3`. Now guarded with `if self.state.max_iterations > 3`.
+- **`scan_profile` type not guarded** — `profile.get("max_iterations", 300)` crashed
+  on non-dict objects. Now uses `hasattr`/`isinstance` chain with fallback.
+- **Silent exception swallowing in auto-record** — `_auto_record_findings` catch-all
+  used `_logger.debug()`. Elevated to `_logger.warning()`.
+
+**P3 — Code Quality:**
+- Fixed misleading comment `# was 200, reduced from 300` → `# Match Strix default (300)`.
+
+**Tests:** 731 passed, 97 skipped, 0 failures
+
 ## [0.9.37] - 2026-03-03
 
 ### Final Audit — Bug Fixes, Hardening & Dead Code Removal

@@ -874,7 +874,7 @@ def _auto_record_findings(tool_name: str, result: Any, agent_state: Any) -> None
                 agent_state.add_finding(f"[vuln/info-disclosure] Sensitive data at {url}")
 
     except Exception as exc:  # noqa: BLE001
-        _logger.debug("auto-record findings swallowed: %s", exc, exc_info=True)
+        _logger.warning("auto-record findings failed for %s: %s", tool_name, exc, exc_info=True)
 
 
 def remove_screenshot_from_result(result: Any) -> Any:

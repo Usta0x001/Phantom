@@ -6,7 +6,7 @@
 \usepackage{lmodern}
 \usepackage[english]{babel}
 \usepackage{geometry}
-\geometry{margin=2.5cm}
+\geometry{margin=2.5cm, headheight=14.5pt}
 \usepackage{graphicx}
 \usepackage{xcolor}
 \usepackage{hyperref}
@@ -16,6 +16,7 @@
 \usepackage{tabularx}
 \usepackage{enumitem}
 \usepackage{amsmath}
+\usepackage{amssymb}
 \usepackage{tikz}
 \usetikzlibrary{shapes.geometric, arrows.meta, positioning, fit, calc}
 \usepackage{fancyhdr}
@@ -32,11 +33,11 @@
 
 % ─── Star rating command ─────────────────────────────────────────────────────
 \newcommand{\stars}[1]{%
-  \ifnum#1>0 $\bigstar$\fi%
-  \ifnum#1>1 $\bigstar$\fi%
-  \ifnum#1>2 $\bigstar$\fi%
-  \ifnum#1>3 $\bigstar$\fi%
-  \ifnum#1>4 $\bigstar$\fi%
+  \ifnum#1>0\relax\ensuremath{\bigstar}\fi%
+  \ifnum#1>1\relax\ensuremath{\bigstar}\fi%
+  \ifnum#1>2\relax\ensuremath{\bigstar}\fi%
+  \ifnum#1>3\relax\ensuremath{\bigstar}\fi%
+  \ifnum#1>4\relax\ensuremath{\bigstar}\fi%
 }
 
 % ─── Colours ─────────────────────────────────────────────────────────────────
@@ -315,21 +316,21 @@ via tool calls. The implementation resides in \texttt{base\_agent.py} (824~lines
 \begin{figure}[H]
 \centering
 \begin{tikzpicture}[
-  step/.style={rectangle, draw=phantomblue, fill=blue!8, text width=4cm,
+  pstep/.style={rectangle, draw=phantomblue, fill=blue!8, text width=4cm,
     minimum height=0.8cm, align=center, rounded corners=3pt, font=\small},
-  decision/.style={diamond, draw=highorg, fill=orange!8, text width=2cm,
+  decide/.style={diamond, draw=highorg, fill=orange!8, text width=2cm,
     align=center, font=\small, inner sep=1pt},
   arr/.style={-{Stealth[length=2.5mm]}, thick, phantomblue},
   node distance=0.9cm,
 ]
-\node[step] (start) {Increment Iteration};
-\node[decision, below=of start] (check) {Should\\stop?};
-\node[step, below=of check] (llm) {LLM.generate()\\(streaming)};
-\node[step, below=of llm] (parse) {Parse tool calls\\from XML output};
-\node[step, below=of parse] (exec) {Execute tools\\(sandbox / local)};
-\node[step, below=of exec] (record) {Auto-record findings\\to ledger};
-\node[decision, below=of record] (compress) {Memory\\threshold?};
-\node[step, below=of compress] (comp) {Compress history\\(LLM summary)};
+\node[pstep] (start) {Increment Iteration};
+\node[decide, below=of start] (check) {Should\\stop?};
+\node[pstep, below=of check] (llm) {LLM.generate()\\(streaming)};
+\node[pstep, below=of llm] (parse) {Parse tool calls\\from XML output};
+\node[pstep, below=of parse] (exec) {Execute tools\\(sandbox / local)};
+\node[pstep, below=of exec] (record) {Auto-record findings\\to ledger};
+\node[decide, below=of record] (compress) {Memory\\threshold?};
+\node[pstep, below=of compress] (comp) {Compress history\\(LLM summary)};
 
 \draw[arr] (start) -- (check);
 \draw[arr] (check) -- node[right, font=\tiny]{No} (llm);

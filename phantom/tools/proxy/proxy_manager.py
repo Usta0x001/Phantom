@@ -38,6 +38,7 @@ _ALLOWED_SSRF_HOSTS: set[str] = set()
 # Automatically captures auth tokens from login responses and carries them
 # across subsequent send_request calls so subagents don't need to re-login.
 # Thread-safe: uses a simple dict guarded by the GIL for reads/writes.
+_MAX_AUTH_TOKENS = 50  # PHT-060: Prevent unbounded growth
 _auth_token_store: dict[str, str] = {}  # header_name -> header_value
 
 
@@ -48,22 +49,36 @@ def get_auth_token_store() -> dict[str, str]:
 
 def set_auth_token(header_name: str, header_value: str) -> None:
     """Manually register an auth token for auto-injection."""
+    # Evict oldest entry when at capacity
+    if header_name not in _auth_token_store and len(_auth_token_store) >= _MAX_AUTH_TOKENS:
+        oldest = next(iter(_auth_token_store))
+        del _auth_token_store[oldest]
     _auth_token_store[header_name] = header_value
 
 
-def _capture_auth_from_response(response_headers: dict, response_body: str) -> None:
+def _capture_auth_from_response(
+    response_headers: dict, response_body: str, *, request_host: str = ""
+) -> None:
     """Auto-capture auth tokens from login-like responses.
 
     Detects JWT tokens in response JSON and Set-Cookie headers,
     stores them for auto-injection into subsequent requests.
+
+    PHT-061: Only captures tokens when *request_host* is in the
+    allowed SSRF hosts set (i.e. a legitimate scan target) to
+    prevent cross-domain token confusion.
     """
     import json as _json
+
+    # PHT-061: Scope capture to scan-target domains only
+    if request_host and request_host.lower().strip() not in _ALLOWED_SSRF_HOSTS:
+        return
 
     # Capture Set-Cookie headers
     set_cookie = response_headers.get("set-cookie", "") or response_headers.get("Set-Cookie", "")
     if set_cookie:
         # Store the cookie for future requests
-        _auth_token_store["Cookie"] = set_cookie.split(";")[0]  # first cookie value
+        set_auth_token("Cookie", set_cookie.split(";")[0])  # first cookie value
 
     # Capture JWT from JSON response body (common in REST APIs like Juice Shop)
     if response_body:
@@ -80,7 +95,7 @@ def _capture_auth_from_response(response_headers: dict, response_body: str) -> N
                         if isinstance(auth_obj, dict):
                             val = auth_obj.get("token") or auth_obj.get("access_token")
                     if val and isinstance(val, str) and len(val) > 20:
-                        _auth_token_store["Authorization"] = f"Bearer {val}"
+                        set_auth_token("Authorization", f"Bearer {val}")
                         _logger.info("Auto-captured auth token from response (field: %s)", key)
                         break
         except (_json.JSONDecodeError, ValueError, TypeError):
@@ -423,7 +438,9 @@ class ProxyManager:
 
                 # Auto-capture auth tokens from successful login-like responses
                 if response.status_code in (200, 201) and method.upper() in ("POST", "PUT"):
-                    _capture_auth_from_response(dict(response.headers), body_content)
+                    from urllib.parse import urlparse as _urlparse
+                    _req_host = _urlparse(url).hostname or ""
+                    _capture_auth_from_response(dict(response.headers), body_content, request_host=_req_host)
 
                 # Body truncation: 8K for HTML (need to see XSS reflections, SQL errors),
                 # 10K for JSON/API responses (need full data for IDOR/auth analysis)

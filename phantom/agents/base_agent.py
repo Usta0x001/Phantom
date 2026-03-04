@@ -46,7 +46,7 @@ class AgentMeta(type):
 
 
 class BaseAgent(metaclass=AgentMeta):
-    max_iterations = 300  # v0.9.34: Match Strix (was 200, reduced from 300)
+    max_iterations = 300  # v0.9.34: Match Strix default (300)
     agent_name: str = ""
     jinja_env: Environment
     default_llm_config: LLMConfig | None = None
@@ -224,7 +224,7 @@ class BaseAgent(metaclass=AgentMeta):
                 )
                 self.state.add_message("user", warning_msg)
 
-            if self.state.iteration == self.state.max_iterations - 3:
+            if self.state.max_iterations > 3 and self.state.iteration == self.state.max_iterations - 3:
                 final_warning_msg = (
                     "CRITICAL: You have only 3 iterations left! "
                     "Your next message MUST be the tool call to the appropriate "
@@ -465,7 +465,9 @@ class BaseAgent(metaclass=AgentMeta):
             self.state.add_error("Tool execution cancelled by user")
             raise
 
-        self.state.messages = conversation_history
+        # PHT-062: Don't reassign — process_tool_invocations already mutated
+        # conversation_history in-place and state.messages IS that list.
+        # Reassignment would overwrite any trimming done by the LLM loop.
 
         if should_agent_finish:
             # Finalize EnhancedAgentState scan tracking when available.
@@ -664,7 +666,7 @@ class BaseAgent(metaclass=AgentMeta):
             import logging
 
             logger = logging.getLogger(__name__)
-            logger.warning(f"Error checking agent messages: {e}")
+            logger.warning("Error checking agent messages: %s", e)
             return
 
     def _handle_sandbox_error(
@@ -814,10 +816,11 @@ class BaseAgent(metaclass=AgentMeta):
 
     def cancel_current_execution(self) -> None:
         self._force_stop = True
-        if self._current_task and not self._current_task.done():
+        task = self._current_task          # snapshot to avoid TOCTOU race
+        if task and not task.done():
             try:
-                loop = self._current_task.get_loop()
-                loop.call_soon_threadsafe(self._current_task.cancel)
-            except RuntimeError:
-                self._current_task.cancel()
+                loop = task.get_loop()
+                loop.call_soon_threadsafe(task.cancel)
+            except (RuntimeError, AttributeError):
+                task.cancel()
         self._current_task = None

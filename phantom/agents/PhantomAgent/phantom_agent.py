@@ -139,27 +139,47 @@ class PhantomAgent(BaseAgent):
         # Strix has NO profile injection at all.
         if self.scan_profile:
             profile = self.scan_profile
-            max_iter = profile.max_iterations if hasattr(profile, "max_iterations") else profile.get("max_iterations", 300)
+            # PHT-063: Guard against non-dict/non-object scan_profile
+            if hasattr(profile, "max_iterations"):
+                max_iter = profile.max_iterations
+            elif isinstance(profile, dict):
+                max_iter = profile.get("max_iterations", 300)
+            else:
+                max_iter = 300
             task_description += f"\n\nYou have {max_iter} iterations. Be thorough and relentless."
 
             # Register active profile flags for stealth enforcement middleware
             try:
                 from phantom.core.scan_profiles import set_active_profile_flags
-                custom_flags = profile.custom_flags if hasattr(profile, "custom_flags") else profile.get("custom_flags", {})
+                if hasattr(profile, "custom_flags"):
+                    custom_flags = profile.custom_flags
+                elif isinstance(profile, dict):
+                    custom_flags = profile.get("custom_flags", {})
+                else:
+                    custom_flags = {}
                 set_active_profile_flags(custom_flags or {})
             except ImportError:
                 pass
 
         # ── Inject auth headers for authenticated scanning ──
+        # PHT-064: Register auth tokens via proxy_manager instead of
+        # embedding raw credentials in the conversation history (which
+        # gets checkpointed and logged). The agent tool `send_request`
+        # auto-injects headers from the token store.
         auth_headers = scan_config.get("auth_headers")
         if auth_headers and isinstance(auth_headers, dict):
-            task_description += "\n\n--- AUTHENTICATED SCANNING ---"
-            task_description += "\nYou MUST include the following authentication headers in ALL HTTP requests:"
+            from phantom.tools.proxy.proxy_manager import set_auth_token
             for header_name, header_value in auth_headers.items():
-                task_description += f"\n  {header_name}: {header_value}"
-            task_description += "\nPass these headers to httpx (-H), nuclei (-header), katana (-headers), and in Python scripts."
-            task_description += "\nTest both authenticated AND unauthenticated access for IDOR/access control issues."
-            task_description += "\n--- END AUTH CONFIG ---"
+                set_auth_token(header_name, header_value)
+            # Tell the agent headers are available but don't reveal values
+            _header_names = ", ".join(auth_headers)
+            task_description += (
+                "\n\n--- AUTHENTICATED SCANNING ---"
+                f"\nAuth headers [{_header_names}] are pre-loaded and will be "
+                "auto-injected into send_request calls."
+                "\nTest both authenticated AND unauthenticated access for IDOR/access control issues."
+                "\n--- END AUTH CONFIG ---"
+            )
 
         if user_instructions:
             # PHT-009 FIX: Switch to ALLOWLIST approach — strip ALL tags,
