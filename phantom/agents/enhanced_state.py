@@ -167,7 +167,7 @@ class EnhancedAgentState(AgentState):
             self.tested_endpoints[key].append(test_type)
             return True  # duplicate
         if len(self.tested_endpoints) >= 10_000:
-            return False  # silently cap
+            return True  # cap reached — treat as "already tested" so agent skips it
         self.tested_endpoints[key] = [test_type]
         return False
     

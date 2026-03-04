@@ -228,26 +228,28 @@ class CostController:
 
     def get_remaining_budget(self) -> dict[str, Any]:
         """Get remaining budget information."""
-        state = self._state
-        return {
-            "remaining_cost_usd": round(self.max_cost_usd - state.total_cost_usd, 4),
-            "remaining_input_tokens": self.max_input_tokens - state.total_input_tokens,
-            "remaining_output_tokens": self.max_output_tokens - state.total_output_tokens,
-            "usage_percentage": round(
-                (state.total_cost_usd / self.max_cost_usd * 100)
-                if self.max_cost_usd > 0 else 0, 1
-            ),
-        }
+        with self._lock:
+            state = self._state
+            return {
+                "remaining_cost_usd": round(self.max_cost_usd - state.total_cost_usd, 4),
+                "remaining_input_tokens": self.max_input_tokens - state.total_input_tokens,
+                "remaining_output_tokens": self.max_output_tokens - state.total_output_tokens,
+                "usage_percentage": round(
+                    (state.total_cost_usd / self.max_cost_usd * 100)
+                    if self.max_cost_usd > 0 else 0, 1
+                ),
+            }
 
     def get_cost_summary(self) -> str:
         """Get a human-readable cost summary."""
-        state = self._state
-        return (
-            f"Cost: ${state.total_cost_usd:.2f} / ${self.max_cost_usd:.2f} "
-            f"({state.total_requests} requests, "
-            f"{state.total_input_tokens:,} in + {state.total_output_tokens:,} out tokens, "
-            f"{state.compression_calls} compressions)"
-        )
+        with self._lock:
+            state = self._state
+            return (
+                f"Cost: ${state.total_cost_usd:.2f} / ${self.max_cost_usd:.2f} "
+                f"({state.total_requests} requests, "
+                f"{state.total_input_tokens:,} in + {state.total_output_tokens:,} out tokens, "
+                f"{state.compression_calls} compressions)"
+            )
 
 
 # Global instance
