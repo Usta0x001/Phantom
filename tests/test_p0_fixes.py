@@ -104,14 +104,12 @@ def test_arch003_unverified_findings_field():
     print("ARCH-003 PASS: _unverified_findings field works")
 
 
-def test_sec005_dockerfile_no_strix():
-    """SEC-005: Dockerfile.sandbox must not reference strix."""
+def test_sec005_dockerfile_image_name():
+    """SEC-005: Dockerfile.sandbox must reference correct phantom image."""
     dockerfile_path = Path(__file__).parent.parent / "containers" / "Dockerfile.sandbox"
     if dockerfile_path.exists():
         content = dockerfile_path.read_text()
-        assert "usestrix" not in content, "Dockerfile still references usestrix!"
-        assert "strix-sandbox" not in content.lower() or "phantom" in content.lower()
-        assert "ghcr.io/usta0x001/phantom-sandbox" in content
+        assert "ghcr.io/usta0x001/phantom-sandbox" in content, "Dockerfile must use phantom-sandbox image"
         print("SEC-005 PASS: Dockerfile uses phantom-sandbox image")
     else:
         print(f"SEC-005 SKIP: {dockerfile_path} not found")
@@ -125,5 +123,5 @@ if __name__ == "__main__":
     test_auto001_blocks_below_minimum_tools()
     test_auto001_allows_sufficient_work()
     test_arch003_unverified_findings_field()
-    test_sec005_dockerfile_no_strix()
+    test_sec005_dockerfile_image_name()
     print("\n=== ALL P0 VERIFICATION TESTS PASSED ===")

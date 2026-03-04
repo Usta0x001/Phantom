@@ -10,9 +10,9 @@
 
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg?style=flat-square)](LICENSE)
 [![Python](https://img.shields.io/badge/Python-3.12%2B-3776AB.svg?style=flat-square&logo=python&logoColor=white)](https://python.org)
-[![Docker](https://img.shields.io/badge/Docker-Required-2496ED.svg?style=flat-square&logo=docker&logoColor=white)](https://hub.docker.com/r/redwan07/phantom)
+[![Docker](https://img.shields.io/badge/Docker-Required-2496ED.svg?style=flat-square&logo=docker&logoColor=white)](https://github.com/Usta0x001/Phantom/pkgs/container/phantom-sandbox)
 [![PyPI](https://img.shields.io/pypi/v/phantom-agent.svg?style=flat-square&logo=pypi&logoColor=white)](https://pypi.org/project/phantom-agent/)
-[![Tests](https://img.shields.io/badge/Tests-808%20passing-2ecc71.svg?style=flat-square&logo=pytest&logoColor=white)](#testing)
+[![Tests](https://img.shields.io/badge/Tests-731%20passing-2ecc71.svg?style=flat-square&logo=pytest&logoColor=white)](#testing)
 [![Audit](https://img.shields.io/badge/Audit-83%20Resolved-e74c3c.svg?style=flat-square&logo=hackthebox&logoColor=white)](#security-audit)
 
 <br>
@@ -221,7 +221,7 @@ graph TB
         Docker["Docker Engine"]
     end
 
-    subgraph Container["Ephemeral Sandbox · Kali-based · 14GB"]
+    subgraph Container["Ephemeral Sandbox · Kali-based · ~13GB"]
         ToolServer["Tool Server API :48081"]
 
         subgraph Toolkit["Offensive Tools"]
@@ -284,7 +284,7 @@ export LLM_API_KEY="your-api-key"
 phantom scan --target https://your-app.com
 ```
 
-First run pulls the sandbox image (~14GB). Results saved to `phantom_runs/`.
+First run pulls the sandbox image (~13GB). Results saved to `phantom_runs/`.
 
 ### Docker
 
@@ -448,7 +448,7 @@ phantom/
 │   ├── models/               #   Pydantic domain models
 │   ├── skills/               #   Domain knowledge files
 │   └── telemetry/            #   Run tracing
-├── tests/                    # 808+ tests
+├── tests/                    # 731+ tests
 ├── containers/               # Sandbox Dockerfile
 ├── scripts/                  # Build scripts
 └── docs/                     # Documentation
@@ -460,11 +460,11 @@ phantom/
 
 ## Testing
 
-808+ tests, 0 failures:
+731+ tests, 0 failures:
 
 | Suite | Tests | Scope |
 |-------|:-----:|-------|
-| Integration | 184 | Full system E2E |
+| Integration | 153 | Full system E2E |
 | Audit fixes | 39 | Security fix verification |
 | Unit tests | ~200 | Module-level |
 | Feature tests | ~100 | Regression |

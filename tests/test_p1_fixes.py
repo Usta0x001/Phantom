@@ -96,7 +96,7 @@ def test_logic005_time_limit_exists():
 
     state = AgentState()
     assert hasattr(state, "max_scan_duration_seconds")
-    assert state.max_scan_duration_seconds == 0  # v0.9.36: disabled by default (like Strix)
+    assert state.max_scan_duration_seconds == 0  # v0.9.36: disabled by default
     print("LOGIC-005 PASS: Wall-clock time limit field exists")
 
 

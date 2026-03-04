@@ -50,7 +50,7 @@ class PhantomAgent(BaseAgent):
 
         # ── v0.9.34: VulnClassTracker DISABLED ──
         # The rotation engine forces abandoning promising attack vectors after
-        # just 10 tool calls (too shallow). Strix doesn't have this and finds
+        # just 10 tool calls (too shallow). Disabling it lets the LLM find
         # more vulns. The LLM naturally rotates when it exhausts a vector.
 
         # Initialize EnhancedAgentState scan tracking if available
@@ -131,12 +131,12 @@ class PhantomAgent(BaseAgent):
         # v0.9.35: Juice Shop auto-detection and strategy injection REMOVED (H-11).
         # Hardcoded strategies prevent the LLM from adapting to discoveries.
         # Port 3000 is too broad (Express, Rails, React all use it).
-        # Strix has no hardcoded strategies — the LLM figures it out.
+        # No hardcoded strategies — the LLM figures it out.
 
         # ── v0.9.35: Minimal scan profile injection (H-15) ──
         # Only inject max_iterations. Skip_tools, priority_tools, rates, etc.
         # are redundant (already in system prompt) or restrictive.
-        # Strix has NO profile injection at all.
+        # Keep profile injection minimal.
         if self.scan_profile:
             profile = self.scan_profile
             # PHT-063: Guard against non-dict/non-object scan_profile

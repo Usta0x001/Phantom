@@ -230,8 +230,7 @@ async def execute_tool_invocation(tool_inv: dict[str, Any], agent_state: Any | N
 
     # v0.9.35: Tool firewall DISABLED (H-02). The injection pattern matching
     # blocks legitimate pentest payloads: SQLi (;), SSTI (${...}), command
-    # injection (`...`), boolean SQLi (||). Strix has no firewall.
-    # The sandbox already provides isolation.
+    # injection (`...`), boolean SQLi (||). The sandbox provides isolation.
 
     # Auto-inject auth headers for security tools that support extra_args
     tool_args = _inject_auth_headers(tool_name, tool_args, agent_state)

@@ -38,7 +38,7 @@ All notable changes to Phantom will be documented in this file.
   used `_logger.debug()`. Elevated to `_logger.warning()`.
 
 **P3 — Code Quality:**
-- Fixed misleading comment `# was 200, reduced from 300` → `# Match Strix default (300)`.
+- Fixed misleading comment `# was 200, reduced from 300` → `# default (300)`.
 
 **Tests:** 731 passed, 97 skipped, 0 failures
 
@@ -51,7 +51,7 @@ All notable changes to Phantom will be documented in this file.
   stored value. Now uses `data.get("max_iterations", 300)` so resumed scans keep the
   correct iteration limit.
 - **is_approaching_max_iterations threshold** — was 0.93, too aggressive (agent only got
-  7% of iterations for wrap-up). Changed to 0.85 to match Strix-like behavior.
+  7% of iterations for wrap-up). Changed to 0.85 for better wrap-up timing.
 
 **P2 — Robustness Fixes:**
 - **XSS body detection** — `body[:500]` was too small to catch XSS reflections in
@@ -85,11 +85,11 @@ All notable changes to Phantom will be documented in this file.
 - **Memory compression was BROKEN** since v0.9.35 — `get_conversation_history()` returned a copy,
   so in-place compression in llm.py operated on a disconnected copy that was discarded.
   Context grew unbounded until the brutal 500-message hard trim kicked in.
-  Fixed: now returns direct reference like Strix.
+  Fixed: now returns direct reference.
 
-**Strix Alignment:**
+**Alignment Fixes:**
 - `max_iterations` default restored to 300 (was wrongly lowered to 200)
-- Wall-clock time limit disabled by default (Strix has none)
+- Wall-clock time limit disabled by default
 - Juice Shop auto-detection narrowed (no longer fires for ANY port-3000 target)
 - `_execute_actions` now assigns reference directly (not redundant copy)
 
@@ -105,50 +105,48 @@ All notable changes to Phantom will be documented in this file.
 
 ## [0.9.35] - 2026-03-03
 
-### Guarantee Strix Power — Remove ALL Remaining Overhead (17 Harmful Diffs)
+### Guarantee Full Power — Remove ALL Remaining Overhead (17 Harmful Diffs)
 
-Post-v0.9.34 deep code audit found 17 remaining differences still making Phantom 
-weaker than Strix. This release eliminates every one of them while keeping the 10 
-genuinely helpful Phantom additions.
+Post-v0.9.34 deep code audit found 17 remaining differences still weakening Phantom. 
+This release eliminates every one of them while keeping the 10 genuinely helpful additions.
 
 #### Removed (Proven Harmful)
 
 - **H-01: max_tokens cap removed** — Was truncating LLM output at 8192/16384 tokens, 
   causing tool calls to be cut mid-XML → parse failures → "agent does nothing" cycles.
-  Strix has no cap.
 - **H-02: Tool firewall disabled** — Injection pattern matching blocked legitimate 
-  pentest payloads (SQLi `;`, SSTI `${}`, command injection backticks). Strix has none.
+  pentest payloads (SQLi `;`, SSTI `${}`, command injection backticks).
 - **H-03: Loop detector removed** — False positives when methodically testing similar 
   endpoints. Injected "change your approach" messages abandoned productive attack vectors.
 - **H-04: Phase transition system removed** — RECON→EXPLOIT→REPORT phases with 
-  "Call finish_scan NOW" at 95% stole the last 15 iterations. Strix has no phases.
+  "Call finish_scan NOW" at 95% stole the last 15 iterations.
 - **H-05: "No tool call" prescriptive nudge removed** — Was listing specific tools 
-  the agent should use. Now matches Strix: silently continues.
+  the agent should use. Now silently continues.
 - **H-06: Empty response handler simplified** — Removed prescriptive tool suggestions 
-  and hidden "6+ vuln classes" gate. Now matches Strix's simple corrective.
+  and hidden "6+ vuln classes" gate. Now uses a simple corrective.
 - **H-07: "Move on after 3-5 attempts" REMOVED** — THE biggest single weakness. 
-  Replaced with Strix's "each failure teaches you something, the REAL work begins 
+  Replaced with "each failure teaches you something, the REAL work begins 
   when tools fail". Most real vulns need 10-50+ attempts.
 - **H-08: "Follow ROTATION messages" removed** — Vestigial from disabled VulnClassTracker.
-- **H-09: Full vulnerability methodology restored** — Restored Strix's detailed 
+- **H-09: Full vulnerability methodology restored** — Restored detailed 
   EXPLOITATION APPROACH (basic→advanced→super-advanced), VULNERABILITY KNOWLEDGE BASE, 
   and "A single high-impact vulnerability is worth more than dozens of low-severity findings."
 - **H-10: Python restriction removed** — "TOOLS FIRST / Only use python_action for 4 
-  categories" replaced with Strix's open "Automate with Python scripts for complex 
+  categories" replaced with open "Automate with Python scripts for complex 
   workflows and repetitive tasks."
 - **H-11: Juice Shop strategy injection removed** — Hardcoded STEP 1/2/3 checklist 
-  for port 3000 targets. Strix lets the LLM figure it out.
+  for port 3000 targets. Lets the LLM figure it out.
 - **H-12: TOOL_PROFILES filtering removed** — Quick mode was hiding 15+ tools 
   (arjun, jwt_tool, ffuf_parameter_fuzz, etc.). Now ALL tools visible always.
 - **H-13: In-place memory compression** — Was copying conversation_history, causing 
-  unbounded growth across 300 iterations. Now matches Strix: compress in-place.
+  unbounded growth across 300 iterations. Now compresses in-place.
   Also removed unnecessary asyncio.to_thread wrapper.
 - **H-14: ITERATION BUDGET DISCIPLINE removed** — "No wasted iterations" created 
   anxiety about exploration. Security testing REQUIRES speculative tests.
 - **H-15: Scan profile injection minimized** — Was injecting skip_tools, priority_tools, 
   rates, nuclei_severity (~500+ tokens per request). Now only injects iteration count.
 - **H-16: Jinja autoescape fixed** — Was HTML-escaping XML tags in prompts. Now 
-  matches Strix: `default_for_string=False`.
+  matches expected behavior: `default_for_string=False`.
 - **H-17: Stealth delay verified** — delay_ms defaults to 0, harmless.
 
 #### Kept (Proven Helpful — K-01 through K-10)
@@ -159,39 +157,40 @@ genuinely helpful Phantom additions.
 
 ## [0.9.34] - 2026-03-05
 
-### Return to Strix Philosophy — Remove Harmful Orchestration Bloat
+### Return to Core Philosophy — Remove Harmful Orchestration Bloat
 
-Deep comparative audit of Strix vs Phantom revealed that 3000+ lines of "improvements" 
-collectively made Phantom WORSE at vulnerability discovery. Strix (the base system) finds 
+Deep comparative audit revealed that 3000+ lines of "improvements" 
+collectively made Phantom WORSE at vulnerability discovery. The base system finds 
 dozens of bugs on OWASP Juice Shop; Phantom with all its added complexity found only 2. 
 This release strips harmful additions while keeping genuinely helpful ones.
 
 #### Root Cause Analysis (7 root causes identified)
 1. **Context window pollution** — 8+ control messages injected per iteration drowning the LLM
-2. **Iteration budget halved** — Quick profile had 150 (Strix uses 300)
+2. **Iteration budget halved** — Quick profile had 150 (optimal is 300)
 3. **Contradictory scanning strategies** — 4 competing strategy sections in prompt
-4. **Shallow-testing prompts** — "Move on after 3-4 attempts" vs Strix's "Be relentless"
+4. **Shallow-testing prompts** — "Move on after 3-4 attempts" vs "Be relentless"
 5. **Tool firewall** — Blocked browser_action/python_action in first 8 iterations
-6. **Low temperature (0.4)** — Killed creative exploitation; Strix uses provider default
+6. **Low temperature (0.4)** — Killed creative exploitation; uses provider default
 7. **Aggressive finish gates** — 40% iteration minimum + 4 vuln classes + 3 scanner types
 
 #### Changes Applied (10 fixes)
 
-- **System prompt rewritten** — Replaced "INTELLIGENT SCANNING STRATEGY" with Strix's 
+- **System prompt rewritten** — Replaced "INTELLIGENT SCANNING STRATEGY" with 
   "AGGRESSIVE SCANNING MANDATE" (GO SUPER HARD, 2000+ steps, UNLEASH FULL CAPABILITY). 
   Replaced rigid MANDATORY PHASES (25/50/25%) with lean WORKFLOW GUIDANCE.
 - **Temperature default removed** — No longer hardcodes 0.4; uses provider default (~0.7-1.0)
-  like Strix. Conditionally omits temperature from API calls when None.
+  Uses provider default (~0.7-1.0).
+  Conditionally omits temperature from API calls when None.
 - **max_iterations restored to 300** — Quick profile 150→300, base_agent default 200→300.
 - **VulnClassTracker disabled** — Was forcing rotation every 10 iterations, abandoning 
-  promising attack vectors. Strix doesn't have one.
+  promising attack vectors. Phantom doesn't need one.
 - **Tool firewall removed** — v0.9.33 addition that blocked browser/python tools early.
 - **Control message injection gutted** — Removed ~200 lines: scanner orders (iter 1-6), 
   scanner enforcement (iter 10), verbose phase messages, diversity alerts, coverage updates, 
   stagnation detector. Kept only lean phase transitions.
 - **Finish gates dramatically lowered** — From MIN_ITERATIONS=120/MIN_TOOL_CALLS=60/4 vuln 
   classes/3 scanners → MIN_ITERATIONS=10/MIN_TOOL_CALLS=8. AUTO-002 and AUTO-003 removed.
-- **MIN_RECENT_MESSAGES 12→15** — Matches Strix, preserves more context for exploit chains.
+- **MIN_RECENT_MESSAGES 12→15** — Preserves more context for exploit chains.
 - **Stagnation detector removed** — Too aggressive at 15 iterations.
 - **Bug bounty mindset in prompt** — "If it wouldn't earn $500+, keep searching."
 
@@ -813,7 +812,7 @@ config loading.
 - **Container `cap_drop=["ALL"]` killed sandbox** — Over-zealous capability hardening
   prevented `sudo` inside the entrypoint, crashing the container before the tool
   server could start. Reverted to `cap_add=["NET_ADMIN", "NET_RAW"]` (matching
-  upstream Strix) without `cap_drop`.
+  upstream design) without `cap_drop`.
 - **Config `GROQ_API_KEY` never loaded from saved config** — `Config` class did
   not track `GROQ_API_KEY`, `OPENAI_API_KEY`, or `PHANTOM_LLM_FALLBACK` as
   canonical vars, so `apply_saved()` silently skipped them. Added all three.

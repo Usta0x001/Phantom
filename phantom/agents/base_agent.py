@@ -46,7 +46,7 @@ class AgentMeta(type):
 
 
 class BaseAgent(metaclass=AgentMeta):
-    max_iterations = 300  # v0.9.34: Match Strix default (300)
+    max_iterations = 300  # v0.9.34: Default iteration budget
     agent_name: str = ""
     jinja_env: Environment
     default_llm_config: LLMConfig | None = None
@@ -437,7 +437,7 @@ class BaseAgent(metaclass=AgentMeta):
         if actions:
             return await self._execute_actions(actions, tracer)
 
-        # No tool call — Strix behavior: silently continue (no prescriptive nudge)
+        # No tool call — silently continue (no prescriptive nudge)
         return False
 
     async def _execute_actions(self, actions: list[Any], tracer: Optional["Tracer"]) -> bool:
@@ -802,17 +802,17 @@ class BaseAgent(metaclass=AgentMeta):
     ) -> bool:
         """Handle non-LLM iteration errors.
 
-        Returns ``False`` to signal that the caller should propagate the
-        error (non-interactive) or enter waiting state (interactive).
-        Returning ``True`` means the error was absorbed and the loop
-        should continue — only used for genuinely transient errors.
+        Returns ``True`` to absorb the error so the agent loop continues.
+        Transient sandbox/Docker errors,
+        tool execution failures, and network glitches should NOT kill
+        the entire scan — the agent can recover on the next iteration.
         """
         error_msg = f"Error in iteration {self.state.iteration}: {error!s}"
         logger.exception(error_msg)
         self.state.add_error(error_msg)
         if tracer:
             tracer.update_agent_status(self.state.agent_id, "error")
-        return False  # propagate — let caller decide how to handle
+        return True  # absorb — loop continues
 
     def cancel_current_execution(self) -> None:
         self._force_stop = True
