@@ -165,8 +165,13 @@ async def _execute_tool_in_sandbox(tool_name: str, agent_state: Any, **kwargs: A
 
     async with httpx.AsyncClient(trust_env=False) as client:
         try:
+            # v0.9.39: mTLS support (feature-flagged OFF by default)
+            ssl_ctx = _get_tls_context(agent_state)
+            if ssl_ctx and request_url.startswith("http://"):
+                request_url = "https://" + request_url[7:]
             response = await client.post(
-                request_url, json=request_data, headers=headers, timeout=timeout
+                request_url, json=request_data, headers=headers, timeout=timeout,
+                **({"verify": ssl_ctx} if ssl_ctx else {}),
             )
             response.raise_for_status()
             response_data = response.json()
@@ -321,6 +326,21 @@ def _get_scope_validator() -> Any:
         tracer = get_global_tracer()
         if tracer and hasattr(tracer, 'scope_validator'):
             return tracer.scope_validator
+    except (ImportError, AttributeError):
+        pass
+    return None
+
+
+def _get_tls_context(agent_state: Any) -> Any:
+    """Get mTLS SSL context if available (v0.9.39: MTLS feature flag)."""
+    try:
+        from phantom.core.feature_flags import is_enabled
+        if not is_enabled("PHANTOM_FF_MTLS"):
+            return None
+        from phantom.telemetry.tracer import get_global_tracer
+        tracer = get_global_tracer()
+        if tracer and hasattr(tracer, 'tls_manager'):
+            return tracer.tls_manager.create_client_ssl_context()
     except (ImportError, AttributeError):
         pass
     return None

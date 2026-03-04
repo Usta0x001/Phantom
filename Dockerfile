@@ -53,6 +53,10 @@ COPY --from=builder /build/.venv /app/.venv
 COPY --from=builder /build/phantom /app/phantom
 COPY --from=builder /build/README.md /build/LICENSE /app/
 
+# v0.9.39: Copy hardened entrypoint for egress enforcement
+COPY containers/docker-entrypoint-hardened.sh /opt/phantom/docker-entrypoint-hardened.sh
+RUN chmod +x /opt/phantom/docker-entrypoint-hardened.sh
+
 # Fix shebangs that point to /build/.venv → /app/.venv
 RUN find /app/.venv/bin -type f -exec \
     sed -i 's|#!/build/.venv/bin/python|#!/app/.venv/bin/python|g' {} + 2>/dev/null || true
