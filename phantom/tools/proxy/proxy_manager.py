@@ -123,14 +123,16 @@ def _is_ssrf_safe(url: str) -> bool:
         if parsed.scheme not in ("http", "https"):
             return False
 
-        # Block known dangerous hostnames
-        if hostname.lower() in ("localhost", "0.0.0.0"):
-            return False
-
         # Allow explicitly registered scan targets even if they resolve to
         # private IPs (e.g. host.docker.internal → 192.168.x.x).
+        # CHECK THIS FIRST — before the localhost block — because the target
+        # may be localhost itself when running locally.
         if hostname.lower() in _ALLOWED_SSRF_HOSTS:
             return True
+
+        # Block known dangerous hostnames (only if NOT an allowed target)
+        if hostname.lower() in ("localhost", "0.0.0.0"):
+            return False
 
         # PHT-003 FIX: Resolve DNS first, then check ALL resolved IPs
         try:
@@ -194,6 +196,8 @@ class ProxyManager:
         sort_order: str = "desc",
         scope_id: str | None = None,
     ) -> dict[str, Any]:
+        if gql is None:
+            return {"error": "Proxy request listing requires the gql package (only available in Docker sandbox)", "requests": [], "count": 0}
         offset = (start_page - 1) * page_size
         limit = (end_page - start_page + 1) * page_size
 
