@@ -76,13 +76,15 @@ def _build_smart_context(
             ):
                 if len(vulns) < 20:
                     vulns.append(vuln.strip()[:150])
-            # SECURITY-OVERRIDE: Pass credentials to child agents so they can
-            # test authenticated vulnerabilities (IDOR, privilege escalation,
-            # JWT manipulation, etc.). Subagents run in the same sandbox and
-            # need auth tokens to test ~50% of Juice Shop-style challenges.
+            # P1-007 FIX: Do NOT pass literal credentials to child agents — this
+            # leaks secrets through conversation history. Instead, note that
+            # credentials were found so the child can request them via the
+            # parent's findings ledger or re-discover them.
             for cred in _re.findall(r"(?:password|token|secret|api[_-]?key)[:\s=]+\S+", text, _re.IGNORECASE):
                 if len(creds) < 10:
-                    creds.append(cred.strip()[:200])
+                    import hashlib as _hl
+                    cred_hash = _hl.sha256(cred.strip().encode()).hexdigest()[:8]
+                    creds.append(f"credential_ref:{cred_hash} (available in parent context)")
 
         if urls:
             summary_parts.append(f"## Discovered URLs/Endpoints ({len(urls)} total)")

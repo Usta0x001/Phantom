@@ -358,11 +358,16 @@ class MemoryCompressor:
                 ):
                     critical_extracts.append(f"[ENDPOINT] {endpoint}")
                 # Preserve credentials found during scan
+                # P1-005 FIX: Redact literal credential values to prevent leaking
+                # them to the external LLM. Store a hash reference so the agent
+                # knows credentials exist without exposing them.
                 for cred in _cre.findall(
                     r"(?:password|secret|api[_-]?key|admin)[:\s=]+([^\s\"']{3,80})",
                     ctext, _cre.IGNORECASE,
                 ):
-                    critical_extracts.append(f"[CRED] {cred.strip()}")
+                    import hashlib as _hl
+                    cred_hash = _hl.sha256(cred.strip().encode()).hexdigest()[:8]
+                    critical_extracts.append(f"[CRED] credential_ref:{cred_hash} (redacted)")
                 # Preserve numeric IDs (for IDOR testing)
                 for idor in _cre.findall(
                     r"(?:user[_-]?id|id|uid|basket[_-]?id)[\"']?\s*[:=]\s*(\d+)",
