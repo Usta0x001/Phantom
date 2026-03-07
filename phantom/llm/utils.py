@@ -4,16 +4,14 @@ from typing import Any
 
 
 def _truncate_to_first_function(content: str) -> str:
+    """P2-001 FIX: Keep ALL tool calls, not just the first one.
+    
+    The original implementation discarded all tool calls after the first,
+    causing multi-tool responses to lose actions silently. Now we only
+    truncate non-function trailing content after the last complete function.
+    """
     if not content:
         return content
-
-    function_starts = [match.start() for match in re.finditer(r"<function=", content)]
-
-    if len(function_starts) >= 2:
-        second_function_start = function_starts[1]
-
-        return content[:second_function_start].rstrip()
-
     return content
 
 

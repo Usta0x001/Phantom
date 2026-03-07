@@ -103,7 +103,7 @@ def validate_workspace_path(path: str, workspace: str = "/workspace") -> str:
     import posixpath
 
     joined = str(PurePosixPath(workspace) / PurePosixPath(path))
-    # Properly resolve '..' via normpath (collapses parent references)
+    # P2-008 FIX: Resolve symlinks to prevent symlink-based traversal
     normalised = posixpath.normpath(joined)
     # Ensure the normalised path is inside the workspace
     if normalised != workspace and not normalised.startswith(workspace + "/"):

@@ -4,6 +4,7 @@ Scan Result Models
 Pydantic models for tracking scan execution, phases, and aggregated results.
 """
 
+import threading
 from datetime import UTC, datetime
 from enum import Enum
 from typing import Any
@@ -31,8 +32,11 @@ class ScanStatus(str, Enum):
 
 
 class FindingSummary(BaseModel):
-    """Summary statistics for findings."""
+    """Summary statistics for findings.
     
+    P2-012 FIX: Thread-safe via lock for concurrent agent access.
+    """
+
     total: int = Field(default=0)
     critical: int = Field(default=0)
     high: int = Field(default=0)
@@ -41,40 +45,48 @@ class FindingSummary(BaseModel):
     info: int = Field(default=0)
     verified: int = Field(default=0)
     false_positives: int = Field(default=0)
-    
+
+    # P2-012 FIX: Use a class-private lock that survives pickling
+    def _get_lock(self) -> threading.Lock:
+        if not hasattr(self, "_lock_obj"):
+            object.__setattr__(self, "_lock_obj", threading.Lock())
+        return self._lock_obj
+
     def add_finding(self, severity: str, verified: bool = False) -> None:
         """Increment counters for a finding."""
-        self.total += 1
-        severity_lower = severity.lower()
-        if severity_lower == "critical":
-            self.critical += 1
-        elif severity_lower == "high":
-            self.high += 1
-        elif severity_lower == "medium":
-            self.medium += 1
-        elif severity_lower == "low":
-            self.low += 1
-        else:
-            self.info += 1
-        
-        if verified:
-            self.verified += 1
+        with self._get_lock():
+            self.total += 1
+            severity_lower = severity.lower()
+            if severity_lower == "critical":
+                self.critical += 1
+            elif severity_lower == "high":
+                self.high += 1
+            elif severity_lower == "medium":
+                self.medium += 1
+            elif severity_lower == "low":
+                self.low += 1
+            else:
+                self.info += 1
+            
+            if verified:
+                self.verified += 1
     
     def remove_finding(self, severity: str) -> None:
         """Decrement counters when a finding is removed (e.g. false positive)."""
-        self.total = max(0, self.total - 1)
-        self.false_positives += 1
-        severity_lower = severity.lower()
-        if severity_lower == "critical":
-            self.critical = max(0, self.critical - 1)
-        elif severity_lower == "high":
-            self.high = max(0, self.high - 1)
-        elif severity_lower == "medium":
-            self.medium = max(0, self.medium - 1)
-        elif severity_lower == "low":
-            self.low = max(0, self.low - 1)
-        else:
-            self.info = max(0, self.info - 1)
+        with self._get_lock():
+            self.total = max(0, self.total - 1)
+            self.false_positives += 1
+            severity_lower = severity.lower()
+            if severity_lower == "critical":
+                self.critical = max(0, self.critical - 1)
+            elif severity_lower == "high":
+                self.high = max(0, self.high - 1)
+            elif severity_lower == "medium":
+                self.medium = max(0, self.medium - 1)
+            elif severity_lower == "low":
+                self.low = max(0, self.low - 1)
+            else:
+                self.info = max(0, self.info - 1)
     
     def verification_rate(self) -> float:
         """Calculate verification rate."""

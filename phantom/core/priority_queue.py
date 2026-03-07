@@ -7,6 +7,7 @@ Ensures critical findings are verified first and high-value targets are scanned 
 
 import heapq
 import logging
+import threading
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import IntEnum
@@ -66,6 +67,7 @@ class VulnerabilityPriorityQueue:
         self._heap: list[PriorityItem[Vulnerability]] = []
         self._counter = 0
         self._seen_ids: set[str] = set()
+        self._lock = threading.Lock()
     
     def push(self, vuln: Vulnerability) -> bool:
         """
@@ -73,35 +75,37 @@ class VulnerabilityPriorityQueue:
         
         Returns True if added, False if duplicate.
         """
-        if vuln.id in self._seen_ids:
-            return False
-        
-        priority = SEVERITY_TO_PRIORITY.get(vuln.severity, Priority.MEDIUM)
-        
-        # Boost priority for certain vulnerability classes
-        if vuln.vulnerability_class in {"sqli", "rce", "ssti"}:
-            priority = min(priority, Priority.HIGH)
-        
-        item = PriorityItem(
-            priority=priority.value,
-            timestamp=self._counter,
-            item=vuln,
-        )
-        
-        heapq.heappush(self._heap, item)
-        self._seen_ids.add(vuln.id)
-        self._counter += 1
-        
-        logger.debug("Queued %s with priority %s", vuln.id, priority.name)
-        return True
+        with self._lock:
+            if vuln.id in self._seen_ids:
+                return False
+            
+            priority = SEVERITY_TO_PRIORITY.get(vuln.severity, Priority.MEDIUM)
+            
+            # Boost priority for certain vulnerability classes
+            if vuln.vulnerability_class in {"sqli", "rce", "ssti"}:
+                priority = min(priority, Priority.HIGH)
+            
+            item = PriorityItem(
+                priority=priority.value,
+                timestamp=self._counter,
+                item=vuln,
+            )
+            
+            heapq.heappush(self._heap, item)
+            self._seen_ids.add(vuln.id)
+            self._counter += 1
+            
+            logger.debug("Queued %s with priority %s", vuln.id, priority.name)
+            return True
     
     def pop(self) -> Vulnerability | None:
         """Remove and return highest priority vulnerability."""
-        if not self._heap:
-            return None
-        
-        item = heapq.heappop(self._heap)
-        return item.item
+        with self._lock:
+            if not self._heap:
+                return None
+            
+            item = heapq.heappop(self._heap)
+            return item.item
     
     def peek(self) -> Vulnerability | None:
         """View highest priority without removing."""

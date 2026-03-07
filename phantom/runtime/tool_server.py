@@ -41,7 +41,9 @@ security_dependency = Depends(security)
 agent_tasks: dict[str, asyncio.Task[Any]] = {}
 
 # PHT-012 FIX: Simple in-memory rate limiter
-_rate_limit_store: dict[str, list[float]] = {}
+# P2-006 FIX: Use deque for O(1) amortized pruning instead of O(n) list rebuild
+from collections import deque as _deque
+_rate_limit_store: dict[str, _deque[float]] = {}
 _RATE_LIMIT_MAX = 60  # max requests per window
 _RATE_LIMIT_WINDOW = 60.0  # seconds
 
@@ -52,17 +54,17 @@ async def _rate_limit_check(request: Request) -> None:
     client_ip = request.client.host if request.client else "unknown"
     now = _time.monotonic()
     if client_ip not in _rate_limit_store:
-        _rate_limit_store[client_ip] = []
-    # Prune old entries
-    _rate_limit_store[client_ip] = [
-        t for t in _rate_limit_store[client_ip] if now - t < _RATE_LIMIT_WINDOW
-    ]
-    if len(_rate_limit_store[client_ip]) >= _RATE_LIMIT_MAX:
+        _rate_limit_store[client_ip] = _deque()
+    q = _rate_limit_store[client_ip]
+    # Prune expired entries from the left (oldest first) — O(1) amortized
+    while q and now - q[0] >= _RATE_LIMIT_WINDOW:
+        q.popleft()
+    if len(q) >= _RATE_LIMIT_MAX:
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
             detail="Rate limit exceeded. Try again later.",
         )
-    _rate_limit_store[client_ip].append(now)
+    q.append(now)
 
 
 def verify_token(credentials: HTTPAuthorizationCredentials) -> str:

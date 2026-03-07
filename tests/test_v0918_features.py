@@ -285,7 +285,7 @@ class TestScanProfileOptimization:
         assert merged.max_iterations == 200
         assert merged.reasoning_effort == "high"
         # Original unchanged
-        assert profile.max_iterations == 300
+        assert profile.max_iterations == 100
         assert profile.reasoning_effort == "high"
 
     def test_unknown_profile_raises(self):
