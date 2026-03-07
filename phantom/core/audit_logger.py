@@ -70,7 +70,7 @@ class AuditLogger:
                 except OSError:
                     _logger.warning("SEC-004: Could not persist HMAC key to %s", key_path)
             _logger.info("SEC-004: Using unique per-run HMAC key (not default)")
-        self._prev_hash = hashlib.sha256(b"genesis").hexdigest()[:16]
+        self._prev_hash = hashlib.sha256(b"genesis").hexdigest()[:32]
         # H6 FIX: On resume, verify existing chain and pick up from last hash
         if self.log_path.exists():
             self._verify_and_resume_chain()
@@ -80,7 +80,7 @@ class AuditLogger:
         import hashlib
         import hmac as _hmac
 
-        prev = hashlib.sha256(b"genesis").hexdigest()[:16]
+        prev = hashlib.sha256(b"genesis").hexdigest()[:32]
         last_valid_hash = prev
         tampered = False
         line_count = 0
@@ -110,7 +110,7 @@ class AuditLogger:
                     verify_line = json.dumps(verify_entry, default=str, ensure_ascii=False)
                     expected = _hmac.new(
                         self._hmac_key, (prev + verify_line).encode(), hashlib.sha256
-                    ).hexdigest()[:16]
+                    ).hexdigest()[:32]
 
                     if expected != stored_hmac:
                         tampered = True
@@ -158,10 +158,13 @@ class AuditLogger:
             _logger.debug("Audit log rotation failed", exc_info=True)
 
     def _compute_hmac(self, data: str) -> str:
-        """Compute HMAC-SHA256 for tamper detection chain."""
+        """Compute HMAC-SHA256 for tamper detection chain.
+        
+        P2-004 FIX: Use 128-bit truncation (32 hex chars) instead of 64-bit (16 hex).
+        """
         import hashlib
         import hmac as _hmac
-        return _hmac.new(self._hmac_key, data.encode(), hashlib.sha256).hexdigest()[:16]
+        return _hmac.new(self._hmac_key, data.encode(), hashlib.sha256).hexdigest()[:32]
 
     def _write_entry(self, entry: dict[str, Any]) -> None:
         """Write a single audit entry with fsync for crash safety and HMAC chain."""

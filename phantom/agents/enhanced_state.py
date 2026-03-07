@@ -69,7 +69,16 @@ class EnhancedAgentState(AgentState):
     
     # Tool usage tracking
     tools_used: dict[str, int] = Field(default_factory=dict)
-    
+
+    def model_post_init(self, __context: Any) -> None:
+        """P2-002 FIX: Eagerly initialize priority queues to avoid lazy-init race."""
+        super().model_post_init(__context)
+        # Use object.__setattr__ to bypass Pydantic's frozen/validation
+        if not hasattr(self, "_vuln_queue") or self._vuln_queue is None:
+            object.__setattr__(self, "_vuln_queue", VulnerabilityPriorityQueue())
+        if not hasattr(self, "_scan_queue") or self._scan_queue is None:
+            object.__setattr__(self, "_scan_queue", ScanPriorityQueue())
+
     def initialize_scan(self, target: str, scan_id: str | None = None) -> ScanResult:
         """Initialize a new scan with priority queues."""
         import uuid
@@ -97,15 +106,15 @@ class EnhancedAgentState(AgentState):
     
     @property
     def vuln_queue(self) -> VulnerabilityPriorityQueue:
-        """Get the vulnerability priority queue (lazy-init)."""
-        if not hasattr(self, "_vuln_queue") or self._vuln_queue is None:
+        """Get the vulnerability priority queue."""
+        if self._vuln_queue is None:
             self._vuln_queue = VulnerabilityPriorityQueue()
         return self._vuln_queue
     
     @property
     def scan_queue(self) -> ScanPriorityQueue:
-        """Get the scan task priority queue (lazy-init)."""
-        if not hasattr(self, "_scan_queue") or self._scan_queue is None:
+        """Get the scan task priority queue."""
+        if self._scan_queue is None:
             self._scan_queue = ScanPriorityQueue()
         return self._scan_queue
     
