@@ -30,7 +30,7 @@ class TestScanProfilesV096:
     def test_quick_iterations_increased(self):
         from phantom.core.scan_profiles import get_profile
         p = get_profile("quick")
-        assert p.max_iterations == 100, "Quick must be 100 iterations (P2-011 FIX)"
+        assert p.max_iterations == 50, "Quick must be 50 iterations (budget-optimized)"
 
     def test_standard_iterations_increased(self):
         from phantom.core.scan_profiles import get_profile
@@ -335,7 +335,7 @@ class TestNmapRateLimiting:
 class TestVersion096:
     def test_version_is_current(self):
         from phantom import __version__
-        assert __version__ == "0.9.38"
+        assert __version__ == "0.9.39"
 
 
 # =========================================================================

@@ -519,14 +519,25 @@ Examples:
     assign_workspace_subdirs(args.targets_info)
     rewrite_localhost_targets(args.targets_info, HOST_GATEWAY_HOSTNAME)
 
-    # Register scan targets with SSRF check so send_request won't block them
+    # Register scan targets with SSRF check so send_request won't block them.
+    # Must register BOTH the original hostname AND the rewritten hostname
+    # (e.g. localhost → host.docker.internal) because tools use the rewritten URL.
     try:
         from phantom.tools.proxy.proxy_manager import allow_ssrf_host
         from urllib.parse import urlparse as _urlparse
         for t in args.targets_info:
-            h = _urlparse(t.get("original", "")).hostname
-            if h:
-                allow_ssrf_host(h)
+            # Register original hostname (e.g. "localhost")
+            orig_h = _urlparse(t.get("original", "")).hostname
+            if orig_h:
+                allow_ssrf_host(orig_h)
+            # Register rewritten hostname from target details (e.g. "host.docker.internal")
+            details = t.get("details", {})
+            for url_field in ("target_url", "target_ip"):
+                rewritten_url = details.get(url_field, "")
+                if rewritten_url:
+                    rw_h = _urlparse(rewritten_url).hostname if "://" in rewritten_url else rewritten_url
+                    if rw_h and rw_h != orig_h:
+                        allow_ssrf_host(rw_h)
     except Exception:
         pass
 

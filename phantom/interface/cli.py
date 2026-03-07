@@ -1,4 +1,5 @@
 import atexit
+import os
 import signal
 import sys
 import threading
@@ -177,6 +178,15 @@ async def run_cli(args: Any) -> None:  # noqa: PLR0915
     target_urls = [t["original"] for t in args.targets_info]
     scope_validator = ScopeValidator.from_targets(target_urls)
     tracer.scope_validator = scope_validator  # attach for downstream access
+
+    # ── Cost Controller ──
+    try:
+        from phantom.core.cost_controller import init_cost_controller
+        max_cost = float(os.environ.get("PHANTOM_MAX_COST", "25.0"))
+        cost_controller = init_cost_controller(max_cost_usd=max_cost)
+        console.print(f"  [dim]Cost limit:[/] ${max_cost:.2f}")
+    except Exception:
+        pass  # Cost controller is optional
 
     # ── Audit Logger ──
     audit_log_path = tracer.get_run_dir() / "audit.jsonl"
