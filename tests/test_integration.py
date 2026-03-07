@@ -342,29 +342,29 @@ class TestNotifierSSRFProtection:
     def test_rejects_localhost(self):
         from phantom.core.notifier import _validate_url
 
-        assert _validate_url("http://localhost/hook") is False
-        assert _validate_url("http://0.0.0.0/hook") is False
+        assert _validate_url("http://localhost/hook") is None
+        assert _validate_url("http://0.0.0.0/hook") is None
 
     def test_rejects_private_ip(self):
         from phantom.core.notifier import _validate_url
 
-        assert _validate_url("http://192.168.1.1/hook") is False
-        assert _validate_url("http://10.0.0.1/hook") is False
-        assert _validate_url("http://127.0.0.1/hook") is False
+        assert _validate_url("http://192.168.1.1/hook") is None
+        assert _validate_url("http://10.0.0.1/hook") is None
+        assert _validate_url("http://127.0.0.1/hook") is None
 
     def test_allows_public_urls(self):
         from phantom.core.notifier import _validate_url
 
-        # Google is public and should be allowed
+        # Google is public and should be allowed — returns pinned IP string
         result = _validate_url("https://hooks.slack.com/services/test")
         # May fail in CI without network, but should not crash
-        assert isinstance(result, bool)
+        assert result is None or isinstance(result, str)
 
     def test_rejects_invalid_scheme(self):
         from phantom.core.notifier import _validate_url
 
-        assert _validate_url("ftp://example.com/hook") is False
-        assert _validate_url("file:///etc/passwd") is False
+        assert _validate_url("ftp://example.com/hook") is None
+        assert _validate_url("file:///etc/passwd") is None
 
 
 # =========================================================================

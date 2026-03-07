@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import threading
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from typing import Any
@@ -66,6 +67,8 @@ class LLM:
         self.agent_name = agent_name
         self.agent_id: str | None = None
         self._total_stats = RequestStats()
+        # P0-003 FIX: Lock for thread-safe stats updates
+        self._stats_lock = threading.Lock()
 
         # L1-FIX: Dynamic context window — use the provider registry to set
         # the memory compressor threshold based on the ACTUAL model context
@@ -225,9 +228,10 @@ class LLM:
 
         # v0.9.35: In-place compression. Previously operated on a
         # copy, causing unbounded memory growth across 300 iterations.
+        # P0-001 FIX: Atomic slice assignment instead of clear()+extend()
+        # to prevent data loss if compress_history() raises mid-operation.
         compressed = list(self.memory_compressor.compress_history(conversation_history))
-        conversation_history.clear()
-        conversation_history.extend(compressed)
+        conversation_history[:] = compressed
         messages.extend(compressed)
 
         if self._is_anthropic() and self.config.enable_prompt_caching:
@@ -351,10 +355,12 @@ class LLM:
                 except (ImportError, AttributeError):
                     pass
 
-            self._total_stats.input_tokens += input_tokens
-            self._total_stats.output_tokens += output_tokens
-            self._total_stats.cached_tokens += cached_tokens
-            self._total_stats.cost += cost
+            # P0-003 FIX: Thread-safe stats update
+            with self._stats_lock:
+                self._total_stats.input_tokens += input_tokens
+                self._total_stats.output_tokens += output_tokens
+                self._total_stats.cached_tokens += cached_tokens
+                self._total_stats.cost += cost
 
             # ---- Cost Controller integration (PHT security control) ----
             try:

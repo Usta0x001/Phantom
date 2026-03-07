@@ -28,42 +28,49 @@ from urllib.parse import urlparse
 _logger = logging.getLogger(__name__)
 
 
-def _validate_url(url: str) -> bool:
+def _validate_url(url: str) -> str | None:
     """Reject URLs pointing to private/loopback addresses (SSRF protection).
     
-    Also resolves DNS to catch rebinding attacks where a public hostname
-    resolves to a private IP.
+    P0-002 FIX: Returns the first safe resolved IP (pinned) instead of bool,
+    so callers connect to the pinned IP and avoid DNS rebinding attacks.
+    Returns None if the URL is unsafe.
     """
     try:
         parsed = urlparse(url)
         hostname = parsed.hostname
         if not hostname:
-            return False
+            return None
         # Block obviously internal hostnames
         if hostname in ("localhost", "0.0.0.0"):
-            return False
+            return None
         try:
             addr = ipaddress.ip_address(hostname)
             if addr.is_private or addr.is_loopback or addr.is_link_local or addr.is_reserved:
-                return False
+                return None
+            return hostname  # Already an IP literal — no rebinding risk
         except ValueError:
             # hostname is a domain name — resolve it to check IP
             import socket
             try:
                 resolved = socket.getaddrinfo(hostname, None, socket.AF_UNSPEC, socket.SOCK_STREAM)
+                first_safe_ip: str | None = None
                 for family, _type, _proto, _canonname, sockaddr in resolved:
                     ip_str = sockaddr[0]
                     addr = ipaddress.ip_address(ip_str)
                     if addr.is_private or addr.is_loopback or addr.is_link_local or addr.is_reserved:
-                        return False
+                        return None
+                    if first_safe_ip is None:
+                        first_safe_ip = ip_str
+                if first_safe_ip is None:
+                    return None
             except socket.gaierror:
-                return False  # Can't resolve = don't allow
+                return None  # Can't resolve = don't allow
         # Only allow https for webhooks
         if parsed.scheme != "https":
-            return False
-        return True
+            return None
+        return first_safe_ip
     except Exception:
-        return False
+        return None
 
 
 # ======================================================================
@@ -101,14 +108,22 @@ class WebhookChannel(NotificationChannel):
         return f"webhook:{self.url[:40]}"
 
     def send(self, payload: dict[str, Any]) -> bool:
-        if not _validate_url(self.url):
+        pinned_ip = _validate_url(self.url)
+        if not pinned_ip:
             _logger.warning("Blocked webhook to private/internal URL: %s", self.url)
             return False
         try:
+            # P0-002 FIX: Connect to pinned IP, pass original Host header
+            parsed = urlparse(self.url)
+            pinned_url = self.url.replace(parsed.hostname, pinned_ip, 1)
             body = json.dumps(payload).encode("utf-8")
-            headers = {"Content-Type": "application/json", **self.headers}
+            headers = {
+                "Content-Type": "application/json",
+                "Host": parsed.hostname,
+                **self.headers,
+            }
             req = urllib.request.Request(
-                self.url, data=body, headers=headers, method="POST"
+                pinned_url, data=body, headers=headers, method="POST"
             )
             with urllib.request.urlopen(req, timeout=self.timeout_s) as resp:
                 return 200 <= resp.status < 300
@@ -136,16 +151,20 @@ class SlackChannel(NotificationChannel):
         return f"slack:{self.channel or 'default'}"
 
     def send(self, payload: dict[str, Any]) -> bool:
-        if not _validate_url(self.webhook_url):
+        pinned_ip = _validate_url(self.webhook_url)
+        if not pinned_ip:
             _logger.warning("Blocked Slack webhook to private/internal URL: %s", self.webhook_url)
             return False
         slack_msg = self._format_slack(payload)
         try:
+            # P0-002 FIX: Connect to pinned IP, pass original Host header
+            parsed = urlparse(self.webhook_url)
+            pinned_url = self.webhook_url.replace(parsed.hostname, pinned_ip, 1)
             body = json.dumps(slack_msg).encode("utf-8")
             req = urllib.request.Request(
-                self.webhook_url,
+                pinned_url,
                 data=body,
-                headers={"Content-Type": "application/json"},
+                headers={"Content-Type": "application/json", "Host": parsed.hostname},
                 method="POST",
             )
             with urllib.request.urlopen(req, timeout=self.timeout_s) as resp:
