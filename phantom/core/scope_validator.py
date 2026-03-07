@@ -328,6 +328,11 @@ def _extract_host(target: str) -> str:
         target = target.rsplit("@", 1)[-1]
 
     # Handle host:port
+    # P3-003 FIX: Handle bracket-wrapped IPv6 addresses like [::1]:8080
+    if target.startswith("["):
+        bracket_end = target.find("]")
+        if bracket_end != -1:
+            return target[1:bracket_end]
     if ":" in target and not target.startswith("["):
         parts = target.rsplit(":", 1)
         if len(parts) == 2:
