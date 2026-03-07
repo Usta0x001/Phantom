@@ -385,9 +385,9 @@ class TestLoopDetector:
 # ====================================================================
 
 class TestPHT015CredentialPropagation:
-    """Verify credentials are propagated to child agents for authenticated testing."""
+    """P1-007 FIX: Verify credentials are REDACTED (not leaked) to child agents."""
 
-    def test_creds_propagated_to_subagents(self):
+    def test_creds_redacted_in_subagent_context(self):
         from phantom.tools.agents_graph.agents_graph_actions import _build_smart_context
 
         history = [
@@ -406,19 +406,24 @@ class TestPHT015CredentialPropagation:
 
         context = _build_smart_context(history, mock_state)
 
-        # The summary section should now include credentials so subagents
-        # can test authenticated vulnerabilities (IDOR, privilege escalation, etc.)
+        # The summary section should contain credential references but NOT raw values
         summary_msgs = [
             msg for msg in context
             if isinstance(msg.get("content"), str)
             and "parent_findings_summary" in msg["content"]
         ]
-        # Credentials should appear in the summary for subagent use
-        has_creds = any(
-            "password=" in msg["content"] or "api_key=" in msg["content"]
+        # Raw credentials must NOT appear in the summary
+        has_raw_creds = any(
+            "SuperSecret123" in msg["content"] or "sk-abcdef" in msg["content"]
             for msg in summary_msgs
         )
-        assert has_creds, "Credentials should be propagated to subagents for authenticated testing"
+        assert not has_raw_creds, "Raw credentials must NOT be propagated to subagents"
+        # But credential references should be present
+        has_cred_refs = any(
+            "credential_ref:" in msg["content"]
+            for msg in summary_msgs
+        )
+        assert has_cred_refs, "Credential references should be propagated to subagents"
 
 
 if __name__ == "__main__":

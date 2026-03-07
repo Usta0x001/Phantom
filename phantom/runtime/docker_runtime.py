@@ -153,7 +153,8 @@ class DockerRuntime(AbstractRuntime):
         )
 
     def _create_container(self, scan_id: str, max_retries: int = 2) -> Container:
-        container_name = f"phantom-scan-{scan_id}"
+        # P1-004 FIX: Add PID to container name to avoid collisions across processes
+        container_name = f"phantom-scan-{scan_id}-{os.getpid()}"
         image_name = Config.get("phantom_image")
         if not image_name:
             raise ValueError("PHANTOM_IMAGE must be configured")
@@ -243,7 +244,7 @@ class DockerRuntime(AbstractRuntime):
         ) from last_error
 
     def _get_or_create_container(self, scan_id: str) -> Container:
-        container_name = f"phantom-scan-{scan_id}"
+        container_name = f"phantom-scan-{scan_id}-{os.getpid()}"
 
         if self._scan_container:
             try:

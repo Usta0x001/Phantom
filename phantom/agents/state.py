@@ -81,12 +81,22 @@ class AgentState(BaseModel):
         if len(self.messages) >= self._MAX_MESSAGES:
             # Keep the system prompt (first message) and the most recent half
             keep = self._MAX_MESSAGES // 2
+            trimmed_count = len(self.messages) - keep - 1
             self.messages = self.messages[:1] + self.messages[-keep:]
             logger.warning(
                 "Message history exceeded %d — trimmed to %d keeping system prompt",
                 self._MAX_MESSAGES,
                 len(self.messages),
             )
+            # P1-001 FIX: Inject visible advisory so the agent knows context was lost
+            self.messages.append({
+                "role": "user",
+                "content": (
+                    f"<system_advisory>⚠️ Memory trimmed: {trimmed_count} older messages "
+                    f"were removed to stay within the {self._MAX_MESSAGES} message limit. "
+                    f"Check findings_ledger for preserved discoveries.</system_advisory>"
+                ),
+            })
         message = {"role": role, "content": content}
         if thinking_blocks:
             message["thinking_blocks"] = thinking_blocks
@@ -135,6 +145,12 @@ class AgentState(BaseModel):
             if " ".join(existing.split()).strip().lower() == normalized:
                 return
         if len(self.findings_ledger) >= self._MAX_FINDINGS:
+            # P1-006 FIX: Log warning before truncation so operators know data was dropped
+            dropped_count = len(self.findings_ledger) - self._MAX_FINDINGS // 2
+            logger.warning(
+                "Findings ledger exceeded %d entries — archiving oldest %d",
+                self._MAX_FINDINGS, dropped_count,
+            )
             # Keep the most recent half
             self.findings_ledger = self.findings_ledger[-self._MAX_FINDINGS // 2 :]
         self.findings_ledger.append(finding)

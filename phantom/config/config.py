@@ -28,12 +28,20 @@ def _get_keyring() -> Any:
 
 
 def _store_secret(key: str, value: str) -> bool:
-    """Store a secret in OS keyring. Returns True on success."""
+    """Store a secret in OS keyring. Returns True on success.
+    
+    P1-003 FIX: Verify readback after write to detect silent keyring failures.
+    """
     kr = _get_keyring()
     if kr is None:
         return False
     try:
         kr.set_password("phantom", key, value)
+        # Verify the write succeeded by reading back
+        stored = kr.get_password("phantom", key)
+        if stored != value:
+            _logger.warning("Keyring write verification failed for %s — readback mismatch", key)
+            return False
         return True
     except Exception:  # noqa: BLE001
         return False
