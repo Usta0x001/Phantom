@@ -129,6 +129,8 @@ def calculate_cvss_and_severity(
         base_score = scores[0]
         base_severity = severities[0]
 
+        # P3-007 FIX: Clamp score to valid CVSS range
+        base_score = max(0.0, min(10.0, float(base_score)))
         severity = base_severity.lower()
 
     except Exception:
