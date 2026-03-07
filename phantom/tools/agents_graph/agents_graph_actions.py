@@ -1,5 +1,6 @@
 import re as _re
 import threading
+import time as _time
 from datetime import UTC, datetime
 from typing import Any, Literal
 
@@ -324,6 +325,68 @@ def view_agent_graph(agent_state: Any) -> dict[str, Any]:
         }
 
 
+# ── HARDENED v0.9.40: Child agent watchdog ────────────────────────────
+# Periodic check that kills child agents exceeding a hard timeout.
+# Prevents dangling daemon threads from consuming resources indefinitely.
+
+_CHILD_AGENT_HARD_TIMEOUT = 900.0  # 15 minutes max per child agent
+_agent_start_times: dict[str, float] = {}
+_watchdog_running = False
+_watchdog_lock = threading.Lock()
+
+
+def _agent_watchdog() -> None:
+    """Kill child agents that have exceeded their hard timeout."""
+    global _watchdog_running
+    try:
+        now = _time.monotonic()
+        stale_ids: list[str] = []
+        with _graph_lock:
+            for agent_id, start_ts in list(_agent_start_times.items()):
+                if now - start_ts > _CHILD_AGENT_HARD_TIMEOUT:
+                    node = _agent_graph["nodes"].get(agent_id, {})
+                    if node.get("status") in ("running", "waiting"):
+                        stale_ids.append(agent_id)
+
+            for agent_id in stale_ids:
+                _agent_graph["nodes"][agent_id]["status"] = "timeout"
+                _agent_graph["nodes"][agent_id]["finished_at"] = datetime.now(UTC).isoformat()
+                _agent_graph["nodes"][agent_id]["result"] = {
+                    "error": f"Killed by watchdog: exceeded {_CHILD_AGENT_HARD_TIMEOUT}s hard timeout"
+                }
+                # Request graceful stop on the agent instance
+                inst = _agent_instances.get(agent_id)
+                if inst and hasattr(inst, "_force_stop_event"):
+                    inst._force_stop_event.set()
+                _running_agents.pop(agent_id, None)
+                _agent_instances.pop(agent_id, None)
+                _agent_states.pop(agent_id, None)
+                _agent_start_times.pop(agent_id, None)
+
+        # Reschedule if there are still active agents being tracked
+        with _watchdog_lock:
+            if _agent_start_times:
+                t = threading.Timer(60.0, _agent_watchdog)
+                t.daemon = True
+                t.start()
+            else:
+                _watchdog_running = False
+    except Exception:
+        with _watchdog_lock:
+            _watchdog_running = False
+
+
+def _ensure_watchdog_running() -> None:
+    """Start the watchdog timer if not already running."""
+    global _watchdog_running
+    with _watchdog_lock:
+        if not _watchdog_running:
+            _watchdog_running = True
+            t = threading.Timer(60.0, _agent_watchdog)
+            t.daemon = True
+            t.start()
+
+
 @register_tool(sandbox_execution=False)
 def create_agent(
     agent_state: Any,
@@ -431,6 +494,9 @@ def create_agent(
         thread.start()
         with _graph_lock:
             _running_agents[state.agent_id] = thread
+            # HARDENED v0.9.40: Track creation time for watchdog timeout
+            _agent_start_times[state.agent_id] = _time.monotonic()
+        _ensure_watchdog_running()
 
     except Exception as e:  # noqa: BLE001
         return {"success": False, "error": f"Failed to create agent: {e}", "agent_id": None}
@@ -791,12 +857,24 @@ def send_user_message_to_agent(agent_id: str, message: str) -> dict[str, Any]:
 def wait_for_message(
     agent_state: Any,
     reason: str = "Waiting for messages from other agents",
+    timeout_seconds: int = 300,
 ) -> dict[str, Any]:
+    """Wait for messages from other agents with a mandatory timeout.
+
+    HARDENED v0.9.40: Added mandatory timeout (default 300s) to prevent
+    indefinite blocking that could deadlock the agent graph.
+    """
+    # Clamp timeout to a sane range to prevent infinite waits
+    timeout_seconds = max(30, min(timeout_seconds, 600))
     try:
         agent_id = agent_state.agent_id
         agent_name = agent_state.agent_name
 
         agent_state.enter_waiting_state()
+        # HARDENED v0.9.40: Set the waiting timeout on agent state so the
+        # agent loop's _wait_for_input() can auto-resume after expiry.
+        if hasattr(agent_state, "set_waiting_timeout"):
+            agent_state.set_waiting_timeout(timeout_seconds)
 
         with _graph_lock:
             if agent_id in _agent_graph["nodes"]:
@@ -818,8 +896,9 @@ def wait_for_message(
         return {
             "success": True,
             "status": "waiting",
-            "message": f"Agent '{agent_name}' is now waiting for messages",
+            "message": f"Agent '{agent_name}' is now waiting for messages (timeout: {timeout_seconds}s)",
             "reason": reason,
+            "timeout_seconds": timeout_seconds,
             "agent_info": {
                 "id": agent_id,
                 "name": agent_name,
@@ -829,6 +908,6 @@ def wait_for_message(
                 "Message from another agent",
                 "Message from user",
                 "Direct communication",
-                "Waiting timeout reached",
+                f"Waiting timeout reached ({timeout_seconds}s)",
             ],
         }

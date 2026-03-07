@@ -193,7 +193,9 @@ class TestPHT013PluginLoader:
 # ====================================================================
 
 class TestPHT017AuditHMAC:
-    """Verify HMAC chain fields are written in audit log entries."""
+    """Verify audit chain signature fields are written in audit log entries.
+    Ed25519 signing is enabled by default (PHANTOM_FF_ED25519_AUDIT=True),
+    so entries use _sig (not legacy _hmac)."""
 
     def test_hmac_fields_present(self, tmp_path):
         from phantom.core.audit_logger import AuditLogger
@@ -205,9 +207,11 @@ class TestPHT017AuditHMAC:
         assert len(lines) == 1
         entry = json.loads(lines[0])
         assert "_prev_hash" in entry
-        assert "_hmac" in entry
+        # Ed25519 signing uses _sig; legacy HMAC uses _hmac
+        assert "_sig" in entry or "_hmac" in entry
 
     def test_hmac_chain_integrity(self, tmp_path):
+        import hashlib
         from phantom.core.audit_logger import AuditLogger
         log_file = tmp_path / "audit.jsonl"
         logger = AuditLogger(log_file, hmac_key="test-key-123")
@@ -218,8 +222,17 @@ class TestPHT017AuditHMAC:
         entry1 = json.loads(lines[0])
         entry2 = json.loads(lines[1])
 
-        # Second entry's _prev_hash should equal first entry's _hmac
-        assert entry2["_prev_hash"] == entry1["_hmac"]
+        # Chain linkage: entry2._prev_hash == SHA256(entry1 payload without signature)
+        if "_sig" in entry1:
+            # Ed25519 mode: _prev_hash is SHA256 of payload without _sig
+            payload1 = {k: v for k, v in entry1.items() if k != "_sig"}
+            expected_hash = hashlib.sha256(
+                json.dumps(payload1, sort_keys=True, ensure_ascii=True).encode()
+            ).hexdigest()
+            assert entry2["_prev_hash"] == expected_hash
+        else:
+            # Legacy HMAC mode
+            assert entry2["_prev_hash"] == entry1["_hmac"]
 
 
 # ====================================================================

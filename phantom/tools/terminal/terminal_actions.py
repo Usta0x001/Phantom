@@ -2,6 +2,10 @@ import logging
 import re
 from typing import Any
 
+from phantom.core.command_allowlist import (
+    CommandValidationError,
+    validate_command,
+)
 from phantom.tools.registry import register_tool
 
 _logger = logging.getLogger(__name__)
@@ -35,6 +39,24 @@ def terminal_execute(
             "exit_code": None,
             "working_dir": None,
         }
+
+    # V2-ARCH-001 FIX: Command allowlist validation — only known pentest tools
+    # are permitted. This is the primary defense against arbitrary command
+    # execution via prompt injection through tool outputs.
+    if not is_input:  # Only validate new commands, not interactive input
+        try:
+            validate_command(command)
+        except CommandValidationError as e:
+            _logger.warning("Command allowlist blocked: %s — %s", command[:200], e.reason)
+            return {
+                "error": f"BLOCKED: {e.reason}",
+                "command": command[:200],
+                "terminal_id": terminal_id or "default",
+                "content": "",
+                "status": "blocked",
+                "exit_code": None,
+                "working_dir": None,
+            }
 
     # Block only full SecLists repo clone (~2GB) and rockyou (~14GB)
     for pattern in _BLOCKED_DOWNLOAD_PATTERNS:

@@ -146,6 +146,10 @@ class ScopeValidator:
         "connect": ["host", "target"],
         "ssh_connect": ["host"],
         "ftp_connect": ["host"],
+        # BUG-004 FIX: terminal_execute must be scope-checked to prevent
+        # arbitrary command execution against out-of-scope targets.
+        "terminal_execute": ["command"],
+        "run_command": ["command"],
     }
 
     # Generic parameter names that always get checked (fallback for unknown tools)
@@ -161,6 +165,12 @@ class ScopeValidator:
         self._dns_pin_cache: dict[str, tuple[set[str], float]] = {}
         self._DNS_PIN_CACHE_MAX = 10_000
         self._DNS_PIN_TTL = 300.0  # G-08 FIX: 5-minute TTL for pinned entries
+        # BUG-005 FIX: Primary targets are never evicted from DNS pin cache
+        self._protected_dns_pins: set[str] = set()
+        # V-MED-003 FIX: Thread lock for DNS pin cache to prevent race
+        # conditions during concurrent scope checks (TOCTOU on pin cache).
+        import threading as _threading
+        self._dns_pin_lock = _threading.Lock()
 
     @classmethod
     def from_targets(cls, targets: list[str]) -> ScopeValidator:
@@ -168,7 +178,17 @@ class ScopeValidator:
         config = ScopeConfig()
         for t in targets:
             config.add_target(t)
-        return cls(config)
+        validator = cls(config)
+        # BUG-005 FIX: Mark primary targets as protected in DNS pin cache
+        for t in targets:
+            try:
+                from urllib.parse import urlparse
+                parsed = urlparse(t if "://" in t else f"https://{t}")
+                host = parsed.hostname or t
+                validator._protected_dns_pins.add(host.lower())
+            except Exception:
+                validator._protected_dns_pins.add(t.lower())
+        return validator
 
     @classmethod
     def permissive(cls) -> ScopeValidator:
@@ -182,14 +202,17 @@ class ScopeValidator:
 
         Inspects the tool's parameters for URLs/IPs/hostnames and validates
         each one against the configured scope rules (is_in_scope).
+        
+        FIX-P0-001: Also validates URL schemes against security policy.
 
         Returns:
             The original tool_args dict (pass-through) if all targets are in scope.
 
         Raises:
             ScopeViolationError: If any target parameter is out of scope.
+            SecurityViolationError: If URL scheme is blocked (FIX-P0-001).
         """
-        from phantom.core.exceptions import ScopeViolationError
+        from phantom.core.exceptions import ScopeViolationError, SecurityViolationError
 
         # Determine which parameters to check
         params_to_check = self._SCOPE_CHECKED_PARAMS.get(tool_name)
@@ -204,9 +227,25 @@ class ScopeValidator:
             if not value or not isinstance(value, str):
                 continue
 
-            # Skip empty/placeholder values
-            if value.strip() in ("", "localhost", "127.0.0.1"):
+            # Skip empty/placeholder values only — CRIT-04 FIX: never skip localhost/127.0.0.1
+            if value.strip() == "":
                 continue
+
+            # BUG-004 FIX: For command-type params, extract embedded IPs/URLs
+            if param_name == "command":
+                self._enforce_scope_on_command(tool_name or "", value)
+                continue
+
+            # FIX-P0-001: Validate URL scheme BEFORE scope check
+            # This catches dangerous schemes regardless of scope configuration
+            if "://" in value or value.startswith("//"):
+                scheme_valid, reason = validate_url_scheme(value)
+                if not scheme_valid:
+                    raise SecurityViolationError(
+                        message=f"Tool '{tool_name}' parameter '{param_name}' uses "
+                                f"blocked URL pattern: {reason}",
+                        violation_type="blocked_url_scheme",
+                    )
 
             if not self.is_in_scope(value):
                 raise ScopeViolationError(
@@ -237,12 +276,19 @@ class ScopeValidator:
                 explicitly_allowed = True
                 break
 
-        # PHT-023: DNS rebinding defense — ALWAYS check resolved IPs.
-        # Even explicitly-allowed domains (e.g. *.target.com) must not resolve
-        # to private/internal IPs — user authorized the domain, not 10.x/169.254.x.
+        # PHT-023: DNS rebinding defense — check resolved IPs for non-explicit
+        # targets. Explicitly-allowed targets (user directly added the host)
+        # bypass the private-IP resolution check because the user authorized it
+        # (e.g., host.docker.internal for Docker-hosted targets).
+        # Wildcard rules (*.target.com) still get DNS rebinding defense because
+        # the user authorized the domain pattern, not specific internal IPs.
         # LOGIC-003 FIX: DNS pinning — record resolved IPs on first check and
         # reject if subsequent resolutions return different IPs (TOCTOU defense).
-        if not is_private_ip(host):
+        _is_exact_allow = explicitly_allowed and not any(
+            r.pattern.startswith("*.") for r in self.config.rules
+            if r.action == "allow" and r.matches(target)
+        )
+        if not is_private_ip(host) and not _is_exact_allow:
             import socket as _socket
             try:
                 resolved_ips = _socket.getaddrinfo(host, None)
@@ -257,31 +303,43 @@ class ScopeValidator:
                         )
                         return False
 
-                # DNS pinning: compare against cached resolution
-                if host in self._dns_pin_cache:
-                    pinned_ips, pin_time = self._dns_pin_cache[host]
-                    # G-08 FIX: Expire stale pins after TTL
-                    import time as _time
-                    if _time.time() - pin_time > self._DNS_PIN_TTL:
-                        # Pin expired — re-pin with current resolution
-                        del self._dns_pin_cache[host]
-                    elif current_ips != pinned_ips:
-                        new_ips = current_ips - pinned_ips
-                        self._log_violation(
-                            target, "dns_pin_violation",
-                            f"Hostname {host} resolved to new IPs {new_ips} "
-                            f"(pinned: {pinned_ips})"
-                        )
-                        return False
+                # V-MED-003 FIX: All DNS pin cache operations under lock
+                # to prevent TOCTOU race conditions during concurrent checks.
+                with self._dns_pin_lock:
+                    # DNS pinning: compare against cached resolution
+                    if host in self._dns_pin_cache:
+                        pinned_ips, pin_time = self._dns_pin_cache[host]
+                        # G-08 FIX: Expire stale pins after TTL
+                        import time as _time
+                        if _time.time() - pin_time > self._DNS_PIN_TTL:
+                            # Pin expired — re-pin with current resolution
+                            del self._dns_pin_cache[host]
+                        elif current_ips != pinned_ips:
+                            new_ips = current_ips - pinned_ips
+                            self._log_violation(
+                                target, "dns_pin_violation",
+                                f"Hostname {host} resolved to new IPs {new_ips} "
+                                f"(pinned: {pinned_ips})"
+                            )
+                            return False
 
-                if host not in self._dns_pin_cache:
-                    # Pin the first resolution (or refresh after TTL expiry)
-                    # M7 FIX: evict oldest entries if cache is full
-                    if len(self._dns_pin_cache) >= self._DNS_PIN_CACHE_MAX:
-                        oldest_key = next(iter(self._dns_pin_cache))
-                        del self._dns_pin_cache[oldest_key]
-                    import time as _time
-                    self._dns_pin_cache[host] = (current_ips, _time.time())
+                    if host not in self._dns_pin_cache:
+                        # Pin the first resolution (or refresh after TTL expiry)
+                        # M7 FIX: evict oldest entries if cache is full
+                        if len(self._dns_pin_cache) >= self._DNS_PIN_CACHE_MAX:
+                            # BUG-005 FIX: Only evict non-protected (secondary) entries
+                            evicted = False
+                            for candidate_key in list(self._dns_pin_cache.keys()):
+                                if candidate_key not in self._protected_dns_pins:
+                                    del self._dns_pin_cache[candidate_key]
+                                    evicted = True
+                                    break
+                            if not evicted:
+                                # All entries are protected — evict oldest anyway
+                                oldest_key = next(iter(self._dns_pin_cache))
+                                del self._dns_pin_cache[oldest_key]
+                        import time as _time
+                        self._dns_pin_cache[host] = (current_ips, _time.time())
             except _socket.gaierror:
                 pass  # DNS resolution failed — continue with rule-based check
 
@@ -294,6 +352,58 @@ class ScopeValidator:
             return False
 
         return self.config.default_action == "allow"
+
+    # ── BUG-004 FIX: Command scope enforcement ──
+
+    # Regex to extract IPs and URLs from shell commands
+    _IP_RE = re.compile(
+        r'\b(?:(?:25[0-5]|2[0-4]\d|[01]?\d\d?)\.){3}(?:25[0-5]|2[0-4]\d|[01]?\d\d?)\b'
+    )
+    _URL_RE = re.compile(
+        r'https?://[^\s\'\"<>|;`]+', re.IGNORECASE
+    )
+    _HOSTNAME_RE = re.compile(
+        r'\b(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}\b'
+    )
+
+    def _enforce_scope_on_command(self, tool_name: str, command: str) -> None:
+        """Extract IPs, URLs, and hostnames from a command and validate scope."""
+        from phantom.core.exceptions import ScopeViolationError
+
+        targets: set[str] = set()
+        # Extract IPs
+        targets.update(self._IP_RE.findall(command))
+        # Extract URLs
+        targets.update(self._URL_RE.findall(command))
+        # Extract hostnames (filter out common non-target words)
+        for hostname in self._HOSTNAME_RE.findall(command):
+            # Exclude common file extensions and command-like patterns
+            if hostname.endswith(('.py', '.sh', '.txt', '.log', '.conf', '.yml',
+                                  '.json', '.xml', '.md', '.cfg')):
+                continue
+            targets.add(hostname)
+
+        for target in targets:
+            # CRIT-05 FIX: Block internal addresses in command scope checking
+            host = _extract_host(target)
+            if host in ("127.0.0.1", "localhost", "0.0.0.0", "::1", "169.254.169.254"):
+                raise ScopeViolationError(
+                    message=(
+                        f"Tool '{tool_name}' command targets internal address '{host}' "
+                        f"which is blocked by scope policy."
+                    ),
+                    tool_name=tool_name,
+                    target=target,
+                )
+            if not self.is_in_scope(target):
+                raise ScopeViolationError(
+                    message=(
+                        f"Tool '{tool_name}' command contains target '{target}' "
+                        f"which is outside the declared scope."
+                    ),
+                    tool_name=tool_name,
+                    target=target,
+                )
 
     def validate_target(self, target: str) -> dict[str, Any]:
         """Validate a target and return detailed result."""
@@ -341,6 +451,9 @@ class ScopeValidator:
                 "timestamp": datetime.now(UTC).isoformat(),
             }
         )
+        # MED-28 FIX: Cap violation log to prevent unbounded memory growth
+        if len(self._violation_log) > 5000:
+            self._violation_log = self._violation_log[-2500:]
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize scope config for persistence."""
@@ -356,16 +469,22 @@ class ScopeValidator:
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> ScopeValidator:
         """Deserialize scope config."""
+        _valid_actions = {"allow", "deny"}
+        _valid_types = {"domain", "ip", "cidr", "regex"}
         config = ScopeConfig(
             default_action=data.get("default_action", "deny"),
             strict_mode=data.get("strict_mode", True),
         )
         for rule_data in data.get("rules", []):
+            rule_type = rule_data.get("type", "domain")
+            action = rule_data.get("action", "allow")
+            if rule_type not in _valid_types or action not in _valid_actions:
+                continue
             config.rules.append(
                 ScopeRule(
                     pattern=rule_data["pattern"],
-                    rule_type=rule_data["type"],
-                    action=rule_data.get("action", "allow"),
+                    rule_type=rule_type,
+                    action=action,
                 )
             )
         return cls(config)
@@ -383,6 +502,93 @@ _PRIVATE_NETWORKS = [
     ipaddress.ip_network("fc00::/7"),  # IPv6 ULA
     ipaddress.ip_network("fe80::/10"),  # IPv6 link-local
 ]
+
+# FIX-P0-001: Dangerous URL schemes that can be abused for SSRF or local file access
+# These MUST be blocked regardless of in-scope status
+_BLOCKED_URL_SCHEMES = frozenset({
+    "file",       # Local file access
+    "gopher",     # Protocol smuggling
+    "dict",       # Dictionary server protocol (info leak)
+    "ftp",        # Legacy, often misconfigured
+    "ldap",       # LDAP injection vector
+    "ldaps",      # LDAP over SSL
+    "tftp",       # Trivial FTP (unauthenticated)
+    "jar",        # Java archive (can trigger deserialization)
+    "netdoc",     # Alternative file: scheme
+    "data",       # Data URLs can embed arbitrary content
+    "mailto",     # Email injection
+    "tel",        # Telephone (misuse vector)
+    "javascript", # XSS vector
+    "vbscript",   # VBScript injection
+})
+
+# Whitelist of allowed URL schemes
+_ALLOWED_URL_SCHEMES = frozenset({
+    "http",
+    "https",
+})
+
+
+def validate_url_scheme(url: str) -> tuple[bool, str]:
+    """
+    FIX-P0-001: Validate URL scheme against security policy.
+    
+    Checks:
+    1. Scheme is in the allowed whitelist (http, https)
+    2. Scheme is NOT in the blocked list (file, gopher, data, etc.)
+    3. URL does not contain embedded credentials (user:pass@host)
+    
+    Args:
+        url: The URL to validate
+        
+    Returns:
+        Tuple of (is_valid, reason). If is_valid is False, reason explains why.
+    """
+    if not url or not isinstance(url, str):
+        return False, "empty_or_invalid_url"
+    
+    # Parse URL to extract scheme
+    try:
+        parsed = urlparse(url)
+    except Exception:
+        return False, "url_parse_error"
+    
+    scheme = (parsed.scheme or "").lower()
+    
+    # Check for missing scheme
+    if not scheme:
+        # No scheme — allow (will be treated as hostname)
+        return True, "no_scheme"
+    
+    # Check blocked schemes first (explicit deny)
+    if scheme in _BLOCKED_URL_SCHEMES:
+        return False, f"blocked_scheme_{scheme}"
+    
+    # Check if scheme is in whitelist
+    if scheme not in _ALLOWED_URL_SCHEMES:
+        return False, f"unknown_scheme_{scheme}"
+    
+    # FIX-P0-001: Check for embedded credentials (user:pass@host)
+    # This is often used in SSRF attacks to smuggle data
+    if parsed.username or parsed.password:
+        return False, "embedded_credentials"
+    
+    # Check for URL with double-encoded characters (bypass attempt)
+    if "%25" in url.lower():  # %25 = encoded %
+        return False, "double_encoding_detected"
+    
+    # Check for backslash in URL (URL confusion attacks)
+    if "\\" in url:
+        return False, "backslash_in_url"
+    
+    # Check for suspicious port numbers
+    if parsed.port:
+        # Block commonly abused ports (Redis, Memcached, etc.)
+        dangerous_ports = {6379, 11211, 27017, 5432, 3306, 1433, 9200, 2375, 2376}
+        if parsed.port in dangerous_ports:
+            return False, f"dangerous_port_{parsed.port}"
+    
+    return True, "valid"
 
 
 def is_private_ip(host: str) -> bool:

@@ -8,16 +8,46 @@ from typing import Any
 import httpx
 
 from phantom.config import Config
-from phantom.core.exceptions import SecurityViolationError, ResourceExhaustedError, ScopeViolationError
+from phantom.core.exceptions import SecurityViolationError, ResourceExhaustedError, ScopeViolationError, ToolError, PhaseViolationError
+from phantom.core.circuit_breaker import CircuitBreaker, CircuitState
+from phantom.core.tool_firewall import get_global_firewall
+from phantom.core.degradation_handler import DegradationHandler
+from phantom.core.wal import WriteAheadLog
 
 _logger = logging.getLogger(__name__)
 
-# ── G-03 FIX: Circuit breaker ───────────────────────────────────────
-# After N consecutive failures of the same tool, temporarily disable it
-# to prevent the agent from wasting iterations on broken tools.
-_circuit_breaker: dict[str, dict[str, Any]] = {}
-_CB_THRESHOLD = 3       # consecutive failures before tripping
-_CB_COOLDOWN_S = 300.0  # seconds to skip the tool after tripping
+# ── Singletons for degradation and WAL ──
+_degradation_handler: DegradationHandler | None = None
+_wal: WriteAheadLog | None = None
+
+
+def get_degradation_handler() -> DegradationHandler:
+    """Lazy-init singleton for the degradation handler."""
+    global _degradation_handler
+    if _degradation_handler is None:
+        _degradation_handler = DegradationHandler()
+    return _degradation_handler
+
+
+def get_executor_wal() -> WriteAheadLog:
+    """Lazy-init singleton for the executor WAL."""
+    global _wal
+    if _wal is None:
+        _wal = WriteAheadLog("phantom_wal_executor")
+    return _wal
+
+# ── T2-01: Use CircuitBreaker class instead of inline dict ────────────
+import threading as _cb_threading
+
+_circuit_breaker_lock = _cb_threading.Lock()
+_circuit_breakers: dict[str, CircuitBreaker] = {}
+
+# V2-DESIGN-002: Finding provenance tracker for dedup + source attribution
+try:
+    from phantom.core.finding_provenance import FindingProvenanceTracker, FindingSource
+    _finding_tracker = FindingProvenanceTracker()
+except ImportError:
+    _finding_tracker = None  # type: ignore[assignment]
 
 # L17 FIX: module-level constant instead of per-call recreation
 _ENDPOINT_TOOLS_MAP: dict[str, str] = {
@@ -36,6 +66,34 @@ _ENDPOINT_TOOLS_MAP: dict[str, str] = {
     "httpx_full_analysis": "httpx-full",
     "send_request": "manual",
     "repeat_request": "manual-repeat",
+}
+
+# ARC-003 FIX: Minimum scan phase required before a tool can be invoked.
+# Tools not listed here are allowed in any phase. Phase ordering:
+# recon < enumeration < vulnerability_scanning < exploitation < post_exploitation < reporting
+_TOOL_MINIMUM_PHASE: dict[str, str] = {
+    # Exploitation tools require at least vulnerability_scanning phase
+    "sqlmap_test": "vulnerability_scanning",
+    "sqlmap_forms": "vulnerability_scanning",
+    "sqlmap_dump_database": "exploitation",
+    # Nuclei vuln scanning
+    "nuclei_scan_cves": "vulnerability_scanning",
+    "nuclei_scan_misconfigs": "enumeration",
+    # Fuzzing requires at least enumeration
+    "ffuf_parameter_fuzz": "enumeration",
+    "ffuf_vhost_fuzz": "enumeration",
+    # Terminal/Python execution requires exploitation phase
+    "terminal_execute": "exploitation",
+    "python_action": "exploitation",
+}
+
+_PHASE_ORDER: dict[str, int] = {
+    "recon": 0,
+    "enumeration": 1,
+    "vulnerability_scanning": 2,
+    "exploitation": 3,
+    "post_exploitation": 4,
+    "reporting": 5,
 }
 
 
@@ -64,27 +122,58 @@ except (ValueError, TypeError):
 
 
 async def execute_tool(tool_name: str, agent_state: Any | None = None, **kwargs: Any) -> Any:
-    # ── G-03: Circuit breaker check ──────────────────────────────────
-    if tool_name in _circuit_breaker:
-        cb = _circuit_breaker[tool_name]
-        if cb["failures"] >= _CB_THRESHOLD:
-            if _time.time() < cb["cooldown_until"]:
-                _logger.warning(
-                    "G-03: Circuit breaker OPEN for '%s' (%d consecutive failures). "
-                    "Cooldown expires in %.0fs.",
-                    tool_name, cb["failures"],
-                    cb["cooldown_until"] - _time.time(),
-                )
-                return (
-                    f"⚠️ Tool '{tool_name}' is temporarily disabled — circuit breaker "
-                    f"tripped after {cb['failures']} consecutive failures. "
-                    f"Try a different tool or wait ~{int(cb['cooldown_until'] - _time.time())}s."
-                )
-            # Cooldown expired — reset and allow one retry
-            del _circuit_breaker[tool_name]
+    # ── HARDENED v0.9.40: Degradation handler — block non-essential tools in MINIMAL mode ──
+    dh = get_degradation_handler()
+    if not dh.is_tool_allowed(tool_name):
+        _logger.warning("DEGRADATION blocked '%s' — system in MINIMAL mode", tool_name)
+        return (
+            f"⚠️ Tool '{tool_name}' is blocked — system is in degraded (MINIMAL) mode. "
+            f"Only essential tools are available."
+        )
+
+    # ── Determine current phase ──
+    current_phase = "recon"
+    if agent_state is not None and hasattr(agent_state, "state_machine") and agent_state.state_machine:
+        current_phase = agent_state.state_machine.current_state.value
+
+    # ── HARDENED v0.9.40: Tool Firewall — deterministic pre-execution gate ──
+    firewall = get_global_firewall()
+    if firewall is not None:
+        findings_ledger: list[str] = []
+        if agent_state is not None and hasattr(agent_state, "findings_ledger"):
+            findings_ledger = agent_state.findings_ledger or []
+        verdict = firewall.validate(
+            tool_name=tool_name,
+            tool_args=kwargs,
+            current_phase=current_phase,
+            findings_ledger=findings_ledger,
+        )
+        # validate() raises ToolFirewallViolation on block; returns FirewallVerdict on pass
+        if verdict.sanitized_args:
+            kwargs = verdict.sanitized_args
+
+    # ── T2-01: Circuit breaker check using CircuitBreaker class ──────
+    # V2-BUG-001 FIX: Thread-safe get-or-create with lock
+    with _circuit_breaker_lock:
+        if tool_name not in _circuit_breakers:
+            _circuit_breakers[tool_name] = CircuitBreaker(name=tool_name, failure_threshold=3, recovery_timeout=300.0)
+        cb = _circuit_breakers[tool_name]
+    if not cb.can_execute():
+        _logger.warning(
+            "Circuit breaker OPEN for '%s' (state=%s). Try a different tool.",
+            tool_name, cb.state.value,
+        )
+        return (
+            f"⚠️ Tool '{tool_name}' is temporarily disabled — circuit breaker "
+            f"tripped. Try a different tool or wait for cooldown."
+        )
 
     execute_in_sandbox = should_execute_in_sandbox(tool_name)
     sandbox_mode = os.getenv("PHANTOM_SANDBOX_MODE", "false").lower() == "true"
+
+    # ── HARDENED v0.9.40: WAL-protected tool execution ──
+    wal = get_executor_wal()
+    txn_id = wal.begin(f"tool:{tool_name}", payload={"tool": tool_name, "phase": current_phase if firewall else "unknown"})
 
     try:
         if execute_in_sandbox and not sandbox_mode:
@@ -92,22 +181,20 @@ async def execute_tool(tool_name: str, agent_state: Any | None = None, **kwargs:
         else:
             result = await _execute_tool_locally(tool_name, agent_state, **kwargs)
 
-        # ── G-03: Success — reset circuit breaker for this tool
-        _circuit_breaker.pop(tool_name, None)
+        # Success — commit WAL and reset circuit breaker
+        wal.commit(txn_id)
+        cb.record_success()
+
+        # Track tool failure in degradation handler on success (recovery)
+        dh.recover_tool(tool_name)
+
         return result
 
     except Exception:
-        # ── G-03: Track failure in circuit breaker
-        if tool_name not in _circuit_breaker:
-            _circuit_breaker[tool_name] = {"failures": 0, "cooldown_until": 0.0}
-        _circuit_breaker[tool_name]["failures"] += 1
-        if _circuit_breaker[tool_name]["failures"] >= _CB_THRESHOLD:
-            _circuit_breaker[tool_name]["cooldown_until"] = _time.time() + _CB_COOLDOWN_S
-            _logger.warning(
-                "G-03: Circuit breaker TRIPPED for '%s' after %d failures. "
-                "Cooldown: %.0fs.",
-                tool_name, _circuit_breaker[tool_name]["failures"], _CB_COOLDOWN_S,
-            )
+        # Rollback WAL, track failure in circuit breaker and degradation
+        wal.rollback(txn_id)
+        cb.record_failure()
+        dh.handle_tool_failure(tool_name, "execution_error")
         raise
 
 
@@ -273,7 +360,13 @@ async def execute_tool_with_validation(
         cause = e.__cause__ or e.__context__
         if isinstance(cause, (SecurityViolationError, ResourceExhaustedError)):
             raise cause from e
+        # BUG-021 FIX: Sanitize error strings to prevent stack trace leakage
+        # to the LLM. Only expose the final error message, not the traceback.
         error_str = str(e)
+        # Strip file paths and line numbers from error messages
+        import re as _re_err
+        error_str = _re_err.sub(r'File "[^"]+", line \d+', '[internal]', error_str)
+        error_str = _re_err.sub(r'Traceback \(most recent call last\):', '', error_str)
         if len(error_str) > 500:
             error_str = error_str[:500] + "... [truncated]"
         return f"Error executing {tool_name}: {error_str}"
@@ -313,8 +406,71 @@ async def execute_tool_invocation(tool_inv: dict[str, Any], agent_state: Any | N
         if tool_name and tool_name not in get_tool_names():
             return f"Error: Tool '{tool_name}' is not registered."
 
+    # ARC-003 FIX: Phase-gated tool execution — prevent premature exploitation
+    if tool_name and tool_name in _TOOL_MINIMUM_PHASE and agent_state is not None:
+        required_phase = _TOOL_MINIMUM_PHASE[tool_name]
+        current_phase = "recon"
+        if hasattr(agent_state, "current_phase"):
+            current_phase = getattr(agent_state.current_phase, "value", str(agent_state.current_phase))
+        elif hasattr(agent_state, "state_machine"):
+            current_phase = getattr(agent_state.state_machine.current_state, "value", "recon")
+        required_ord = _PHASE_ORDER.get(required_phase, 0)
+        current_ord = _PHASE_ORDER.get(current_phase, 0)
+        if current_ord < required_ord:
+            _logger.warning(
+                "PHASE VIOLATION: tool=%s requires phase '%s' but current is '%s'",
+                tool_name, required_phase, current_phase,
+            )
+            raise PhaseViolationError(
+                f"Tool '{tool_name}' requires scan phase '{required_phase}' "
+                f"but current phase is '{current_phase}'",
+                tool_name=tool_name,
+                required_phase=required_phase,
+                current_phase=current_phase,
+            )
+
     # Auto-inject auth headers for security tools that support extra_args
     tool_args = _inject_auth_headers(tool_name, tool_args, agent_state)
+
+    # V2-DESIGN-003 FIX: Tool risk classification — enforce evidence gates
+    # and per-tier rate limits before executing high-risk tools.
+    if tool_name:
+        try:
+            from phantom.core.tool_risk_classifier import (
+                check_evidence_gate,
+                get_rate_limit,
+                get_risk_tier,
+            )
+
+            tier = get_risk_tier(tool_name)
+            # Evidence gate: DESTRUCTIVE/UNRESTRICTED tools require verified findings
+            findings_count = 0
+            if agent_state and hasattr(agent_state, "findings_ledger"):
+                findings_count = len(agent_state.findings_ledger or [])
+            gate_ok, gate_msg = check_evidence_gate(tool_name, findings_count)
+            if not gate_ok:
+                _logger.warning("EVIDENCE GATE blocked %s: %s", tool_name, gate_msg)
+                return f"⚠️ {gate_msg}"
+
+            # Rate limit check (per-tier)
+            rate_limit = get_rate_limit(tool_name)
+            if rate_limit is not None:
+                _tier_key = f"_risk_rate_{tier.name}"
+                _now = _time.monotonic()
+                if not hasattr(execute_tool, "_tier_windows"):
+                    execute_tool._tier_windows = {}  # type: ignore[attr-defined]
+                window = execute_tool._tier_windows.get(_tier_key, [])  # type: ignore[attr-defined]
+                window = [t for t in window if _now - t < 60.0]
+                if len(window) >= rate_limit:
+                    _logger.warning(
+                        "RATE LIMIT for tier %s tool %s: %d/%d per minute",
+                        tier.name, tool_name, len(window), rate_limit,
+                    )
+                    return f"⚠️ Rate limit reached for {tier.name}-tier tools ({rate_limit}/min). Wait before retrying."
+                window.append(_now)
+                execute_tool._tier_windows[_tier_key] = window  # type: ignore[attr-defined]
+        except ImportError:
+            pass  # tool_risk_classifier not available — skip
 
     return await execute_tool_with_validation(tool_name, agent_state, **tool_args)
 
@@ -407,21 +563,34 @@ def _inject_auth_headers(
     header_parts: list[str] = []
     if flag == "--headers":
         # SQLMap: --headers="Header1: val1\nHeader2: val2"
-        # SEC-007 FIX: Strip CRLF from header names and values
-        hdr_lines = "\\n".join(
-            f"{n.replace(chr(13),'').replace(chr(10),'')}: {v.replace(chr(13),'').replace(chr(10),'')}"
-            for n, v in auth_headers.items()
-        )
-        header_parts.append(f'--headers="{hdr_lines}"')
+        # V2-BUG-004 FIX: Use allowlist instead of denylist for header values.
+        # Only permit safe characters to prevent all injection vectors.
+        import re as _re_hdr
+        import shlex as _shlex_h
+        _SAFE_HDR_RE = _re_hdr.compile(r'^[a-zA-Z0-9_\-=./: ]+$')
+        hdr_lines_parts: list[str] = []
+        for n, v in auth_headers.items():
+            safe_name = str(n).strip()
+            safe_value = str(v).strip()
+            if not _SAFE_HDR_RE.match(safe_name) or not _SAFE_HDR_RE.match(safe_value):
+                _logger.warning("Skipping unsafe auth header: %s", safe_name)
+                continue
+            hdr_lines_parts.append(f"{safe_name}: {safe_value}")
+        if not hdr_lines_parts:
+            return tool_args
+        hdr_lines = "\\n".join(hdr_lines_parts)
+        header_parts.append(f'--headers={_shlex_h.quote(hdr_lines)}')
     else:
-        # PHT-004 FIX: Use shlex.quote for each header value to prevent
-        # shell metacharacter injection via double-quote breakout.
-        # SEC-007 FIX: Also strip \r\n (CRLF) to prevent HTTP header injection.
+    # V2-BUG-004 FIX: Use allowlist validation for header values
+        import re as _re_hdr2
         import shlex as _shlex
+        _SAFE_HDR_RE2 = _re_hdr2.compile(r'^[a-zA-Z0-9_\-=./: ]+$')
         for name, value in auth_headers.items():
-            # Validate header name/value don't contain injection chars
-            safe_name = str(name).replace('"', '').replace("'", "").replace(";", "").replace("\r", "").replace("\n", "")
-            safe_value = str(value).replace('"', '').replace(";", "").replace("`", "").replace("\r", "").replace("\n", "")
+            safe_name = str(name).strip()
+            safe_value = str(value).strip()
+            if not _SAFE_HDR_RE2.match(safe_name) or not _SAFE_HDR_RE2.match(safe_value):
+                _logger.warning("Skipping unsafe auth header: %s", safe_name)
+                continue
             header_parts.append(f"{flag} {_shlex.quote(f'{safe_name}: {safe_value}')}")
 
     header_str = " ".join(header_parts)
@@ -647,6 +816,8 @@ async def process_tool_invocations(
             observation_xml, images, tool_should_finish = await _execute_single_tool(
                 tool_inv, agent_state, tracer, agent_id
             )
+        except (SecurityViolationError, ResourceExhaustedError):
+            raise  # CRIT-01 FIX: Never swallow security/resource errors
         except Exception as exc:  # noqa: BLE001
             # Capture error as a tool result so results from prior tools are preserved
             tool_name = tool_inv.get("toolName", "unknown")
@@ -770,12 +941,13 @@ async def batch_execute_tools(
             should_agent_finish = True
 
     # v0.9.39: Cost check between parallel and sequential batches
+    # V2-BUG-010 FIX: Use public method instead of accessing private _check_limits
     if is_enabled("PHANTOM_FF_PARALLEL_SAFETY"):
         try:
             from phantom.core.cost_controller import get_cost_controller
             cc = get_cost_controller()
             if cc:
-                cc._check_limits()  # noqa: SLF001
+                cc.check_limits()
         except (ImportError, AttributeError):
             pass
 
@@ -783,6 +955,8 @@ async def batch_execute_tools(
     for inv in sequential:
         try:
             obs_xml, imgs, finish = await _execute_single_tool(inv, agent_state, tracer, agent_id)
+        except (SecurityViolationError, ResourceExhaustedError):
+            raise  # CRIT-02 FIX: Never swallow security/resource errors
         except Exception as exc:  # noqa: BLE001
             tname = inv.get("toolName", "unknown")
             err = f"Error executing {tname}: {str(exc)[:500]}"
@@ -943,7 +1117,11 @@ def _auto_report_scanner_findings(scanner: str, findings: list[dict], agent_stat
 def _auto_record_findings(tool_name: str, result: Any, agent_state: Any) -> None:
     """Automatically record key findings from security tool results to the
     persistent findings ledger.  This ensures critical discoveries survive
-    memory compression even if the agent forgets to call ``record_finding``."""
+    memory compression even if the agent forgets to call ``record_finding``.
+
+    V2-DESIGN-002: Findings are tracked via FindingProvenanceTracker for
+    dedup (O(1) hash lookup) and source attribution (AUTO vs LLM).
+    """
     if not isinstance(result, dict):
         return
     # Tools with explicit "success" field: require it to be truthy.
@@ -952,6 +1130,14 @@ def _auto_record_findings(tool_name: str, result: Any, agent_state: Any) -> None
         return
     if not agent_state or not hasattr(agent_state, "add_finding"):
         return
+
+    def _tracked_add_finding(description: str) -> None:
+        """Wrapper that deduplicates via provenance tracker before adding."""
+        if _finding_tracker is not None:
+            added = _finding_tracker.add(description, tool_name, FindingSource.AUTO)
+            if added is None:
+                return  # Duplicate — skip
+        agent_state.add_finding(description)
 
     try:
         # --- Nuclei ---
@@ -964,9 +1150,9 @@ def _auto_record_findings(tool_name: str, result: Any, agent_state: Any) -> None
                 url = f.get("matched_at") or f.get("host", "")
                 if sev in ("critical", "high", "medium", "low"):
                     verified_tag = "[UNVERIFIED] " if sev in ("critical", "high") else ""
-                    agent_state.add_finding(f"[vuln/nuclei] {verified_tag}{sev.upper()} {name} at {url}")
+                    _tracked_add_finding(f"[vuln/nuclei] {verified_tag}{sev.upper()} {name} at {url}")
                 elif sev in ("unknown", "info") and name:
-                    agent_state.add_finding(f"[info/nuclei] {name} at {url}")
+                    _tracked_add_finding(f"[info/nuclei] {name} at {url}")
                 # Queue for verification if EnhancedAgentState supports it
                 if sev in ("critical", "high") and hasattr(agent_state, "unverified_findings"):
                     agent_state.unverified_findings.append({
@@ -987,7 +1173,7 @@ def _auto_record_findings(tool_name: str, result: Any, agent_state: Any) -> None
                     port_list = ", ".join(
                         f"{p['port']}/{p.get('service','?')}" for p in open_ports[:20]
                     )
-                    agent_state.add_finding(f"[recon/nmap] {hostname}: {port_list}")
+                    _tracked_add_finding(f"[recon/nmap] {hostname}: {port_list}")
 
         # --- Katana ---
         elif tool_name == "katana_crawl":
@@ -996,14 +1182,14 @@ def _auto_record_findings(tool_name: str, result: Any, agent_state: Any) -> None
             js_count = result.get("summary", {}).get("js_files", 0)
             form_count = result.get("summary", {}).get("forms", 0)
             if total > 0:
-                agent_state.add_finding(
+                _tracked_add_finding(
                     f"[recon/katana] {total} URLs discovered "
                     f"({api_count} APIs, {js_count} JS, {form_count} forms)"
                 )
             for ep in result.get("api_endpoints", [])[:10]:
                 url = ep.get("url", "")
                 if url:
-                    agent_state.add_finding(f"[endpoint] API: {url}")
+                    _tracked_add_finding(f"[endpoint] API: {url}")
                     # BUG-07 FIX: Wire add_endpoint for structured tracking
                     if hasattr(agent_state, "add_endpoint"):
                         agent_state.add_endpoint(url)
@@ -1022,7 +1208,7 @@ def _auto_record_findings(tool_name: str, result: Any, agent_state: Any) -> None
                     parts = [f"[recon/httpx] {url} ({status})"]
                     if tech:
                         parts.append(f"  tech: {', '.join(tech[:5])}")
-                    agent_state.add_finding(" ".join(parts))
+                    _tracked_add_finding(" ".join(parts))
                     # BUG-07 FIX: Wire add_endpoint for structured tracking
                     if hasattr(agent_state, "add_endpoint"):
                         agent_state.add_endpoint(url)
@@ -1031,7 +1217,7 @@ def _auto_record_findings(tool_name: str, result: Any, agent_state: Any) -> None
         elif tool_name == "nmap_vuln_scan":
             for vuln in result.get("vulnerabilities", []):
                 title = vuln.get("title", "unknown vuln")
-                agent_state.add_finding(f"[vuln/nmap] {title}")
+                _tracked_add_finding(f"[vuln/nmap] {title}")
 
         # --- Vulnerability Report ---
         elif tool_name == "create_vulnerability_report":
@@ -1039,7 +1225,7 @@ def _auto_record_findings(tool_name: str, result: Any, agent_state: Any) -> None
             severity = result.get("severity", "unknown")
             cvss = result.get("cvss_score", "?")
             report_id = result.get("report_id", "")
-            agent_state.add_finding(
+            _tracked_add_finding(
                 f"[vuln/report] {severity.upper()} (CVSS {cvss}) {title}"
             )
             # Also populate EnhancedAgentState vulnerability tracking
@@ -1067,13 +1253,13 @@ def _auto_record_findings(tool_name: str, result: Any, agent_state: Any) -> None
                 url = result.get("url", result.get("target", "?"))
                 # BUG-13 FIX: sqlmap returns "injection_points", not "vulnerable_params"
                 params = result.get("injection_points", result.get("vulnerable_params", []))
-                agent_state.add_finding(
+                _tracked_add_finding(
                     f"[vuln/sqlmap] SQLi CONFIRMED at {url} params={params}"
                 )
             elif tool_name == "sqlmap_dump_database":
                 tables = result.get("tables", [])
                 if tables:
-                    agent_state.add_finding(
+                    _tracked_add_finding(
                         f"[data/sqlmap] DB dump: {len(tables)} tables extracted"
                     )
 
@@ -1084,7 +1270,7 @@ def _auto_record_findings(tool_name: str, result: Any, agent_state: Any) -> None
                 url = f.get("url", f.get("input", ""))
                 status = f.get("status", "")
                 size = f.get("length", f.get("words", ""))
-                agent_state.add_finding(
+                _tracked_add_finding(
                     f"[recon/ffuf] {url} (status={status} size={size})"
                 )
                 # BUG-07 FIX: Wire add_endpoint for structured tracking
@@ -1095,7 +1281,7 @@ def _auto_record_findings(tool_name: str, result: Any, agent_state: Any) -> None
         elif tool_name == "subfinder_enumerate":
             subdomains = result.get("subdomains", [])
             if subdomains:
-                agent_state.add_finding(
+                _tracked_add_finding(
                     f"[recon/subfinder] {len(subdomains)} subdomains: "
                     + ", ".join(subdomains[:10])
                 )
@@ -1115,17 +1301,17 @@ def _auto_record_findings(tool_name: str, result: Any, agent_state: Any) -> None
                 agent_state.add_endpoint(url)
             # Record interesting HTTP responses
             if status in (200, 201, 301, 302, 403, 500) and url:
-                agent_state.add_finding(f"[recon/request] {url} (status={status})")
+                _tracked_add_finding(f"[recon/request] {url} (status={status})")
             # Detect SQLi indicators in response
             if any(kw in body for kw in ("sql", "syntax error", "sqlite", "sequelize",
                                           "unrecognized token", "near \"")):
-                agent_state.add_finding(f"[vuln/sqli-indicator] SQL error in response from {url}")
+                _tracked_add_finding(f"[vuln/sqli-indicator] SQL error in response from {url}")
             # Detect XSS reflection
             if "<script" in body or "javascript:" in body or "onerror" in body:
-                agent_state.add_finding(f"[vuln/xss-indicator] Script reflection at {url}")
+                _tracked_add_finding(f"[vuln/xss-indicator] Script reflection at {url}")
             # Detect sensitive data exposure
             if any(kw in body for kw in ("password", "secret", "api_key", "private_key")):
-                agent_state.add_finding(f"[vuln/info-disclosure] Sensitive data at {url}")
+                _tracked_add_finding(f"[vuln/info-disclosure] Sensitive data at {url}")
 
     except Exception as exc:  # noqa: BLE001
         _logger.warning("auto-record findings failed for %s: %s", tool_name, exc, exc_info=True)

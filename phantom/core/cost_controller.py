@@ -140,8 +140,9 @@ class CostController:
             self._state.total_cost_usd += cost_usd
             self._state.total_requests += 1
 
-            # v0.9.39: Monotonicity invariant — cost can never decrease
-            assert self._state.total_cost_usd >= 0, "Cost went negative — invariant violated"
+            # HIGH-18 FIX: Use explicit check instead of assert (stripped in -O mode)
+            if self._state.total_cost_usd < 0:
+                raise RuntimeError("Cost went negative — invariant violated")
 
             if is_compression:
                 self._state.compression_calls += 1
@@ -153,7 +154,10 @@ class CostController:
             self._check_limits()
 
     def _check_limits(self) -> None:
-        """Check if any cost/token limit has been exceeded."""
+        """Check if any cost/token limit has been exceeded.
+
+        NOTE: Must be called with self._lock held.
+        """
         state = self._state
 
         # Cost limit
@@ -214,10 +218,24 @@ class CostController:
                 compression_cost_usd=self._state.compression_cost_usd,
             )
 
+    def check_limits(self) -> None:
+        """V2-BUG-010 FIX: Public API — acquires lock and checks all limits.
+
+        Safe for external callers (e.g. executor.py) that don't hold the lock.
+        Raises CostLimitExceeded if any limit is breached.
+        """
+        with self._lock:
+            self._check_limits()
+
     def restore_from_checkpoint(self, data: dict[str, Any]) -> None:
         """Restore cost state from a checkpoint."""
         with self._lock:
-            self._state = CostSnapshot.from_dict(data)
+            restored = CostSnapshot.from_dict(data)
+            # MED-50 FIX: Validate restored data is reasonable
+            if restored.total_cost_usd < 0 or restored.total_requests < 0:
+                _logger.warning("Invalid cost checkpoint data — ignoring")
+                return
+            self._state = restored
             _logger.info(
                 "Cost controller restored: $%.2f spent, %d requests",
                 self._state.total_cost_usd,

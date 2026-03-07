@@ -60,13 +60,24 @@ class AuditLogger:
 
         # PHT-017 FIX: HMAC chain for tamper detection (legacy / fallback)
         # SEC-004 FIX: No more hardcoded default key — generate unique per-run key
+        # HIGH-14 FIX: Store HMAC key in a separate restricted directory to
+        # prevent an attacker with log-read access from forging entries.
         import hashlib
         import secrets
+        import tempfile
         if hmac_key:
             self._hmac_key = hmac_key.encode()
         else:
-            # Generate and persist a unique key per audit log
-            key_path = self.log_path.with_suffix(".hmac_key")
+            # Store key outside the log directory
+            key_dir = Path(tempfile.gettempdir()) / "phantom_keys"
+            key_dir.mkdir(parents=True, exist_ok=True)
+            try:
+                key_dir.chmod(0o700)
+            except OSError:
+                pass
+            # Use log path hash as a stable key-file name
+            key_name = hashlib.sha256(str(self.log_path.resolve()).encode()).hexdigest()[:16]
+            key_path = key_dir / f"{key_name}.hmac_key"
             if key_path.exists():
                 try:
                     self._hmac_key = key_path.read_text(encoding="utf-8").strip().encode()
@@ -160,12 +171,18 @@ class AuditLogger:
         self.log_path.parent.mkdir(parents=True, exist_ok=True)
 
     def _rotate_if_needed(self) -> None:
-        """Rotate log file if it exceeds max size."""
+        """Rotate log file if it exceeds max size.
+        
+        HIGH-15 FIX: Reset HMAC chain after rotation so new file starts
+        with a valid genesis hash.
+        """
         try:
             if self.log_path.exists() and self.log_path.stat().st_size > self.max_size:
                 timestamp = datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
                 rotated = self.log_path.with_suffix(f".{timestamp}.jsonl")
                 self.log_path.rename(rotated)
+                import hashlib
+                self._prev_hash = hashlib.sha256(b"genesis").hexdigest()[:16]
         except OSError:
             _logger.debug("Audit log rotation failed", exc_info=True)
 
@@ -448,11 +465,13 @@ def _sanitize_args(args: dict[str, Any]) -> dict[str, Any]:
 
     Recursively sanitizes nested dicts and lists.
     """
-    sensitive_keys = {"password", "token", "api_key", "secret", "credential", "auth",
-                      "authorization", "cookie", "session"}
+    # LOW-35 FIX: Use exact key matching to avoid "auth" matching "author"
+    sensitive_keys = {"password", "token", "api_key", "secret", "credential",
+                      "auth", "authorization", "cookie", "session"}
 
     def _sanitize_value(key: str, value: Any) -> Any:
-        if any(s in key.lower() for s in sensitive_keys):
+        key_lower = key.lower()
+        if key_lower in sensitive_keys or any(s in key_lower for s in ("api_key", "secret", "password")):
             return "***REDACTED***"
         if isinstance(value, dict):
             return {k: _sanitize_value(k, v) for k, v in value.items()}

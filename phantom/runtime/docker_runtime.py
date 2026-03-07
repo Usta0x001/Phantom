@@ -123,10 +123,20 @@ class DockerRuntime(AbstractRuntime):
                 return
 
     def _recover_container_state(self, container: Container) -> None:
-        for env_var in container.attrs["Config"]["Env"]:
-            if env_var.startswith("TOOL_SERVER_TOKEN="):
-                self._tool_server_token = env_var.split("=", 1)[1]
-                break
+        # V2-SEC-001 FIX: Recover token from file inside container, not env var.
+        # Falls back to env var for backward compatibility with older containers.
+        try:
+            exit_code, output = container.exec_run(
+                "cat /run/secrets/phantom_token", user="root",
+            )
+            if exit_code == 0 and output:
+                self._tool_server_token = output.decode(errors="replace").strip()
+        except Exception:
+            # Fallback: try env var for older containers
+            for env_var in container.attrs["Config"]["Env"]:
+                if env_var.startswith("TOOL_SERVER_TOKEN="):
+                    self._tool_server_token = env_var.split("=", 1)[1]
+                    break
 
         port_bindings = container.attrs.get("NetworkSettings", {}).get("Ports", {})
         port_key = f"{CONTAINER_TOOL_SERVER_PORT}/tcp"
@@ -188,7 +198,9 @@ class DockerRuntime(AbstractRuntime):
                     # Cannot use cap_drop=ALL because the sandbox runs security tools
                     # (Caido proxy, nmap, sqlmap) that need standard container caps.
                     # Instead, add only the extra caps needed for pentest tooling.
-                    cap_add=["NET_ADMIN", "NET_RAW", "SYS_PTRACE"],
+                    # BUG-012 FIX: Removed SYS_PTRACE — not needed for pentest
+                    # tools and allows container escape via ptrace(PTRACE_ATTACH).
+                    cap_add=["NET_ADMIN", "NET_RAW"],
                     labels={"phantom-scan-id": scan_id},
                     # PHT-006 FIX: Per-container resource limits to prevent DoS
                     mem_limit="4g",
@@ -196,13 +208,19 @@ class DockerRuntime(AbstractRuntime):
                     cpu_period=100000,
                     cpu_quota=200000,  # 2 CPUs max
                     pids_limit=512,    # Limit process spawning
-                    # NOTE: storage_opt (disk quota) only supported with devicemapper.
-                    # On overlay2/overlayfs it is silently ignored or errors out.
-                    # Omitted for maximum Docker compatibility.
+                    # BUG-013 FIX: Set tmpfs mount with size limit for /tmp
+                    # to mitigate disk exhaustion inside the container.
+                    # tmpfs is supported on all Docker storage drivers.
+                    tmpfs={"/tmp": "size=2g,noexec"},
+                    # BUG-029 FIX: Read-only root filesystem with explicit
+                    # writable paths via tmpfs. Prevents unauthorized writes.
+                    read_only=True,
                     environment={
                         "PYTHONUNBUFFERED": "1",
                         "TOOL_SERVER_PORT": str(CONTAINER_TOOL_SERVER_PORT),
-                        "TOOL_SERVER_TOKEN": self._tool_server_token,
+                        # V2-SEC-001 FIX: Token injected via file mount, NOT env var.
+                        # See _inject_token_file(). Env var kept empty for compat.
+                        "PHANTOM_TOKEN_FILE": "/run/secrets/phantom_token",
                         "PHANTOM_SANDBOX_EXECUTION_TIMEOUT": str(execution_timeout),
                         "HOST_GATEWAY": HOST_GATEWAY_HOSTNAME,
                         "PHANTOM_SANDBOX_MODE": "true",
@@ -222,9 +240,17 @@ class DockerRuntime(AbstractRuntime):
                 self._scan_container = container
                 # Release port reservation BEFORE health check — Docker needs the port
                 self._release_port_reservation()
+
+                # V2-SEC-001 FIX: Write token to file inside container
+                self._inject_token_file(container, self._tool_server_token)
+
+                # V2-ARCH-004 FIX: Apply egress filtering BEFORE tool server starts.
+                # This closes the timing gap where the container had unrestricted
+                # network access for ~15-20 seconds during the original flow.
+                self._apply_egress_filtering(container)
+
                 # Give entrypoint time to start Caido + tool server
-                # Entrypoint takes ~15-20s: Caido start, token fetch, project create, proxy config
-                time.sleep(10)
+                time.sleep(5)
                 self._wait_for_tool_server()
 
             except (DockerException, RequestsConnectionError, RequestsTimeout, SandboxInitializationError) as e:
@@ -248,6 +274,139 @@ class DockerRuntime(AbstractRuntime):
             "Failed to create container",
             f"Container creation failed after {max_retries + 1} attempts: {last_error}",
         ) from last_error
+
+    def _inject_token_file(self, container: Container, token: str) -> None:
+        """V2-SEC-001 FIX: Inject auth token via file mount instead of env var.
+
+        Writes token to /run/secrets/phantom_token inside the container.
+        This prevents exposure via docker inspect, /proc/1/environ, etc.
+        """
+        import tarfile
+        from io import BytesIO
+
+        try:
+            tar_buffer = BytesIO()
+            token_bytes = token.encode("utf-8")
+            with tarfile.open(fileobj=tar_buffer, mode="w") as tar:
+                info = tarfile.TarInfo(name="phantom_token")
+                info.size = len(token_bytes)
+                info.mode = 0o400  # Read-only by owner
+                info.uid = 0
+                info.gid = 0
+                tar.addfile(info, BytesIO(token_bytes))
+            tar_buffer.seek(0)
+
+            # Create /run/secrets directory
+            container.exec_run("mkdir -p /run/secrets", user="root")
+            container.put_archive("/run/secrets", tar_buffer.getvalue())
+            # Restrict permissions
+            container.exec_run(
+                "chmod 400 /run/secrets/phantom_token",
+                user="root",
+            )
+        except Exception as e:
+            import logging as _log
+            _log.getLogger(__name__).error("Token file injection failed: %s", e)
+            raise
+
+    def _apply_egress_filtering(self, container: Container) -> None:
+        """BUG-007 FIX: Apply network egress filtering inside the sandbox.
+
+        Blocks access to cloud metadata endpoints (169.254.169.254) and
+        private network ranges that are never legitimate pentest targets.
+        Uses iptables inside the container (requires NET_ADMIN cap).
+
+        v0.9.39 HARDENING: Verifies rules were actually applied and logs
+        at WARNING level on failure instead of silently continuing.
+        """
+        import logging as _log
+        _logger_egress = _log.getLogger(__name__)
+
+        enforcement = os.getenv("PHANTOM_EGRESS_ENFORCEMENT", "strict")
+        if enforcement == "disabled":
+            return
+
+        # Block cloud metadata (SSRF protection)
+        # Block link-local and Docker internal networks
+        # FIX-P0-003: Block ALL RFC1918 private ranges to prevent lateral movement
+        rules = [
+            "iptables -A OUTPUT -d 169.254.169.254 -j DROP",
+            "iptables -A OUTPUT -d 169.254.0.0/16 -j DROP",
+            "iptables -A OUTPUT -d 172.17.0.0/16 -j DROP",  # Docker bridge
+            # FIX-P0-003: Full RFC1918 private network egress blocking
+            "iptables -A OUTPUT -d 10.0.0.0/8 -j DROP",
+            "iptables -A OUTPUT -d 172.16.0.0/12 -j DROP",
+            "iptables -A OUTPUT -d 192.168.0.0/16 -j DROP",
+            # Block IPv6 link-local
+            "ip6tables -A OUTPUT -d fe80::/10 -j DROP 2>/dev/null || true",
+            "ip6tables -A OUTPUT -d ::1 -j DROP 2>/dev/null || true",
+            # T3-03: Block IPv6 ULA range
+            "ip6tables -A OUTPUT -d fd00::/8 -j DROP 2>/dev/null || true",
+        ]
+
+        applied_count = 0
+        failed_rules: list[str] = []
+
+        for rule in rules:
+            try:
+                exit_code, output = container.exec_run(
+                    rule, user="root",
+                )
+                if exit_code != 0:
+                    detail = output.decode(errors="replace") if output else "unknown"
+                    failed_rules.append(f"{rule} → {detail}")
+                    _logger_egress.warning(
+                        "Egress rule FAILED: %s → %s",
+                        rule, detail,
+                    )
+                else:
+                    applied_count += 1
+            except (DockerException, OSError) as e:
+                failed_rules.append(f"{rule} → {e!s}")
+                _logger_egress.warning("Egress filtering rule FAILED: %s → %s", rule, e)
+
+        # Verification: confirm rules are actually present in the iptables chain
+        verified = False
+        try:
+            exit_code, output = container.exec_run(
+                "iptables -L OUTPUT -n", user="root",
+            )
+            if exit_code == 0 and output:
+                table_text = output.decode(errors="replace")
+                # Check that at least the critical metadata rule is present
+                if "169.254.169.254" in table_text:
+                    verified = True
+        except (DockerException, OSError):
+            pass
+
+        if applied_count == len(rules) and verified:
+            _logger_egress.info(
+                "Egress filtering applied and verified on container %s (%d/%d rules)",
+                container.name, applied_count, len(rules),
+            )
+        elif applied_count > 0:
+            _logger_egress.warning(
+                "Egress filtering PARTIALLY applied on container %s (%d/%d rules, verified=%s). "
+                "Failed: %s",
+                container.name, applied_count, len(rules), verified,
+                "; ".join(failed_rules),
+            )
+        else:
+            _logger_egress.error(
+                "Egress filtering FAILED on container %s — no rules applied. "
+                "Container may have unrestricted network access. Failed: %s",
+                container.name, "; ".join(failed_rules),
+            )
+            # ARC-005 FIX: In strict mode, abort sandbox creation when
+            # egress filtering completely fails — never allow an unfiltered container.
+            if enforcement == "strict":
+                from phantom.runtime import SandboxInitializationError
+                raise SandboxInitializationError(
+                    f"Egress filtering FAILED on container {container.name} — "
+                    f"no rules applied. Aborting in strict enforcement mode.",
+                    "Set PHANTOM_EGRESS_ENFORCEMENT=permissive to allow "
+                    "containers without egress filtering (NOT recommended).",
+                )
 
     def _get_or_create_container(self, scan_id: str) -> Container:
         container_name = f"phantom-scan-{scan_id}"

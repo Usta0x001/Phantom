@@ -19,6 +19,15 @@ from phantom.models.host import Host
 from phantom.models.scan import ScanResult, ScanPhase, ScanStatus
 from phantom.core.priority_queue import VulnerabilityPriorityQueue, ScanPriorityQueue
 
+# BUG-002/BUG-001/BUG-005 FIX: Import intelligence components
+from phantom.core.attack_graph import AttackGraph
+from phantom.core.scan_state_machine import ScanStateMachine, ScanState
+from phantom.core.strategic_planner import StrategicPlanner
+from phantom.core.adversarial_critic import AdversarialCritic
+from phantom.core.confidence_engine import ConfidenceEngine
+from phantom.core.evidence_registry import EvidenceRegistry
+from phantom.core.hypothesis_tracker import HypothesisTracker
+
 _logger = logging.getLogger(__name__)
 
 
@@ -69,6 +78,72 @@ class EnhancedAgentState(AgentState):
     
     # Tool usage tracking
     tools_used: dict[str, int] = Field(default_factory=dict)
+    
+    # ── BUG-002/001/005 FIX: Intelligence components (non-serialized) ──
+    # These are runtime objects that don't serialize with Pydantic.
+    # They are initialized lazily and rebuilt from checkpoint data.
+
+    # v0.9.39 FIX (Risk 3): Migrate from deprecated `class Config` to
+    # Pydantic V2 `model_config` to prevent breakage in Pydantic V3.
+    model_config = {"arbitrary_types_allowed": True}
+
+    def _init_intelligence(self) -> None:
+        """Initialize intelligence components if not already present."""
+        if not hasattr(self, "_attack_graph") or self._attack_graph is None:
+            self._attack_graph = AttackGraph()
+        if not hasattr(self, "_state_machine") or self._state_machine is None:
+            self._state_machine = ScanStateMachine()
+        if not hasattr(self, "_planner") or self._planner is None:
+            self._planner = StrategicPlanner(self._attack_graph)
+        if not hasattr(self, "_critic") or self._critic is None:
+            self._critic = AdversarialCritic()
+        if not hasattr(self, "_confidence") or self._confidence is None:
+            self._confidence = ConfidenceEngine()
+        if not hasattr(self, "_evidence_registry") or self._evidence_registry is None:
+            self._evidence_registry = EvidenceRegistry()
+        if not hasattr(self, "_hypothesis_tracker") or self._hypothesis_tracker is None:
+            self._hypothesis_tracker = HypothesisTracker()
+
+    @property
+    def attack_graph(self) -> AttackGraph:
+        self._init_intelligence()
+        return self._attack_graph
+
+    @property
+    def state_machine(self) -> ScanStateMachine:
+        self._init_intelligence()
+        return self._state_machine
+
+    @property
+    def planner(self) -> StrategicPlanner:
+        self._init_intelligence()
+        return self._planner
+
+    @property
+    def critic(self) -> AdversarialCritic:
+        self._init_intelligence()
+        return self._critic
+
+    @property
+    def confidence_engine(self) -> ConfidenceEngine:
+        self._init_intelligence()
+        return self._confidence
+
+    @property
+    def evidence_registry(self) -> EvidenceRegistry:
+        self._init_intelligence()
+        return self._evidence_registry
+
+    @property
+    def hypothesis_tracker(self) -> HypothesisTracker:
+        self._init_intelligence()
+        return self._hypothesis_tracker
+
+    def get_phase_guidance(self) -> str:
+        """BUG-011 FIX: Get current phase guidance from planner + state machine."""
+        self._init_intelligence()
+        phase = self._state_machine.current_state
+        return self._planner.generate_phase_guidance(self, phase)
     
     def initialize_scan(self, target: str, scan_id: str | None = None) -> ScanResult:
         """Initialize a new scan with priority queues."""
@@ -135,6 +210,13 @@ class EnhancedAgentState(AgentState):
         
         if self.scan_result:
             self.scan_result.add_host(key)
+
+        # BUG-002 FIX: Auto-populate attack graph with discovered hosts
+        try:
+            ports = [p.port for p in host.ports] if host.ports else []
+            self.attack_graph.add_host(key, ports=ports, os_info=host.os)
+        except Exception as _e:
+            _logger.debug("Failed to add host %s to attack graph: %s", key, _e)
     
     def add_subdomain(self, subdomain: str) -> None:
         """Register discovered subdomain."""
@@ -230,6 +312,26 @@ class EnhancedAgentState(AgentState):
             "severity": vuln.severity.value,
             "target": vuln.target,
         })
+
+        # BUG-002 FIX: Auto-populate attack graph with discovered vulns
+        try:
+            self.attack_graph.add_vulnerability(
+                vuln.id,
+                vuln.name,
+                severity=vuln.severity.value.lower(),
+                host=vuln.target,
+                verified=(vuln.status == VulnerabilityStatus.VERIFIED),
+            )
+            # Also add evidence to confidence engine
+            self.confidence_engine.add_evidence(
+                vuln.id,
+                vuln.detected_by or "unknown",
+                f"{vuln.name} at {vuln.target}",
+            )
+            # Record in state machine
+            self.state_machine.record_finding()
+        except Exception as _e:
+            _logger.debug("Failed to update intelligence layer for vuln %s: %s", vuln.id, _e)
     
     def mark_vuln_verified(self, vuln_id: str) -> None:
         """Mark vulnerability as verified."""
@@ -370,11 +472,42 @@ class EnhancedAgentState(AgentState):
     # Checkpoint / Scan Resume
     # ------------------------------------------------------------------
 
+    # V-CRIT-003 FIX: HMAC-SHA256 checkpoint integrity signing.
+    # Uses a per-scan key derived from PHANTOM_CHECKPOINT_SECRET env var
+    # (or a random key generated at scan start and stored in context).
+
+    @staticmethod
+    def _get_checkpoint_hmac_key() -> bytes:
+        """Derive or retrieve the HMAC key for checkpoint signing."""
+        import os
+        import hashlib
+        # Primary: environment variable (set by deployment orchestrator)
+        env_key = os.environ.get("PHANTOM_CHECKPOINT_SECRET")
+        if env_key:
+            return hashlib.sha256(env_key.encode("utf-8")).digest()
+        # Fallback: use a fixed derivation from hostname + process ID.
+        # This is weaker than a proper secret but still detects external
+        # file tampering (attacker would need same host + PID).
+        import platform
+        seed = f"phantom-ckpt-{platform.node()}-{os.getpid()}"
+        return hashlib.sha256(seed.encode("utf-8")).digest()
+
+    @staticmethod
+    def _compute_checkpoint_hmac(payload_bytes: bytes) -> str:
+        """Compute HMAC-SHA256 over the checkpoint payload."""
+        import hmac
+        import hashlib
+        key = EnhancedAgentState._get_checkpoint_hmac_key()
+        return hmac.new(key, payload_bytes, hashlib.sha256).hexdigest()
+
     def save_checkpoint(self, run_dir: str | Path) -> Path:
         """Persist current scan state to *run_dir*/checkpoint.json.
 
         Called periodically (e.g. every N iterations) so a crashed scan can
         be resumed from the last checkpoint instead of restarting.
+
+        V-CRIT-003 FIX: Computes HMAC-SHA256 over the data payload and
+        stores it alongside the checkpoint for integrity verification.
         """
         run_dir = Path(run_dir)
         run_dir.mkdir(parents=True, exist_ok=True)
@@ -402,8 +535,16 @@ class EnhancedAgentState(AgentState):
             "saved_at": datetime.now(UTC).isoformat(),
         }
 
-        checkpoint_path.write_text(json.dumps(data, indent=2, default=str), encoding="utf-8")
-        _logger.debug("Checkpoint saved to %s (iteration %d)", checkpoint_path, self.iteration)
+        # V-CRIT-003 FIX: Serialize deterministically, compute HMAC, wrap
+        payload_json = json.dumps(data, indent=2, default=str, sort_keys=True)
+        hmac_sig = self._compute_checkpoint_hmac(payload_json.encode("utf-8"))
+        wrapper = {
+            "_hmac_sha256": hmac_sig,
+            "_data": data,
+        }
+
+        checkpoint_path.write_text(json.dumps(wrapper, indent=2, default=str), encoding="utf-8")
+        _logger.debug("Checkpoint saved to %s (iteration %d, hmac=%s…)", checkpoint_path, self.iteration, hmac_sig[:12])
         return checkpoint_path
 
     @classmethod
@@ -414,12 +555,41 @@ class EnhancedAgentState(AgentState):
         Rejects unknown keys, enforces type constraints, and limits sizes
         to prevent deserialization-based attacks.
 
+        V-CRIT-003 FIX: Verifies HMAC-SHA256 integrity signature before
+        applying checkpoint data. Rejects tampered checkpoints.
+
         The returned state will have iteration, phase, discovered assets,
         and vulnerability data pre-populated so the agent can continue
         where it left off.
         """
         checkpoint_path = Path(checkpoint_path)
-        data = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+        raw = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+
+        # V-CRIT-003 FIX: Verify HMAC integrity if the wrapper is present
+        if isinstance(raw, dict) and "_hmac_sha256" in raw and "_data" in raw:
+            stored_hmac = raw["_hmac_sha256"]
+            data = raw["_data"]
+            # Re-serialize deterministically and verify
+            payload_json = json.dumps(data, indent=2, default=str, sort_keys=True)
+            computed_hmac = cls._compute_checkpoint_hmac(payload_json.encode("utf-8"))
+
+            import hmac as _hmac_mod
+            if not _hmac_mod.compare_digest(stored_hmac, computed_hmac):
+                from phantom.core.exceptions import InvalidCheckpointError
+                raise InvalidCheckpointError(
+                    "Checkpoint HMAC verification failed — file may have been "
+                    "tampered with. Aborting restore."
+                )
+            _logger.info("Checkpoint HMAC verified successfully (hmac=%s…)", stored_hmac[:12])
+        elif isinstance(raw, dict) and "_hmac_sha256" not in raw:
+            # Legacy checkpoint (pre-signing) — allow but warn
+            data = raw
+            _logger.warning(
+                "Checkpoint has no HMAC signature (legacy format). "
+                "Accepting with reduced trust. Re-save to add integrity protection."
+            )
+        else:
+            data = raw
 
         # ---- PHT-019 FIX: checkpoint validation ----
         _ALLOWED_TOP_KEYS = {
@@ -464,6 +634,33 @@ class EnhancedAgentState(AgentState):
                 _logger.warning("Checkpoint dict '%s' truncated (%d > %d)", key, len(d), MAX_DICT_LEN)
                 data[key] = dict(list(d.items())[:MAX_DICT_LEN])
         # ---- end PHT-019 validation ----
+
+        # ---- BUG-003 FIX: Semantic validation ----
+        # Reject checkpoints with logically impossible values.
+        from phantom.core.exceptions import InvalidCheckpointError
+
+        iteration = data.get("iteration", 0)
+        max_iters = data.get("max_iterations", 300)
+        if iteration < 0:
+            raise InvalidCheckpointError(
+                f"Checkpoint has negative iteration ({iteration})"
+            )
+        if max_iters <= 0:
+            raise InvalidCheckpointError(
+                f"Checkpoint has non-positive max_iterations ({max_iters})"
+            )
+        if iteration > max_iters:
+            raise InvalidCheckpointError(
+                f"Checkpoint iteration ({iteration}) exceeds max_iterations ({max_iters})"
+            )
+        vuln_stats = data.get("vuln_stats", {})
+        if isinstance(vuln_stats, dict):
+            for stat_key, stat_val in vuln_stats.items():
+                if isinstance(stat_val, (int, float)) and stat_val < 0:
+                    raise InvalidCheckpointError(
+                        f"Checkpoint vuln_stats['{stat_key}'] is negative ({stat_val})"
+                    )
+        # ---- end BUG-003 semantic validation ----
 
         # BUG-14 FIX: Restore max_iterations from checkpoint (default 300)
         state = cls(

@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import threading
 from typing import TYPE_CHECKING, Any, Optional
 
 
@@ -17,9 +18,29 @@ from phantom.llm.utils import clean_content
 from phantom.runtime import SandboxInitializationError
 from phantom.tools import process_tool_invocations
 from phantom.utils.resource_paths import get_phantom_resource_path
-from phantom.core.exceptions import SecurityViolationError, ResourceExhaustedError
+from phantom.core.exceptions import (
+    SecurityViolationError,
+    ResourceExhaustedError,
+    SafetySubsystemFailureError,
+    LLMStallError,
+)
+from phantom.core.autonomy_guard import AutonomyGuard
+from phantom.core.reasoning_trace import ReasoningTrace
 
 from .state import AgentState
+
+# ARC-001 FIX: Safe-mode tool whitelist. When the critic or FSM is unavailable,
+# only these reconaissance tools are allowed. All exploitation/destructive tools
+# are blocked to prevent unsupervised exploitation.
+# V2-AGT-005 FIX: Restricted to passive-only tools — removed send_request,
+# repeat_request, nuclei_scan which can actively probe targets.
+SAFE_MODE_TOOL_WHITELIST: frozenset[str] = frozenset({
+    "nmap_scan", "httpx_probe", "httpx_full_analysis", "katana_crawl",
+    "ffuf_directory_scan",
+    "subfinder_scan", "whois_lookup", "dns_lookup",
+    "agents_graph_actions.wait_for_message", "agents_graph_actions.agent_finish",
+    "finish_actions.finish_scan", "finish_actions.finish_with_report",
+})
 
 
 logger = logging.getLogger(__name__)
@@ -40,7 +61,7 @@ class AgentMeta(type):
         new_cls.agent_name = name
         new_cls.jinja_env = Environment(
             loader=FileSystemLoader(prompt_dir),
-            autoescape=select_autoescape(enabled_extensions=(), default_for_string=False),
+            autoescape=select_autoescape(enabled_extensions=(), default_for_string=True),
         )
 
         return new_cls
@@ -85,7 +106,16 @@ class BaseAgent(metaclass=AgentMeta):
         except Exception:  # noqa: BLE001
             logger.warning("Failed to set LLM agent state for %s", self.state.agent_id, exc_info=True)
         self._current_task: asyncio.Task[Any] | None = None
-        self._force_stop = False
+        # BUG-010 FIX: Use threading.Event for atomic cross-thread stop signaling
+        self._force_stop_event = threading.Event()
+
+        # HARDENED v0.9.40: Autonomy guard for drift detection + escalation control
+        self._autonomy_guard = AutonomyGuard(
+            original_task=self.state.task or "",
+        )
+
+        # HARDENED v0.9.40: Reasoning trace for loop/collapse detection
+        self._reasoning_trace = ReasoningTrace()
 
         from phantom.telemetry.tracer import get_global_tracer
 
@@ -172,8 +202,13 @@ class BaseAgent(metaclass=AgentMeta):
             return self._handle_sandbox_error(e, tracer)
 
         while True:
-            if self._force_stop:
-                self._force_stop = False
+            if self._force_stop_event.is_set():
+                self._force_stop_event.clear()
+                # BUG-026 FIX: In non-interactive mode, return immediately
+                # instead of entering waiting state (which would hang forever)
+                if self.non_interactive:
+                    self.state.set_completed({"success": False, "cancelled": True})
+                    return self.state.final_result or {}
                 await self._enter_waiting_state(tracer, was_cancelled=True)
                 continue
 
@@ -190,16 +225,101 @@ class BaseAgent(metaclass=AgentMeta):
                 continue
 
             if self.state.llm_failed:
+                # BUG-026 FIX: Non-interactive agents must not wait for input
+                if self.non_interactive:
+                    self.state.set_completed({"success": False, "error": "LLM failed"})
+                    return self.state.final_result or {}
                 await self._wait_for_input()
                 continue
 
             self.state.increment_iteration()
 
-            # Periodic checkpoint for scan resume (every 10 iterations, root agent only)
+            # BUG-002 FIX: Detect LLM stall (consecutive empty/null responses)
+            # V-HIGH-001 FIX: Save partial results BEFORE raising so scan data
+            # is not lost. The stall error still propagates and terminates the
+            # agent, but all discovered vulnerabilities/hosts are preserved.
+            if self.state.has_empty_last_messages(5):
+                logger.error(
+                    "LLM stall detected: 5 consecutive empty responses at iteration %d",
+                    self.state.iteration,
+                )
+                stall_msg = (
+                    f"LLM returned empty responses for 5 consecutive iterations "
+                    f"(iteration {self.state.iteration})"
+                )
+                # Save partial results before terminating
+                from phantom.telemetry.tracer import get_global_tracer as _get_tracer
+                _stall_tracer = _get_tracer()
+                self._save_partial_results_on_crash(_stall_tracer, stall_msg)
+                self.state.set_completed({
+                    "success": False,
+                    "error": stall_msg,
+                    "terminated_by": "LLMStallError",
+                })
+                if _stall_tracer:
+                    _stall_tracer.update_agent_status(self.state.agent_id, "stall_abort")
+                if self.non_interactive:
+                    return {"success": False, "error": stall_msg}
+                raise LLMStallError(stall_msg)
+
+            # ── BUG-003 FIX: State machine integration ──
+            # Record iteration and try auto-advance if enhanced state is available
+            if hasattr(self.state, "state_machine"):
+                try:
+                    self.state.state_machine.record_iteration()
+                    # Try to auto-advance to the next phase
+                    new_phase = self.state.state_machine.try_advance(self.state)
+                    if new_phase:
+                        logger.info(
+                            "Auto-advanced to phase: %s",
+                            new_phase.value,
+                        )
+                        # T1-02: Recalculate confidence with decay on phase transition
+                        if hasattr(self.state, 'confidence_engine'):
+                            self.state.confidence_engine.recalculate_all_with_decay(decay_half_life=600.0)
+                        # Inject phase guidance as advisory to the LLM
+                        guidance = self.state.get_phase_guidance()
+                        if guidance:
+                            self.state.add_advisory(guidance, ttl=5)
+                except Exception as _fsm_err:
+                    # ARC-001 FIX: FSM failure is safety-relevant — enter safe mode
+                    logger.warning("FSM update failed — entering safe mode: %s", _fsm_err)
+                    self.state.update_context("_safe_mode", True)
+
+            # ── HARDENED v0.9.40: Autonomy guard — drift detection ────────
+            # Periodically check whether the agent has drifted from its task.
+            try:
+                drift = self._autonomy_guard.evaluate_drift(
+                    iteration=self.state.iteration,
+                )
+                if drift.drifted:
+                    corrective = self._autonomy_guard.get_corrective_message(drift)
+                    logger.warning(
+                        "DRIFT DETECTED at iteration %d (overlap=%.2f): %s",
+                        self.state.iteration, drift.overlap_score, corrective[:200],
+                    )
+                    self.state.add_message("user", corrective)
+                # Watchdog: check for agent stalling (no progress for too long)
+                watchdog_verdict = self._autonomy_guard.check_watchdog()
+                if not watchdog_verdict.allowed:
+                    logger.error(
+                        "WATCHDOG TIMEOUT at iteration %d: %s",
+                        self.state.iteration, watchdog_verdict.reason,
+                    )
+                    self.state.add_message("user", (
+                        "WATCHDOG: Agent appears stalled — no meaningful progress "
+                        f"detected. {watchdog_verdict.reason}. Take a different "
+                        "approach or finish the scan."
+                    ))
+            except Exception as _guard_err:
+                logger.debug("Autonomy guard check failed: %s", _guard_err)
+
+            # BUG-020 FIX: Configurable checkpoint interval (default 10)
+            _checkpoint_interval = self.config.get("checkpoint_interval", 10)
             is_root = not getattr(self.state, "parent_id", None)
             if (
                 is_root
-                and self.state.iteration % 10 == 0
+                and self.state.iteration % _checkpoint_interval == 0
                 and hasattr(self.state, "save_checkpoint")
                 and tracer
                 and hasattr(tracer, "get_run_dir")
@@ -331,7 +451,7 @@ class BaseAgent(metaclass=AgentMeta):
                 continue
 
     async def _wait_for_input(self) -> None:
-        if self._force_stop:
+        if self._force_stop_event.is_set():
             return
 
         if self.state.has_waiting_timeout():
@@ -476,7 +596,35 @@ class BaseAgent(metaclass=AgentMeta):
         return False
 
     async def _execute_actions(self, actions: list[Any], tracer: Optional["Tracer"]) -> bool:
-        """Execute actions and return True if agent should finish."""
+        """Execute actions and return True if agent should finish.
+
+        V-CRIT-001 FIX: Actions blocked by safe mode or critic are removed
+        from the list BEFORE passing to process_tool_invocations().
+        V-MED-001 FIX: Attempt safe mode recovery at the start of each batch.
+        V-MED-002 FIX: Safe mode check runs for ALL agent states, not only
+        those with critic/state_machine attributes.
+        """
+        allowed_actions: list[Any] = []
+
+        # V-MED-001 FIX: Attempt safe mode recovery — retry critic/FSM health
+        # before processing the batch. If the subsystem recovered from a
+        # transient failure, clear safe mode so exploitation can resume.
+        if self.state.context.get("_safe_mode"):
+            if hasattr(self.state, "critic") and hasattr(self.state, "state_machine"):
+                try:
+                    # Lightweight health probe — call review_action with a
+                    # benign tool to see if the critic is responsive again.
+                    self.state.critic.review_action(
+                        "nmap_scan", {}, self.state,
+                        self.state.state_machine.current_state,
+                        reasoning="safe mode recovery probe",
+                    )
+                    # If we get here without exception, critic is healthy
+                    logger.info("Safe mode recovery: critic responded — clearing safe mode")
+                    self.state.update_context("_safe_mode", False)
+                except Exception:
+                    pass  # Still broken — stay in safe mode
+
         for action in actions:
             self.state.add_action(action)
             # Track tool usage on EnhancedAgentState when available
@@ -485,10 +633,118 @@ class BaseAgent(metaclass=AgentMeta):
                 if tool_name:
                     self.state.track_tool_usage(tool_name)
 
+            # V-MED-002 FIX: Safe mode check runs OUTSIDE the critic/FSM
+            # guard so that plain AgentState instances are also protected.
+            tool_name = action.get("toolName") or action.get("tool_name") or ""
+
+            # ── HARDENED v0.9.40: Autonomy guard — escalation / coherence check ──
+            current_phase = "recon"
+            if hasattr(self.state, "state_machine") and self.state.state_machine:
+                current_phase = self.state.state_machine.current_state.value
+            try:
+                ag_verdict = self._autonomy_guard.check_action(
+                    tool_name=tool_name,
+                    tool_args=action.get("args", {}),
+                    current_phase=current_phase,
+                    iteration=self.state.iteration,
+                )
+                if not ag_verdict.allowed:
+                    logger.warning(
+                        "AUTONOMY GUARD blocked '%s' at iteration %d: %s",
+                        tool_name, self.state.iteration, ag_verdict.reason,
+                    )
+                    self.state.add_message(
+                        "user",
+                        f"Action '{tool_name}' BLOCKED by autonomy guard: {ag_verdict.reason}. "
+                        f"Choose a more appropriate action.",
+                    )
+                    continue  # Skip — do NOT add to allowed_actions
+            except Exception as _ag_err:
+                logger.debug("Autonomy guard check_action failed: %s", _ag_err)
+
+            # ── HARDENED v0.9.40: Reasoning trace — log tool decision ──
+            llm_reasoning = action.get("reasoning") or action.get("thought", "")
+            confidence = 0.0
+            if hasattr(self.state, "confidence_engine"):
+                try:
+                    all_conf = self.state.confidence_engine.get_all_confidences()
+                    confidence = max(all_conf.values()) if all_conf else 0.0
+                except Exception:
+                    pass
+            self._reasoning_trace.append(
+                phase=current_phase,
+                tool_name=tool_name,
+                reasoning=llm_reasoning[:500] if llm_reasoning else "",
+                confidence=confidence,
+            )
+
+            # ── Check for reasoning loops/collapse ──
+            if self._reasoning_trace.detect_reasoning_loops():
+                logger.warning("REASONING LOOP detected at iteration %d", self.state.iteration)
+                self.state.add_message(
+                    "user",
+                    "WARNING: Reasoning loop detected — you are repeating the same "
+                    "tool/reasoning pattern. Try a different approach.",
+                )
+            if self._reasoning_trace.detect_confidence_collapse():
+                logger.warning("CONFIDENCE COLLAPSE detected at iteration %d", self.state.iteration)
+
+            if self.state.context.get("_safe_mode"):
+                if tool_name and tool_name not in SAFE_MODE_TOOL_WHITELIST:
+                    logger.warning(
+                        "SAFE MODE: Blocking tool '%s' — critic/FSM unavailable", tool_name,
+                    )
+                    self.state.add_message(
+                        "user",
+                        f"Tool '{tool_name}' is BLOCKED because the safety subsystem "
+                        f"(critic/FSM) is unavailable. Only reconnaissance tools are "
+                        f"allowed in safe mode: {', '.join(sorted(SAFE_MODE_TOOL_WHITELIST))}",
+                    )
+                    continue  # Skip — do NOT add to allowed_actions
+
+            # BUG-005 FIX: Adversarial critic review before execution
+            if hasattr(self.state, "critic") and hasattr(self.state, "state_machine"):
+                tool_args = action.get("args", {})
+                # T1-03: Extract LLM reasoning and pass to critic
+                llm_reasoning = action.get("reasoning") or action.get("thought", "")
+
+                try:
+                    verdict = self.state.critic.review_action(
+                        tool_name, tool_args, self.state,
+                        self.state.state_machine.current_state,
+                        reasoning=llm_reasoning,
+                    )
+                    if verdict.issues and verdict.warning_text:
+                        # AGT-001 FIX: TTL=15 instead of 2 so warnings persist
+                        self.state.add_advisory(verdict.warning_text, ttl=15)
+                        # AGT-001 FIX: Record rejected actions permanently
+                        if not hasattr(self.state, '_rejected_actions'):
+                            self.state.context.setdefault("_rejected_actions", [])
+                        rejected_list = self.state.context.get("_rejected_actions", [])
+                        rejected_list.append({
+                            "tool": tool_name,
+                            "reason": verdict.warning_text[:200],
+                            "iteration": self.state.iteration,
+                        })
+                except Exception as _critic_err:
+                    # ARC-001 FIX: Critic failure → enter safe mode for remaining actions
+                    logger.warning("Critic review failed — entering safe mode: %s", _critic_err)
+                    self.state.update_context("_safe_mode", True)
+                    if tool_name and tool_name not in SAFE_MODE_TOOL_WHITELIST:
+                        self.state.add_message(
+                            "user",
+                            f"Tool '{tool_name}' BLOCKED: critic unavailable, safe mode activated.",
+                        )
+                        continue  # Skip — do NOT add to allowed_actions
+
+            # V-CRIT-001 FIX: Only actions that passed all checks are added
+            allowed_actions.append(action)
+
         conversation_history = self.state.get_conversation_history()
 
+        # V-CRIT-001 FIX: Pass ONLY the filtered list to process_tool_invocations
         tool_task = asyncio.create_task(
-            process_tool_invocations(actions, conversation_history, self.state)
+            process_tool_invocations(allowed_actions, conversation_history, self.state)
         )
         self._current_task = tool_task
 
@@ -499,6 +755,27 @@ class BaseAgent(metaclass=AgentMeta):
             self._current_task = None
             self.state.add_error("Tool execution cancelled by user")
             raise
+
+        # T1-04: Post-execution critic review and confidence feedback
+        if hasattr(self.state, "critic") and hasattr(self.state, "state_machine"):
+            try:
+                tool_name = action.get("toolName") or action.get("tool_name") or ""
+                tool_args = action.get("args", {})
+                last_msg = conversation_history[-1] if conversation_history else {}
+                tool_result = last_msg.get("content", "") if isinstance(last_msg, dict) else ""
+                review = self.state.critic.review_result(
+                    tool_name, tool_args, tool_result, self.state,
+                )
+                if hasattr(self.state, 'confidence_engine') and review.confidence_adjustment != 0:
+                    for vuln_id in list(self.state.discovered_vulns or []):
+                        self.state.confidence_engine.add_evidence(
+                            vuln_id, tool_name,
+                            f"Post-exec review: adj={review.confidence_adjustment:.2f}",
+                        )
+            except Exception as _review_err:
+                # ARC-001 FIX: Post-exec review failure → safe mode
+                logger.warning("Post-execution review failed — entering safe mode: %s", _review_err)
+                self.state.update_context("_safe_mode", True)
 
         # PHT-062: Don't reassign — process_tool_invocations already mutated
         # conversation_history in-place and state.messages IS that list.
@@ -608,9 +885,13 @@ class BaseAgent(metaclass=AgentMeta):
 
     def _check_agent_messages(self, state: AgentState) -> None:  # noqa: PLR0912
         """PHT-002 FIX: Hardened inter-agent message handling with structured
-        DATA-only message schema and deep content sanitization."""
+        DATA-only message schema and deep content sanitization.
+
+        V-CRIT-002 FIX: Verifies Ed25519 signatures on non-user messages.
+        Messages with invalid or missing signatures are rejected."""
         try:
             from phantom.tools.agents_graph.agents_graph_actions import _agent_graph, _agent_messages, _graph_lock
+            from phantom.agents.protocol import get_public_key
 
             agent_id = state.agent_id
 
@@ -657,6 +938,61 @@ class BaseAgent(metaclass=AgentMeta):
                     with _graph_lock:
                         if sender_id and sender_id in _agent_graph.get("nodes", {}):
                             sender_name = _agent_graph["nodes"][sender_id]["name"]
+
+                    # V-CRIT-002 FIX: Verify Ed25519 signature on inter-agent messages.
+                    # Reject messages with missing or invalid signatures to prevent
+                    # message forgery / impersonation between agents.
+                    if sender_id:
+                        sender_pub_key = get_public_key(sender_id)
+                        signature = message.get("signature", b"")
+                        sig_valid = False
+                        if sender_pub_key and signature:
+                            try:
+                                from phantom.agents.protocol import AgentMessage as _AMProto
+                                # Reconstruct signable message and verify
+                                proto_msg = _AMProto.from_dict({
+                                    "msg_type": message.get("message_type", "response"),
+                                    "sender_id": sender_id,
+                                    "receiver_id": agent_id,
+                                    "payload": {"content": message.get("content", "")},
+                                    "timestamp": message.get("timestamp", ""),
+                                    "correlation_id": message.get("correlation_id"),
+                                    "signature": signature if isinstance(signature, str) else "",
+                                })
+                                sig_valid = proto_msg.verify(sender_pub_key)
+                            except Exception as _sig_err:
+                                logger.warning(
+                                    "ARC-004: Signature verification error for message "
+                                    "from '%s': %s", sender_id, _sig_err,
+                                )
+                                sig_valid = False
+                        if not sig_valid:
+                            logger.warning(
+                                "ARC-004: REJECTED unsigned/invalid message from '%s' "
+                                "to '%s' — possible forgery attempt",
+                                sender_id, agent_id,
+                            )
+                            try:
+                                from phantom.core.audit_logger import get_global_audit_logger
+                                _audit = get_global_audit_logger()
+                                if _audit:
+                                    _audit.log_event(
+                                        event_type="message_auth_failure",
+                                        severity="warning",
+                                        category="security",
+                                        data={
+                                            "sender_id": sender_id,
+                                            "receiver_id": agent_id,
+                                            "has_signature": bool(signature),
+                                            "has_public_key": sender_pub_key is not None,
+                                        },
+                                        agent_id=agent_id,
+                                    )
+                            except Exception:  # noqa: BLE001
+                                pass
+                            with _graph_lock:
+                                message["read"] = True
+                            continue  # Skip this forged message
 
                     # PHT-002 FIX: Deep sanitization of inter-agent content
                     raw_content = str(message.get("content", ""))
@@ -850,7 +1186,7 @@ class BaseAgent(metaclass=AgentMeta):
         return True  # absorb — loop continues
 
     def cancel_current_execution(self) -> None:
-        self._force_stop = True
+        self._force_stop_event.set()
         task = self._current_task          # snapshot to avoid TOCTOU race
         if task and not task.done():
             try:

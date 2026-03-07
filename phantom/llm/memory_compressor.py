@@ -168,7 +168,12 @@ def _summarize_messages(
                     is_compression=True,
                 )
         except Exception as _cost_exc:  # noqa: BLE001
-            logger.debug("Failed to track compression cost: %s", _cost_exc)
+            # BUG-007 FIX: Log at WARNING level (not debug) and include
+            # enough context to diagnose cost-tracking failures.
+            logger.warning(
+                "Cost controller failed for compression call (model=%s): %s",
+                model, _cost_exc,
+            )
 
         # v0.9.39 FIX (MEM-002): Sanitize compression output
         try:
@@ -413,6 +418,16 @@ class MemoryCompressor:
                 else:
                     # Append critical extracts that may have been lost
                     if critical_extracts:
+                        # V-MED-004 FIX: Redact credentials from preserved data
+                        # before pinning, to prevent credential leakage to the
+                        # external LLM on the next compression cycle.
+                        try:
+                            from phantom.llm.dedupe import _redact_secrets
+                            critical_extracts = [
+                                _redact_secrets(ext) for ext in critical_extracts
+                            ]
+                        except ImportError:
+                            pass  # dedupe module unavailable — continue without redaction
                         extract_text = "\n".join(dict.fromkeys(critical_extracts))  # dedup
                         existing = summary.get("content", "")
                         summary["content"] = (
@@ -426,9 +441,16 @@ class MemoryCompressor:
         # the agent (and subagents) can rely on for continuity.
         ledger_msg = self._build_ledger_message()
 
+        # AGT-004 FIX: Build exploit chain log — a compact sequence of
+        # exploitation steps that is NEVER compressed, ensuring the LLM
+        # retains full context of multi-step attack chains.
+        chain_msg = self._build_exploit_chain_message()
+
         result = system_msgs + compressed
         if ledger_msg:
             result.append(ledger_msg)
+        if chain_msg:
+            result.append(chain_msg)
         result.extend(recent_msgs)
 
         # ── G-06 FIX: Post-compression token validation ─────────────
@@ -463,7 +485,12 @@ class MemoryCompressor:
 
     def _build_ledger_message(self) -> dict[str, Any] | None:
         """Build a synthetic message from the agent's findings ledger and
-        tested endpoint tracking."""
+        tested endpoint tracking.
+
+        HARDENED v0.9.40: Also pins confidence scores and verification
+        status for every tracked vulnerability, ensuring the LLM never
+        loses track of which findings are confirmed vs. hypothetical.
+        """
         state = self._agent_state
         if state is None:
             return None
@@ -483,6 +510,28 @@ class MemoryCompressor:
                 "</persistent_findings_ledger>"
             )
 
+        # HARDENED v0.9.40: Confidence anchor — prevents the agent from
+        # treating low-confidence scanner hits as confirmed vulnerabilities
+        # after compression erases the original evidence context.
+        conf_engine = getattr(state, "confidence_engine", None)
+        if conf_engine:
+            try:
+                summary = conf_engine.get_summary()
+                if summary.get("tracked_vulns", 0) > 0:
+                    conf_lines: list[str] = []
+                    for vid, conf in conf_engine.get_all_confidences().items():
+                        label = "CONFIRMED" if conf >= 0.7 else "NEEDS VERIFICATION" if conf >= 0.4 else "HYPOTHESIS"
+                        conf_lines.append(f"- {vid}: {conf:.0%} [{label}]")
+                    if conf_lines:
+                        parts.append(
+                            "<confidence_anchor>\n"
+                            "Vulnerability confidence scores (DO NOT treat HYPOTHESIS as confirmed):\n\n"
+                            + "\n".join(conf_lines[:50]) +
+                            "\n</confidence_anchor>"
+                        )
+            except Exception:
+                pass
+
         # Tested endpoint dedup summary
         endpoint_summary_fn = getattr(state, "get_tested_endpoints_summary", None)
         if endpoint_summary_fn:
@@ -498,6 +547,75 @@ class MemoryCompressor:
 
         if not parts:
             return None
+
+        return {
+            "role": "user",
+            "content": "\n\n".join(parts),
+        }
+
+    def _build_exploit_chain_message(self) -> dict[str, Any] | None:
+        """AGT-004 FIX: Build a synthetic message preserving exploit chain steps.
+
+        Multi-step exploitation chains (e.g., IDOR → token theft → admin SQLi)
+        must survive compression intact. This message is NEVER summarized.
+        """
+        state = self._agent_state
+        if state is None:
+            return None
+
+        # Collect exploit chain data from attack graph if available
+        chain_steps: list[str] = []
+        attack_graph = getattr(state, "attack_graph", None)
+        if attack_graph and hasattr(attack_graph, "get_exploit_chains"):
+            try:
+                chains = attack_graph.get_exploit_chains()
+                for chain in chains[:10]:  # cap at 10 chains
+                    steps = chain.get("steps", [])
+                    if steps:
+                        desc = " → ".join(str(s) for s in steps[:20])
+                        chain_steps.append(f"- Chain: {desc}")
+            except Exception:
+                pass
+
+        # Also extract from actions_taken — look for successful exploitation actions
+        actions = getattr(state, "actions_taken", [])
+        exploit_actions: list[str] = []
+        _EXPLOIT_TOOLS = {
+            "sqlmap_test", "sqlmap_forms", "sqlmap_dump_database",
+            "terminal_execute", "python_action",
+        }
+        for act in actions[-200:]:
+            action_data = act.get("action", {})
+            tool = (
+                action_data.get("toolName")
+                or action_data.get("tool_name")
+                or action_data.get("name", "")
+            )
+            if tool in _EXPLOIT_TOOLS:
+                args = action_data.get("args", {})
+                target = args.get("url") or args.get("target") or ""
+                exploit_actions.append(
+                    f"- iter={act.get('iteration', '?')}: {tool}({target[:100]})"
+                )
+
+        if not chain_steps and not exploit_actions:
+            return None
+
+        parts: list[str] = []
+        if chain_steps:
+            parts.append(
+                "<exploit_chain_log>\n"
+                "PRESERVED exploit chains (NEVER compress/summarize):\n"
+                + "\n".join(chain_steps)
+                + "\n</exploit_chain_log>"
+            )
+        if exploit_actions:
+            parts.append(
+                "<exploitation_history>\n"
+                "Recent exploitation tool invocations (NEVER compress):\n"
+                + "\n".join(exploit_actions[-50:])
+                + "\n</exploitation_history>"
+            )
 
         return {
             "role": "user",

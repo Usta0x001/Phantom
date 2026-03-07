@@ -43,7 +43,7 @@ class VulnFingerprint:
     @property
     def key(self) -> str:
         """Stable identity string for diffing."""
-        return f"{self.title}|{self.endpoint}|{self.method}|{self.cve}"
+        return f"{self.title}|{self.severity}|{self.endpoint}|{self.method}|{self.cve}"
 
 
 @dataclass

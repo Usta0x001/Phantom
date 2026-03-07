@@ -718,6 +718,66 @@ def finish_scan(
     if active_agents_error:
         return active_agents_error
 
+    # ── HARDENED v0.9.40: Verified-findings gate ──────────────────────
+    # Block finish_scan if HIGH/CRITICAL findings exist that have NOT been
+    # verified.  The agent must run the verification engine or manually
+    # confirm exploitability before finalising the report.  This prevents
+    # hallucinated vulnerabilities from appearing as confirmed in reports.
+    if agent_state is not None:
+        from phantom.core.feature_flags import is_enabled as _is_enabled
+        if _is_enabled("PHANTOM_FF_FINISH_GUARD"):
+            try:
+                from phantom.telemetry.tracer import get_global_tracer as _get_tracer
+                _tr = _get_tracer()
+                if _tr and _tr.vulnerability_reports:
+                    _unverified_high: list[dict[str, str]] = []
+                    for _rpt in _tr.vulnerability_reports:
+                        _sev = str(_rpt.get("severity", "")).lower()
+                        _vstatus = str(_rpt.get("verification_status", "")).lower()
+                        if _sev in ("critical", "high") and _vstatus != "verified":
+                            _unverified_high.append({
+                                "id": _rpt.get("id", "?"),
+                                "title": str(_rpt.get("title", ""))[:120],
+                                "severity": _sev,
+                            })
+                    if _unverified_high:
+                        _names = "; ".join(
+                            f"{u['severity'].upper()} {u['title']}" for u in _unverified_high[:5]
+                        )
+                        # Allow override if iteration budget is nearly exhausted
+                        _iter = getattr(agent_state, "iteration", 0)
+                        _max_iter = getattr(agent_state, "max_iterations", 300)
+                        if _iter < _max_iter - 5:
+                            _logger.warning(
+                                "HARDENED v0.9.40: finish_scan blocked — %d unverified HIGH/CRIT findings",
+                                len(_unverified_high),
+                            )
+                            return {
+                                "success": False,
+                                "message": (
+                                    f"Cannot finish: {len(_unverified_high)} HIGH/CRITICAL findings are "
+                                    f"NOT verified.  Run verification probes or remove unconfirmed "
+                                    f"findings before finishing.  Unverified: {_names}"
+                                ),
+                                "blocked_by": "HARDENED_verified_findings_gate",
+                                "unverified_findings": _unverified_high[:10],
+                            }
+                        else:
+                            _logger.warning(
+                                "HARDENED v0.9.40: allowing finish despite %d unverified findings "
+                                "(iteration %d/%d — budget nearly exhausted)",
+                                len(_unverified_high), _iter, _max_iter,
+                            )
+                            # Mark unverified findings as hypotheses in the reports
+                            for _rpt in _tr.vulnerability_reports:
+                                _sev = str(_rpt.get("severity", "")).lower()
+                                _vstatus = str(_rpt.get("verification_status", "")).lower()
+                                if _sev in ("critical", "high") and _vstatus != "verified":
+                                    _rpt["verification_status"] = "hypothesis"
+                                    _rpt["title"] = "[UNVERIFIED] " + str(_rpt.get("title", ""))
+            except Exception as _vg_err:
+                _logger.warning("Verified-findings gate error (non-fatal): %s", _vg_err)
+
     validation_errors = []
 
     if not executive_summary or not executive_summary.strip():

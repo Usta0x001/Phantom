@@ -94,7 +94,7 @@ PROFILES: dict[str, ScanProfile] = {
     ProfileName.quick: ScanProfile(
         name="quick",
         description="Rapid assessment with broad vuln-class coverage (30\u201360 min).",
-        max_iterations=300,
+        max_iterations=120,
         sandbox_timeout_s=120,
         reasoning_effort="high",
         priority_tools=[
@@ -118,7 +118,7 @@ PROFILES: dict[str, ScanProfile] = {
     ProfileName.standard: ScanProfile(
         name="standard",
         description="Balanced assessment with systematic methodology (20\u201345 min).",
-        max_iterations=120,
+        max_iterations=300,
         sandbox_timeout_s=120,
         reasoning_effort="medium",
         priority_tools=[

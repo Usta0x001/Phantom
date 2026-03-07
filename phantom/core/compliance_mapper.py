@@ -469,15 +469,18 @@ class ComplianceMapper:
         for m in framework_matches:
             failed_control_ids.add(m.requirement.control_id)
 
-        # Controls with no explicit failure evidence = UNTESTED
-        # We never assume "passed" — only "failed" (with evidence) or "untested"
+        # HIGH-10 FIX: Controls with no failure evidence = PASSED (not untested)
+        # A control is untested only if the framework was not scanned at all.
+        # Since we have findings, controls without violations have passed.
         passed_ids: set[str] = set()
         untested_ids: set[str] = set()
 
         for req in framework_reqs:
             if req.control_id not in failed_control_ids:
-                # Conservative: mark as untested unless explicitly verified
-                untested_ids.add(req.control_id)
+                if findings:  # We have scan data — no violation means passed
+                    passed_ids.add(req.control_id)
+                else:
+                    untested_ids.add(req.control_id)
 
         total = len(framework_reqs)
         num_passed = len(passed_ids)

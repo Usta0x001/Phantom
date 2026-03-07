@@ -118,6 +118,20 @@ class EphemeralTLSManager:
         """Return path to CA certificate (for container trust store)."""
         return self._temp_dir / "ca.pem"
 
+    def cleanup(self) -> None:
+        """Remove ephemeral TLS material from disk."""
+        import shutil
+        try:
+            shutil.rmtree(self._temp_dir, ignore_errors=True)
+        except Exception:
+            pass
+        self._ca_key = None
+        self._ca_cert = None
+
+    def __del__(self) -> None:
+        """Best-effort cleanup on garbage collection."""
+        self.cleanup()
+
     def create_client_ssl_context(self) -> ssl.SSLContext:
         """Create client SSL context with client cert and CA verification."""
         ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)

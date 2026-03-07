@@ -173,6 +173,9 @@ class ScanPriorityQueue:
     
     def push(self, task: ScanTask) -> None:
         """Add task to queue."""
+        # LOW-37 FIX: Skip duplicate task_id to prevent double execution
+        if task.task_id in self._tasks:
+            return
         item = PriorityItem(
             priority=task.priority.value,
             timestamp=self._counter,

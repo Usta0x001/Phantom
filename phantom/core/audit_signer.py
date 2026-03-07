@@ -55,7 +55,14 @@ class AuditSigner:
             try:
                 self._private_key_path.chmod(0o600)
             except OSError:
-                pass  # Windows may not support chmod
+                # BUG-031 FIX: On Windows, chmod isn't supported but the key
+                # is still protected by NTFS ACLs. Log a warning instead of
+                # silently passing so operators know.
+                _logger.warning(
+                    "Could not set file permissions on %s — ensure the file "
+                    "is only readable by the current user.",
+                    self._private_key_path,
+                )
             # Save public key
             pub_pem = self._private_key.public_key().public_bytes(
                 serialization.Encoding.PEM,

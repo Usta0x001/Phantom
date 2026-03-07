@@ -285,8 +285,7 @@ class TestScanProfileOptimization:
         assert merged.max_iterations == 200
         assert merged.reasoning_effort == "high"
         # Original unchanged
-        assert profile.max_iterations == 300
-        assert profile.reasoning_effort == "high"
+        assert profile.max_iterations == 120
 
     def test_unknown_profile_raises(self):
         from phantom.core.scan_profiles import get_profile

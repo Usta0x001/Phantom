@@ -27,9 +27,9 @@ class TestFeatureFlags:
         assert is_enabled("PHANTOM_FF_MTLS") is False
 
     def test_env_override_to_false(self):
-        os.environ["PHANTOM_FF_SCOPE_ENFORCEMENT"] = "false"
+        os.environ["PHANTOM_FF_FINISH_GUARD"] = "false"
         clear_cache()
-        assert is_enabled("PHANTOM_FF_SCOPE_ENFORCEMENT") is False
+        assert is_enabled("PHANTOM_FF_FINISH_GUARD") is False
 
     def test_env_override_to_true(self):
         os.environ["PHANTOM_FF_MTLS"] = "true"
@@ -37,16 +37,16 @@ class TestFeatureFlags:
         assert is_enabled("PHANTOM_FF_MTLS") is True
 
     def test_cache_is_sticky(self):
-        assert is_enabled("PHANTOM_FF_OUTPUT_SANITIZER") is True
-        os.environ["PHANTOM_FF_OUTPUT_SANITIZER"] = "false"
+        assert is_enabled("PHANTOM_FF_FINISH_GUARD") is True
+        os.environ["PHANTOM_FF_FINISH_GUARD"] = "false"
         # Without cache clear, old value persists
-        assert is_enabled("PHANTOM_FF_OUTPUT_SANITIZER") is True
+        assert is_enabled("PHANTOM_FF_FINISH_GUARD") is True
 
     def test_cache_clear_reloads(self):
-        assert is_enabled("PHANTOM_FF_OUTPUT_SANITIZER") is True
-        os.environ["PHANTOM_FF_OUTPUT_SANITIZER"] = "false"
+        assert is_enabled("PHANTOM_FF_FINISH_GUARD") is True
+        os.environ["PHANTOM_FF_FINISH_GUARD"] = "false"
         clear_cache()
-        assert is_enabled("PHANTOM_FF_OUTPUT_SANITIZER") is False
+        assert is_enabled("PHANTOM_FF_FINISH_GUARD") is False
 
     def test_unknown_flag_defaults_to_false(self):
         assert is_enabled("PHANTOM_FF_NONEXISTENT") is False

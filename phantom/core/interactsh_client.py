@@ -85,6 +85,7 @@ class InteractshClient:
         self.server = server or "oast.pro"
         
         self._session_id: str | None = None
+        self._session_token: str | None = None  # CRIT-07: Store session token for polling
         self._base_domain: str | None = None
         self._payloads: dict[str, OOBPayload] = {}
         self._interactions: list[OOBInteraction] = []
@@ -108,7 +109,12 @@ class InteractshClient:
             return self._base_domain
         
         # Start interactsh-client and capture domain
-        cmd = f"interactsh-client -server {shlex.quote(self.server)} -json -poll-interval 1 -n 1"
+        # CRIT-07 FIX: Use -sf (session file) flag to persist session for later polling
+        session_file = f"/tmp/interactsh_session_{uuid.uuid4().hex[:8]}.json"
+        cmd = (
+            f"interactsh-client -server {shlex.quote(self.server)} "
+            f"-json -poll-interval 1 -n 1 -sf {shlex.quote(session_file)}"
+        )
         
         try:
             result = await self.terminal_execute(cmd, timeout=15)
@@ -121,6 +127,7 @@ class InteractshClient:
             if domain_match:
                 self._base_domain = domain_match.group(1)
                 self._session_id = self._base_domain.split(".")[0]
+                self._session_token = session_file  # CRIT-07: Remember session file
                 logger.info(f"Interactsh session started: {self._base_domain}")
             else:
                 # Fallback to mock
@@ -129,7 +136,7 @@ class InteractshClient:
                 logger.warning(f"Could not parse interactsh output, using mock: {self._base_domain}")
             
         except Exception as e:
-            logger.error(f"Failed to start interactsh: {e}")
+            logger.warning("HIGH-21: Interactsh start failed, falling back to mock mode — OOB verification disabled: %s", e)
             # Fallback to mock
             self._session_id = str(uuid.uuid4())[:8]
             self._base_domain = f"{self._session_id}.oast.pro"
@@ -224,8 +231,14 @@ class InteractshClient:
             return new_interactions
         
         try:
-            # Poll interactsh for interactions
-            cmd = f"interactsh-client -server {shlex.quote(self.server)} -json -poll-interval 1 -n 1"
+            # CRIT-07 FIX: Reuse existing session via -sf flag instead of creating new session
+            if self._session_token:
+                cmd = (
+                    f"interactsh-client -server {shlex.quote(self.server)} "
+                    f"-json -poll-interval 1 -n 1 -sf {shlex.quote(self._session_token)}"
+                )
+            else:
+                cmd = f"interactsh-client -server {shlex.quote(self.server)} -json -poll-interval 1 -n 1"
             result = await self.terminal_execute(cmd, timeout=10)
             output = result.get("output", "")
             

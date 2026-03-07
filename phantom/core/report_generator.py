@@ -15,6 +15,9 @@ from phantom.models.vulnerability import Vulnerability, VulnerabilitySeverity
 from phantom.models.host import Host
 from phantom.models.scan import ScanResult
 
+# LOW-26 FIX: Single severity sort mapping used throughout
+_SEVERITY_ORDER = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4}
+
 def _sanitize_csv_cell(value: str) -> str:
     """M12 FIX: Prevent CSV formula injection.
     
@@ -37,8 +40,16 @@ class ReportGenerator:
     """
     
     def __init__(self, output_dir: str | Path = "reports"):
-        self.output_dir = Path(output_dir)
+        self.output_dir = Path(output_dir).resolve()
         self.output_dir.mkdir(parents=True, exist_ok=True)
+    
+    def _safe_filename(self, scan_id: str) -> str:
+        """HIGH-11 FIX: Sanitize scan_id against path traversal."""
+        import re
+        safe = re.sub(r'[^a-zA-Z0-9_\-]', '_', str(scan_id))
+        if not safe:
+            safe = "unnamed_scan"
+        return safe[:200]
     
     def generate_json_report(
         self,
@@ -76,14 +87,16 @@ class ReportGenerator:
             "vulnerabilities": [
                 self._vuln_to_dict(v) for v in sorted(
                     vulnerabilities,
-                    key=lambda x: {"critical":0,"high":1,"medium":2,"low":3,"info":4}.get(x.severity.value, 5)
+                    key=lambda x: _SEVERITY_ORDER.get(
+                        x.severity.value if hasattr(x.severity, 'value') else str(x.severity), 5
+                    )
                 )
             ],
             "hosts": [self._host_to_dict(h) for h in hosts],
             "metadata": metadata or {},
         }
         
-        filename = self.output_dir / f"{scan_id}_report.json"
+        filename = self.output_dir / f"{self._safe_filename(scan_id)}_report.json"
         with open(filename, "w", encoding="utf-8") as f:
             json.dump(report, f, indent=2, default=str)
         
@@ -296,7 +309,7 @@ class ReportGenerator:
 </body>
 </html>"""
         
-        filename = self.output_dir / f"{scan_id}_report.html"
+        filename = self.output_dir / f"{self._safe_filename(scan_id)}_report.html"
         with open(filename, "w", encoding="utf-8") as f:
             f.write(html_content)
         
@@ -341,7 +354,7 @@ class ReportGenerator:
         # Sort by severity
         sorted_vulns = sorted(
             vulnerabilities,
-            key=lambda x: {"critical":0,"high":1,"medium":2,"low":3,"info":4}.get(x.severity.value, 5)
+            key=lambda x: _SEVERITY_ORDER.get(x.severity.value, 5)
         )
         
         for vuln in sorted_vulns:
@@ -398,7 +411,7 @@ class ReportGenerator:
         
         content = "\n".join(lines)
         
-        filename = self.output_dir / f"{scan_id}_report.md"
+        filename = self.output_dir / f"{self._safe_filename(scan_id)}_report.md"
         with open(filename, "w", encoding="utf-8") as f:
             f.write(content)
         
@@ -431,7 +444,7 @@ class ReportGenerator:
                 {
                     "type": e.type,
                     "description": e.description,
-                    "data": e.data[:1000],  # Truncate
+                    "data": (e.data or "")[:1000],  # LOW-28 FIX: Guard against None
                 }
                 for e in vuln.evidence
             ],
@@ -477,7 +490,7 @@ class ReportGenerator:
         cards = []
         sorted_vulns = sorted(
             vulns,
-            key=lambda x: {"critical":0,"high":1,"medium":2,"low":3,"info":4}.get(x.severity.value, 5)
+            key=lambda x: _SEVERITY_ORDER.get(x.severity.value, 5)
         )
         
         for vuln in sorted_vulns:

@@ -3,6 +3,11 @@ Verification Engine
 
 Core verification logic for confirming vulnerability exploitability.
 Implements Shannon pattern: verify before report.
+
+Intelligence Plan 5.x enhancements:
+- VerificationTier: QUICK / STANDARD / DEEP tiers for resource-aware verification
+- quick_verify(): inline tier-1 checks (pattern matching, no HTTP)
+- verify_and_feedback(): returns confidence adjustment for the confidence engine
 """
 
 import asyncio
@@ -10,9 +15,10 @@ import logging
 import re
 import time
 from datetime import UTC, datetime
+from enum import Enum
 from typing import Any
 
-from phantom.models.vulnerability import Vulnerability, VulnerabilityStatus
+from phantom.models.vulnerability import Vulnerability
 from phantom.models.verification import (
     ExploitAttempt,
     VerificationResult,
@@ -22,6 +28,17 @@ from phantom.models.verification import (
 
 
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Intelligence Plan 5.1: Tiered Verification
+# ---------------------------------------------------------------------------
+
+class VerificationTier(str, Enum):
+    """Verification depth tiers."""
+    QUICK = "quick"       # Pattern / heuristic only — no network calls
+    STANDARD = "standard" # Normal verification with HTTP probes
+    DEEP = "deep"         # Extended payloads, OOB, and multi-vector
 
 
 class VerificationEngine:
@@ -109,21 +126,35 @@ class VerificationEngine:
             # Do NOT call vuln.mark_false_positive here — unverified != false positive
         
         self._results[vuln.id] = result
+        # LOW-10 FIX: Cap _results to prevent unbounded growth
+        if len(self._results) > 5000:
+            oldest_keys = list(self._results.keys())[:2500]
+            for k in oldest_keys:
+                del self._results[k]
         return result
     
     async def verify_batch(self, vulnerabilities: list[Vulnerability]) -> list[VerificationResult]:
-        """Verify multiple vulnerabilities."""
-        results = []
+        """Verify multiple vulnerabilities concurrently."""
+        import asyncio
         
         # Prioritize by severity
+        _severity_order = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4}
         sorted_vulns = sorted(
             vulnerabilities,
-            key=lambda v: ["critical", "high", "medium", "low", "info"].index(v.severity.value),
+            key=lambda v: _severity_order.get(v.severity.value, 5),
         )
         
-        for vuln in sorted_vulns:
-            result = await self.verify(vuln)
-            results.append(result)
+        # MED-06 FIX: Use asyncio.gather for concurrent verification
+        results = list(await asyncio.gather(
+            *(self.verify(vuln) for vuln in sorted_vulns),
+            return_exceptions=True,
+        ))
+        # Replace exceptions with failed results
+        for i, r in enumerate(results):
+            if isinstance(r, Exception):
+                failed = VerificationResult(vuln_id=sorted_vulns[i].id)
+                failed.mark_failed(f"Verification error: {r}")
+                results[i] = failed
         
         return results
     
@@ -305,13 +336,20 @@ class VerificationEngine:
         true_payload = "1' AND '1'='1"
         false_payload = "1' AND '1'='2"
         
+        http_method = getattr(vuln, "http_method", "GET").upper()
+        
         if self.http_client:
             try:
-                true_url = self._inject_payload(vuln.target, vuln.parameter, true_payload)
-                false_url = self._inject_payload(vuln.target, vuln.parameter, false_payload)
-                
-                true_resp = await self.http_client.get(true_url)
-                false_resp = await self.http_client.get(false_url)
+                if http_method == "POST":
+                    true_data = {vuln.parameter or "id": true_payload}
+                    false_data = {vuln.parameter or "id": false_payload}
+                    true_resp = await self.http_client.post(vuln.target, data=true_data, timeout=10)
+                    false_resp = await self.http_client.post(vuln.target, data=false_data, timeout=10)
+                else:
+                    true_url = self._inject_payload(vuln.target, vuln.parameter, true_payload)
+                    false_url = self._inject_payload(vuln.target, vuln.parameter, false_payload)
+                    true_resp = await self.http_client.get(true_url)
+                    false_resp = await self.http_client.get(false_url)
                 
                 true_len = len(true_resp.content)
                 false_len = len(false_resp.content)
@@ -338,6 +376,10 @@ class VerificationEngine:
             payload="",
         )
         
+        if not vuln.target:
+            attempt.error = "No target URL provided"
+            return attempt
+        
         # Unique marker to search for
         marker = "PHANTOM_XSS_7x7x7"
         payloads = [
@@ -347,13 +389,19 @@ class VerificationEngine:
             f"'-{marker}-'",
         ]
         
+        http_method = getattr(vuln, "http_method", "GET").upper()
+        
         for payload in payloads:
             attempt.payload = payload
-            target_url = self._inject_payload(vuln.target, vuln.parameter, payload)
             
             if self.http_client:
                 try:
-                    response = await self.http_client.get(target_url)
+                    if http_method == "POST":
+                        data = {vuln.parameter or "q": payload}
+                        response = await self.http_client.post(vuln.target, data=data, timeout=10)
+                    else:
+                        target_url = self._inject_payload(vuln.target, vuln.parameter, payload)
+                        response = await self.http_client.get(target_url)
 
                     # PHT-043: Only declare XSS if response is HTML.
                     # JSON/plaintext responses with reflected markers are NOT
@@ -373,12 +421,10 @@ class VerificationEngine:
                     body = response.text if hasattr(response, 'text') else str(response.content)
                     
                     if marker in body:
-                        # Check if it's reflected unencoded
-                        if payload in body or marker in body:
-                            attempt.success = True
-                            attempt.confidence = 0.85
-                            attempt.evidence = f"XSS payload reflected in HTML response: {payload[:50]}"
-                            return attempt
+                        attempt.success = True
+                        attempt.confidence = 0.85
+                        attempt.evidence = f"XSS payload reflected in HTML response: {payload[:50]}"
+                        return attempt
                 except Exception as e:
                     attempt.error = str(e)
         
@@ -515,6 +561,10 @@ class VerificationEngine:
             payload="",
         )
         
+        if not vuln.target:
+            attempt.error = "No target URL provided"
+            return attempt
+        
         # LFI payloads targeting known files
         payloads_and_markers = [
             ("../../../../../../etc/passwd", "root:"),
@@ -551,6 +601,10 @@ class VerificationEngine:
             tool="verification_engine",
             payload="",
         )
+        
+        if not vuln.target:
+            attempt.error = "No target URL provided"
+            return attempt
         
         # SSTI math payloads and their results
         payloads_and_results = [
@@ -768,9 +822,9 @@ class VerificationEngine:
         from urllib.parse import urlencode, urlparse, parse_qs, urlunparse
         
         parsed = urlparse(url)
-        # SSRF guard: reject private/loopback/link-local targets
+        # CRIT-03 FIX: SSRF guard — resolve hostname to check actual IP
         hostname = parsed.hostname or ""
-        if hostname in ("localhost", "0.0.0.0", "169.254.169.254"):
+        if hostname in ("localhost", "0.0.0.0", "169.254.169.254", "127.0.0.1", "::1", "169.254.170.2"):
             raise ValueError(f"Verification blocked: target {hostname!r} is internal")
         try:
             addr = _ipa.ip_address(hostname)
@@ -779,7 +833,17 @@ class VerificationEngine:
         except ValueError as e:
             if "Verification blocked" in str(e):
                 raise
-            # Not an IP — it's a hostname, which is fine
+            # Not an IP literal — resolve DNS and check resolved IPs
+            import socket as _socket
+            try:
+                for info in _socket.getaddrinfo(hostname, None):
+                    resolved = _ipa.ip_address(info[4][0])
+                    if resolved.is_private or resolved.is_loopback or resolved.is_link_local or resolved.is_reserved:
+                        raise ValueError(
+                            f"Verification blocked: {hostname!r} resolves to internal IP {resolved}"
+                        )
+            except _socket.gaierror:
+                pass  # DNS resolution failed — allow rule-based check to handle
         params = parse_qs(parsed.query)
         
         if parameter and parameter in params:
@@ -814,5 +878,131 @@ class VerificationEngine:
         return sum(1 for r in self._results.values() if r.is_exploitable)
     
     def get_false_positive_count(self) -> int:
-        """Count false positives."""
-        return sum(1 for r in self._results.values() if r.status == VerificationStatus.FAILED)
+        """Count confirmed false positives."""
+        return sum(
+            1 for r in self._results.values()
+            if r.status == VerificationStatus.FALSE_POSITIVE
+        )
+
+    # ------------------------------------------------------------------
+    # Intelligence Plan 5.1: Quick (Tier-1) Verification
+    # ------------------------------------------------------------------
+
+    def quick_verify(self, vuln: Vulnerability) -> dict[str, Any]:
+        """Tier-1 quick verification: pattern / heuristic only, no network.
+
+        Returns a lightweight verification hint dict:
+            {"plausible": bool, "confidence_adjustment": float, "reason": str}
+
+        Used inline during scanning to provide early confidence signals
+        without the cost of full HTTP verification.
+        """
+        vuln_class = vuln.vulnerability_class.lower() if vuln.vulnerability_class else ""
+        severity = vuln.severity.value if hasattr(vuln.severity, "value") else str(vuln.severity)
+
+        # Heuristic: scanner-only INFO/LOW findings are weak signals
+        if severity in ("info", "low") and not getattr(vuln, "verified", False):
+            return {
+                "plausible": True,
+                "confidence_adjustment": -0.1,
+                "reason": f"Low-severity unverified finding — discounting confidence",
+            }
+
+        # Heuristic: SQLi/XSS with a known parameter is more plausible
+        if vuln_class in ("sqli", "xss", "ssti") and getattr(vuln, "parameter", None):
+            return {
+                "plausible": True,
+                "confidence_adjustment": 0.05,
+                "reason": f"{vuln_class} with identified parameter '{vuln.parameter}'",
+            }
+
+        # Heuristic: RCE without evidence is suspicious
+        if vuln_class == "rce" and not getattr(vuln, "evidence", ""):
+            return {
+                "plausible": False,
+                "confidence_adjustment": -0.2,
+                "reason": "RCE claim without supporting evidence",
+            }
+
+        return {
+            "plausible": True,
+            "confidence_adjustment": 0.0,
+            "reason": "No quick heuristic applies",
+        }
+
+    # ------------------------------------------------------------------
+    # Intelligence Plan 5.2: Verification Feedback Loop
+    # ------------------------------------------------------------------
+
+    async def verify_and_feedback(
+        self, vuln: Vulnerability, tier: VerificationTier = VerificationTier.STANDARD,
+    ) -> dict[str, Any]:
+        """Verify a vulnerability and return a feedback dict for the confidence engine.
+
+        Returns:
+            {"verified": bool, "confidence_adjustment": float,
+             "verification_result": VerificationResult}
+        """
+        if tier == VerificationTier.QUICK:
+            hint = self.quick_verify(vuln)
+            return {
+                "verified": False,  # Quick tier cannot confirm
+                "confidence_adjustment": hint["confidence_adjustment"],
+                "verification_result": None,
+                "reason": hint["reason"],
+            }
+
+        result = await self.verify(vuln)
+
+        if result.is_exploitable:
+            adjustment = 0.3  # Strong positive boost
+        elif result.status == VerificationStatus.FAILED:
+            adjustment = -0.15  # Moderate negative
+        else:
+            adjustment = 0.0
+
+        if tier == VerificationTier.DEEP:
+            # Deep tier has higher confidence in either direction
+            # T2-06: Clamp multiplier to prevent extreme swings
+            adjustment = max(-0.3, min(0.3, adjustment * 1.5))
+
+        return {
+            "verified": result.is_exploitable,
+            "confidence_adjustment": round(adjustment, 3),
+            "verification_result": result,
+            "reason": f"Tier {tier.value} verification {'succeeded' if result.is_exploitable else 'failed'}",
+        }
+
+    # ------------------------------------------------------------------
+    # T2-05: Tier Selection Heuristic
+    # ------------------------------------------------------------------
+
+    def select_tier(self, vuln: Any, phase: str) -> VerificationTier:
+        """Select verification tier based on severity and scan phase.
+
+        Args:
+            vuln: Vulnerability object with a ``severity`` attribute.
+            phase: Current scan phase name (e.g., "exploitation", "recon").
+
+        Returns:
+            Appropriate VerificationTier.
+        """
+        severity = getattr(vuln, "severity", "medium")
+        if isinstance(severity, str):
+            severity = severity.lower()
+        else:
+            severity = str(severity).lower()
+
+        # During early phases, always use QUICK to save time
+        if phase in ("init", "reconnaissance", "recon", "enumeration"):
+            return VerificationTier.QUICK
+
+        # Critical/high in exploitation or verification → DEEP
+        if severity in ("critical", "high") and phase in ("exploitation", "verification"):
+            return VerificationTier.DEEP
+
+        # Medium severity in verification → STANDARD
+        if severity == "medium" and phase in ("verification", "exploitation"):
+            return VerificationTier.STANDARD
+
+        return VerificationTier.QUICK

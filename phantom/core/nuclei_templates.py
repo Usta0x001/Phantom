@@ -80,12 +80,20 @@ class TemplateGenerator:
         matchers = self._build_matchers(finding)
 
         # Compose template
+        # HIGH-20 FIX: Escape YAML-unsafe characters in user-supplied values
+        def _yaml_safe(val: str) -> str:
+            """Escape YAML special characters in values."""
+            unsafe = set(':{}[]*&!|>%@#`')
+            if any(c in val for c in unsafe) or val.startswith(('-', '?', ' ')):
+                return '"' + val.replace('\\', '\\\\').replace('"', '\\"') + '"'
+            return val
+
         lines = [
             f"id: {template_id}",
             "",
             "info:",
-            f"  name: {title}",
-            f"  author: {self.author}",
+            f"  name: {_yaml_safe(title)}",
+            f"  author: {_yaml_safe(self.author)}",
             f"  severity: {severity}",
             f"  description: |",
             f"    {description[:500]}",

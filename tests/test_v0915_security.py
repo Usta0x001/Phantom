@@ -474,7 +474,16 @@ class TestAuditLogIntegrity:
             entry1 = json.loads(lines[0])
             entry2 = json.loads(lines[1])
 
-            # Entry 2's _prev_hash should reference entry 1's _hmac
-            assert "_hmac" in entry1
+            # Entry 2's _prev_hash references entry 1's content hash
+            assert "_sig" in entry1 or "_hmac" in entry1
             assert "_prev_hash" in entry2
-            assert entry2["_prev_hash"] == entry1["_hmac"]
+            if "_sig" in entry1:
+                # Ed25519 mode: _prev_hash is SHA256 of payload without _sig
+                payload1 = {k: v for k, v in entry1.items() if k != "_sig"}
+                import hashlib
+                expected_hash = hashlib.sha256(
+                    json.dumps(payload1, sort_keys=True, ensure_ascii=True).encode()
+                ).hexdigest()
+                assert entry2["_prev_hash"] == expected_hash
+            else:
+                assert entry2["_prev_hash"] == entry1["_hmac"]

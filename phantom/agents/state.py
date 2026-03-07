@@ -143,6 +143,12 @@ class AgentState(BaseModel):
             if " ".join(existing.split()).strip().lower() == normalized:
                 return
         if len(self.findings_ledger) >= self._MAX_FINDINGS:
+            # BUG-016 FIX: Log a warning instead of silently dropping findings
+            logger.warning(
+                "Findings ledger reached cap (%d). Trimming to keep recent half. "
+                "Oldest findings will be lost.",
+                self._MAX_FINDINGS,
+            )
             # Keep the most recent half
             self.findings_ledger = self.findings_ledger[-self._MAX_FINDINGS // 2 :]
         self.findings_ledger.append(finding)

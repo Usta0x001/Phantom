@@ -94,9 +94,38 @@ def _prepare_report_for_comparison(report: dict[str, Any]) -> dict[str, Any]:
             value = report[field]
             if isinstance(value, str) and len(value) > 8000:
                 value = value[:8000] + "...[truncated]"
+            # BUG-006 FIX: Redact secrets before sending to external LLM
+            if isinstance(value, str):
+                value = _redact_secrets(value)
             cleaned[field] = value
 
     return cleaned
+
+
+# BUG-006 FIX: Pattern-based credential redaction for data sent to external LLM
+_SECRET_PATTERNS: list[tuple[re.Pattern[str], str]] = [
+    # API keys and tokens (generic patterns)
+    (re.compile(r'(?i)(api[_-]?key|token|secret|password|passwd|credential|auth)\s*[:=]\s*["\']?([^\s"\']{8,})["\']?'), r'\1=[REDACTED]'),
+    # Bearer tokens
+    (re.compile(r'(?i)Bearer\s+[A-Za-z0-9\-._~+/]+=*'), 'Bearer [REDACTED]'),
+    # Basic auth
+    (re.compile(r'(?i)Basic\s+[A-Za-z0-9+/]+=*'), 'Basic [REDACTED]'),
+    # JWT tokens
+    (re.compile(r'eyJ[A-Za-z0-9_-]+\.eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+'), '[REDACTED_JWT]'),
+    # AWS keys
+    (re.compile(r'(?:AKIA|ASIA)[A-Z0-9]{16}'), '[REDACTED_AWS_KEY]'),
+    # Private keys
+    (re.compile(r'-----BEGIN\s+(?:RSA\s+)?PRIVATE\s+KEY-----[\s\S]*?-----END\s+(?:RSA\s+)?PRIVATE\s+KEY-----'), '[REDACTED_PRIVATE_KEY]'),
+    # Cookie values (session tokens)
+    (re.compile(r'(?i)(session|sess|sid|jsessionid|phpsessid|csrf|xsrf)\s*=\s*([^\s;]{16,})'), r'\1=[REDACTED]'),
+]
+
+
+def _redact_secrets(text: str) -> str:
+    """Remove credentials/tokens from text before external LLM call."""
+    for pattern, replacement in _SECRET_PATTERNS:
+        text = pattern.sub(replacement, text)
+    return text
 
 
 def _extract_xml_field(content: str, field: str) -> str:

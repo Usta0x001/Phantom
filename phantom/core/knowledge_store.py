@@ -59,7 +59,23 @@ class KnowledgeStore:
     """
     
     def __init__(self, store_path: str | Path = "phantom_knowledge"):
-        self.store_path = Path(store_path)
+        # BUG-004 FIX: Reject paths containing .. traversal segments
+        if ".." in Path(store_path).parts:
+            raise ValueError(
+                f"Knowledge store path '{store_path}' contains '..' "
+                f"segments (path traversal blocked)"
+            )
+        self.store_path = Path(store_path).resolve()
+        # BUG-004 FIX: Use Path.resolve().is_relative_to() instead of
+        # fragile string matching for path traversal prevention.
+        resolved = Path(store_path).resolve()
+        cwd = Path.cwd().resolve()
+        if not resolved.is_relative_to(cwd) and not Path(store_path).is_absolute():
+            raise ValueError(
+                f"Knowledge store path '{store_path}' resolves outside "
+                f"working directory (path traversal blocked)"
+            )
+        self.store_path = resolved
         self.store_path.mkdir(parents=True, exist_ok=True)
         
         self.hosts_file = self.store_path / "hosts.json"
@@ -281,7 +297,8 @@ class KnowledgeStore:
     
     def host_exists(self, key: str) -> bool:
         """Check if host is known."""
-        return key in self._hosts
+        with self._lock:
+            return key in self._hosts
     
     # Vulnerability Management
     
@@ -289,31 +306,31 @@ class KnowledgeStore:
         """Save or update a vulnerability (thread-safe)."""
         with self._lock:
             self._vulns[vuln.id] = {
-            "id": vuln.id,
-            "name": vuln.name,
-            "class": vuln.vulnerability_class,
-            "severity": vuln.severity.value,
-            "status": vuln.status.value,
-            "cvss_score": vuln.cvss_score,
-            "target": vuln.target,
-            "endpoint": vuln.endpoint,
-            "parameter": vuln.parameter,
-            "description": vuln.description,
-            "payload": vuln.payload,
-            "cve_ids": vuln.cve_ids,
-            "cwe_ids": vuln.cwe_ids,
-            "remediation": vuln.remediation,
-            "detected_by": vuln.detected_by,
-            "detected_at": vuln.detected_at.isoformat(),
-            "verified_by": vuln.verified_by,
-            "verified_at": vuln.verified_at.isoformat() if vuln.verified_at else None,
-        }
-        
+                "id": vuln.id,
+                "name": vuln.name,
+                "class": vuln.vulnerability_class,
+                "severity": vuln.severity.value,
+                "status": vuln.status.value,
+                "cvss_score": vuln.cvss_score,
+                "target": vuln.target,
+                "endpoint": vuln.endpoint,
+                "parameter": vuln.parameter,
+                "description": vuln.description,
+                "payload": vuln.payload,
+                "cve_ids": vuln.cve_ids,
+                "cwe_ids": vuln.cwe_ids,
+                "remediation": vuln.remediation,
+                "detected_by": vuln.detected_by,
+                "detected_at": vuln.detected_at.isoformat(),
+                "verified_by": vuln.verified_by,
+                "verified_at": vuln.verified_at.isoformat() if vuln.verified_at else None,
+            }
             self._save_vulns()
     
     def get_vulnerability(self, vuln_id: str) -> Vulnerability | None:
         """Retrieve a vulnerability by ID."""
-        data = self._vulns.get(vuln_id)
+        with self._lock:
+            data = self._vulns.get(vuln_id)
         if not data:
             return None
         
@@ -353,11 +370,14 @@ class KnowledgeStore:
     
     def get_vulns_for_target(self, target: str) -> list[Vulnerability]:
         """Get all vulnerabilities for a target."""
+        with self._lock:
+            matching_ids = [
+                vid for vid, data in self._vulns.items()
+                if target in data.get("target", "")
+            ]
         return [
-            self.get_vulnerability(vid)
-            for vid, data in self._vulns.items()
-            if target in data.get("target", "")
-            and self.get_vulnerability(vid) is not None
+            v for vid in matching_ids
+            if (v := self.get_vulnerability(vid)) is not None
         ]
     
     def get_vulns_by_severity(self, severity: str) -> list[Vulnerability]:
@@ -495,15 +515,20 @@ class KnowledgeStore:
     
     def import_data(self, data: dict[str, Any]) -> None:
         """Import data from export."""
-        if "hosts" in data:
+        # MED-42 FIX: Validate input types before importing
+        if not isinstance(data, dict):
+            logger.warning("import_data: expected dict, got %s — skipping", type(data).__name__)
+            return
+        
+        if "hosts" in data and isinstance(data["hosts"], dict):
             self._hosts.update(data["hosts"])
             self._save_hosts()
         
-        if "vulnerabilities" in data:
+        if "vulnerabilities" in data and isinstance(data["vulnerabilities"], dict):
             self._vulns.update(data["vulnerabilities"])
             self._save_vulns()
         
-        if "false_positives" in data:
+        if "false_positives" in data and isinstance(data["false_positives"], (dict, set, list)):
             self._false_positives.update(data["false_positives"])
             self._save_false_positives()
         

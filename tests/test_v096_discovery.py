@@ -30,12 +30,12 @@ class TestScanProfilesV096:
     def test_quick_iterations_increased(self):
         from phantom.core.scan_profiles import get_profile
         p = get_profile("quick")
-        assert p.max_iterations == 300, "Quick must be 300 iterations"
+        assert p.max_iterations == 120, "Quick must be 120 iterations"
 
     def test_standard_iterations_increased(self):
         from phantom.core.scan_profiles import get_profile
         p = get_profile("standard")
-        assert p.max_iterations == 120, "Standard must be 120 iterations"
+        assert p.max_iterations == 300, "Standard must be 300 iterations"
 
     def test_deep_iterations_increased(self):
         from phantom.core.scan_profiles import get_profile

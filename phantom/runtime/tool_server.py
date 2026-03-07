@@ -46,11 +46,21 @@ if args.token_file:
 elif args.token:
     EXPECTED_TOKEN = args.token
 else:
-    # Final fallback: read from environment variable
-    EXPECTED_TOKEN = os.getenv("TOOL_SERVER_TOKEN", "")
-    if not EXPECTED_TOKEN:
-        print("ERROR: No token provided. Use --token-file, --token, or TOOL_SERVER_TOKEN env.", file=sys.stderr)
-        sys.exit(1)
+    # V2-SEC-001 FIX: Read token from file path in env, not raw token in env
+    _token_file_env = os.getenv("PHANTOM_TOKEN_FILE", "")
+    if _token_file_env:
+        try:
+            with open(_token_file_env) as _tf:
+                EXPECTED_TOKEN = _tf.read().strip()
+        except (OSError, IOError) as _e:
+            print(f"ERROR: Cannot read token file {_token_file_env}: {_e}", file=sys.stderr)
+            sys.exit(1)
+    else:
+        # Final fallback: read from environment variable (legacy)
+        EXPECTED_TOKEN = os.getenv("TOOL_SERVER_TOKEN", "")
+        if not EXPECTED_TOKEN:
+            print("ERROR: No token provided. Use --token-file, --token, PHANTOM_TOKEN_FILE, or TOOL_SERVER_TOKEN env.", file=sys.stderr)
+            sys.exit(1)
 REQUEST_TIMEOUT = args.timeout
 
 app = FastAPI()
@@ -60,9 +70,17 @@ security_dependency = Depends(security)
 agent_tasks: dict[str, asyncio.Task[Any]] = {}
 
 # PHT-012 FIX: Simple in-memory rate limiter
+# V2-SEC-005 FIX: Per-tool rate limiting instead of shared budget
 _rate_limit_store: dict[str, list[float]] = {}
-_RATE_LIMIT_MAX = 60  # max requests per window
+_RATE_LIMIT_MAX = 60  # max requests per window (global)
 _RATE_LIMIT_WINDOW = 60.0  # seconds
+# V2-SEC-005: Per-tool rate limits (calls per 5min window)
+_TOOL_RATE_LIMITS: dict[str, int] = {
+    "terminal_execute": 20,
+    "python_action": 15,
+    "sqlmap_dump_database": 5,
+}
+_tool_rate_store: dict[str, list[float]] = {}
 
 
 async def _rate_limit_check(request: Request) -> None:
@@ -173,13 +191,16 @@ async def execute_tool(
         return ToolExecutionResponse(error=f"Tool timed out after {REQUEST_TIMEOUT}s")
 
     except ValidationError as e:
-        return ToolExecutionResponse(error=f"Invalid arguments: {e}")
+        # V2-BUG-005 FIX: Sanitize error messages — don't leak internal state
+        return ToolExecutionResponse(error="Invalid arguments for tool execution")
 
     except (ValueError, RuntimeError, ImportError) as e:
-        return ToolExecutionResponse(error=f"Tool execution error: {e}")
+        # V2-BUG-005 FIX: Generic error message — strip file paths and internals
+        return ToolExecutionResponse(error="Tool execution error: internal failure")
 
     except Exception as e:  # noqa: BLE001
-        return ToolExecutionResponse(error=f"Unexpected error: {e}")
+        # V2-BUG-005 FIX: Never return raw exception messages
+        return ToolExecutionResponse(error="Unexpected internal error during tool execution")
 
     finally:
         if agent_tasks.get(agent_id) is task:
@@ -194,13 +215,11 @@ async def register_agent(
     return {"status": "registered", "agent_id": agent_id}
 
 
-# PHT-011 FIX: Remove active_agents count from health endpoint to reduce info disclosure
+# V2-ARCH-008 FIX: Minimal health endpoint — no sensitive info disclosure
 @app.get("/health")
 async def health_check() -> dict[str, Any]:
     return {
         "status": "healthy",
-        "sandbox_mode": str(SANDBOX_MODE),
-        "environment": "sandbox" if SANDBOX_MODE else "main",
     }
 
 

@@ -14,16 +14,22 @@ Cleans tool output BEFORE it enters the LLM context window.
 from __future__ import annotations
 
 import hashlib
+import hmac
 import logging
+import os
 import re
 import unicodedata
 
 _logger = logging.getLogger(__name__)
 
+# V2-SEC-004: HMAC key for boundary tag signing — prevents forged boundaries
+_BOUNDARY_KEY = os.urandom(32)
+
 # ── Stage 0: Unicode control characters to strip ──
 _INVISIBLE_RE = re.compile(
     r"[\u200b-\u200f\u202a-\u202e\u2060-\u2069\ufeff\u00ad"
     r"\u034f\u061c\u115f\u1160\u17b4\u17b5\u180e\u2000-\u200a"
+    r"\u200d"  # V2-AGT-001: zero-width joiner (homoglyph vector)
     r"\u2028\u2029\u205f\u3000\uffa0]"
 )
 
@@ -42,6 +48,11 @@ _GRAMMAR_PATTERNS: list[tuple[re.Pattern[str], str]] = [
     # JSON tool-call patterns
     (re.compile(r'\{"?toolName"?\s*:\s*"', re.IGNORECASE), "[NEUTRALIZED:json_tool]"),
     (re.compile(r'\{"?tool_call"?\s*:\s*"', re.IGNORECASE), "[NEUTRALIZED:json_tool]"),
+    # V-HIGH-002 FIX: Neutralize our own boundary tags appearing in tool output.
+    # Prevents attackers from prematurely closing the external data zone and
+    # injecting content that appears outside the boundary to the LLM.
+    (re.compile(r"\[END_EXTERNAL_DATA\]", re.IGNORECASE), "[NEUTRALIZED:boundary_close]"),
+    (re.compile(r"\[BEGIN_EXTERNAL_DATA", re.IGNORECASE), "[NEUTRALIZED:boundary_open]"),
 ]
 
 # ── Stage 2: Prompt override patterns ──
@@ -55,6 +66,13 @@ _PROMPT_OVERRIDE_PATTERNS: list[re.Pattern[str]] = [
     re.compile(r"from\s+now\s+on\s+you\s+(will|must|should)", re.IGNORECASE),
     re.compile(r"system:\s*", re.IGNORECASE),
     re.compile(r"\[INST\]", re.IGNORECASE),
+    # AGT-003 FIX: Task-like language that could hijack agent behavior
+    re.compile(r"(?:execute|run)\s+(?:this\s+)?(?:command|tool|script)", re.IGNORECASE),
+    re.compile(r"(?:you\s+must|you\s+should|you\s+need\s+to)\s+(?:immediately|now|urgently)", re.IGNORECASE),
+    re.compile(r"(?:URGENT|IMPORTANT|CRITICAL)\s*:\s*(?:execute|run|call|invoke)", re.IGNORECASE),
+    re.compile(r"TODO\s*:\s*(?:execute|run|call|invoke|use)", re.IGNORECASE),
+    re.compile(r"(?:act\s+as\s+if|pretend\s+(?:you\s+are|to\s+be))", re.IGNORECASE),
+    re.compile(r"(?:switch|change)\s+(?:to|into)\s+(?:a\s+)?(?:different|new)\s+(?:mode|role|persona)", re.IGNORECASE),
 ]
 
 # ── Constants ──
@@ -104,6 +122,17 @@ def sanitize_tool_output(raw: str, tool_name: str = "") -> str:
     # Stage 4: Hard length enforcement
     if len(text) > MAX_OUTPUT_CHARS:
         text = text[:MAX_OUTPUT_CHARS] + "\n\n[...output truncated at 50K chars...]"
+
+    # AGT-003 FIX: Wrap output in HMAC-signed boundary tags so the LLM
+    # knows this is external data, not instructions to follow.
+    # V2-SEC-004: HMAC signature prevents attackers from forging boundary tags.
+    nonce = os.urandom(8).hex()
+    sig = hmac.new(_BOUNDARY_KEY, f"{tool_name}:{nonce}".encode(), "sha256").hexdigest()[:16]
+    text = (
+        f"[BEGIN_EXTERNAL_DATA tool={tool_name} nonce={nonce} sig={sig}]\n"
+        f"{text}\n"
+        f"[END_EXTERNAL_DATA sig={sig}]"
+    )
 
     return text
 
