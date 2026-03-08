@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import copy
 import tempfile
 import threading
@@ -51,7 +52,7 @@ class TestLLMHistoryPreservation:
         original_len = len(history)
         original_content = [m["content"] for m in history]
 
-        llm._prepare_messages(history)
+        asyncio.run(llm._prepare_messages(history))
 
         # History should still have content (not be empty)
         assert len(history) > 0, "History was destroyed by _prepare_messages!"

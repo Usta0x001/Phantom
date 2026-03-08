@@ -136,10 +136,13 @@ class LLM:
             skill_content = load_skills(skills_to_load)
             env.globals["get_skill"] = lambda name: skill_content.get(name, "")
 
-            # v0.9.35: TOOL_PROFILES filtering REMOVED (H-12). Always
-            # include ALL tools. Filtering hides tools like ffuf_parameter_fuzz,
-            # arjun, jwt_tool, etc. which the agent needs for deep exploitation.
-            tools_prompt_fn = lambda: get_tools_prompt()  # noqa: E731
+            # Phase-aware tool filtering: quick mode loads only the 38 curated
+            # attack-relevant tools, saving ~24% of system-prompt tokens.
+            # standard/deep/stealth/api_only modes always load ALL 55 tools.
+            # See registry.QUICK_MODE_TOOLS for the inclusion criteria.
+            from phantom.tools.registry import TOOL_PROFILES
+            tool_filter = TOOL_PROFILES.get(self.config.scan_mode)
+            tools_prompt_fn = lambda: get_tools_prompt(include_only=tool_filter)  # noqa: E731
 
             result = env.get_template("system_prompt.jinja").render(
                 get_tools_prompt=tools_prompt_fn,
@@ -178,7 +181,7 @@ class LLM:
     async def generate(
         self, conversation_history: list[dict[str, Any]]
     ) -> AsyncIterator[LLMResponse]:
-        messages = self._prepare_messages(conversation_history)
+        messages = await self._prepare_messages(conversation_history)
         max_retries = int(Config.get("phantom_llm_max_retries") or "5")
 
         for attempt in range(max_retries + 1):
@@ -231,7 +234,7 @@ class LLM:
             thinking_blocks=self._extract_thinking(chunks),
         )
 
-    def _prepare_messages(self, conversation_history: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    async def _prepare_messages(self, conversation_history: list[dict[str, Any]]) -> list[dict[str, Any]]:
         messages = [{"role": "system", "content": self.system_prompt}]
 
         if self.agent_name:
@@ -254,14 +257,16 @@ class LLM:
         # to prevent data loss if compress_history() raises mid-operation.
         # Pass system-prompt tokens as overhead so the compressor fires
         # while there's still budget left for the system message.
-        compressed = list(self.memory_compressor.compress_history(
+        compressed = list(await self.memory_compressor.compress_history(
             conversation_history,
             overhead_tokens=self._get_system_prompt_tokens(),
         ))
         conversation_history[:] = compressed
         messages.extend(compressed)
 
-        if self._is_anthropic() and self.config.enable_prompt_caching:
+        # Apply prompt caching for ALL models that support it (not just Anthropic).
+        # litellm.drop_params=True ensures unsupported params are silently dropped.
+        if self.config.enable_prompt_caching:
             messages = self._add_cache_control(messages)
 
         return messages

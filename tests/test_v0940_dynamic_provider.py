@@ -10,6 +10,7 @@ Verifies:
 
 from __future__ import annotations
 
+import asyncio
 import pytest
 
 
@@ -99,11 +100,6 @@ class TestMemoryCompressionOverhead:
         import os
         os.environ.setdefault("PHANTOM_LLM", "gpt-4o-mini")
 
-        # max_total_tokens = 50_000
-        # Each message reports 500 tokens.  40 messages → 20_000 total.
-        # Without overhead: threshold = 50_000 * 0.90 = 45_000 → 20_000 < 45K → NO compress
-        # With overhead=40_000: effective_max = max(50_000-40_000, MIN_RECENT_MESSAGES*500)
-        #   = max(10_000, 7_500) = 10_000; threshold = 9_000 → 20_000 > 9K → COMPRESS
         mc = MemoryCompressor(model_name="gpt-4o-mini", max_tokens=50_000)
         messages = [{"role": "user" if i % 2 == 0 else "assistant",
                      "content": f"msg {i}"} for i in range(40)]
@@ -120,15 +116,12 @@ class TestMemoryCompressionOverhead:
         _mc_mod._summarize_messages = fake_summarize
 
         try:
-            # Patch token counter to return 500 per message (deterministic)
             with patch("phantom.llm.memory_compressor._get_message_tokens", return_value=500):
-                # No overhead → should NOT compress (20K < 45K threshold)
-                mc.compress_history(list(messages), overhead_tokens=0)
+                asyncio.run(mc.compress_history(list(messages), overhead_tokens=0))
                 no_overhead_compressed = len(summarized) > 0
                 summarized.clear()
 
-                # Large overhead → should COMPRESS (20K > 9K threshold)
-                mc.compress_history(list(messages), overhead_tokens=40_000)
+                asyncio.run(mc.compress_history(list(messages), overhead_tokens=40_000))
                 overhead_compressed = len(summarized) > 0
         finally:
             _mc_mod._summarize_messages = original_summarize
@@ -138,7 +131,7 @@ class TestMemoryCompressionOverhead:
 
     def test_overhead_never_compresses_below_floor(self):
         """Even with absurd overhead, compression floor keeps recent messages."""
-        from phantom.llm.memory_compressor import MemoryCompressor, MIN_RECENT_MESSAGES
+        from phantom.llm.memory_compressor import MemoryCompressor
         import os
         os.environ.setdefault("PHANTOM_LLM", "gpt-4o-mini")
 
@@ -150,13 +143,11 @@ class TestMemoryCompressionOverhead:
         _mc_mod._summarize_messages = lambda m, mo, **kw: {"role": "assistant", "content": "sum"}
 
         try:
-            # overhead > max_total_tokens → effective_max hits the safety floor
-            result = mc.compress_history(list(messages), overhead_tokens=999_999)
+            result = asyncio.run(mc.compress_history(list(messages), overhead_tokens=999_999))
         finally:
             _mc_mod._summarize_messages = original
 
-        # Result should be non-empty (floor prevents zeroing out history)
-        assert len(result) >= 0  # just verifies no exception
+        assert len(result) >= 0
 
     def test_zero_overhead_backward_compatible(self):
         """overhead_tokens=0 (default) preserves the old behaviour."""
@@ -167,8 +158,7 @@ class TestMemoryCompressionOverhead:
         mc = MemoryCompressor(model_name="gpt-4o-mini", max_tokens=100_000)
         messages = [{"role": "user", "content": "hello"}, {"role": "assistant", "content": "hi"}]
 
-        # Tiny history — should return unchanged (no compression)
-        result = mc.compress_history(list(messages))  # no overhead_tokens arg
+        result = asyncio.run(mc.compress_history(list(messages)))
         assert len(result) == 2
 
 

@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from typing import Any
 
@@ -232,12 +233,16 @@ class MemoryCompressor:
         # findings ledger during compression.  Set by the LLM class.
         self._agent_state: Any | None = None
 
-    def compress_history(
+    async def compress_history(
         self,
         messages: list[dict[str, Any]],
         overhead_tokens: int = 0,
     ) -> list[dict[str, Any]]:
         """Compress conversation history to stay within token limits.
+
+        This method is async because summarization calls the LLM (blocking I/O).
+        Wrapping with ``asyncio.to_thread`` prevents blocking the event loop
+        during multi-agent scans.
 
         Strategy:
         1. Handle image limits first
@@ -391,7 +396,9 @@ class MemoryCompressor:
                 ):
                     critical_extracts.append(f"[ID] {idor}")
 
-            summary = _summarize_messages(chunk, model_name, self.timeout)
+            # Run the blocking LLM summarization in a thread pool so we don't
+            # block the asyncio event loop during multi-agent scans.
+            summary = await asyncio.to_thread(_summarize_messages, chunk, model_name, self.timeout)
             if summary:
                 if isinstance(summary, list):
                     compressed.extend(summary)  # fallback returned all messages
