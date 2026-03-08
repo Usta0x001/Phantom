@@ -18,26 +18,53 @@ _tool_param_schemas: dict[str, dict[str, Any]] = {}
 logger = logging.getLogger(__name__)
 
 # ── Tool profiles: which tools to include per scan mode ──
-# This dramatically reduces system prompt size for focused scans.
+# quick mode loads 38 attack-relevant tools instead of all 55, saving ~24% of
+# the system-prompt tokens.  The set covers EVERY security capability while
+# dropping file/code-editor, note, and todo management tools that have no
+# value in a live web-application scan.
+#
+# Previous removal note (H-12 in v0.9.35): filtering was removed because the
+# old QUICK_MODE_TOOLS set (27 tools) was missing critical exploit tools like
+# ffuf_parameter_fuzz, report_vulnerability, sqlmap_dump_database, and
+# verify_vulnerability.  This updated set (38 tools) is comprehensive —
+# every tool needed for recon → scan → exploit → report is present.
 QUICK_MODE_TOOLS: set[str] = {
-    # Core reasoning & control
-    "think", "finish_scan", "create_agent", "agent_finish", "send_message_to_agent",
-    # Findings persistence
+    # ── Core control ────────────────────────────────────────────────
+    "think", "finish_scan",
+    "create_agent", "agent_finish", "send_message_to_agent", "wait_for_message",
+    # ── Findings & reporting ────────────────────────────────────────
     "record_finding", "get_findings_ledger",
-    # Proxy / HTTP
-    "send_request", "repeat_request", "list_requests", "list_sitemap", "view_request",
-    # Security scanners (full set — each finds different vuln types)
-    "nuclei_scan", "nuclei_scan_cves", "nuclei_scan_misconfigs",
-    "sqlmap_test", "sqlmap_forms",
-    "ffuf_directory_scan", "katana_crawl", "httpx_probe",
+    "report_vulnerability", "create_vulnerability_report",
+    "verify_vulnerability", "enrich_vulnerability",
+    # ── Recon ───────────────────────────────────────────────────────
+    "scope_rules",
+    "subfinder_enumerate",
     "nmap_scan", "nmap_vuln_scan",
-    # Exploitation & scripting
+    "httpx_probe", "httpx_full_analysis",
+    "katana_crawl",
+    # ── Vulnerability scanning ──────────────────────────────────────
+    "nuclei_scan", "nuclei_scan_cves", "nuclei_scan_misconfigs",
+    "check_known_vulnerabilities",
+    # ── HTTP / proxy ────────────────────────────────────────────────
+    "send_request", "repeat_request",
+    "list_requests", "view_request",
+    "list_sitemap", "view_sitemap_entry",
+    # ── Fuzzing ─────────────────────────────────────────────────────
+    "ffuf_directory_scan", "ffuf_parameter_fuzz",
+    # ── Exploitation ────────────────────────────────────────────────
+    "sqlmap_test", "sqlmap_forms", "sqlmap_dump_database",
     "python_action", "terminal_execute", "browser_action",
-    # Reporting
-    "create_vulnerability_report",
-    # Research
+    # ── Research ────────────────────────────────────────────────────
     "web_search",
 }
+
+# NOT included in quick mode (17 tools, ~24% of token cost):
+#   File/code management : str_replace_editor, list_files, search_files
+#   Note management      : create_note, update_note, list_notes, delete_note
+#   Todo management      : create_todo, update_todo, list_todos,
+#                          mark_todo_done, mark_todo_pending, delete_todo
+#   Misc                 : view_agent_graph, httpx_screenshot,
+#                          subfinder_with_sources, ffuf_vhost_fuzz
 
 TOOL_PROFILES: dict[str, set[str] | None] = {
     "quick": QUICK_MODE_TOOLS,

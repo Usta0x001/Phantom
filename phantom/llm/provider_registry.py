@@ -9,12 +9,92 @@ to the next provider in the chain.
 from __future__ import annotations
 
 import logging
+import threading
 from dataclasses import dataclass, field
 from typing import Any
 
 from phantom.config import Config
 
 logger = logging.getLogger(__name__)
+
+# ─── OpenRouter model metadata cache ───────────────────────────────────────
+# Populated lazily on first use of an unknown openrouter/* model.
+# Maps  openrouter_model_id → {"context_window": int, "cost_input": float, "cost_output": float}
+# e.g.  "google/gemini-flash-1.5" → {"context_window": 1_000_000, ...}
+_OR_MODEL_CACHE: dict[str, dict[str, Any]] = {}
+_OR_FETCH_STARTED: bool = False
+_OR_FETCH_LOCK = threading.Lock()
+
+
+def _background_fetch_openrouter_models() -> None:
+    """Fetch all OpenRouter model metadata in a daemon thread.
+
+    Updates the module-level ``_OR_MODEL_CACHE`` so subsequent calls to
+    ``get_context_window()`` use exact values instead of pattern guesses.
+    The function is a no-op if the fetch already ran or fails for any reason.
+    """
+    global _OR_FETCH_STARTED
+    try:
+        import urllib.request as _req
+        import json as _json
+        from phantom.config import Config as _Cfg
+
+        api_key = _Cfg.get("llm_api_key") or _Cfg.get("openrouter_api_key") or ""
+        headers = {"Content-Type": "application/json"}
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
+
+        request = _req.Request(
+            "https://openrouter.ai/api/v1/models",
+            headers=headers,
+        )
+        with _req.urlopen(request, timeout=5) as resp:  # noqa: S310
+            data = _json.loads(resp.read().decode())
+
+        fetched = 0
+        for model in data.get("data", []):
+            model_id = model.get("id", "")
+            if not model_id:
+                continue
+            ctx = model.get("context_length") or model.get("context_window")
+            pricing = model.get("pricing") or {}
+            entry: dict[str, Any] = {}
+            if ctx:
+                try:
+                    entry["context_window"] = int(ctx)
+                except (TypeError, ValueError):
+                    pass
+            if "prompt" in pricing:
+                try:
+                    # OpenRouter pricing is per-token; convert to per-1K
+                    entry["cost_input"] = float(pricing["prompt"]) * 1000
+                except (TypeError, ValueError):
+                    pass
+            if "completion" in pricing:
+                try:
+                    entry["cost_output"] = float(pricing["completion"]) * 1000
+                except (TypeError, ValueError):
+                    pass
+            if entry:
+                _OR_MODEL_CACHE[model_id.lower()] = entry
+                fetched += 1
+
+        logger.info("OpenRouter model cache populated: %d models", fetched)
+    except Exception:  # noqa: BLE001
+        logger.debug("OpenRouter model metadata fetch failed (non-fatal)", exc_info=True)
+
+
+def _ensure_openrouter_cache(model_name: str) -> None:
+    """Trigger a one-time background fetch when an openrouter/* model is used."""
+    global _OR_FETCH_STARTED
+    if not model_name.lower().startswith("openrouter/"):
+        return
+    with _OR_FETCH_LOCK:
+        if _OR_FETCH_STARTED:
+            return
+        _OR_FETCH_STARTED = True
+    t = threading.Thread(target=_background_fetch_openrouter_models, daemon=True)
+    t.start()
 
 
 @dataclass(frozen=True)
@@ -345,32 +425,48 @@ def infer_api_base(model_name: str) -> str | None:
 
 
 def get_context_window(model_name: str) -> int:
-    """Get context window size for a model (best-effort lookup)."""
+    """Get context window size for a model (best-effort lookup).
+
+    Resolution order:
+    1. Exact match in PROVIDER_PRESETS (authoritative)
+    2. OpenRouter live metadata cache (populated in background on first use)
+    3. Specific prefix match
+    4. Substring pattern match
+    5. Generic prefix fallback
+    6. Hard default: 128K
+    """
     model = model_name.lower()
 
-    # 1. Exact match in presets (highest priority)
+    # 1. Exact match in presets
     if model in PROVIDER_PRESETS:
         return PROVIDER_PRESETS[model].context_window
 
-    # 2. Prefix match (e.g. "groq/", "gemini/")
+    # Trigger background cache population for openrouter models
+    _ensure_openrouter_cache(model_name)
+
+    # 2. OpenRouter live cache — model ID is the part after "openrouter/"
+    if model.startswith("openrouter/"):
+        or_id = model[len("openrouter/"):]
+        cached = _OR_MODEL_CACHE.get(or_id)
+        if cached and "context_window" in cached:
+            return cached["context_window"]
+
+    # 3. Prefix match (e.g. "groq/", "gemini/")
     for prefix, window in MODEL_CONTEXT_WINDOWS.items():
         if model.startswith(prefix) and window != 128_000:
-            # Only use prefix result when it's a specific value, not the
-            # generic 128K openrouter/ fallback — fall through to pattern
-            # matching for better accuracy on openrouter sub-models.
             return window
 
-    # 3. Substring pattern match — works for openrouter/vendor/model-name
+    # 4. Substring pattern match — works for openrouter/vendor/model-name
     for pattern, window in _CONTEXT_WINDOW_PATTERNS:
         if pattern in model:
             return window
 
-    # 4. Prefix fallback (includes generic openrouter/ → 128K)
+    # 5. Prefix fallback (includes generic openrouter/ → 128K)
     for prefix, window in MODEL_CONTEXT_WINDOWS.items():
         if model.startswith(prefix):
             return window
 
-    # 5. Hard default
+    # 6. Hard default
     return 128_000
 
 
