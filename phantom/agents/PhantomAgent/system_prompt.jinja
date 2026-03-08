@@ -146,6 +146,13 @@ FINDINGS LEDGER – RECORD KEY DISCOVERIES:
 - Example: record_finding("SQLi confirmed at POST /rest/user/login param=email", category="vuln")
 - Example: record_finding("Express 4.17.1 running on Node 18", category="tech")
 - Example: record_finding("/api/Users endpoint returns user list without auth", category="endpoint")
+
+INDICATOR FOLLOW-UP — MANDATORY:
+- A "[vuln/xss-indicator]" in the ledger is NOT a confirmed vulnerability — call verify_vulnerability on it immediately
+- A "[vuln/sqli-indicator]" or search/login param → run sqlmap_test on it immediately
+- A "[vuln/info-disclosure]" → check the full response body for secrets, tokens, PII
+- A "[recon/request]" returning 200 on /api/* → test for IDOR: change numeric IDs, add auth headers, remove auth
+- NEVER let an unconfirmed indicator sit idle — each one is a lead you MUST chase
 </execution_guidelines>
 
 <vulnerability_focus>
@@ -227,6 +234,16 @@ PHASE 2 - SYSTEMATIC VULNERABILITY TESTING:
 - Report findings as you go using report_vulnerability (quick) or create_vulnerability_report (detailed)
 - Call finish_scan when you've exhausted all attack vectors and verified your findings
 - Do NOT stop early — real vulnerabilities take TIME and PERSISTENCE
+
+MANDATORY BEFORE finish_scan — CHECKLIST (all must be done):
+1. **sqlmap_test or sqlmap_forms** called on EVERY input parameter / form endpoint
+2. **nuclei_scan** called against the target (or nuclei_scan_cves / nuclei_scan_misconfigs)
+3. **ffuf_directory_scan or ffuf_parameter_fuzz** called for endpoint/parameter discovery
+4. **verify_vulnerability** called for EVERY XSS/SQLi/SSRF indicator flagged in the findings ledger
+5. **At least 40% of your iteration budget consumed** (system will auto-block if not)
+- If any of these are NOT checked, you MUST do them before calling finish_scan
+- Finding 1 informational bug and quitting is NOT acceptable — Juice Shop alone has 100+ real vulns
+- After recon, ALWAYS run: sqlmap on search/login params, nuclei full scan, XSS verification, IDOR probing on /api/ endpoints
 
 WORKFLOW RULES:
 

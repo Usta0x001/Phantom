@@ -71,9 +71,13 @@ def test_auto001_allows_sufficient_work():
     from phantom.agents.state import AgentState
     from phantom.tools.finish.finish_actions import finish_scan
 
-    # With max_iterations=150: MIN_ITERATIONS = max(30, 90) = 90, MIN_TOOL_CALLS = max(20, 45) = 45
-    # Provide enough iterations and tool calls, plus findings for diversity gate
-    actions = [{} for _ in range(50)]
+    # With max_iterations=150:
+    #   Gate 1: min_iter = max(10, int(150*0.40)) = 60  → 95 >= 60 ✓
+    #   Gate 2: MIN_TOOL_CALLS = 20                      → 25 actions ✓
+    #   Gate 3: exploitation tool required               → nuclei_scan ✓
+    #   near_limit: 95 < int(150*0.80)=120              → gates applied
+    actions = [{"action": {"tool_name": "send_request"}} for _ in range(24)]
+    actions.append({"action": {"tool_name": "nuclei_scan"}})   # satisfies Gate 3
     state = AgentState(
         iteration=95, max_iterations=150,
         actions_taken=actions,

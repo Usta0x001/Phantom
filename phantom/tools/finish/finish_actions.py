@@ -650,53 +650,116 @@ def finish_scan(
     if validation_error:
         return validation_error
 
-    # ── AUTO-001: Lightweight minimum-work gate ────────────────────────
-    # v0.9.34: Dramatically lowered from over-controlling gates.
-    # We keep a minimal safety net only to prevent the agent from
-    # finishing in the first few iterations.
+    # ── AUTO-001: Minimum-work gate (v0.9.40 strengthened) ────────────
+    # The previous gate (10 iter / 8 tools) was trivially easy to pass —
+    # agents quit at iteration ~20 of 50 after testing only superficial paths.
+    # New gate enforces:
+    #   1. 40% of max_iterations consumed
+    #   2. At least 20 unique tool calls
+    #   3. At least one exploitation-class tool used (sqlmap, nuclei, ffuf,
+    #      verify_vulnerability, python_action, or sqlmap_forms)
+    #   4. Override: if agent is at 80%+ of max_iterations, let it finish
     if agent_state is not None:
         current_iteration = getattr(agent_state, "iteration", 0)
-        actions_count = len(getattr(agent_state, "actions_taken", []))
+        max_iterations = getattr(agent_state, "max_iterations", 50)
+        actions_taken = getattr(agent_state, "actions_taken", [])
+        actions_count = len(actions_taken)
 
-        # Minimal gate: at least 10 iterations and 8 tool calls
-        MIN_ITERATIONS = 10
-        MIN_TOOL_CALLS = 8
+        # --- Gate 4: if near budget end, always allow ---
+        near_limit = current_iteration >= int(max_iterations * 0.80)
 
-        if current_iteration < MIN_ITERATIONS:
-            remaining = MIN_ITERATIONS - current_iteration
-            _logger.warning(
-                "AUTO-001: finish_scan blocked — iteration %d < minimum %d",
-                current_iteration, MIN_ITERATIONS,
-            )
-            return {
-                "success": False,
-                "message": (
-                    f"Cannot finish scan yet: only {current_iteration}/{MIN_ITERATIONS} "
-                    f"iterations completed. Keep testing!"
-                ),
-                "blocked_by": "AUTO-001_minimum_work_gate",
-                "iterations_remaining": remaining,
+        if not near_limit:
+            # --- Gate 1: 40% of budget consumed ---
+            min_iter = max(10, int(max_iterations * 0.40))
+            if current_iteration < min_iter:
+                remaining = min_iter - current_iteration
+                _logger.warning(
+                    "AUTO-001: finish_scan blocked — iteration %d < 40%% threshold %d",
+                    current_iteration, min_iter,
+                )
+                return {
+                    "success": False,
+                    "message": (
+                        f"Cannot finish scan yet: only {current_iteration}/{max_iterations} "
+                        f"iterations used ({int(current_iteration/max_iterations*100)}%). "
+                        f"You must reach at least {min_iter} iterations ({remaining} more). "
+                        f"Test more attack vectors: SQLi, XSS, IDOR, SSRF, auth bypass!"
+                    ),
+                    "blocked_by": "AUTO-001_iteration_budget_gate",
+                    "iterations_remaining_until_allowed": remaining,
+                }
+
+            # --- Gate 2: minimum unique tool calls ---
+            MIN_TOOL_CALLS = 20
+            if actions_count < MIN_TOOL_CALLS:
+                _logger.warning(
+                    "AUTO-001: finish_scan blocked — %d tool calls < minimum %d",
+                    actions_count, MIN_TOOL_CALLS,
+                )
+                return {
+                    "success": False,
+                    "message": (
+                        f"Cannot finish scan yet: only {actions_count}/{MIN_TOOL_CALLS} "
+                        f"tool calls made. Continue probing — try sqlmap_test, "
+                        f"ffuf_parameter_fuzz, verify_vulnerability, nuclei_scan."
+                    ),
+                    "blocked_by": "AUTO-001_tool_count_gate",
+                }
+
+            # --- Gate 3: at least one exploitation-class tool ---
+            EXPLOITATION_TOOLS = {
+                "sqlmap_test", "sqlmap_forms", "sqlmap_dump_database",
+                "nuclei_scan", "nuclei_scan_cves", "nuclei_scan_misconfigs",
+                "ffuf_parameter_fuzz", "ffuf_directory_scan",
+                "verify_vulnerability",
+                "python_action", "terminal_execute",
             }
+            tools_used: set[str] = set()
+            for action in actions_taken:
+                # actions_taken entries: {"iteration": N, "timestamp": "...", "action": {...}}
+                # The inner action dict uses "toolName", "tool_name", or "name" for the tool.
+                name = ""
+                if isinstance(action, dict):
+                    inner = action.get("action") or action
+                    if isinstance(inner, dict):
+                        name = (
+                            inner.get("toolName")
+                            or inner.get("tool_name")
+                            or inner.get("name")
+                            or ""
+                        )
+                    elif hasattr(inner, "tool_name"):
+                        name = inner.tool_name or ""
+                elif hasattr(action, "tool_name"):
+                    name = action.tool_name or ""
+                if name:
+                    tools_used.add(str(name))
 
-        if actions_count < MIN_TOOL_CALLS:
-            _logger.warning(
-                "AUTO-001: finish_scan blocked — %d tool calls < minimum %d",
-                actions_count, MIN_TOOL_CALLS,
-            )
-            return {
-                "success": False,
-                "message": (
-                    f"Cannot finish scan yet: only {actions_count}/{MIN_TOOL_CALLS} "
-                    f"tools invoked. Keep scanning!"
-                ),
-                "blocked_by": "AUTO-001_minimum_work_gate",
-            }
+            exploit_used = tools_used & EXPLOITATION_TOOLS
+            if not exploit_used:
+                missing = sorted(EXPLOITATION_TOOLS - {"python_action", "terminal_execute"})[:5]
+                _logger.warning(
+                    "AUTO-001: finish_scan blocked — no exploitation-class tools used. "
+                    "Used tools: %s", sorted(tools_used),
+                )
+                return {
+                    "success": False,
+                    "message": (
+                        f"Cannot finish: you haven't used any exploitation-class tools. "
+                        f"You MUST call at least one of: {', '.join(missing)} before finishing. "
+                        f"The scan surface is not exhausted."
+                    ),
+                    "blocked_by": "AUTO-001_exploitation_tools_gate",
+                    "required_tools_examples": missing,
+                }
 
         _logger.info(
-            "AUTO-001: finish_scan allowed — iteration=%d, tools=%d",
-            current_iteration, actions_count,
+            "AUTO-001: finish_scan allowed — iteration=%d/%d (%.0f%%), tools=%d, near_limit=%s",
+            current_iteration, max_iterations,
+            current_iteration / max_iterations * 100,
+            actions_count, near_limit,
         )
-    # ── END AUTO-001 (AUTO-002/003 removed in v0.9.34) ───────────────
+    # ── END AUTO-001 ─────────────────────────────────────────────────
 
     active_agents_error = _check_active_agents(agent_state)
     if active_agents_error:
