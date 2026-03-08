@@ -237,6 +237,19 @@ PROVIDER_PRESETS: dict[str, ProviderConfig] = {
         cost_per_1k_input=0.0025,
         cost_per_1k_output=0.01,
     ),
+    # ── MiniMax (OpenRouter) ───────────────────────────────────────────────
+    "openrouter/minimax/minimax-m2.5": ProviderConfig(
+        model="openrouter/minimax/minimax-m2.5",
+        api_key_env="LLM_API_KEY",
+        api_base="https://openrouter.ai/api/v1",
+        context_window=1_000_000,
+        max_tokens=40_000,
+        rate_limit_rpm=60,
+        supports_vision=False,
+        supports_reasoning=False,
+        cost_per_1k_input=0.0003,
+        cost_per_1k_output=0.0011,
+    ),
     # ── Qwen (OpenRouter) ──
     "openrouter/qwen/qwen3-next-80b-a3b-thinking": ProviderConfig(
         model="openrouter/qwen/qwen3-next-80b-a3b-thinking",
@@ -282,21 +295,82 @@ MODEL_CONTEXT_WINDOWS: dict[str, int] = {
     "openrouter/": 128_000,
 }
 
+# Fine-grained substring patterns for dynamic model name matching.
+# Checked IN ORDER — first match wins.  Applied after exact + prefix lookup.
+# These cover any model (openrouter or bare) that isn't in PROVIDER_PRESETS.
+_CONTEXT_WINDOW_PATTERNS: list[tuple[str, int]] = [
+    ("gemini",    1_000_000),   # all Gemini variants have ≥1M ctx
+    ("claude",      200_000),   # all Claude variants
+    ("minimax",   1_000_000),
+    ("grok-2",    131_072),
+    ("grok",      131_072),
+    ("deepseek",  163_840),
+    ("qwen3",     131_072),
+    ("qwen",      131_072),
+    ("llama-3",   128_000),
+    ("llama3",    128_000),
+    ("llama",     128_000),
+    ("mistral",   128_000),
+    ("mixtral",   32_768),
+    ("hermes",    131_072),
+    ("command",   128_000),
+    ("phi-3",     128_000),
+    ("phi",       128_000),
+    ("solar",      32_768),
+    ("o3",        200_000),
+    ("o1",        128_000),
+    ("gpt-4o",    128_000),
+    ("gpt-4",     128_000),
+]
+
+# Routing prefix → api_base URL (for models unknown to PROVIDER_PRESETS).
+# litellm handles most routing natively, but some providers need explicit base.
+_ROUTING_API_BASES: list[tuple[str, str]] = [
+    ("openrouter/", "https://openrouter.ai/api/v1"),
+    ("ollama/",     "http://localhost:11434"),
+]
+
+
+def infer_api_base(model_name: str) -> str | None:
+    """Return the api_base for a model based on its routing prefix.
+
+    Used for models NOT in PROVIDER_PRESETS so they are routed correctly
+    without requiring explicit LLM_API_BASE environment variables.
+    """
+    m = model_name.lower()
+    for prefix, base in _ROUTING_API_BASES:
+        if m.startswith(prefix):
+            return base
+    return None
+
 
 def get_context_window(model_name: str) -> int:
     """Get context window size for a model (best-effort lookup)."""
     model = model_name.lower()
 
-    # Exact match in presets
+    # 1. Exact match in presets (highest priority)
     if model in PROVIDER_PRESETS:
         return PROVIDER_PRESETS[model].context_window
 
-    # Prefix match
+    # 2. Prefix match (e.g. "groq/", "gemini/")
+    for prefix, window in MODEL_CONTEXT_WINDOWS.items():
+        if model.startswith(prefix) and window != 128_000:
+            # Only use prefix result when it's a specific value, not the
+            # generic 128K openrouter/ fallback — fall through to pattern
+            # matching for better accuracy on openrouter sub-models.
+            return window
+
+    # 3. Substring pattern match — works for openrouter/vendor/model-name
+    for pattern, window in _CONTEXT_WINDOW_PATTERNS:
+        if pattern in model:
+            return window
+
+    # 4. Prefix fallback (includes generic openrouter/ → 128K)
     for prefix, window in MODEL_CONTEXT_WINDOWS.items():
         if model.startswith(prefix):
             return window
 
-    # Default fallback
+    # 5. Hard default
     return 128_000
 
 

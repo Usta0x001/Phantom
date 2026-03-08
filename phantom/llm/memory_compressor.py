@@ -235,6 +235,7 @@ class MemoryCompressor:
     def compress_history(
         self,
         messages: list[dict[str, Any]],
+        overhead_tokens: int = 0,
     ) -> list[dict[str, Any]]:
         """Compress conversation history to stay within token limits.
 
@@ -244,6 +245,13 @@ class MemoryCompressor:
         3. Keep minimum recent messages
         4. Summarize older messages when total tokens exceed limit
         5. Inject findings ledger as a pinned context message (never lost)
+
+        Args:
+            messages: The conversation history to compress.
+            overhead_tokens: Token count of content already committed to the
+                request (e.g. the system prompt) that is NOT in *messages*.
+                Subtracted from the effective threshold so compression fires
+                before the full request exceeds ``max_total_tokens``.
 
         The compression preserves:
         - All system messages unchanged
@@ -301,8 +309,16 @@ class MemoryCompressor:
             _get_message_tokens(msg, model_name) for msg in system_msgs + regular_msgs
         )
 
-        if total_tokens <= self.max_total_tokens * 0.90:
-            # Fire at 90% of max_total_tokens.
+        # Subtract the caller-supplied overhead (e.g. system prompt tokens that
+        # are NOT in *messages* but WILL be sent in the same API call) so the
+        # effective budget reflects the true per-call token spend.
+        effective_max = max(
+            self.max_total_tokens - overhead_tokens,
+            MIN_RECENT_MESSAGES * 500,  # safety floor so we never compress to zero
+        )
+
+        if total_tokens <= effective_max * 0.90:
+            # Compression fires when total_tokens EXCEEDS 90% of effective_max.
             # Previous 0.80 threshold was too aggressive — caused premature
             # compression, wasting LLM tokens and losing exploit context.
             ledger_msg = self._build_ledger_message()
