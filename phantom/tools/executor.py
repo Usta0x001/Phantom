@@ -232,10 +232,52 @@ async def execute_tool_invocation(tool_inv: dict[str, Any], agent_state: Any | N
     # blocks legitimate pentest payloads: SQLi (;), SSTI (${...}), command
     # injection (`...`), boolean SQLi (||). The sandbox provides isolation.
 
+    # Normalise common parameter name aliases that some LLMs emit.
+    # This prevents silent finding loss when an LLM uses a variant name.
+    tool_args = _normalize_tool_args(tool_name, tool_args)
+
     # Auto-inject auth headers for security tools that support extra_args
     tool_args = _inject_auth_headers(tool_name, tool_args, agent_state)
 
     return await execute_tool_with_validation(tool_name, agent_state, **tool_args)
+
+
+# Per-tool parameter alias maps: alias → canonical name.
+# Only remapping is done — if the canonical name already exists, alias is dropped.
+_TOOL_PARAM_ALIASES: dict[str, dict[str, str]] = {
+    "report_vulnerability": {
+        "vuln_title": "title",
+        "vulnerability_title": "title",
+        "vuln_description": "description",
+        "vulnerability_description": "description",
+        "vuln_severity": "severity",
+        "cvss_severity": "severity",
+        "risk_level": "severity",
+        "vuln_target": "target",
+        "target_url": "target",
+        "poc": "proof",
+        "poc_description": "proof",
+        "proof_of_concept": "proof",
+        "evidence": "proof",
+    },
+}
+
+
+def _normalize_tool_args(tool_name: str | None, args: dict[str, Any]) -> dict[str, Any]:
+    """Remap aliased parameter names to their canonical names for known tools."""
+    if tool_name is None:
+        return args
+    aliases = _TOOL_PARAM_ALIASES.get(tool_name)
+    if not aliases:
+        return args
+    normalized = dict(args)
+    for alias, canonical in aliases.items():
+        if alias in normalized and canonical not in normalized:
+            normalized[canonical] = normalized.pop(alias)
+        elif alias in normalized:
+            # Canonical already present — drop the alias silently
+            normalized.pop(alias)
+    return normalized
 
 
 # Tools that accept extra_args and support header-style flags

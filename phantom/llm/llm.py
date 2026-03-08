@@ -75,9 +75,15 @@ class LLM:
         # window instead of the hardcoded 80K default.  Use 75% of the
         # model's window as compression threshold (safety margin for the
         # system prompt + response tokens).
+        # COST-CAP: Hard ceiling of 150K tokens regardless of context window
+        # size.  Large-context models (e.g. MiniMax 1M, Gemini 2M) would
+        # otherwise accumulate ~700K+ tokens per call before compressing,
+        # inflating per-call cost dramatically.  150K keeps per-call spend
+        # proportional while still leaving ample room for tool output.
         from phantom.llm.provider_registry import get_context_window
+        _COST_OPTIMIZED_MAX_TOKENS = 150_000
         model_context = get_context_window(config.model_name)
-        dynamic_max_tokens = int(model_context * 0.75)
+        dynamic_max_tokens = min(int(model_context * 0.75), _COST_OPTIMIZED_MAX_TOKENS)
         self.memory_compressor = MemoryCompressor(
             model_name=config.model_name,
             max_tokens=dynamic_max_tokens,
