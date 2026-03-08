@@ -93,8 +93,8 @@ PROFILES: dict[str, ScanProfile] = {
     # ------------------------------------------------------------------
     ProfileName.quick: ScanProfile(
         name="quick",
-        description="Time-boxed rapid assessment (~15-30 min). Broad vuln-class coverage.",
-        max_iterations=50,  # Reduced from 100 — fits within $0.50 API budget on cheap models
+        description="Time-boxed rapid assessment (~30-60 min). Broad vuln-class coverage.",
+        max_iterations=150,  # Restored to match Strix default — 50 was too low; agent escaped at iter 22/50
         sandbox_timeout_s=120,
         reasoning_effort="high",
         priority_tools=[

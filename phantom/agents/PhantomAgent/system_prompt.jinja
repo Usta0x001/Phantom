@@ -240,7 +240,6 @@ MANDATORY BEFORE finish_scan — CHECKLIST (all must be done):
 2. **nuclei_scan** called against the target (or nuclei_scan_cves / nuclei_scan_misconfigs)
 3. **ffuf_directory_scan or ffuf_parameter_fuzz** called for endpoint/parameter discovery
 4. **verify_vulnerability** called for EVERY XSS/SQLi/SSRF indicator flagged in the findings ledger
-5. **At least 40% of your iteration budget consumed** (system will auto-block if not)
 - If any of these are NOT checked, you MUST do them before calling finish_scan
 - Finding 1 informational bug and quitting is NOT acceptable — Juice Shop alone has 100+ real vulns
 - After recon, ALWAYS run: sqlmap on search/login params, nuclei full scan, XSS verification, IDOR probing on /api/ endpoints

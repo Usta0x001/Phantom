@@ -706,11 +706,13 @@ def finish_scan(
                     "blocked_by": "AUTO-001_tool_count_gate",
                 }
 
-            # --- Gate 3: at least one exploitation-class tool ---
+            # --- Gate 3: at least one ACTIVE EXPLOITATION tool used ---
+            # Deliberately excludes nuclei/ffuf (passive scanners called in iter 2-3)
+            # so the gate is not trivially satisfied. Requires sqlmap, verify,
+            # python_action,  or terminal_execute — tools that prove active exploitation
+            # was attempted. If none are used, the 80% override at iter 120/150 fires.
             EXPLOITATION_TOOLS = {
                 "sqlmap_test", "sqlmap_forms", "sqlmap_dump_database",
-                "nuclei_scan", "nuclei_scan_cves", "nuclei_scan_misconfigs",
-                "ffuf_parameter_fuzz", "ffuf_directory_scan",
                 "verify_vulnerability",
                 "python_action", "terminal_execute",
             }

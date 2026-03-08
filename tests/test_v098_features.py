@@ -271,7 +271,7 @@ class TestEnhancedAgentState:
             )
 
         assert isinstance(config["state"], EnhancedAgentState)
-        assert config["state"].max_iterations == 50  # quick profile (budget-optimized)
+        assert config["state"].max_iterations == 150  # quick profile (Strix-aligned)
 
 
 # ── CI/CD workflow tests ───────────────────────────────────────────────

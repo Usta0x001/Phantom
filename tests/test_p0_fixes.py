@@ -66,6 +66,24 @@ def test_auto001_blocks_below_minimum_tools():
     print("AUTO-001 PASS: Blocked with only 2 tool calls")
 
 
+def test_auto001_blocks_when_only_passive_tools():
+    """AUTO-001: nuclei/ffuf alone must NOT satisfy Gate 3 (exploitation tool gate)."""
+    from phantom.agents.state import AgentState
+    from phantom.tools.finish.finish_actions import finish_scan
+
+    # Meets Gate 1 (iter>=60) and Gate 2 (25 actions) but only passive tools used
+    actions = [{"action": {"tool_name": "send_request"}} for _ in range(22)]
+    actions.append({"action": {"tool_name": "nuclei_scan"}})
+    actions.append({"action": {"tool_name": "ffuf_directory_scan"}})
+    state = AgentState(iteration=70, max_iterations=150, actions_taken=actions)
+    result = finish_scan("summary", "method", "analysis", "recs", agent_state=state)
+    assert result["success"] is False
+    assert result.get("blocked_by") == "AUTO-001_exploitation_tools_gate", (
+        f"Expected exploitation_tools_gate, got: {result.get('blocked_by')}"
+    )
+    print("AUTO-001 PASS: Blocked when only nuclei/ffuf used (no active exploit tool)")
+
+
 def test_auto001_allows_sufficient_work():
     """AUTO-001: finish_scan must pass iteration and tool gates when sufficient work is done."""
     from phantom.agents.state import AgentState
@@ -74,10 +92,10 @@ def test_auto001_allows_sufficient_work():
     # With max_iterations=150:
     #   Gate 1: min_iter = max(10, int(150*0.40)) = 60  → 95 >= 60 ✓
     #   Gate 2: MIN_TOOL_CALLS = 20                      → 25 actions ✓
-    #   Gate 3: exploitation tool required               → nuclei_scan ✓
+    #   Gate 3: ACTIVE exploitation tool required        → sqlmap_test ✓
     #   near_limit: 95 < int(150*0.80)=120              → gates applied
     actions = [{"action": {"tool_name": "send_request"}} for _ in range(24)]
-    actions.append({"action": {"tool_name": "nuclei_scan"}})   # satisfies Gate 3
+    actions.append({"action": {"tool_name": "sqlmap_test"}})   # satisfies Gate 3 (nuclei/ffuf no longer count)
     state = AgentState(
         iteration=95, max_iterations=150,
         actions_taken=actions,
