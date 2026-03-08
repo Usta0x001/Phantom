@@ -2,6 +2,49 @@
 
 All notable changes to Phantom will be documented in this file.
 
+## [0.9.40] - 2026-03-08
+
+### Performance & Reliability
+
+- **Async compression** — `compress_history()` is now `async def`; the blocking
+  `litellm.completion()` call inside `_summarize_messages()` is offloaded to a
+  thread via `asyncio.to_thread()`, eliminating event-loop stalls in long scans.
+- **All-model prompt caching** — Removed the `_is_anthropic()` guard on cache-control
+  injection; prompt caching now applies to every provider where
+  `supports_prompt_caching()` returns True (Gemini Flash, etc.), cutting repeated
+  system-prompt cost by up to 75%.
+- **Quick-mode 38-tool filter** — Rebuilt `QUICK_MODE_TOOLS` from 27 to 38 tools;
+  all attack/exploit tools restored (`ffuf_parameter_fuzz`, `sqlmap_dump_database`,
+  `report_vulnerability`, `verify_vulnerability`, `check_known_vulnerabilities`);
+  file/note/todo management tools excluded. Saves **6,512 tokens per LLM call (~21%)**
+  in quick mode.
+- **OpenRouter metadata cache** — A daemon thread fetches `/api/v1/models` once;
+  `get_context_window()` resolves exact context lengths from the live cache before
+  falling back to heuristic string matching, eliminating over-truncation for models
+  like `mistral/mistral-large`.
+
+### E2E Verification
+
+- Confirmed scan of OWASP Juice Shop with `minimax/minimax-m2.5` via OpenRouter:
+  found **Information Disclosure — Exposed FTP Directory Listing** (MEDIUM, CVSS 5.4).
+  All 29 tool calls succeeded; budget stayed under $0.45.
+- Test suite: 753 passed, 97 skipped (zero regressions).
+
+## [0.9.39] - 2026-03-07
+
+### Security & Reliability
+
+- **SSRF hardening** — Added `_is_safe_url()` validation in `send_request` tool to
+  block requests to private IP ranges and metadata endpoints.
+- **Parameter normalizer** — Unified parameter handling across all HTTP tools to
+  prevent injection via malformed parameter names.
+- **Cost cap at 150K tokens** — Added per-request token limit to prevent runaway
+  responses.
+- **Dynamic provider detection** — Detects provider from model string at runtime;
+  eliminates need for explicit `api_base` config for known OpenRouter models.
+- **Memory overhead fix** — `_prepare_messages` no longer mutates the caller's
+  conversation history list.
+
 ## [0.9.38] - 2026-03-04
 
 ### Zero-Base Audit — P0/P1/P2 Fixes
