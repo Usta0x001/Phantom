@@ -42,9 +42,6 @@ if not SANDBOX_MODE:
     from .terminal import *  # noqa: F403
     from .thinking import *  # noqa: F403
     from .todo import *  # noqa: F403
-    from .security import *  # noqa: F403
-    from .findings import *  # noqa: F403
-
     if HAS_PERPLEXITY_API:
         from .web_search import *  # noqa: F403
 else:

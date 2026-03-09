@@ -78,9 +78,6 @@ class BaseAgent(metaclass=AgentMeta):
 
         with contextlib.suppress(Exception):
             self.llm.set_agent_identity(self.state.agent_name, self.state.agent_id)
-        # Propagate skip_tools into agent state context for executor enforcement
-        if hasattr(self.llm_config, "skip_tools") and self.llm_config.skip_tools:
-            self.state.update_context("skip_tools", self.llm_config.skip_tools)
         self._current_task: asyncio.Task[Any] | None = None
         self._force_stop = False
 

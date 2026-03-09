@@ -171,12 +171,6 @@ async def execute_tool_with_validation(
 
     assert tool_name is not None
 
-    # Enforce scan profile's skip_tools: block execution at the engine level.
-    if agent_state is not None and hasattr(agent_state, "context"):
-        skip_tools: list[str] = agent_state.context.get("skip_tools", [])
-        if tool_name in skip_tools:
-            return f"Error: Tool '{tool_name}' is not available in the current scan mode."
-
     arg_error = _validate_tool_arguments(tool_name, kwargs)
     if arg_error:
         return f"Error: {arg_error}"

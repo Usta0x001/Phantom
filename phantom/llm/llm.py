@@ -97,7 +97,7 @@ class LLM:
             env.globals["get_skill"] = lambda name: skill_content.get(name, "")
 
             result = env.get_template("system_prompt.jinja").render(
-                get_tools_prompt=lambda: get_tools_prompt(skip=self.config.skip_tools),
+                get_tools_prompt=get_tools_prompt,
                 loaded_skill_names=list(skill_content.keys()),
                 **skill_content,
             )

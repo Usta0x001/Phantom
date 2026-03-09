@@ -228,12 +228,9 @@ def should_execute_in_sandbox(tool_name: str) -> bool:
     return True
 
 
-def get_tools_prompt(skip: list[str] | None = None) -> str:
-    skip_set: set[str] = set(skip) if skip else set()
+def get_tools_prompt() -> str:
     tools_by_module: dict[str, list[dict[str, Any]]] = {}
     for tool in tools:
-        if skip_set and tool.get("name") in skip_set:
-            continue
         module = tool.get("module", "unknown")
         if module not in tools_by_module:
             tools_by_module[module] = []

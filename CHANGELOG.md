@@ -2,6 +2,19 @@
 
 All notable changes to Phantom will be documented in this file.
 
+## [0.9.44] - 2026-03-09
+
+### Removed — Security Tool Wrappers
+
+- Removed `phantom/tools/security/` entirely: nmap, nuclei, sqlmap, ffuf, subfinder, httpx,
+  katana wrappers, sanitizer, and verification_actions
+- Removed `phantom/tools/findings/` entirely: findings ledger tools
+- Tool count is now **31** — exactly matching the Strix codebase
+- The AI now uses `terminal_execute` directly to run all security tools inside the sandbox,
+  identical to how Strix operates
+- Removed `skip_tools` wiring: dropped from `LLMConfig`, `base_agent`, `executor`, and
+  `registry` — no longer needed with a flat tool set
+
 ## [0.9.43] - 2026-03-09
 
 ### Branding
