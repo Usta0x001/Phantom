@@ -2,6 +2,28 @@
 
 All notable changes to Phantom will be documented in this file.
 
+## [0.9.42] - 2026-03-09
+
+### Security / Telemetry
+
+- **PostHog permanently disabled** — `is_posthog_enabled()` now hard-returns `False`.
+  No telemetry data is collected, no connections are made to PostHog or any external
+  analytics service. Zero network overhead on every scan invocation.
+
+### CLI
+
+- **Removed `stealth` and `api_only` scan modes from CLI** — These profiles existed
+  in `scan_profiles.py` but had no corresponding skill files and silently fell back
+  to `deep` behaviour. Removed from `ScanMode` enum to avoid confusion. Modes
+  available: `quick`, `standard`, `deep`.
+
+### Docker Sandbox
+
+- **Fixed sandbox image reference** — Default `phantom_image` changed from the
+  non-existent `ghcr.io/usephantom/phantom-sandbox:0.1.12` to
+  `ghcr.io/usta0x001/phantom-sandbox:latest`. Fresh installs no longer fail with
+  a 404 on first run.
+
 ## [0.9.40] - 2026-03-08
 
 ### Performance & Reliability
