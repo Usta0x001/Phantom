@@ -10,10 +10,10 @@ def _is_enabled(raw_value: str | None, default: str = "1") -> bool:
 
 
 def is_otel_enabled() -> bool:
-    explicit = Config.get("phantom_otel_telemetry")
-    if explicit is not None:
-        return _is_enabled(explicit)
-    return _is_enabled(Config.get("phantom_telemetry"), default="1")
+    # Telemetry is permanently disabled — no OTel endpoint is configured.
+    # To opt-in, configure an OTEL_EXPORTER_OTLP_ENDPOINT and set
+    # PHANTOM_OTEL_TELEMETRY=1 (or phantom_otel_telemetry: "1").
+    return False
 
 
 def is_posthog_enabled() -> bool:

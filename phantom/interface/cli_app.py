@@ -107,6 +107,8 @@ class ScanMode(str, Enum):
     quick = "quick"
     standard = "standard"
     deep = "deep"
+    stealth = "stealth"
+    api_only = "api_only"
 
 
 class OutputFormat(str, Enum):

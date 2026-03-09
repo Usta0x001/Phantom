@@ -2,6 +2,31 @@ from phantom.config import Config
 from phantom.config.config import resolve_llm_config
 from phantom.llm.utils import resolve_phantom_model
 
+_VALID_SCAN_MODES = {"quick", "standard", "deep", "stealth", "api_only"}
+
+# Tools to skip per scan mode. Stealth avoids loud/noisy scanners; api_only
+# drops tools that are irrelevant when targeting REST/GraphQL APIs.
+_SKIP_TOOLS_BY_MODE: dict[str, list[str]] = {
+    "stealth": [
+        "nmap_scan",
+        "nmap_vuln_scan",
+        "sqlmap_test",
+        "sqlmap_dump_database",
+        "sqlmap_forms",
+        "ffuf_directory_scan",
+        "ffuf_parameter_fuzz",
+        "ffuf_vhost_fuzz",
+        "subfinder_enumerate",
+        "subfinder_with_sources",
+    ],
+    "api_only": [
+        "ffuf_vhost_fuzz",
+        "subfinder_enumerate",
+        "subfinder_with_sources",
+        "httpx_screenshot",
+    ],
+}
+
 
 class LLMConfig:
     def __init__(
@@ -27,4 +52,5 @@ class LLMConfig:
 
         self.timeout = timeout or int(Config.get("llm_timeout") or "300")
 
-        self.scan_mode = scan_mode if scan_mode in ["quick", "standard", "deep"] else "deep"
+        self.scan_mode = scan_mode if scan_mode in _VALID_SCAN_MODES else "deep"
+        self.skip_tools: list[str] = _SKIP_TOOLS_BY_MODE.get(self.scan_mode, [])

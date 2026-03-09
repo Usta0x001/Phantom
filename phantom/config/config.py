@@ -40,7 +40,7 @@ class Config:
     phantom_disable_browser = "false"
 
     # Runtime Configuration
-    phantom_image = "ghcr.io/usephantom/phantom-sandbox:0.1.12"
+    phantom_image = "ghcr.io/usta0x001/phantom-sandbox:latest"
     phantom_runtime_backend = "docker"
     phantom_sandbox_execution_timeout = "120"
     phantom_sandbox_connect_timeout = "10"

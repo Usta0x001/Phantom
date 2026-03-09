@@ -371,7 +371,7 @@ export PHANTOM_LLM="openai/gpt-4o"     # any LiteLLM-supported model
 export LLM_API_KEY="sk-..."
 
 # Run your first scan
-phantom scan --target https://your-app.com
+phantom -t https://your-app.com
 ```
 
 > **First run** pulls the sandbox image (~13 GB). This happens once. Subsequent scans start in under 10 seconds.
@@ -384,7 +384,7 @@ docker run --rm -it \
   -e LLM_API_KEY="your-key" \
   -v /var/run/docker.sock:/var/run/docker.sock \
   ghcr.io/usta0x001/phantom:latest \
-  scan --target https://your-app.com
+  -t https://your-app.com
 ```
 
 ---
@@ -393,46 +393,37 @@ docker run --rm -it \
 
 ```bash
 # Quick scan (~15 min) — CI/CD friendly
-phantom scan -t https://app.com -m quick
+phantom -t https://app.com -m quick
 
 # Standard scan (~45 min) — recommended default
-phantom scan -t https://app.com
+phantom -t https://app.com
 
 # Deep scan (1–3 h) — exhaustive coverage
-phantom scan -t https://app.com -m deep
+phantom -t https://app.com -m deep
 
-# Stealth mode — low noise, WAF/IDS evasion
-phantom scan -t https://app.com -m stealth
-
-# API-only — REST/GraphQL, no browser
-phantom scan -t https://api.app.com -m api_only
-
-# Focus instructions
-phantom scan -t https://app.com \
+# With custom focus instructions
+phantom -t https://app.com \
   --instruction "Focus on SQL injection and broken auth in /api/v2"
 
 # Resume an interrupted scan
-phantom scan -t https://app.com --resume
-
-# Interactive TUI
 phantom -t https://app.com
 
 # Non-interactive (CI/CD pipelines)
-phantom scan -t https://app.com --non-interactive
+phantom -t https://app.com --non-interactive
 
 # Set a cost ceiling
-PHANTOM_MAX_COST=2.00 phantom scan -t https://app.com
+PHANTOM_MAX_COST=2.00 phantom -t https://app.com
 ```
 
 ### Scan Profiles
 
 | Profile | Max Iterations | Typical Duration | Best For |
 |---------|:--------------:|:----------------:|----------|
-| `quick` | 50 | ~15 min | CI/CD gates, rapid triage |
-| `standard` | 120 | ~45 min | Regular security testing |
-| `deep` | 300 | 1–3 hours | Full audits, compliance |
-| `stealth` | 60 | ~30 min | Production systems, IDS evasion |
-| `api_only` | 100 | ~45 min | REST/GraphQL APIs |
+| `quick` | 300 | ~15–60 min | CI/CD gates, rapid triage |
+| `standard` | 120 | ~20–45 min | Regular security testing |
+| `deep` | 300 | 1–3 hours | Full audits, compliance (default) |
+| `stealth` | 60 | ~30–60 min | Covert assessments, WAF-aware targets |
+| `api_only` | 100 | ~20–45 min | REST/GraphQL API-focused scans |
 
 ### Output
 
@@ -513,7 +504,7 @@ jobs:
 | `PHANTOM_PER_REQUEST_CEILING` | Max cost per LLM request (USD) | `5.0` |
 | `PHANTOM_WEBHOOK_URL` | Webhook URL for critical alerts | — |
 | `PHANTOM_DISABLE_BROWSER` | Disable Playwright browser | `false` |
-| `PHANTOM_TELEMETRY` | Enable anonymous usage telemetry | `true` |
+| `PHANTOM_TELEMETRY` | Enable anonymous usage telemetry | `false` |
 
 </details>
 
@@ -579,6 +570,62 @@ Current state: **731 tests passing · 0 failing · 97 skipped**
 | [Documentation](docs/DOCUMENTATION.md) | Full API and configuration reference |
 | [Contributing](CONTRIBUTING.md) | Development guidelines |
 | [Changelog](CHANGELOG.md) | Version history and release notes |
+
+---
+
+## Docker Sandbox — Setup Guide
+
+Phantom runs all offensive tools inside an isolated Docker sandbox container. This section covers setup for fresh installs and custom environments.
+
+### Default Sandbox Image
+
+The default image is `ghcr.io/usta0x001/phantom-sandbox:latest` — a pre-built Kali Linux container with all security tools installed.
+
+**Requirements:**
+- Docker Desktop or Docker Engine installed and running
+- The image is pulled automatically on first scan (~13 GB, one-time download)
+
+```bash
+# Pre-pull the image manually (optional, avoids delay on first scan)
+docker pull ghcr.io/usta0x001/phantom-sandbox:latest
+```
+
+### Using a Custom Sandbox Image
+
+Override the image via environment variable or config:
+
+```bash
+# Environment variable
+export PHANTOM_IMAGE="ghcr.io/usta0x001/phantom-sandbox:latest"
+phantom -t https://target.com
+
+# Or in ~/.phantom/config.yaml
+phantom_image: "ghcr.io/usta0x001/phantom-sandbox:latest"
+```
+
+### Air-Gapped / Offline Environments
+
+If your environment has no internet access:
+
+```bash
+# On a machine with internet access — save the image
+docker pull ghcr.io/usta0x001/phantom-sandbox:latest
+docker save ghcr.io/usta0x001/phantom-sandbox:latest | gzip > phantom-sandbox.tar.gz
+
+# On the air-gapped machine — load it
+docker load < phantom-sandbox.tar.gz
+
+# Point Phantom at the loaded image
+export PHANTOM_IMAGE="ghcr.io/usta0x001/phantom-sandbox:latest"
+```
+
+### Verify Sandbox Is Working
+
+```bash
+# Quick smoke test — should start a container and exit cleanly
+docker run --rm ghcr.io/usta0x001/phantom-sandbox:latest nmap --version
+docker run --rm ghcr.io/usta0x001/phantom-sandbox:latest nuclei --version
+```
 
 ---
 

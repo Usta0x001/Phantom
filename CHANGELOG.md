@@ -2,6 +2,53 @@
 
 All notable changes to Phantom will be documented in this file.
 
+## [0.9.43] - 2026-03-09
+
+### Branding
+
+- **Fixed TUI splash screen** — The ASCII art banner was still spelling **STRIX** (inherited
+  from the original codebase). Replaced with a full `PHANTOM` block-letter banner in the
+  same style and Phantom-red (`#dc2626`) colour. This is the logo users see on every
+  interactive scan launch.
+
+### Telemetry
+
+- **All telemetry permanently disabled** — Both `is_posthog_enabled()` and
+  `is_otel_enabled()` now hard-return `False`. No PostHog events, no OTel spans,
+  zero network connections on startup or scan completion. No config knobs checked.
+  Default in README/docs updated to `false`.
+
+### Scan Modes
+
+- **`stealth` mode fully wired** — New skill file
+  `phantom/skills/scan_modes/stealth.md` created with a complete methodology for
+  low-noise covert assessments. Reasoning effort set to `low`. `skip_tools` now
+  enforced (no `ffuf_directory_scan`, `sqlmap_test`, `subfinder_enumerate`,
+  `create_sub_agent`).
+- **`api_only` mode fully wired** — New skill file
+  `phantom/skills/scan_modes/api_only.md` created with an API-focused methodology.
+  Browser tools and subdomain discovery disabled by the profile.
+- **Both modes restored to CLI** — `ScanMode` enum and `parse_arguments` choices
+  now include `stealth` and `api_only`. The modes silently fell back to `deep`
+  in 0.9.41–0.9.42 due to missing skill files — that is now fixed.
+
+### Architecture — ScanProfile Enforcement
+
+- **`skip_tools` wired end-to-end** — Previously `ScanProfile.skip_tools` was
+  dead data (stored but never enforced). Now:
+  1. `LLMConfig.__init__()` loads the matching `ScanProfile` and stores its
+     `skip_tools` list.
+  2. `get_tools_prompt(skip=...)` filters listed tools from the system prompt so
+     the LLM never sees them.
+  3. `execute_tool_with_validation()` checks `agent_state.context["skip_tools"]`
+     and returns an error if the agent attempts to call a blocked tool.
+  4. `BaseAgent.__init__()` propagates `skip_tools` into `agent_state.context`.
+- **`LLMConfig` scan_mode validation** expanded to include `stealth` and
+  `api_only` instead of falling back to `deep`.
+- **Stealth reasoning effort** — `stealth` mode now sets reasoning effort to
+  `low` (was inheriting `high` via the `else` branch). Quick remains `medium`,
+  all others `high`.
+
 ## [0.9.42] - 2026-03-09
 
 ### Security / Telemetry

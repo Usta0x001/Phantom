@@ -72,6 +72,8 @@ class LLM:
             self._reasoning_effort = reasoning
         elif config.scan_mode == "quick":
             self._reasoning_effort = "medium"
+        elif config.scan_mode == "stealth":
+            self._reasoning_effort = "low"
         else:
             self._reasoning_effort = "high"
 
@@ -95,7 +97,7 @@ class LLM:
             env.globals["get_skill"] = lambda name: skill_content.get(name, "")
 
             result = env.get_template("system_prompt.jinja").render(
-                get_tools_prompt=get_tools_prompt,
+                get_tools_prompt=lambda: get_tools_prompt(skip=self.config.skip_tools),
                 loaded_skill_names=list(skill_content.keys()),
                 **skill_content,
             )

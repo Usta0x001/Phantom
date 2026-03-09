@@ -349,13 +349,15 @@ Examples:
         "-m",
         "--scan-mode",
         type=str,
-        choices=["quick", "standard", "deep"],
+        choices=["quick", "standard", "deep", "stealth", "api_only"],
         default="deep",
         help=(
             "Scan mode: "
             "'quick' for fast CI/CD checks, "
             "'standard' for routine testing, "
             "'deep' for thorough security reviews (default). "
+            "'stealth' for low-noise covert assessments. "
+            "'api_only' for REST/GraphQL API-focused scans. "
             "Default: deep."
         ),
     )
