@@ -11,18 +11,18 @@ class TestSchemaLoading:
     """Verify that _get_schema_path falls back to consolidated schemas."""
 
     def test_security_tools_have_schemas(self):
-        """All security tools must have proper XML schemas (not 'Schema not found')."""
+        """No security module tools exist — verify no broken schemas in active tools."""
         from phantom.tools.registry import tools
 
         broken = []
         for t in tools:
-            if t.get("module") == "security":
-                schema = t.get("xml_schema", "")
-                if "Schema not found" in schema or "Error loading" in schema:
-                    broken.append(t["name"])
+            schema = t.get("xml_schema", "")
+            if "Schema not found" in schema or "Error loading" in schema:
+                broken.append(t["name"])
 
-        assert not broken, f"Security tools still missing schemas: {broken}"
+        assert not broken, f"Tools still missing schemas: {broken}"
 
+    @pytest.mark.skip(reason="lean-phantom: katana_crawl wrapper removed in 0.9.44")
     def test_katana_crawl_has_schema_params(self):
         """katana_crawl must have parameter definitions in its schema."""
         from phantom.tools.registry import tools
@@ -34,6 +34,7 @@ class TestSchemaLoading:
                 return
         pytest.fail("katana_crawl not found in registry")
 
+    @pytest.mark.skip(reason="lean-phantom: httpx_probe wrapper removed in 0.9.44")
     def test_httpx_probe_has_targets_param(self):
         """httpx_probe schema must define 'targets' parameter."""
         from phantom.tools.registry import tools
@@ -56,6 +57,7 @@ class TestSchemaLoading:
 
         assert not broken, f"Tools with missing schemas: {broken}"
 
+    @pytest.mark.skip(reason="lean-phantom: nmap_tool wrapper removed in 0.9.44")
     def test_consolidated_schema_fallback(self):
         """_get_schema_path should fall back to folder-level consolidated schema."""
         from phantom.tools.registry import _get_schema_path

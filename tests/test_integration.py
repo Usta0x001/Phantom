@@ -197,6 +197,7 @@ class TestAgentGraphThreadSafety:
 # =========================================================================
 
 
+@pytest.mark.skip(reason="lean-phantom: security tool wrappers removed")
 class TestNewAgentTools:
     """Test the new knowledge/enrichment tools."""
 
@@ -233,8 +234,9 @@ class TestNewAgentTools:
         from phantom.tools import get_tool_names
 
         names = get_tool_names()
-        assert "check_known_vulnerabilities" in names
-        assert "enrich_vulnerability" in names
+        # Verify core tools exist (security wrappers removed in 0.9.44)
+        assert "terminal_execute" in names
+        assert "send_request" in names
 
 
 # =========================================================================

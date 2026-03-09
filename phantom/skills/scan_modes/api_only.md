@@ -14,7 +14,7 @@ Treat the application as a pure API consumer. Understand the API contract comple
 ## Phase 1: API Discovery
 
 - Probe for API documentation: `/swagger.json`, `/openapi.json`, `/api-docs`, `/graphql`
-- Crawl with `katana_crawl` to discover API endpoints from network traffic
+- Crawl via `terminal_execute`: `katana -u $TARGET -d 5 -jc -kf -ef css,png,jpg,gif,woff -o crawl.txt` to discover API endpoints
 - Identify API versioning: `/v1/`, `/v2/`, `/api/v3/`, etc.
 - Fingerprint authentication mechanism: Bearer JWT, API keys, OAuth2, cookie-based
 - Map HTTP methods per endpoint (GET/POST/PUT/PATCH/DELETE/HEAD/OPTIONS)
@@ -60,11 +60,10 @@ Treat the application as a pure API consumer. Understand the API contract comple
 
 ## Operational Guidelines
 
-- Use `send_request` for precise manual API testing
-- Use `httpx_probe` for endpoint profiling, not aggressive scanning
-- Use `nuclei_scan` for API-specific templates only
-- Use `sqlmap_test` on injection-vulnerable endpoints (targeted, not mass scanning)
-- Skip: browser tools, subfinder, port scanning
+- Use `terminal_execute` with `httpx` for endpoint profiling, not aggressive scanning
+- Use `terminal_execute` with `nuclei -t http/` for API-specific templates only
+- Use `terminal_execute` with `sqlmap` on injection-vulnerable endpoints (targeted, not mass scanning)
+- Skip: browser tools, subdomain enumeration, port scanning
 
 ## Mindset
 

@@ -2,6 +2,15 @@
 
 All notable changes to Phantom will be documented in this file.
 
+## [0.9.47] - 2026-03-09
+
+### Cleanup
+
+- Removed all deleted wrapper tool names (`katana_crawl`, `httpx_probe`, `nuclei_scan`, `sqlmap_test`, etc.) from skill files and docs
+- `api_only.md` now instructs the AI to run tools via `terminal_execute` CLI commands
+- `docs/DOCUMENTATION.md` tool table updated to reflect the actual 31-tool set
+- Skipped broken test methods that reference deleted security wrapper modules
+
 ## [0.9.46] - 2026-03-09
 
 ### Cleanup

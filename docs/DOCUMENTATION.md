@@ -183,56 +183,77 @@ phantom --target https://api.target.com --mode api_only
 
 ## 6. Tool Reference
 
-### Reconnaissance Tools
+### Sandbox Execution
 
 | Tool | Description |
 |------|-------------|
-| `nmap_scan` | TCP/UDP port scanning and service detection |
-| `nmap_vuln_scan` | Nmap with vulnerability scripts |
-| `httpx_probe` | HTTP probing and technology fingerprinting |
-| `httpx_full_analysis` | Deep HTTP analysis with headers/redirects |
+| `terminal_execute` | Execute any CLI command in the Docker sandbox (nmap, sqlmap, ffuf, nuclei, katana, httpx, subfinder, etc.) |
+| `python_action` | Run Python scripts in the sandbox |
 
-### Discovery Tools
+### HTTP Proxy & Traffic
 
 | Tool | Description |
 |------|-------------|
-| `ffuf_directory_scan` | Directory/file brute-forcing |
-| `ffuf_parameter_fuzz` | Parameter discovery and fuzzing |
-| `ffuf_vhost_fuzz` | Virtual host enumeration |
-| `nuclei_scan` | Template-based vulnerability scanning |
-| `nuclei_scan_cves` | Known CVE detection |
-| `nuclei_scan_misconfigs` | Misconfiguration detection |
+| `send_request` | Send crafted HTTP requests |
+| `repeat_request` | Replay and modify intercepted requests |
+| `list_requests` | List all intercepted HTTP requests |
+| `view_request` | Inspect a specific request/response |
+| `list_sitemap` | Browse discovered URL sitemap |
+| `view_sitemap_entry` | Inspect a sitemap entry |
+| `scope_rules` | View/set target scope rules |
 
-### Exploitation Tools
-
-| Tool | Description |
-|------|-------------|
-| `sqlmap_test` | SQL injection detection and exploitation |
-| `sqlmap_forms` | Form-based SQL injection testing |
-| `sqlmap_dump_database` | Database extraction after confirmed SQLi |
-| `nikto_scan` | Web server vulnerability scanning |
-
-### Browser Tools
+### Browser Automation
 
 | Tool | Description |
 |------|-------------|
-| `browser_navigate` | Navigate to URL and capture DOM |
-| `browser_click` | Interact with page elements |
-| `browser_input` | Fill forms and submit data |
-| `browser_screenshot` | Capture page screenshots |
-| `browser_execute_js` | Execute JavaScript in page context |
+| `browser_action` | Navigate, click, input, screenshot, execute JS |
 
-### Agent Tools
+### Agent Orchestration
 
 | Tool | Description |
 |------|-------------|
-| `terminal_execute` | Execute commands in sandbox shell |
-| `python_action` | Run Python scripts in sandbox |
-| `create_sub_agent` | Delegate specialized tasks |
-| `finish_scan` | Finalize and generate reports |
-| `record_finding` | Manually log a discovery |
-| `add_note` | Agent scratchpad entries |
-| `manage_todo` | Agent task planning |
+| `view_agent_graph` | View multi-agent task graph |
+| `create_agent` | Spawn a specialized sub-agent |
+| `send_message_to_agent` | Send a task to a sub-agent |
+| `agent_finish` | Mark an agent task complete |
+| `wait_for_message` | Block until an agent responds |
+
+### Reporting & Findings
+
+| Tool | Description |
+|------|-------------|
+| `create_vulnerability_report` | Record a confirmed vulnerability |
+| `finish_scan` | Finalize scan and generate report |
+
+### Notes & Task Management
+
+| Tool | Description |
+|------|-------------|
+| `create_note` | Create a note in the agent scratchpad |
+| `list_notes` | List all notes |
+| `update_note` | Edit an existing note |
+| `delete_note` | Remove a note |
+| `create_todo` | Add a task to the agent's TODO list |
+| `list_todos` | List current TODO items |
+| `update_todo` | Edit a TODO item |
+| `mark_todo_done` | Mark a task completed |
+| `mark_todo_pending` | Reset a task to pending |
+| `delete_todo` | Remove a TODO item |
+
+### Reasoning & Search
+
+| Tool | Description |
+|------|-------------|
+| `think` | Internal reasoning step (no external action) |
+| `web_search` | Search the web via Perplexity (requires API key) |
+
+### File Operations
+
+| Tool | Description |
+|------|-------------|
+| `str_replace_editor` | Edit files in the sandbox |
+| `list_files` | List files in a directory |
+| `search_files` | Search file contents |
 
 ---
 
