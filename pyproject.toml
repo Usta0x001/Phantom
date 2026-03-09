@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "phantom-agent"
-version = "0.9.40"
+version = "0.9.41"
 description = "Autonomous Offensive Security Intelligence — AI-powered penetration testing"
 authors = ["Usta0x001 <r_gadouri@estin.dz>"]
 readme = "README.md"
@@ -52,13 +52,14 @@ litellm = "~1.81.1"
 tenacity = "^9.0.0"
 pydantic = {extras = ["email"], version = "^2.11.3"}
 rich = "^13.9"
-typer = "^0.15.0"
 docker = "^7.1.0"
 textual = "^4.0.0"
 xmltodict = "^0.13.0"
 requests = "^2.32.0"
 cvss = "^3.2"
-networkx = "^3.4"
+traceloop-sdk = "^0.53.0"
+opentelemetry-exporter-otlp-proto-http = "^1.40.0"
+scrubadub = "^2.0.1"
 
 # Optional LLM provider dependencies
 google-cloud-aiplatform = { version = ">=1.38", optional = true }
@@ -151,6 +152,9 @@ module = [
     "libtmux.*",
     "pytest.*",
     "cvss.*",
+    "opentelemetry.*",
+    "scrubadub.*",
+    "traceloop.*",
 ]
 ignore_missing_imports = true
 

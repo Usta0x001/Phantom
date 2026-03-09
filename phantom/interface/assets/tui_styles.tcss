@@ -3,6 +3,28 @@ Screen {
     color: #d4d4d4;
 }
 
+.screen--selection {
+    background: #0a0000;
+    color: #e5e5e5;
+}
+
+ToastRack {
+    dock: top;
+    align: right top;
+    margin-bottom: 0;
+    margin-top: 1;
+}
+
+Toast {
+    width: 25;
+    background: #000000;
+    border-left: outer #dc2626;
+}
+
+Toast.-information .toast--title {
+    color: #dc2626;
+}
+
 #splash_screen {
     height: 100%;
     width: 100%;
@@ -55,11 +77,20 @@ Screen {
     margin-bottom: 0;
 }
 
-#stats_display {
+#stats_scroll {
     height: auto;
     max-height: 15;
     background: transparent;
     padding: 0;
+    margin: 0;
+    border: round #333333;
+    scrollbar-size: 0 0;
+}
+
+#stats_display {
+    height: auto;
+    background: transparent;
+    padding: 0 1;
     margin: 0;
 }
 
@@ -320,7 +351,7 @@ VulnerabilityDetailScreen {
 
 .user-message {
     color: #e5e5e5;
-    border-left: thick #dc2626;
+    border-left: thick #f59e0b;
     padding-left: 1;
     margin-bottom: 1;
 }
@@ -508,10 +539,10 @@ StopAgentScreen {
     grid-gutter: 1;
     grid-rows: auto auto;
     padding: 1;
-    width: 34;
+    width: 30;
     height: auto;
-    border: round #dc2626;
-    background: #0a0000 98%;
+    border: round #a3a3a3;
+    background: #000000 98%;
 }
 
 #stop_agent_title {
@@ -571,10 +602,10 @@ QuitScreen {
     grid-gutter: 1;
     grid-rows: auto auto;
     padding: 1;
-    width: 28;
+    width: 24;
     height: auto;
-    border: round #991b1b;
-    background: #0a0000 98%;
+    border: round #333333;
+    background: #000000 98%;
 }
 
 #quit_title {

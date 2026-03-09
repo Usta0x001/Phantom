@@ -130,7 +130,7 @@ def load_skills(skill_names: list[str]) -> dict[str, str]:
             if skill_path and (skills_dir / skill_path).exists():
                 full_path = skills_dir / skill_path
                 var_name = skill_name.split("/")[-1]
-                content = full_path.read_text()
+                content = full_path.read_text(encoding="utf-8")
                 content = _FRONTMATTER_PATTERN.sub("", content).lstrip()
                 skill_content[var_name] = content
                 logger.info(f"Loaded skill: {skill_name} -> {var_name}")

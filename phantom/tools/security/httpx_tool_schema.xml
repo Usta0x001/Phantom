@@ -1,0 +1,52 @@
+<tools>
+  <tool name="httpx_probe">
+    <description>Probe HTTP/HTTPS services using HTTPx. Discovers live hosts, tech stack, status codes, and titles.</description>
+    <parameters>
+      <parameter name="targets" type="string" required="true">
+        <description>Single URL/domain or comma-separated list of targets</description>
+      </parameter>
+      <parameter name="ports" type="string" required="false">
+        <description>Ports to probe (e.g., "80,443,8080,8443")</description>
+      </parameter>
+      <parameter name="follow_redirects" type="boolean" required="false">
+        <description>Follow HTTP redirects (default: true)</description>
+      </parameter>
+      <parameter name="tech_detect" type="boolean" required="false">
+        <description>Detect technologies (default: true)</description>
+      </parameter>
+      <parameter name="rate_limit" type="integer" required="false">
+        <description>Requests per second (default: 150)</description>
+      </parameter>
+    </parameters>
+    <returns type="Dict[str, Any]">
+      <description>Probed hosts with status, titles, tech stack, server info</description>
+    </returns>
+  </tool>
+
+  <tool name="httpx_screenshot">
+    <description>Take a screenshot of a web page using HTTPx.</description>
+    <parameters>
+      <parameter name="url" type="string" required="true">
+        <description>Target URL to screenshot</description>
+      </parameter>
+      <parameter name="output_dir" type="string" required="false">
+        <description>Directory to save screenshots (default: /workspace/screenshots)</description>
+      </parameter>
+    </parameters>
+    <returns type="Dict[str, Any]">
+      <description>Screenshot file path and status</description>
+    </returns>
+  </tool>
+
+  <tool name="httpx_full_analysis">
+    <description>Perform comprehensive HTTP analysis including all available metadata.</description>
+    <parameters>
+      <parameter name="targets" type="string" required="true">
+        <description>URL(s) to analyze</description>
+      </parameter>
+    </parameters>
+    <returns type="Dict[str, Any]">
+      <description>Full analysis with status, title, tech, server, CDN, ASN, websocket support, etc.</description>
+    </returns>
+  </tool>
+</tools>

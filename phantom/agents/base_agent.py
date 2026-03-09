@@ -344,7 +344,7 @@ class BaseAgent(metaclass=AgentMeta):
             except Exception as e:
                 from phantom.telemetry import posthog
 
-                pass  #("sandbox_init_error", str(e))
+                posthog.error("sandbox_init_error", str(e))
                 raise
 
         if not self.state.task:

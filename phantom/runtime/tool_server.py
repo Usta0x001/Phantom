@@ -2,14 +2,13 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import hmac
 import os
 import signal
 import sys
 from typing import Any
 
 import uvicorn
-from fastapi import Depends, FastAPI, HTTPException, Request, status
+from fastapi import Depends, FastAPI, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, ValidationError
 
@@ -18,16 +17,15 @@ SANDBOX_MODE = os.getenv("PHANTOM_SANDBOX_MODE", "false").lower() == "true"
 if not SANDBOX_MODE:
     raise RuntimeError("Tool server should only run in sandbox mode (PHANTOM_SANDBOX_MODE=true)")
 
-parser = argparse.ArgumentParser(description="Start phantom tool server")
+parser = argparse.ArgumentParser(description="Start Phantom tool server")
 parser.add_argument("--token", required=True, help="Authentication token")
-# PHT-005 FIX: Bind to 127.0.0.1 by default to prevent network-adjacent attacks
-parser.add_argument("--host", default="127.0.0.1", help="Host to bind to")
+parser.add_argument("--host", default="0.0.0.0", help="Host to bind to")  # nosec
 parser.add_argument("--port", type=int, required=True, help="Port to bind to")
 parser.add_argument(
     "--timeout",
     type=int,
-    default=600,
-    help="Hard timeout in seconds for each request execution (default: 600)",
+    default=120,
+    help="Hard timeout in seconds for each request execution (default: 120)",
 )
 
 args = parser.parse_args()
@@ -40,32 +38,6 @@ security_dependency = Depends(security)
 
 agent_tasks: dict[str, asyncio.Task[Any]] = {}
 
-# PHT-012 FIX: Simple in-memory rate limiter
-# P2-006 FIX: Use deque for O(1) amortized pruning instead of O(n) list rebuild
-from collections import deque as _deque
-_rate_limit_store: dict[str, _deque[float]] = {}
-_RATE_LIMIT_MAX = 60  # max requests per window
-_RATE_LIMIT_WINDOW = 60.0  # seconds
-
-
-async def _rate_limit_check(request: Request) -> None:
-    """PHT-012 FIX: Rate limiting middleware for tool server."""
-    import time as _time
-    client_ip = request.client.host if request.client else "unknown"
-    now = _time.monotonic()
-    if client_ip not in _rate_limit_store:
-        _rate_limit_store[client_ip] = _deque()
-    q = _rate_limit_store[client_ip]
-    # Prune expired entries from the left (oldest first) — O(1) amortized
-    while q and now - q[0] >= _RATE_LIMIT_WINDOW:
-        q.popleft()
-    if len(q) >= _RATE_LIMIT_MAX:
-        raise HTTPException(
-            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail="Rate limit exceeded. Try again later.",
-        )
-    q.append(now)
-
 
 def verify_token(credentials: HTTPAuthorizationCredentials) -> str:
     if not credentials or credentials.scheme != "Bearer":
@@ -75,7 +47,7 @@ def verify_token(credentials: HTTPAuthorizationCredentials) -> str:
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-    if not hmac.compare_digest(credentials.credentials, EXPECTED_TOKEN):
+    if credentials.credentials != EXPECTED_TOKEN:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid authentication token",
@@ -97,8 +69,6 @@ class ToolExecutionResponse(BaseModel):
 
 
 async def _run_tool(agent_id: str, tool_name: str, kwargs: dict[str, Any]) -> Any:
-    import inspect
-
     from phantom.tools.argument_parser import convert_arguments
     from phantom.tools.context import set_current_agent_id
     from phantom.tools.registry import get_tool_by_name
@@ -110,24 +80,12 @@ async def _run_tool(agent_id: str, tool_name: str, kwargs: dict[str, Any]) -> An
         raise ValueError(f"Tool '{tool_name}' not found")
 
     converted_kwargs = convert_arguments(tool_func, kwargs)
-
-    if asyncio.iscoroutinefunction(tool_func) or inspect.isawaitable(tool_func):
-        # Async tool — call directly in the event loop
-        return await tool_func(**converted_kwargs)
-    else:
-        # Sync tool — run in a thread to avoid blocking the event loop
-        result = await asyncio.to_thread(tool_func, **converted_kwargs)
-        # Guard against sync wrappers that return unawaited coroutines
-        if inspect.isawaitable(result):
-            return await result
-        return result
+    return await asyncio.to_thread(tool_func, **converted_kwargs)
 
 
 @app.post("/execute", response_model=ToolExecutionResponse)
 async def execute_tool(
-    request: ToolExecutionRequest,
-    credentials: HTTPAuthorizationCredentials = security_dependency,
-    _rate: None = Depends(_rate_limit_check),
+    request: ToolExecutionRequest, credentials: HTTPAuthorizationCredentials = security_dependency
 ) -> ToolExecutionResponse:
     verify_token(credentials)
 
@@ -177,13 +135,15 @@ async def register_agent(
     return {"status": "registered", "agent_id": agent_id}
 
 
-# PHT-011 FIX: Remove active_agents count from health endpoint to reduce info disclosure
 @app.get("/health")
 async def health_check() -> dict[str, Any]:
     return {
         "status": "healthy",
         "sandbox_mode": str(SANDBOX_MODE),
         "environment": "sandbox" if SANDBOX_MODE else "main",
+        "auth_configured": "true" if EXPECTED_TOKEN else "false",
+        "active_agents": len(agent_tasks),
+        "agents": list(agent_tasks.keys()),
     }
 
 

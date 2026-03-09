@@ -1,106 +1,118 @@
+import contextlib
+import re
+from pathlib import PurePosixPath
 from typing import Any
 
 from phantom.tools.registry import register_tool
 
 
-# ── v0.9.33: Simplified vulnerability reporter ─────────────────────────
-#
-# The original create_vulnerability_report has 16+ params which is a
-# huge barrier for the LLM to use correctly.  This lightweight wrapper
-# needs only 5 params and auto-computes CVSS from severity string.
-
-_SEVERITY_CVSS_DEFAULTS: dict[str, dict[str, str]] = {
-    "critical": {"AV": "N", "AC": "L", "PR": "N", "UI": "N", "S": "C", "C": "H", "I": "H", "A": "H"},
-    "high":     {"AV": "N", "AC": "L", "PR": "N", "UI": "N", "S": "U", "C": "H", "I": "H", "A": "N"},
-    "medium":   {"AV": "N", "AC": "L", "PR": "N", "UI": "R", "S": "U", "C": "L", "I": "L", "A": "N"},
-    "low":      {"AV": "N", "AC": "H", "PR": "L", "UI": "R", "S": "U", "C": "L", "I": "N", "A": "N"},
-}
+_CVSS_FIELDS = (
+    "attack_vector",
+    "attack_complexity",
+    "privileges_required",
+    "user_interaction",
+    "scope",
+    "confidentiality",
+    "integrity",
+    "availability",
+)
 
 
-@register_tool(sandbox_execution=False)
-async def report_vulnerability(
-    title: str,
-    target: str,
-    severity: str,
-    description: str,
-    proof: str,
-) -> dict[str, Any]:
-    """Report a discovered vulnerability with minimal friction.
+def parse_cvss_xml(xml_str: str) -> dict[str, str] | None:
+    if not xml_str or not xml_str.strip():
+        return None
+    result = {}
+    for field in _CVSS_FIELDS:
+        match = re.search(rf"<{field}>(.*?)</{field}>", xml_str, re.DOTALL)
+        if match:
+            result[field] = match.group(1).strip()
+    return result if result else None
 
-    This is the PREFERRED way to report vulnerabilities.  Only 5 parameters
-    required.  Use this instead of create_vulnerability_report for speed.
 
-    Args:
-        title: Short vulnerability title (e.g. "SQL Injection in /api/login")
-        target: The URL or target where the vulnerability was found
-        severity: One of: critical, high, medium, low
-        description: Description of the vulnerability and its impact
-        proof: Proof of concept — curl command, HTTP request, or steps to reproduce
-    """
-    severity = severity.strip().lower()
-    if severity not in _SEVERITY_CVSS_DEFAULTS:
-        return {"success": False, "message": f"Invalid severity '{severity}'. Must be critical/high/medium/low."}
+def parse_code_locations_xml(xml_str: str) -> list[dict[str, Any]] | None:
+    if not xml_str or not xml_str.strip():
+        return None
+    locations = []
+    for loc_match in re.finditer(r"<location>(.*?)</location>", xml_str, re.DOTALL):
+        loc: dict[str, Any] = {}
+        loc_content = loc_match.group(1)
+        for field in (
+            "file",
+            "start_line",
+            "end_line",
+            "snippet",
+            "label",
+            "fix_before",
+            "fix_after",
+        ):
+            field_match = re.search(rf"<{field}>(.*?)</{field}>", loc_content, re.DOTALL)
+            if field_match:
+                raw = field_match.group(1)
+                value = (
+                    raw.strip("\n")
+                    if field in ("snippet", "fix_before", "fix_after")
+                    else raw.strip()
+                )
+                if field in ("start_line", "end_line"):
+                    with contextlib.suppress(ValueError, TypeError):
+                        loc[field] = int(value)
+                elif value:
+                    loc[field] = value
+        if loc.get("file") and loc.get("start_line") is not None:
+            locations.append(loc)
+    return locations if locations else None
 
-    if not title or not title.strip():
-        return {"success": False, "message": "Title cannot be empty."}
-    if not target or not target.strip():
-        return {"success": False, "message": "Target cannot be empty."}
-    if not description or len(description.strip()) < 10:
-        return {"success": False, "message": "Description must be at least 10 characters."}
 
-    cvss_map = _SEVERITY_CVSS_DEFAULTS[severity]
-    cvss_score, severity_str, cvss_vector = calculate_cvss_and_severity(
-        cvss_map["AV"], cvss_map["AC"], cvss_map["PR"], cvss_map["UI"],
-        cvss_map["S"], cvss_map["C"], cvss_map["I"], cvss_map["A"],
-    )
+def _validate_file_path(path: str) -> str | None:
+    if not path or not path.strip():
+        return "file path cannot be empty"
+    p = PurePosixPath(path)
+    if p.is_absolute():
+        return f"file path must be relative, got absolute: '{path}'"
+    if ".." in p.parts:
+        return f"file path must not contain '..': '{path}'"
+    return None
 
-    # Auto-derive fields the LLM shouldn't need to fill in manually
-    impact = f"{severity.upper()} severity: {description[:200]}"
-    remediation = f"Investigate and remediate: {title}"
 
-    try:
-        from phantom.telemetry.tracer import get_global_tracer
+def _validate_code_locations(locations: list[dict[str, Any]]) -> list[str]:
+    errors = []
+    for i, loc in enumerate(locations):
+        path_err = _validate_file_path(loc.get("file", ""))
+        if path_err:
+            errors.append(f"code_locations[{i}]: {path_err}")
+        start = loc.get("start_line")
+        if not isinstance(start, int) or start < 1:
+            errors.append(f"code_locations[{i}]: start_line must be a positive integer")
+        end = loc.get("end_line")
+        if end is None:
+            errors.append(f"code_locations[{i}]: end_line is required")
+        elif not isinstance(end, int) or end < 1:
+            errors.append(f"code_locations[{i}]: end_line must be a positive integer")
+        elif isinstance(start, int) and end < start:
+            errors.append(f"code_locations[{i}]: end_line ({end}) must be >= start_line ({start})")
+    return errors
 
-        tracer = get_global_tracer()
-        if not tracer:
-            return {"success": False, "message": "Tracer unavailable — report not stored."}
 
-        # Light title-based dedup (avoids expensive LLM-based dedup call)
-        existing = tracer.get_existing_vulnerabilities()
-        for r in existing:
-            if r.get("title", "").lower().strip() == title.lower().strip():
-                return {
-                    "success": False,
-                    "message": f"Duplicate: '{title}' already reported.",
-                    "duplicate_of": r.get("id", ""),
-                }
+def _extract_cve(cve: str) -> str:
+    match = re.search(r"CVE-\d{4}-\d{4,}", cve)
+    return match.group(0) if match else cve.strip()
 
-        report_id = tracer.add_vulnerability_report(
-            title=title.strip(),
-            description=description[:1000],
-            severity=severity_str,
-            impact=impact,
-            target=target.strip(),
-            technical_analysis=description[:500],
-            poc_description=proof[:1000],
-            poc_script_code="",
-            remediation_steps=remediation,
-            cvss=cvss_score,
-            cvss_breakdown=cvss_map,
-            endpoint=target.split("?")[0] if "?" in target else target,
-            method="GET",
-        )
 
-        return {
-            "success": True,
-            "message": f"Vulnerability '{title}' reported successfully!",
-            "report_id": report_id,
-            "severity": severity_str,
-            "cvss_score": cvss_score,
-        }
+def _validate_cve(cve: str) -> str | None:
+    if not re.match(r"^CVE-\d{4}-\d{4,}$", cve):
+        return f"invalid CVE format: '{cve}' (expected 'CVE-YYYY-NNNNN')"
+    return None
 
-    except Exception as e:
-        return {"success": False, "message": f"Report failed: {e!s}"}
+
+def _extract_cwe(cwe: str) -> str:
+    match = re.search(r"CWE-\d+", cwe)
+    return match.group(0) if match else cwe.strip()
+
+
+def _validate_cwe(cwe: str) -> str | None:
+    if not re.match(r"^CWE-\d+$", cwe):
+        return f"invalid CWE format: '{cwe}' (expected 'CWE-NNN')"
+    return None
 
 
 def calculate_cvss_and_severity(
@@ -129,15 +141,13 @@ def calculate_cvss_and_severity(
         base_score = scores[0]
         base_severity = severities[0]
 
-        # P3-007 FIX: Clamp score to valid CVSS range
-        base_score = max(0.0, min(10.0, float(base_score)))
         severity = base_severity.lower()
 
     except Exception:
         import logging
 
         logging.exception("Failed to calculate CVSS")
-        return 0.0, "unknown", ""
+        return 7.5, "high", ""
     else:
         return base_score, severity, vector
 
@@ -152,6 +162,7 @@ def _validate_required_fields(**kwargs: str | None) -> list[str]:
         "target": "Target cannot be empty",
         "technical_analysis": "Technical analysis cannot be empty",
         "poc_description": "PoC description cannot be empty",
+        "poc_script_code": "PoC script/code is REQUIRED - provide the actual exploit/payload",
         "remediation_steps": "Remediation steps cannot be empty",
     }
 
@@ -159,17 +170,6 @@ def _validate_required_fields(**kwargs: str | None) -> list[str]:
         value = kwargs.get(field_name)
         if not value or not str(value).strip():
             validation_errors.append(error_msg)
-
-    # poc_script_code is strongly recommended but not blocking — a good
-    # poc_description is sufficient.  This avoids rejecting real findings
-    # because the LLM couldn't generate a perfect exploit script.
-    poc_code = kwargs.get("poc_script_code")
-    if not poc_code or not str(poc_code).strip():
-        poc_desc = kwargs.get("poc_description", "")
-        if not poc_desc or len(str(poc_desc).strip()) < 20:
-            validation_errors.append(
-                "Either poc_script_code or a detailed poc_description (20+ chars) is required"
-            )
 
     return validation_errors
 
@@ -199,7 +199,7 @@ def _validate_cvss_parameters(**kwargs: str) -> list[str]:
 
 
 @register_tool(sandbox_execution=False)
-async def create_vulnerability_report(
+def create_vulnerability_report(  # noqa: PLR0912
     title: str,
     description: str,
     impact: str,
@@ -208,23 +208,12 @@ async def create_vulnerability_report(
     poc_description: str,
     poc_script_code: str,
     remediation_steps: str,
-    # CVSS Breakdown Components (optional — sensible defaults provided)
-    attack_vector: str = "N",
-    attack_complexity: str = "L",
-    privileges_required: str = "N",
-    user_interaction: str = "N",
-    scope: str = "U",
-    confidentiality: str = "L",
-    integrity: str = "L",
-    availability: str = "N",
-    # Optional fields
+    cvss_breakdown: str,
     endpoint: str | None = None,
     method: str | None = None,
     cve: str | None = None,
-    code_file: str | None = None,
-    code_before: str | None = None,
-    code_after: str | None = None,
-    code_diff: str | None = None,
+    cwe: str | None = None,
+    code_locations: str | None = None,
 ) -> dict[str, Any]:
     validation_errors = _validate_required_fields(
         title=title,
@@ -237,32 +226,32 @@ async def create_vulnerability_report(
         remediation_steps=remediation_steps,
     )
 
-    validation_errors.extend(
-        _validate_cvss_parameters(
-            attack_vector=attack_vector,
-            attack_complexity=attack_complexity,
-            privileges_required=privileges_required,
-            user_interaction=user_interaction,
-            scope=scope,
-            confidentiality=confidentiality,
-            integrity=integrity,
-            availability=availability,
-        )
-    )
+    parsed_cvss = parse_cvss_xml(cvss_breakdown)
+    if not parsed_cvss:
+        validation_errors.append("cvss: could not parse CVSS breakdown XML")
+    else:
+        validation_errors.extend(_validate_cvss_parameters(**parsed_cvss))
+
+    parsed_locations = parse_code_locations_xml(code_locations) if code_locations else None
+
+    if parsed_locations:
+        validation_errors.extend(_validate_code_locations(parsed_locations))
+    if cve:
+        cve = _extract_cve(cve)
+        cve_err = _validate_cve(cve)
+        if cve_err:
+            validation_errors.append(cve_err)
+    if cwe:
+        cwe = _extract_cwe(cwe)
+        cwe_err = _validate_cwe(cwe)
+        if cwe_err:
+            validation_errors.append(cwe_err)
 
     if validation_errors:
         return {"success": False, "message": "Validation failed", "errors": validation_errors}
 
-    cvss_score, severity, cvss_vector = calculate_cvss_and_severity(
-        attack_vector,
-        attack_complexity,
-        privileges_required,
-        user_interaction,
-        scope,
-        confidentiality,
-        integrity,
-        availability,
-    )
+    assert parsed_cvss is not None
+    cvss_score, severity, cvss_vector = calculate_cvss_and_severity(**parsed_cvss)
 
     try:
         from phantom.telemetry.tracer import get_global_tracer
@@ -285,7 +274,7 @@ async def create_vulnerability_report(
                 "method": method,
             }
 
-            dedupe_result = await check_duplicate(candidate, existing_reports)
+            dedupe_result = check_duplicate(candidate, existing_reports)
 
             if dedupe_result.get("is_duplicate"):
                 duplicate_id = dedupe_result.get("duplicate_id", "")
@@ -308,17 +297,6 @@ async def create_vulnerability_report(
                     "reason": dedupe_result.get("reason", ""),
                 }
 
-            cvss_breakdown = {
-                "attack_vector": attack_vector,
-                "attack_complexity": attack_complexity,
-                "privileges_required": privileges_required,
-                "user_interaction": user_interaction,
-                "scope": scope,
-                "confidentiality": confidentiality,
-                "integrity": integrity,
-                "availability": availability,
-            }
-
             report_id = tracer.add_vulnerability_report(
                 title=title,
                 description=description,
@@ -330,14 +308,12 @@ async def create_vulnerability_report(
                 poc_script_code=poc_script_code,
                 remediation_steps=remediation_steps,
                 cvss=cvss_score,
-                cvss_breakdown=cvss_breakdown,
+                cvss_breakdown=parsed_cvss,
                 endpoint=endpoint,
                 method=method,
                 cve=cve,
-                code_file=code_file,
-                code_before=code_before,
-                code_after=code_after,
-                code_diff=code_diff,
+                cwe=cwe,
+                code_locations=parsed_locations,
             )
 
             return {

@@ -163,32 +163,34 @@ def format_vulnerability_report(report: dict[str, Any]) -> Text:  # noqa: PLR091
         text.append("\n")
         text.append(poc_script_code, style="dim")
 
-    code_file = report.get("code_file")
-    if code_file:
+    code_locations = report.get("code_locations")
+    if code_locations:
         text.append("\n\n")
-        text.append("Code File: ", style=field_style)
-        text.append(code_file)
-
-    code_before = report.get("code_before")
-    if code_before:
-        text.append("\n\n")
-        text.append("Code Before", style=field_style)
-        text.append("\n")
-        text.append(code_before, style="dim")
-
-    code_after = report.get("code_after")
-    if code_after:
-        text.append("\n\n")
-        text.append("Code After", style=field_style)
-        text.append("\n")
-        text.append(code_after, style="dim")
-
-    code_diff = report.get("code_diff")
-    if code_diff:
-        text.append("\n\n")
-        text.append("Code Diff", style=field_style)
-        text.append("\n")
-        text.append(code_diff, style="dim")
+        text.append("Code Locations", style=field_style)
+        for i, loc in enumerate(code_locations):
+            text.append("\n\n")
+            text.append(f"  Location {i + 1}: ", style="dim")
+            text.append(loc.get("file", "unknown"), style="bold")
+            start = loc.get("start_line")
+            end = loc.get("end_line")
+            if start is not None:
+                if end and end != start:
+                    text.append(f":{start}-{end}")
+                else:
+                    text.append(f":{start}")
+            if loc.get("label"):
+                text.append(f"\n  {loc['label']}", style="italic dim")
+            if loc.get("snippet"):
+                text.append("\n  ")
+                text.append(loc["snippet"], style="dim")
+            if loc.get("fix_before") or loc.get("fix_after"):
+                text.append("\n  Fix:")
+                if loc.get("fix_before"):
+                    text.append("\n  - ", style="dim")
+                    text.append(loc["fix_before"], style="dim")
+                if loc.get("fix_after"):
+                    text.append("\n  + ", style="dim")
+                    text.append(loc["fix_after"], style="dim")
 
     remediation_steps = report.get("remediation_steps")
     if remediation_steps:
@@ -376,13 +378,6 @@ def build_tui_stats_text(tracer: Any, agent_config: dict[str, Any] | None = None
         model = getattr(llm_config, "model_name", "Unknown")
         stats_text.append(model, style="white")
 
-        # Show scan profile if available
-        scan_profile = agent_config.get("scan_profile")
-        if scan_profile:
-            profile_name = getattr(scan_profile, "name", "") or ""
-            if profile_name:
-                stats_text.append(f" [{profile_name}]", style="dim #fbbf24")
-
     llm_stats = tracer.get_total_llm_stats()
     total_stats = llm_stats["total"]
 
@@ -395,14 +390,11 @@ def build_tui_stats_text(tracer: Any, agent_config: dict[str, Any] | None = None
         stats_text.append(" · ", style="white")
         stats_text.append(f"${total_stats['cost']:.2f}", style="white")
 
-    # Show iteration count if available
-    agent_count = len(tracer.agents)
-    if agent_count > 0:
+    caido_url = getattr(tracer, "caido_url", None)
+    if caido_url:
         stats_text.append("\n")
-        stats_text.append(f"{agent_count} agent(s)", style="dim white")
-        tool_count = tracer.get_real_tool_count()
-        if tool_count > 0:
-            stats_text.append(f" · {tool_count} tools", style="dim white")
+        stats_text.append("Caido: ", style="bold white")
+        stats_text.append(caido_url, style="white")
 
     return stats_text
 
@@ -470,42 +462,7 @@ def generate_run_name(targets_info: list[dict[str, Any]] | None = None) -> str:
 # Target processing utilities
 
 
-def _is_ssrf_safe_url(url: str) -> bool:
-    """Block requests to private/loopback/link-local IPs (SSRF prevention)."""
-    try:
-        parsed = urlparse(url)
-        hostname = parsed.hostname
-        if not hostname:
-            return False
-        if parsed.scheme not in ("http", "https"):
-            return False
-        # Block obviously internal hostnames
-        if hostname in ("localhost", "0.0.0.0"):
-            return False
-        try:
-            addr = ipaddress.ip_address(hostname)
-            if addr.is_private or addr.is_loopback or addr.is_link_local or addr.is_reserved:
-                return False
-        except ValueError:
-            # Hostname — resolve and check resolved IPs
-            import socket as _sock
-            try:
-                resolved = _sock.getaddrinfo(hostname, None, _sock.AF_UNSPEC, _sock.SOCK_STREAM)
-                for _fam, _typ, _pro, _can, sockaddr in resolved:
-                    addr = ipaddress.ip_address(sockaddr[0])
-                    if addr.is_private or addr.is_loopback or addr.is_link_local or addr.is_reserved:
-                        return False
-            except _sock.gaierror:
-                return False
-        return True
-    except Exception:  # noqa: BLE001
-        return False
-
-
 def _is_http_git_repo(url: str) -> bool:
-    # SSRF protection: never probe private/internal addresses
-    if not _is_ssrf_safe_url(url):
-        return False
     check_url = f"{url.rstrip('/')}/info/refs?service=git-upload-pack"
     try:
         req = Request(check_url, headers={"User-Agent": "git/phantom"})  # noqa: S310
@@ -532,9 +489,7 @@ def infer_target_type(target: str) -> tuple[str, dict[str, str]]:  # noqa: PLR09
     parsed = urlparse(target)
     if parsed.scheme in ("http", "https"):
         if parsed.username or parsed.password:
-            # Strip embedded credentials before passing to git clone
-            safe_url = parsed._replace(netloc=parsed.hostname + (f":{parsed.port}" if parsed.port else "")).geturl()
-            return "repository", {"target_repo": safe_url}
+            return "repository", {"target_repo": target}
         if parsed.path.rstrip("/").endswith(".git"):
             return "repository", {"target_repo": target}
         if parsed.query or parsed.fragment:
@@ -685,7 +640,7 @@ def _is_localhost_host(host: str) -> bool:
 
 
 def rewrite_localhost_targets(targets_info: list[dict[str, Any]], host_gateway: str) -> None:
-    from urllib.parse import urlparse, urlunparse
+    from yarl import URL  # type: ignore[import-not-found]
 
     for target_info in targets_info:
         target_type = target_info.get("type")
@@ -694,15 +649,12 @@ def rewrite_localhost_targets(targets_info: list[dict[str, Any]], host_gateway: 
         if target_type == "web_application":
             target_url = details.get("target_url", "")
             try:
-                parsed = urlparse(target_url)
+                url = URL(target_url)
             except (ValueError, TypeError):
                 continue
 
-            if parsed.hostname and _is_localhost_host(parsed.hostname):
-                new_netloc = host_gateway
-                if parsed.port:
-                    new_netloc = f"{host_gateway}:{parsed.port}"
-                details["target_url"] = urlunparse(parsed._replace(netloc=new_netloc))
+            if url.host and _is_localhost_host(url.host):
+                details["target_url"] = str(url.with_host(host_gateway))
 
         elif target_type == "ip_address":
             target_ip = details.get("target_ip", "")
@@ -758,7 +710,7 @@ def clone_repository(repo_url: str, run_name: str, dest_name: str | None = None)
 
         panel = Panel(
             error_text,
-            title="[bold white]phantom",
+            title="[bold white]PHANTOM",
             title_align="left",
             border_style="red",
             padding=(1, 2),
@@ -776,7 +728,7 @@ def clone_repository(repo_url: str, run_name: str, dest_name: str | None = None)
 
         panel = Panel(
             error_text,
-            title="[bold white]phantom",
+            title="[bold white]PHANTOM",
             title_align="left",
             border_style="red",
             padding=(1, 2),
@@ -804,7 +756,7 @@ def check_docker_connection() -> Any:
 
         panel = Panel(
             error_text,
-            title="[bold white]phantom",
+            title="[bold white]PHANTOM",
             title_align="left",
             border_style="red",
             padding=(1, 2),

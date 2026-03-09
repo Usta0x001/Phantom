@@ -5,7 +5,8 @@ from typing import Any
 
 import litellm
 
-from phantom.config import Config
+from phantom.config.config import resolve_llm_config
+from phantom.llm.utils import resolve_phantom_model
 
 
 logger = logging.getLogger(__name__)
@@ -113,34 +114,8 @@ def _parse_dedupe_response(content: str) -> dict[str, Any]:
     )
 
     if not result_match:
-        # Fallback: try to infer from raw text when LLM doesn't follow XML format
-        content_lower = content.lower()
-        if any(kw in content_lower for kw in ("not a duplicate", "not duplicate", "unique", "new vulnerability")):
-            return {
-                "is_duplicate": False,
-                "duplicate_id": "",
-                "confidence": 0.7,
-                "reason": f"Inferred from LLM text: {content[:200]}",
-            }
-        if any(kw in content_lower for kw in ("is a duplicate", "duplicate of", "same vulnerability", "already reported")):
-            # Try to extract the duplicate ID from text
-            id_match = re.search(r"(?:vuln|id|report)[-_]?(\d+)", content_lower)
-            dup_id = f"vuln-{id_match.group(1)}" if id_match else ""
-            return {
-                "is_duplicate": True,
-                "duplicate_id": dup_id,
-                "confidence": 0.6,
-                "reason": f"Inferred from LLM text: {content[:200]}",
-            }
-        # Final fallback: treat as not-duplicate with low confidence.
-        # False negatives (missing a dup) are safer than false positives (dropping a unique vuln).
-        logger.warning("No <dedupe_result> block found in response, defaulting to not-duplicate: %s", content[:500])
-        return {
-            "is_duplicate": False,
-            "duplicate_id": "",
-            "confidence": 0.5,
-            "reason": f"Could not parse LLM response; defaulting to not-duplicate: {content[:200]}",
-        }
+        logger.warning(f"No <dedupe_result> block found in response: {content[:500]}")
+        raise ValueError("No <dedupe_result> block found in response")
 
     result_content = result_match.group(1)
 
@@ -164,7 +139,7 @@ def _parse_dedupe_response(content: str) -> dict[str, Any]:
     }
 
 
-async def check_duplicate(
+def check_duplicate(
     candidate: dict[str, Any], existing_reports: list[dict[str, Any]]
 ) -> dict[str, Any]:
     if not existing_reports:
@@ -175,48 +150,15 @@ async def check_duplicate(
             "reason": "No existing reports to compare against",
         }
 
-    # Fast path: if candidate endpoint+title doesn't overlap with ANY existing
-    # report, skip the expensive LLM call entirely.
-    cand_endpoint = (candidate.get("endpoint") or "").lower().strip()
-    cand_title = (candidate.get("title") or "").lower().strip()
-    has_overlap = False
-    for existing in existing_reports:
-        ex_endpoint = (existing.get("endpoint") or "").lower().strip()
-        ex_title = (existing.get("title") or "").lower().strip()
-        # Check for endpoint match + title similarity
-        if cand_endpoint and ex_endpoint and cand_endpoint == ex_endpoint:
-            has_overlap = True
-            break
-        # Check for title substring match (rough similarity)
-        if cand_title and ex_title:
-            _stopwords = {"in", "at", "the", "a", "via", "on", "for", "of", "to", "and"}
-            cand_words = set(cand_title.split()) - _stopwords
-            ex_words = set(ex_title.split()) - _stopwords
-            if len(cand_words & ex_words) >= 3:
-                has_overlap = True
-                break
-    if not has_overlap:
-        return {
-            "is_duplicate": False,
-            "duplicate_id": "",
-            "confidence": 0.95,
-            "reason": "Fast path: no endpoint/title overlap with existing reports",
-        }
-
     try:
         candidate_cleaned = _prepare_report_for_comparison(candidate)
         existing_cleaned = [_prepare_report_for_comparison(r) for r in existing_reports]
 
         comparison_data = {"candidate": candidate_cleaned, "existing_reports": existing_cleaned}
 
-        model_name = Config.get("phantom_llm")
-        api_key = Config.get("llm_api_key")
-        api_base = (
-            Config.get("llm_api_base")
-            or Config.get("openai_api_base")
-            or Config.get("litellm_base_url")
-            or Config.get("ollama_api_base")
-        )
+        model_name, api_key, api_base = resolve_llm_config()
+        litellm_model, _ = resolve_phantom_model(model_name)
+        litellm_model = litellm_model or model_name
 
         messages = [
             {"role": "system", "content": DEDUPE_SYSTEM_PROMPT},
@@ -231,7 +173,7 @@ async def check_duplicate(
         ]
 
         completion_kwargs: dict[str, Any] = {
-            "model": model_name,
+            "model": litellm_model,
             "messages": messages,
             "timeout": 120,
         }
@@ -240,7 +182,7 @@ async def check_duplicate(
         if api_base:
             completion_kwargs["api_base"] = api_base
 
-        response = await litellm.acompletion(**completion_kwargs)
+        response = litellm.completion(**completion_kwargs)
 
         content = response.choices[0].message.content
         if not content:

@@ -47,11 +47,11 @@ class TerminalSession:
 
     @property
     def PS1(self) -> str:  # noqa: N802
-        return r"[phantom_$?]$ "
+        return r"[PHANTOM_$?]$ "
 
     @property
     def PS1_PATTERN(self) -> str:  # noqa: N802
-        return r"\[phantom_(\d+)\]"
+        return r"\[PHANTOM_(\d+)\]"
 
     def initialize(self) -> None:
         self.server = libtmux.Server()

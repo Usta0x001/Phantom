@@ -1,134 +1,9 @@
-import re as _re
 import threading
 from datetime import UTC, datetime
 from typing import Any, Literal
 
 from phantom.tools.registry import register_tool
 
-# Thread-safe lock for all agent graph mutations
-_graph_lock = threading.Lock()
-
-
-def _build_smart_context(
-    full_history: list[dict[str, Any]],
-    parent_state: Any,
-) -> list[dict[str, Any]]:
-    """Build an optimised context payload for a new subagent.
-
-    Instead of blindly passing the last N messages (which loses critical
-    recon data) or the full history (which wastes tokens), we construct:
-
-    1. **First 2 messages** — always included because they contain the
-       scan task description and initial target context.
-    2. **Findings summary** — a synthetic message that captures key data
-       extracted from the *entire* parent conversation so the child never
-       loses important discoveries (endpoints, vulns, technologies, creds).
-    3. **Last 5 messages** — recent activity so the child understands what
-       just happened before it was created.
-
-    Total inherited: 2 + 1 (summary) + up to 5 = max 8 messages — compact
-    but information-dense.
-    """
-    if len(full_history) <= 8:
-        return list(full_history)
-
-    # --- 1. First 2 messages (task + initial context) ---
-    initial = full_history[:2]
-
-    # --- 2. Extract key findings from full history ---
-    summary_parts: list[str] = []
-
-    # Gather parent's findings ledger if available
-    if hasattr(parent_state, "findings_ledger") and parent_state.findings_ledger:
-        summary_parts.append("## Key Findings from Parent Agent")
-        for entry in parent_state.findings_ledger[-40:]:
-            summary_parts.append(f"- {entry}")
-
-    # Also scan conversation for important patterns if ledger is insufficient
-    if len(summary_parts) < 5:
-        urls: set[str] = set()
-        techs: set[str] = set()
-        vulns: list[str] = []
-        creds: list[str] = []
-        for msg in full_history:
-            text = _extract_text(msg)
-            if not text:
-                continue
-            # Extract URLs/endpoints mentioned
-            for url in _re.findall(r"https?://[^\s\"'<>]+", text):
-                urls.add(url.rstrip(".,;)"))
-            # Extract technologies
-            for tech in _re.findall(
-                r"(?:running|using|detected|framework|server)[:\s]+([A-Za-z0-9][\w./-]{2,30})",
-                text,
-                _re.IGNORECASE,
-            ):
-                techs.add(tech.strip())
-            # Extract vulnerability mentions (expanded pattern)
-            for vuln in _re.findall(
-                r"(?:(?:SQL|XSS|SSRF|CSRF|IDOR|XXE|RCE|LFI|RFI|JWT|"
-                r"path.traversal|directory.traversal|open.redirect|"
-                r"business.logic|race.condition|privilege.escalation|"
-                r"broken.auth|insecure.deserialization|file.upload|"
-                r"injection|misconfiguration|info.disclosure|CORS)\b[^.]{0,100})",
-                text,
-                _re.IGNORECASE,
-            ):
-                if len(vulns) < 20:
-                    vulns.append(vuln.strip()[:150])
-            # P1-007 FIX: Do NOT pass literal credentials to child agents — this
-            # leaks secrets through conversation history. Instead, note that
-            # credentials were found so the child can request them via the
-            # parent's findings ledger or re-discover them.
-            for cred in _re.findall(r"(?:password|token|secret|api[_-]?key)[:\s=]+\S+", text, _re.IGNORECASE):
-                if len(creds) < 10:
-                    import hashlib as _hl
-                    cred_hash = _hl.sha256(cred.strip().encode()).hexdigest()[:8]
-                    creds.append(f"credential_ref:{cred_hash} (available in parent context)")
-
-        if urls:
-            summary_parts.append(f"## Discovered URLs/Endpoints ({len(urls)} total)")
-            for u in sorted(urls)[:40]:
-                summary_parts.append(f"- {u}")
-        if techs:
-            summary_parts.append(f"## Technologies Detected: {', '.join(sorted(techs)[:15])}")
-        if vulns:
-            summary_parts.append("## Potential Vulnerabilities Noted")
-            for v in vulns[:15]:
-                summary_parts.append(f"- {v}")
-        if creds:
-            summary_parts.append("## Credentials/Tokens Found")
-            for c in creds:
-                summary_parts.append(f"- {c}")
-
-    summary_text = "\n".join(summary_parts) if summary_parts else ""
-
-    # --- 3. Last 5 messages (recent activity) ---
-    recents = full_history[-5:]
-
-    # --- Assemble ---
-    result = list(initial)
-    if summary_text:
-        result.append({
-            "role": "user",
-            "content": f"<parent_findings_summary>\n{summary_text}\n</parent_findings_summary>",
-        })
-    result.extend(recents)
-    return result
-
-
-def _extract_text(msg: dict[str, Any]) -> str:
-    """Extract plain text from a conversation message."""
-    content = msg.get("content", "")
-    if isinstance(content, str):
-        return content
-    if isinstance(content, list):
-        parts = []
-        for item in content:
-            if isinstance(item, dict) and item.get("type") == "text":
-                parts.append(item.get("text", ""))
-        return " ".join(parts)
-    return str(content)
 
 _agent_graph: dict[str, Any] = {
     "nodes": {},
@@ -194,9 +69,9 @@ def _run_agent_in_thread(
 
         state.add_message("user", task_xml)
 
-        with _graph_lock:
-            _agent_states[state.agent_id] = state
-            _agent_graph["nodes"][state.agent_id]["state"] = state.model_dump()
+        _agent_states[state.agent_id] = state
+
+        _agent_graph["nodes"][state.agent_id]["state"] = state.model_dump()
 
         import asyncio
 
@@ -208,25 +83,21 @@ def _run_agent_in_thread(
             loop.close()
 
     except Exception as e:
-        with _graph_lock:
-            _agent_graph["nodes"][state.agent_id]["status"] = "error"
-            _agent_graph["nodes"][state.agent_id]["finished_at"] = datetime.now(UTC).isoformat()
-            _agent_graph["nodes"][state.agent_id]["result"] = {"error": str(e)}
-            _running_agents.pop(state.agent_id, None)
-            _agent_instances.pop(state.agent_id, None)
-            _agent_states.pop(state.agent_id, None)
+        _agent_graph["nodes"][state.agent_id]["status"] = "error"
+        _agent_graph["nodes"][state.agent_id]["finished_at"] = datetime.now(UTC).isoformat()
+        _agent_graph["nodes"][state.agent_id]["result"] = {"error": str(e)}
+        _running_agents.pop(state.agent_id, None)
+        _agent_instances.pop(state.agent_id, None)
         raise
     else:
-        with _graph_lock:
-            if state.stop_requested:
-                _agent_graph["nodes"][state.agent_id]["status"] = "stopped"
-            else:
-                _agent_graph["nodes"][state.agent_id]["status"] = "completed"
-            _agent_graph["nodes"][state.agent_id]["finished_at"] = datetime.now(UTC).isoformat()
-            _agent_graph["nodes"][state.agent_id]["result"] = result
-            _running_agents.pop(state.agent_id, None)
-            _agent_instances.pop(state.agent_id, None)
-            _agent_states.pop(state.agent_id, None)
+        if state.stop_requested:
+            _agent_graph["nodes"][state.agent_id]["status"] = "stopped"
+        else:
+            _agent_graph["nodes"][state.agent_id]["status"] = "completed"
+        _agent_graph["nodes"][state.agent_id]["finished_at"] = datetime.now(UTC).isoformat()
+        _agent_graph["nodes"][state.agent_id]["result"] = result
+        _running_agents.pop(state.agent_id, None)
+        _agent_instances.pop(state.agent_id, None)
 
         return {"result": result}
 
@@ -236,20 +107,8 @@ def view_agent_graph(agent_state: Any) -> dict[str, Any]:
     try:
         structure_lines = ["=== AGENT GRAPH STRUCTURE ==="]
 
-        with _graph_lock:
-            # Snapshot graph state under lock for consistent reads
-            nodes_snapshot = {k: dict(v) for k, v in _agent_graph["nodes"].items()}
-            edges_snapshot = list(_agent_graph["edges"])
-            root_id_snapshot = _root_agent_id
-
-        def _build_tree(agent_id: str, depth: int = 0, visited: set[str] | None = None) -> None:
-            if visited is None:
-                visited = set()
-            if agent_id in visited:
-                return  # Prevent infinite loop on edge cycles
-            visited.add(agent_id)
-
-            node = nodes_snapshot[agent_id]
+        def _build_tree(agent_id: str, depth: int = 0) -> None:
+            node = _agent_graph["nodes"][agent_id]
             indent = "  " * depth
 
             you_indicator = " ← This is you" if agent_id == agent_state.agent_id else ""
@@ -260,50 +119,49 @@ def view_agent_graph(agent_state: Any) -> dict[str, Any]:
 
             children = [
                 edge["to"]
-                for edge in edges_snapshot
+                for edge in _agent_graph["edges"]
                 if edge["from"] == agent_id and edge["type"] == "delegation"
             ]
 
             if children:
                 structure_lines.append(f"{indent}   Children:")
                 for child_id in children:
-                    if child_id in nodes_snapshot:
-                        _build_tree(child_id, depth + 2, visited)
+                    _build_tree(child_id, depth + 2)
 
-        root_agent_id = root_id_snapshot
-        if not root_agent_id and nodes_snapshot:
-            for agent_id, node in nodes_snapshot.items():
+        root_agent_id = _root_agent_id
+        if not root_agent_id and _agent_graph["nodes"]:
+            for agent_id, node in _agent_graph["nodes"].items():
                 if node.get("parent_id") is None:
                     root_agent_id = agent_id
                     break
             if not root_agent_id:
-                root_agent_id = next(iter(nodes_snapshot.keys()))
+                root_agent_id = next(iter(_agent_graph["nodes"].keys()))
 
-        if root_agent_id and root_agent_id in nodes_snapshot:
+        if root_agent_id and root_agent_id in _agent_graph["nodes"]:
             _build_tree(root_agent_id)
         else:
             structure_lines.append("No agents in the graph yet")
 
         graph_structure = "\n".join(structure_lines)
 
-        total_nodes = len(nodes_snapshot)
+        total_nodes = len(_agent_graph["nodes"])
         running_count = sum(
-            1 for node in nodes_snapshot.values() if node["status"] == "running"
+            1 for node in _agent_graph["nodes"].values() if node["status"] == "running"
         )
         waiting_count = sum(
-            1 for node in nodes_snapshot.values() if node["status"] == "waiting"
+            1 for node in _agent_graph["nodes"].values() if node["status"] == "waiting"
         )
         stopping_count = sum(
-            1 for node in nodes_snapshot.values() if node["status"] == "stopping"
+            1 for node in _agent_graph["nodes"].values() if node["status"] == "stopping"
         )
         completed_count = sum(
-            1 for node in nodes_snapshot.values() if node["status"] == "completed"
+            1 for node in _agent_graph["nodes"].values() if node["status"] == "completed"
         )
         stopped_count = sum(
-            1 for node in nodes_snapshot.values() if node["status"] == "stopped"
+            1 for node in _agent_graph["nodes"].values() if node["status"] == "stopped"
         )
         failed_count = sum(
-            1 for node in nodes_snapshot.values() if node["status"] in ["failed", "error"]
+            1 for node in _agent_graph["nodes"].values() if node["status"] in ["failed", "error"]
         )
 
     except Exception as e:  # noqa: BLE001
@@ -369,14 +227,9 @@ def create_agent(
         from phantom.agents.state import AgentState
         from phantom.llm.config import LLMConfig
 
-        # Derive subagent iteration limit from parent's remaining budget (75%, min 50)
-        child_max_iter = 300  # fallback
-        parent_agent = _agent_instances.get(parent_id)
-        if parent_agent:
-            parent_max = getattr(parent_agent.state, "max_iterations", 300)
-            child_max_iter = max(50, int(parent_max * 0.75))
+        state = AgentState(task=task, agent_name=name, parent_id=parent_id, max_iterations=300)
 
-        state = AgentState(task=task, agent_name=name, parent_id=parent_id, max_iterations=child_max_iter)
+        parent_agent = _agent_instances.get(parent_id)
 
         timeout = None
         scan_mode = "deep"
@@ -399,11 +252,9 @@ def create_agent(
 
         inherited_messages = []
         if inherit_context:
-            full_history = agent_state.get_conversation_history()
-            inherited_messages = _build_smart_context(full_history, agent_state)
+            inherited_messages = agent_state.get_conversation_history()
 
-        with _graph_lock:
-            _agent_instances[state.agent_id] = agent
+        _agent_instances[state.agent_id] = agent
 
         thread = threading.Thread(
             target=_run_agent_in_thread,
@@ -412,8 +263,7 @@ def create_agent(
             name=f"Agent-{name}-{state.agent_id}",
         )
         thread.start()
-        with _graph_lock:
-            _running_agents[state.agent_id] = thread
+        _running_agents[state.agent_id] = thread
 
     except Exception as e:  # noqa: BLE001
         return {"success": False, "error": f"Failed to create agent: {e}", "agent_id": None}
@@ -440,53 +290,51 @@ def send_message_to_agent(
     priority: Literal["low", "normal", "high", "urgent"] = "normal",
 ) -> dict[str, Any]:
     try:
-        with _graph_lock:
-            if target_agent_id not in _agent_graph["nodes"]:
-                return {
-                    "success": False,
-                    "error": f"Target agent '{target_agent_id}' not found in graph",
-                    "message_id": None,
-                }
-
-            sender_id = agent_state.agent_id
-
-            from uuid import uuid4
-
-            message_id = f"msg_{uuid4().hex[:8]}"
-            message_data = {
-                "id": message_id,
-                "from": sender_id,
-                "to": target_agent_id,
-                "content": message,
-                "message_type": message_type,
-                "priority": priority,
-                "timestamp": datetime.now(UTC).isoformat(),
-                "delivered": False,
-                "read": False,
+        if target_agent_id not in _agent_graph["nodes"]:
+            return {
+                "success": False,
+                "error": f"Target agent '{target_agent_id}' not found in graph",
+                "message_id": None,
             }
 
-            if target_agent_id not in _agent_messages:
-                _agent_messages[target_agent_id] = []
+        sender_id = agent_state.agent_id
 
-            _agent_messages[target_agent_id].append(message_data)
+        from uuid import uuid4
 
-            _agent_graph["edges"].append(
-                {
-                    "from": sender_id,
-                    "to": target_agent_id,
-                    "type": "message",
-                    "message_id": message_id,
-                    "message_type": message_type,
-                    "priority": priority,
-                    "created_at": datetime.now(UTC).isoformat(),
-                }
-            )
+        message_id = f"msg_{uuid4().hex[:8]}"
+        message_data = {
+            "id": message_id,
+            "from": sender_id,
+            "to": target_agent_id,
+            "content": message,
+            "message_type": message_type,
+            "priority": priority,
+            "timestamp": datetime.now(UTC).isoformat(),
+            "delivered": False,
+            "read": False,
+        }
 
-            message_data["delivered"] = True
+        if target_agent_id not in _agent_messages:
+            _agent_messages[target_agent_id] = []
 
-            target_name = _agent_graph["nodes"][target_agent_id]["name"]
-            sender_name = _agent_graph["nodes"][sender_id]["name"]
-            target_status = _agent_graph["nodes"][target_agent_id]["status"]
+        _agent_messages[target_agent_id].append(message_data)
+
+        _agent_graph["edges"].append(
+            {
+                "from": sender_id,
+                "to": target_agent_id,
+                "type": "message",
+                "message_id": message_id,
+                "message_type": message_type,
+                "priority": priority,
+                "created_at": datetime.now(UTC).isoformat(),
+            }
+        )
+
+        message_data["delivered"] = True
+
+        target_name = _agent_graph["nodes"][target_agent_id]["name"]
+        sender_name = _agent_graph["nodes"][sender_id]["name"]
 
         return {
             "success": True,
@@ -496,7 +344,7 @@ def send_message_to_agent(
             "target_agent": {
                 "id": target_agent_id,
                 "name": target_name,
-                "status": target_status,
+                "status": _agent_graph["nodes"][target_agent_id]["status"],
             },
         }
 
@@ -526,36 +374,35 @@ def agent_finish(
 
         agent_id = agent_state.agent_id
 
-        with _graph_lock:
-            if agent_id not in _agent_graph["nodes"]:
-                return {"agent_completed": False, "error": "Current agent not found in graph"}
+        if agent_id not in _agent_graph["nodes"]:
+            return {"agent_completed": False, "error": "Current agent not found in graph"}
 
-            agent_node = _agent_graph["nodes"][agent_id]
+        agent_node = _agent_graph["nodes"][agent_id]
 
-            agent_node["status"] = "finished" if success else "failed"
-            agent_node["finished_at"] = datetime.now(UTC).isoformat()
-            agent_node["result"] = {
-                "summary": result_summary,
-                "findings": findings or [],
-                "success": success,
-                "recommendations": final_recommendations or [],
-            }
+        agent_node["status"] = "finished" if success else "failed"
+        agent_node["finished_at"] = datetime.now(UTC).isoformat()
+        agent_node["result"] = {
+            "summary": result_summary,
+            "findings": findings or [],
+            "success": success,
+            "recommendations": final_recommendations or [],
+        }
 
-            parent_notified = False
+        parent_notified = False
 
-            if report_to_parent and agent_node["parent_id"]:
-                parent_id = agent_node["parent_id"]
+        if report_to_parent and agent_node["parent_id"]:
+            parent_id = agent_node["parent_id"]
 
-                if parent_id in _agent_graph["nodes"]:
-                    findings_xml = "\n".join(
-                        f"        <finding>{finding}</finding>" for finding in (findings or [])
-                    )
-                    recommendations_xml = "\n".join(
-                        f"        <recommendation>{rec}</recommendation>"
-                        for rec in (final_recommendations or [])
-                    )
+            if parent_id in _agent_graph["nodes"]:
+                findings_xml = "\n".join(
+                    f"        <finding>{finding}</finding>" for finding in (findings or [])
+                )
+                recommendations_xml = "\n".join(
+                    f"        <recommendation>{rec}</recommendation>"
+                    for rec in (final_recommendations or [])
+                )
 
-                    report_message = f"""<agent_completion_report>
+                report_message = f"""<agent_completion_report>
     <agent_info>
         <agent_name>{agent_node["name"]}</agent_name>
         <agent_id>{agent_id}</agent_id>
@@ -574,80 +421,40 @@ def agent_finish(
     </results>
 </agent_completion_report>"""
 
-                    if parent_id not in _agent_messages:
-                        _agent_messages[parent_id] = []
+                if parent_id not in _agent_messages:
+                    _agent_messages[parent_id] = []
 
-                    from uuid import uuid4
+                from uuid import uuid4
 
-                    _agent_messages[parent_id].append(
-                        {
-                            "id": f"report_{uuid4().hex[:8]}",
-                            "from": agent_id,
-                            "to": parent_id,
-                            "content": report_message,
-                            "message_type": "information",
-                            "priority": "high",
-                            "timestamp": datetime.now(UTC).isoformat(),
-                            "delivered": True,
-                            "read": False,
-                        }
-                    )
+                _agent_messages[parent_id].append(
+                    {
+                        "id": f"report_{uuid4().hex[:8]}",
+                        "from": agent_id,
+                        "to": parent_id,
+                        "content": report_message,
+                        "message_type": "information",
+                        "priority": "high",
+                        "timestamp": datetime.now(UTC).isoformat(),
+                        "delivered": True,
+                        "read": False,
+                    }
+                )
 
-                    parent_notified = True
+                parent_notified = True
 
-            # === Subagent findings rollup ===
-            # Propagate discovered vulnerabilities, endpoints, and findings
-            # from the subagent's state back to the parent's state.
-            parent_state = _agent_states.get(agent_node["parent_id"])
-            child_state = _agent_states.get(agent_id)
-
-            if parent_state and child_state:
-                # Roll up endpoints
-                if hasattr(child_state, "endpoints") and hasattr(parent_state, "endpoints"):
-                    for ep in child_state.endpoints:
-                        if ep not in parent_state.endpoints:
-                            parent_state.endpoints.append(ep)
-
-                # Roll up vulnerabilities
-                if hasattr(child_state, "vulnerabilities") and hasattr(parent_state, "vulnerabilities"):
-                    for vuln_id, vuln in child_state.vulnerabilities.items():
-                        if vuln_id not in parent_state.vulnerabilities:
-                            parent_state.vulnerabilities[vuln_id] = vuln
-                            # Update vuln_stats
-                            if hasattr(parent_state, "vuln_stats"):
-                                parent_state.vuln_stats["total"] = parent_state.vuln_stats.get("total", 0) + 1
-                                sev = str(getattr(vuln, "severity", "info")).lower()
-                                if sev in parent_state.vuln_stats:
-                                    parent_state.vuln_stats[sev] = parent_state.vuln_stats.get(sev, 0) + 1
-
-                # Roll up findings ledger
-                if hasattr(child_state, "findings_ledger") and hasattr(parent_state, "findings_ledger"):
-                    for entry in child_state.findings_ledger:
-                        if entry not in parent_state.findings_ledger:
-                            parent_state.findings_ledger.append(entry)
-
-                # Roll up tested endpoints (to avoid re-testing)
-                if hasattr(child_state, "tested_endpoints") and hasattr(parent_state, "tested_endpoints"):
-                    for key, tests in child_state.tested_endpoints.items():
-                        if key not in parent_state.tested_endpoints:
-                            parent_state.tested_endpoints[key] = tests
-                        else:
-                            parent_state.tested_endpoints[key].extend(tests)
-
-            _running_agents.pop(agent_id, None)
-            agent_name = agent_node["name"]
-            agent_task = agent_node["task"]
+        _running_agents.pop(agent_id, None)
 
         return {
             "agent_completed": True,
             "parent_notified": parent_notified,
             "completion_summary": {
                 "agent_id": agent_id,
-                "agent_name": agent_name,
-                "task": agent_task,
+                "agent_name": agent_node["name"],
+                "task": agent_node["task"],
                 "success": success,
                 "findings_count": len(findings or []),
                 "has_recommendations": bool(final_recommendations),
+                "finished_at": agent_node["finished_at"],
             },
         }
 
@@ -661,42 +468,35 @@ def agent_finish(
 
 def stop_agent(agent_id: str) -> dict[str, Any]:
     try:
-        with _graph_lock:
-            if agent_id not in _agent_graph["nodes"]:
-                return {
-                    "success": False,
-                    "error": f"Agent '{agent_id}' not found in graph",
-                    "agent_id": agent_id,
-                }
-
-            agent_node = _agent_graph["nodes"][agent_id]
-
-            if agent_node["status"] in ["completed", "error", "failed", "stopped"]:
-                return {
-                    "success": True,
-                    "message": f"Agent '{agent_node['name']}' was already stopped",
-                    "agent_id": agent_id,
-                    "previous_status": agent_node["status"],
-                }
-
-            if agent_id in _agent_states:
-                agent_state = _agent_states[agent_id]
-                agent_state.request_stop()
-
-            if agent_id in _agent_instances:
-                agent_instance = _agent_instances[agent_id]
-                if hasattr(agent_instance, "state"):
-                    agent_instance.state.request_stop()
-                if hasattr(agent_instance, "cancel_current_execution"):
-                    agent_instance.cancel_current_execution()
-
-            agent_node["status"] = "stopping"
-            agent_node["result"] = {
-                "summary": "Agent stop requested by user",
+        if agent_id not in _agent_graph["nodes"]:
+            return {
                 "success": False,
-                "stopped_by_user": True,
+                "error": f"Agent '{agent_id}' not found in graph",
+                "agent_id": agent_id,
             }
-            agent_name = agent_node["name"]
+
+        agent_node = _agent_graph["nodes"][agent_id]
+
+        if agent_node["status"] in ["completed", "error", "failed", "stopped"]:
+            return {
+                "success": True,
+                "message": f"Agent '{agent_node['name']}' was already stopped",
+                "agent_id": agent_id,
+                "previous_status": agent_node["status"],
+            }
+
+        if agent_id in _agent_states:
+            agent_state = _agent_states[agent_id]
+            agent_state.request_stop()
+
+        if agent_id in _agent_instances:
+            agent_instance = _agent_instances[agent_id]
+            if hasattr(agent_instance, "state"):
+                agent_instance.state.request_stop()
+            if hasattr(agent_instance, "cancel_current_execution"):
+                agent_instance.cancel_current_execution()
+
+        agent_node["status"] = "stopping"
 
         try:
             from phantom.telemetry.tracer import get_global_tracer
@@ -707,11 +507,17 @@ def stop_agent(agent_id: str) -> dict[str, Any]:
         except (ImportError, AttributeError):
             pass
 
+        agent_node["result"] = {
+            "summary": "Agent stop requested by user",
+            "success": False,
+            "stopped_by_user": True,
+        }
+
         return {
             "success": True,
-            "message": f"Stop request sent to agent '{agent_name}'",
+            "message": f"Stop request sent to agent '{agent_node['name']}'",
             "agent_id": agent_id,
-            "agent_name": agent_name,
+            "agent_name": agent_node["name"],
             "note": "Agent will stop gracefully after current iteration",
         }
 
@@ -725,41 +531,39 @@ def stop_agent(agent_id: str) -> dict[str, Any]:
 
 def send_user_message_to_agent(agent_id: str, message: str) -> dict[str, Any]:
     try:
-        with _graph_lock:
-            if agent_id not in _agent_graph["nodes"]:
-                return {
-                    "success": False,
-                    "error": f"Agent '{agent_id}' not found in graph",
-                    "agent_id": agent_id,
-                }
-
-            agent_node = _agent_graph["nodes"][agent_id]
-
-            if agent_id not in _agent_messages:
-                _agent_messages[agent_id] = []
-
-            from uuid import uuid4
-
-            message_data = {
-                "id": f"user_msg_{uuid4().hex[:8]}",
-                "from": "user",
-                "to": agent_id,
-                "content": message,
-                "message_type": "instruction",
-                "priority": "high",
-                "timestamp": datetime.now(UTC).isoformat(),
-                "delivered": True,
-                "read": False,
+        if agent_id not in _agent_graph["nodes"]:
+            return {
+                "success": False,
+                "error": f"Agent '{agent_id}' not found in graph",
+                "agent_id": agent_id,
             }
 
-            _agent_messages[agent_id].append(message_data)
-            agent_name = agent_node["name"]
+        agent_node = _agent_graph["nodes"][agent_id]
+
+        if agent_id not in _agent_messages:
+            _agent_messages[agent_id] = []
+
+        from uuid import uuid4
+
+        message_data = {
+            "id": f"user_msg_{uuid4().hex[:8]}",
+            "from": "user",
+            "to": agent_id,
+            "content": message,
+            "message_type": "instruction",
+            "priority": "high",
+            "timestamp": datetime.now(UTC).isoformat(),
+            "delivered": True,
+            "read": False,
+        }
+
+        _agent_messages[agent_id].append(message_data)
 
         return {
             "success": True,
-            "message": f"Message sent to agent '{agent_name}'",
+            "message": f"Message sent to agent '{agent_node['name']}'",
             "agent_id": agent_id,
-            "agent_name": agent_name,
+            "agent_name": agent_node["name"],
         }
 
     except Exception as e:  # noqa: BLE001
@@ -781,10 +585,9 @@ def wait_for_message(
 
         agent_state.enter_waiting_state()
 
-        with _graph_lock:
-            if agent_id in _agent_graph["nodes"]:
-                _agent_graph["nodes"][agent_id]["status"] = "waiting"
-                _agent_graph["nodes"][agent_id]["waiting_reason"] = reason
+        if agent_id in _agent_graph["nodes"]:
+            _agent_graph["nodes"][agent_id]["status"] = "waiting"
+            _agent_graph["nodes"][agent_id]["waiting_reason"] = reason
 
         try:
             from phantom.telemetry.tracer import get_global_tracer

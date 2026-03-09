@@ -1,20 +1,40 @@
+import json
 import logging
 import threading
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Optional
+from typing import Any, Callable, Optional
 from uuid import uuid4
 
+from opentelemetry import trace
+from opentelemetry.trace import SpanContext, SpanKind
 
-if TYPE_CHECKING:
-    from collections.abc import Callable
+from phantom.config import Config
+from phantom.telemetry import posthog
+from phantom.telemetry.flags import is_otel_enabled
+from phantom.telemetry.utils import (
+    TelemetrySanitizer,
+    append_jsonl_record,
+    bootstrap_otel,
+    format_span_id,
+    format_trace_id,
+    get_events_write_lock,
+)
+
+
+try:
+    from traceloop.sdk import Traceloop
+except ImportError:  # pragma: no cover - exercised when dependency is absent
+    Traceloop = None  # type: ignore[assignment,unused-ignore]
 
 
 logger = logging.getLogger(__name__)
 
 _global_tracer: Optional["Tracer"] = None
-_global_tracer_lock = threading.Lock()
 
+_OTEL_BOOTSTRAP_LOCK = threading.Lock()
+_OTEL_BOOTSTRAPPED = False
+_OTEL_REMOTE_ENABLED = False
 
 def get_global_tracer() -> Optional["Tracer"]:
     return _global_tracer
@@ -22,20 +42,11 @@ def get_global_tracer() -> Optional["Tracer"]:
 
 def set_global_tracer(tracer: "Tracer") -> None:
     global _global_tracer  # noqa: PLW0603
-    with _global_tracer_lock:
-        _global_tracer = tracer
+    _global_tracer = tracer
 
 
 class Tracer:
-    """Thread-safe scan telemetry tracker.
-
-    All mutable state is guarded by ``_lock`` so that concurrent agent
-    threads and the UI status thread can read/write safely.
-    """
-
     def __init__(self, run_name: str | None = None):
-        self._lock = threading.RLock()  # RLock: allows re-entrant locking (set_scan_config -> get_run_dir)
-
         self.run_name = run_name
         self.run_id = run_name or f"run-{uuid4().hex[:8]}"
         self.start_time = datetime.now(UTC).isoformat()
@@ -61,26 +72,234 @@ class Tracer:
             "status": "running",
         }
         self._run_dir: Path | None = None
+        self._events_file_path: Path | None = None
         self._next_execution_id = 1
         self._next_message_id = 1
         self._saved_vuln_ids: set[str] = set()
+        self._run_completed_emitted = False
+        self._telemetry_enabled = is_otel_enabled()
+        self._sanitizer = TelemetrySanitizer()
 
+        self._otel_tracer: Any = None
+        self._remote_export_enabled = False
+
+        self.caido_url: str | None = None
         self.vulnerability_found_callback: Callable[[dict[str, Any]], None] | None = None
 
+        self._setup_telemetry()
+        self._emit_run_started_event()
+
+    @property
+    def events_file_path(self) -> Path:
+        if self._events_file_path is None:
+            self._events_file_path = self.get_run_dir() / "events.jsonl"
+        return self._events_file_path
+
+    def _active_events_file_path(self) -> Path:
+        active = get_global_tracer()
+        if active and active._events_file_path is not None:
+            return active._events_file_path
+        return self.events_file_path
+
+    def _get_events_write_lock(self, output_path: Path | None = None) -> threading.Lock:
+        path = output_path or self.events_file_path
+        return get_events_write_lock(path)
+
+    def _active_run_metadata(self) -> dict[str, Any]:
+        active = get_global_tracer()
+        if active:
+            return active.run_metadata
+        return self.run_metadata
+
+    def _setup_telemetry(self) -> None:
+        global _OTEL_BOOTSTRAPPED, _OTEL_REMOTE_ENABLED
+
+        if not self._telemetry_enabled:
+            self._otel_tracer = None
+            self._remote_export_enabled = False
+            return
+
+        run_dir = self.get_run_dir()
+        self._events_file_path = run_dir / "events.jsonl"
+        base_url = (Config.get("traceloop_base_url") or "").strip()
+        api_key = (Config.get("traceloop_api_key") or "").strip()
+        headers_raw = Config.get("traceloop_headers") or ""
+
+        (
+            self._otel_tracer,
+            self._remote_export_enabled,
+            _OTEL_BOOTSTRAPPED,
+            _OTEL_REMOTE_ENABLED,
+        ) = bootstrap_otel(
+            bootstrapped=_OTEL_BOOTSTRAPPED,
+            remote_enabled_state=_OTEL_REMOTE_ENABLED,
+            bootstrap_lock=_OTEL_BOOTSTRAP_LOCK,
+            traceloop=Traceloop,
+            base_url=base_url,
+            api_key=api_key,
+            headers_raw=headers_raw,
+            output_path_getter=self._active_events_file_path,
+            run_metadata_getter=self._active_run_metadata,
+            sanitizer=self._sanitize_data,
+            write_lock_getter=self._get_events_write_lock,
+            tracer_name="phantom.telemetry.tracer",
+        )
+
+    def _set_association_properties(self, properties: dict[str, Any]) -> None:
+        if Traceloop is None:
+            return
+        sanitized = self._sanitize_data(properties)
+        try:
+            Traceloop.set_association_properties(sanitized)
+        except Exception:  # noqa: BLE001
+            logger.debug("Failed to set Traceloop association properties")
+
+    def _sanitize_data(self, data: Any, key_hint: str | None = None) -> Any:
+        return self._sanitizer.sanitize(data, key_hint=key_hint)
+
+    def _append_event_record(self, record: dict[str, Any]) -> None:
+        try:
+            append_jsonl_record(self.events_file_path, record)
+        except OSError:
+            logger.exception("Failed to append JSONL event record")
+
+    def _enrich_actor(self, actor: dict[str, Any] | None) -> dict[str, Any] | None:
+        if not actor:
+            return None
+
+        enriched = dict(actor)
+        if "agent_name" in enriched:
+            return enriched
+
+        agent_id = enriched.get("agent_id")
+        if not isinstance(agent_id, str):
+            return enriched
+
+        agent_data = self.agents.get(agent_id, {})
+        agent_name = agent_data.get("name")
+        if isinstance(agent_name, str) and agent_name:
+            enriched["agent_name"] = agent_name
+
+        return enriched
+
+    def _emit_event(
+        self,
+        event_type: str,
+        actor: dict[str, Any] | None = None,
+        payload: Any | None = None,
+        status: str | None = None,
+        error: Any | None = None,
+        source: str = "phantom.tracer",
+        include_run_metadata: bool = False,
+    ) -> None:
+        if not self._telemetry_enabled:
+            return
+
+        enriched_actor = self._enrich_actor(actor)
+        sanitized_actor = self._sanitize_data(enriched_actor) if enriched_actor else None
+        sanitized_payload = self._sanitize_data(payload) if payload is not None else None
+        sanitized_error = self._sanitize_data(error) if error is not None else None
+
+        trace_id: str | None = None
+        span_id: str | None = None
+        parent_span_id: str | None = None
+
+        current_context = trace.get_current_span().get_span_context()
+        if isinstance(current_context, SpanContext) and current_context.is_valid:
+            parent_span_id = format_span_id(current_context.span_id)
+
+        if self._otel_tracer is not None:
+            try:
+                with self._otel_tracer.start_as_current_span(
+                    f"phantom.{event_type}",
+                    kind=SpanKind.INTERNAL,
+                ) as span:
+                    span_context = span.get_span_context()
+                    trace_id = format_trace_id(span_context.trace_id)
+                    span_id = format_span_id(span_context.span_id)
+
+                    span.set_attribute("phantom.event_type", event_type)
+                    span.set_attribute("phantom.source", source)
+                    span.set_attribute("phantom.run_id", self.run_id)
+                    span.set_attribute("phantom.run_name", self.run_name or "")
+
+                    if status:
+                        span.set_attribute("phantom.status", status)
+                    if sanitized_actor is not None:
+                        span.set_attribute(
+                            "phantom.actor",
+                            json.dumps(sanitized_actor, ensure_ascii=False),
+                        )
+                    if sanitized_payload is not None:
+                        span.set_attribute(
+                            "phantom.payload",
+                            json.dumps(sanitized_payload, ensure_ascii=False),
+                        )
+                    if sanitized_error is not None:
+                        span.set_attribute(
+                            "phantom.error",
+                            json.dumps(sanitized_error, ensure_ascii=False),
+                        )
+            except Exception:  # noqa: BLE001
+                logger.debug("Failed to create OTEL span for event type '%s'", event_type)
+
+        if trace_id is None:
+            trace_id = format_trace_id(uuid4().int & ((1 << 128) - 1)) or uuid4().hex
+        if span_id is None:
+            span_id = format_span_id(uuid4().int & ((1 << 64) - 1)) or uuid4().hex[:16]
+
+        record = {
+            "timestamp": datetime.now(UTC).isoformat(),
+            "event_type": event_type,
+            "run_id": self.run_id,
+            "trace_id": trace_id,
+            "span_id": span_id,
+            "parent_span_id": parent_span_id,
+            "actor": sanitized_actor,
+            "payload": sanitized_payload,
+            "status": status,
+            "error": sanitized_error,
+            "source": source,
+        }
+        if include_run_metadata:
+            record["run_metadata"] = self._sanitize_data(self.run_metadata)
+        self._append_event_record(record)
+
     def set_run_name(self, run_name: str) -> None:
-        with self._lock:
-            self.run_name = run_name
-            self.run_id = run_name
+        self.run_name = run_name
+        self.run_id = run_name
+        self.run_metadata["run_name"] = run_name
+        self.run_metadata["run_id"] = run_name
+        self._run_dir = None
+        self._events_file_path = None
+        self._run_completed_emitted = False
+        self._set_association_properties({"run_id": self.run_id, "run_name": self.run_name or ""})
+        self._emit_run_started_event()
+
+    def _emit_run_started_event(self) -> None:
+        if not self._telemetry_enabled:
+            return
+
+        self._emit_event(
+            "run.started",
+            payload={
+                "run_name": self.run_name,
+                "start_time": self.start_time,
+                "local_jsonl_path": str(self.events_file_path),
+                "remote_export_enabled": self._remote_export_enabled,
+            },
+            status="running",
+            include_run_metadata=True,
+        )
 
     def get_run_dir(self) -> Path:
-        with self._lock:
-            if self._run_dir is None:
-                runs_dir = Path.cwd() / "phantom_runs"
-                runs_dir.mkdir(exist_ok=True)
+        if self._run_dir is None:
+            runs_dir = Path.cwd() / "phantom_runs"
+            runs_dir.mkdir(exist_ok=True)
 
-                run_dir_name = self.run_name if self.run_name else self.run_id
-                self._run_dir = runs_dir / run_dir_name
-                self._run_dir.mkdir(exist_ok=True)
+            run_dir_name = self.run_name if self.run_name else self.run_id
+            self._run_dir = runs_dir / run_dir_name
+            self._run_dir.mkdir(exist_ok=True)
 
         return self._run_dir
 
@@ -100,75 +319,65 @@ class Tracer:
         endpoint: str | None = None,
         method: str | None = None,
         cve: str | None = None,
-        code_file: str | None = None,
-        code_before: str | None = None,
-        code_after: str | None = None,
-        code_diff: str | None = None,
-        cvss_vector: str | None = None,
-        mitre: dict[str, Any] | None = None,
+        cwe: str | None = None,
+        code_locations: list[dict[str, Any]] | None = None,
     ) -> str:
-        with self._lock:
-            report_id = f"vuln-{len(self.vulnerability_reports) + 1:04d}"
+        report_id = f"vuln-{len(self.vulnerability_reports) + 1:04d}"
 
-            report: dict[str, Any] = {
-                "id": report_id,
-                "title": title.strip(),
-                "severity": severity.lower().strip(),
-                "timestamp": datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S UTC"),
-            }
+        report: dict[str, Any] = {
+            "id": report_id,
+            "title": title.strip(),
+            "severity": severity.lower().strip(),
+            "timestamp": datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S UTC"),
+        }
 
-            if description:
-                report["description"] = description.strip()
-            if impact:
-                report["impact"] = impact.strip()
-            if target:
-                report["target"] = target.strip()
-            if technical_analysis:
-                report["technical_analysis"] = technical_analysis.strip()
-            if poc_description:
-                report["poc_description"] = poc_description.strip()
-            if poc_script_code:
-                report["poc_script_code"] = poc_script_code.strip()
-            if remediation_steps:
-                report["remediation_steps"] = remediation_steps.strip()
-            if cvss is not None:
-                report["cvss"] = cvss
-            if cvss_breakdown:
-                report["cvss_breakdown"] = cvss_breakdown
-            if endpoint:
-                report["endpoint"] = endpoint.strip()
-            if method:
-                report["method"] = method.strip()
-            if cve:
-                report["cve"] = cve.strip()
-            if code_file:
-                report["code_file"] = code_file.strip()
-            if code_before:
-                report["code_before"] = code_before.strip()
-            if code_after:
-                report["code_after"] = code_after.strip()
-            if code_diff:
-                report["code_diff"] = code_diff.strip()
-            if cvss_vector:
-                report["cvss_vector"] = cvss_vector.strip()
-            if mitre:
-                report["mitre"] = mitre
+        if description:
+            report["description"] = description.strip()
+        if impact:
+            report["impact"] = impact.strip()
+        if target:
+            report["target"] = target.strip()
+        if technical_analysis:
+            report["technical_analysis"] = technical_analysis.strip()
+        if poc_description:
+            report["poc_description"] = poc_description.strip()
+        if poc_script_code:
+            report["poc_script_code"] = poc_script_code.strip()
+        if remediation_steps:
+            report["remediation_steps"] = remediation_steps.strip()
+        if cvss is not None:
+            report["cvss"] = cvss
+        if cvss_breakdown:
+            report["cvss_breakdown"] = cvss_breakdown
+        if endpoint:
+            report["endpoint"] = endpoint.strip()
+        if method:
+            report["method"] = method.strip()
+        if cve:
+            report["cve"] = cve.strip()
+        if cwe:
+            report["cwe"] = cwe.strip()
+        if code_locations:
+            report["code_locations"] = code_locations
 
-            self.vulnerability_reports.append(report)
-            callback = self.vulnerability_found_callback
-
+        self.vulnerability_reports.append(report)
         logger.info(f"Added vulnerability report: {report_id} - {title}")
+        posthog.finding(severity)
+        self._emit_event(
+            "finding.created",
+            payload={"report": report},
+            status=report["severity"],
+            source="phantom.findings",
+        )
 
-        # Fire callback outside lock to avoid deadlock
-        if callback:
-            callback(report)
+        if self.vulnerability_found_callback:
+            self.vulnerability_found_callback(report)
 
         self.save_run_data()
         return report_id
 
     def get_existing_vulnerabilities(self) -> list[dict[str, Any]]:
-        with self._lock:
-            return list(self.vulnerability_reports)
+        return list(self.vulnerability_reports)
 
     def update_scan_final_fields(
         self,
@@ -177,17 +386,16 @@ class Tracer:
         technical_analysis: str,
         recommendations: str,
     ) -> None:
-        with self._lock:
-            self.scan_results = {
-                "scan_completed": True,
-                "executive_summary": executive_summary.strip(),
-                "methodology": methodology.strip(),
-                "technical_analysis": technical_analysis.strip(),
-                "recommendations": recommendations.strip(),
-                "success": True,
-            }
+        self.scan_results = {
+            "scan_completed": True,
+            "executive_summary": executive_summary.strip(),
+            "methodology": methodology.strip(),
+            "technical_analysis": technical_analysis.strip(),
+            "recommendations": recommendations.strip(),
+            "success": True,
+        }
 
-            self.final_scan_result = f"""# Executive Summary
+        self.final_scan_result = f"""# Executive Summary
 
 {executive_summary.strip()}
 
@@ -205,10 +413,24 @@ class Tracer:
 """
 
         logger.info("Updated scan final fields")
+        self._emit_event(
+            "finding.reviewed",
+            payload={
+                "scan_completed": True,
+                "vulnerability_count": len(self.vulnerability_reports),
+            },
+            status="completed",
+            source="phantom.findings",
+        )
         self.save_run_data(mark_complete=True)
+        posthog.end(self, exit_reason="finished_by_tool")
 
     def log_agent_creation(
-        self, agent_id: str, name: str, task: str, parent_id: str | None = None
+        self,
+        agent_id: str,
+        name: str,
+        task: str,
+        parent_id: str | None = None,
     ) -> None:
         agent_data: dict[str, Any] = {
             "id": agent_id,
@@ -221,8 +443,14 @@ class Tracer:
             "tool_executions": [],
         }
 
-        with self._lock:
-            self.agents[agent_id] = agent_data
+        self.agents[agent_id] = agent_data
+        self._emit_event(
+            "agent.created",
+            actor={"agent_id": agent_id, "agent_name": name},
+            payload={"task": task, "parent_id": parent_id},
+            status="running",
+            source="phantom.agents",
+        )
 
     def log_chat_message(
         self,
@@ -231,116 +459,195 @@ class Tracer:
         agent_id: str | None = None,
         metadata: dict[str, Any] | None = None,
     ) -> int:
-        with self._lock:
-            message_id = self._next_message_id
-            self._next_message_id += 1
+        message_id = self._next_message_id
+        self._next_message_id += 1
 
-            message_data = {
-                "message_id": message_id,
-                "content": content,
-                "role": role,
-                "agent_id": agent_id,
-                "timestamp": datetime.now(UTC).isoformat(),
-                "metadata": metadata or {},
-            }
+        message_data = {
+            "message_id": message_id,
+            "content": content,
+            "role": role,
+            "agent_id": agent_id,
+            "timestamp": datetime.now(UTC).isoformat(),
+            "metadata": metadata or {},
+        }
 
-            self.chat_messages.append(message_data)
-            return message_id
+        self.chat_messages.append(message_data)
+        self._emit_event(
+            "chat.message",
+            actor={"agent_id": agent_id, "role": role},
+            payload={"message_id": message_id, "content": content, "metadata": metadata or {}},
+            status="logged",
+            source="phantom.chat",
+        )
+        return message_id
 
-    def log_tool_execution_start(self, agent_id: str, tool_name: str, args: dict[str, Any]) -> int:
-        with self._lock:
-            execution_id = self._next_execution_id
-            self._next_execution_id += 1
+    def log_tool_execution_start(
+        self,
+        agent_id: str,
+        tool_name: str,
+        args: dict[str, Any],
+    ) -> int:
+        execution_id = self._next_execution_id
+        self._next_execution_id += 1
 
-            now = datetime.now(UTC).isoformat()
-            execution_data = {
-                "execution_id": execution_id,
+        now = datetime.now(UTC).isoformat()
+        execution_data = {
+            "execution_id": execution_id,
+            "agent_id": agent_id,
+            "tool_name": tool_name,
+            "args": args,
+            "status": "running",
+            "result": None,
+            "timestamp": now,
+            "started_at": now,
+            "completed_at": None,
+        }
+
+        self.tool_executions[execution_id] = execution_data
+
+        if agent_id in self.agents:
+            self.agents[agent_id]["tool_executions"].append(execution_id)
+
+        self._emit_event(
+            "tool.execution.started",
+            actor={
                 "agent_id": agent_id,
                 "tool_name": tool_name,
-                "args": args,
-                "status": "running",
-                "result": None,
-                "timestamp": now,
-                "started_at": now,
-                "completed_at": None,
-            }
+                "execution_id": execution_id,
+            },
+            payload={"args": args},
+            status="running",
+            source="phantom.tools",
+        )
 
-            self.tool_executions[execution_id] = execution_data
-
-            if agent_id in self.agents:
-                self.agents[agent_id]["tool_executions"].append(execution_id)
-
-            return execution_id
+        return execution_id
 
     def update_tool_execution(
-        self, execution_id: int, status: str, result: Any | None = None
+        self,
+        execution_id: int,
+        status: str,
+        result: Any | None = None,
     ) -> None:
-        with self._lock:
-            if execution_id in self.tool_executions:
-                self.tool_executions[execution_id]["status"] = status
-                self.tool_executions[execution_id]["result"] = result
-                self.tool_executions[execution_id]["completed_at"] = datetime.now(UTC).isoformat()
+        if execution_id not in self.tool_executions:
+            return
+
+        tool_data = self.tool_executions[execution_id]
+        tool_data["status"] = status
+        tool_data["result"] = result
+        tool_data["completed_at"] = datetime.now(UTC).isoformat()
+
+        tool_name = str(tool_data.get("tool_name", "unknown"))
+        agent_id = str(tool_data.get("agent_id", "unknown"))
+        error_payload = result if status in {"error", "failed"} else None
+
+        self._emit_event(
+            "tool.execution.updated",
+            actor={
+                "agent_id": agent_id,
+                "tool_name": tool_name,
+                "execution_id": execution_id,
+            },
+            payload={"result": result},
+            status=status,
+            error=error_payload,
+            source="phantom.tools",
+        )
+
+        if tool_name == "create_vulnerability_report":
+            finding_status = "reviewed" if status == "completed" else "rejected"
+            self._emit_event(
+                "finding.reviewed",
+                actor={"agent_id": agent_id, "tool_name": tool_name},
+                payload={"execution_id": execution_id, "result": result},
+                status=finding_status,
+                error=error_payload,
+                source="phantom.findings",
+            )
 
     def update_agent_status(
-        self, agent_id: str, status: str, error_message: str | None = None
+        self,
+        agent_id: str,
+        status: str,
+        error_message: str | None = None,
     ) -> None:
-        with self._lock:
-            if agent_id in self.agents:
-                self.agents[agent_id]["status"] = status
-                self.agents[agent_id]["updated_at"] = datetime.now(UTC).isoformat()
-                if error_message:
-                    self.agents[agent_id]["error_message"] = error_message
+        if agent_id in self.agents:
+            self.agents[agent_id]["status"] = status
+            self.agents[agent_id]["updated_at"] = datetime.now(UTC).isoformat()
+            if error_message:
+                self.agents[agent_id]["error_message"] = error_message
+
+        self._emit_event(
+            "agent.status.updated",
+            actor={"agent_id": agent_id},
+            payload={"error_message": error_message},
+            status=status,
+            error=error_message,
+            source="phantom.agents",
+        )
 
     def set_scan_config(self, config: dict[str, Any]) -> None:
-        with self._lock:
-            self.scan_config = config
-            self.run_metadata.update(
-                {
-                    "targets": config.get("targets", []),
-                    "user_instructions": config.get("user_instructions", ""),
-                    "max_iterations": config.get("max_iterations", 200),
-                }
-            )
-            self.get_run_dir()
+        self.scan_config = config
+        self.run_metadata.update(
+            {
+                "targets": config.get("targets", []),
+                "user_instructions": config.get("user_instructions", ""),
+                "max_iterations": config.get("max_iterations", 200),
+            }
+        )
+        self._set_association_properties(
+            {
+                "run_id": self.run_id,
+                "run_name": self.run_name or "",
+                "targets": config.get("targets", []),
+                "max_iterations": config.get("max_iterations", 200),
+            }
+        )
+        self._emit_event(
+            "run.configured",
+            payload={"scan_config": config},
+            status="configured",
+            source="phantom.run",
+        )
 
-    def save_run_data(self, mark_complete: bool = False) -> None:  # noqa: PLR0912, PLR0915
-        # Snapshot mutable state under lock, then do I/O outside lock
-        with self._lock:
-            if mark_complete:
-                self.end_time = datetime.now(UTC).isoformat()
-            final_result = self.final_scan_result
-            vuln_reports = list(self.vulnerability_reports)
-            saved_ids = set(self._saved_vuln_ids)
-
+    def save_run_data(self, mark_complete: bool = False) -> None:
         try:
             run_dir = self.get_run_dir()
+            if mark_complete:
+                if self.end_time is None:
+                    self.end_time = datetime.now(UTC).isoformat()
+                self.run_metadata["end_time"] = self.end_time
+                self.run_metadata["status"] = "completed"
 
-            if final_result:
+            if self.final_scan_result:
                 penetration_test_report_file = run_dir / "penetration_test_report.md"
                 with penetration_test_report_file.open("w", encoding="utf-8") as f:
                     f.write("# Security Penetration Test Report\n\n")
                     f.write(
                         f"**Generated:** {datetime.now(UTC).strftime('%Y-%m-%d %H:%M:%S UTC')}\n\n"
                     )
-                    f.write(f"{final_result}\n")
+                    f.write(f"{self.final_scan_result}\n")
                 logger.info(
-                    f"Saved final penetration test report to: {penetration_test_report_file}"
+                    "Saved final penetration test report to: %s",
+                    penetration_test_report_file,
                 )
 
-            if vuln_reports:
+            if self.vulnerability_reports:
                 vuln_dir = run_dir / "vulnerabilities"
                 vuln_dir.mkdir(exist_ok=True)
 
                 new_reports = [
                     report
-                    for report in vuln_reports
-                    if report["id"] not in saved_ids
+                    for report in self.vulnerability_reports
+                    if report["id"] not in self._saved_vuln_ids
                 ]
 
                 severity_order = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4}
                 sorted_reports = sorted(
-                    vuln_reports,
-                    key=lambda x: (severity_order.get(x["severity"], 5), x["timestamp"]),
+                    self.vulnerability_reports,
+                    key=lambda report: (
+                        severity_order.get(report["severity"], 5),
+                        report["timestamp"],
+                    ),
                 )
 
                 for report in new_reports:
@@ -356,6 +663,7 @@ class Tracer:
                             ("Endpoint", report.get("endpoint")),
                             ("Method", report.get("method")),
                             ("CVE", report.get("cve")),
+                            ("CWE", report.get("cwe")),
                         ]
                         cvss_score = report.get("cvss")
                         if cvss_score is not None:
@@ -366,8 +674,8 @@ class Tracer:
                                 f.write(f"**{label}:** {value}\n")
 
                         f.write("\n## Description\n\n")
-                        desc = report.get("description") or "No description provided."
-                        f.write(f"{desc}\n\n")
+                        description = report.get("description") or "No description provided."
+                        f.write(f"{description}\n\n")
 
                         if report.get("impact"):
                             f.write("## Impact\n\n")
@@ -386,22 +694,39 @@ class Tracer:
                                 f.write(f"{report['poc_script_code']}\n")
                                 f.write("```\n\n")
 
-                        if report.get("code_file") or report.get("code_diff"):
+                        if report.get("code_locations"):
                             f.write("## Code Analysis\n\n")
-                            if report.get("code_file"):
-                                f.write(f"**File:** {report['code_file']}\n\n")
-                            if report.get("code_diff"):
-                                f.write("**Changes:**\n")
-                                f.write("```diff\n")
-                                f.write(f"{report['code_diff']}\n")
-                                f.write("```\n\n")
+                            for i, loc in enumerate(report["code_locations"]):
+                                prefix = f"**Location {i + 1}:**"
+                                file_ref = loc.get("file", "unknown")
+                                line_ref = ""
+                                if loc.get("start_line") is not None:
+                                    if loc.get("end_line") and loc["end_line"] != loc["start_line"]:
+                                        line_ref = f" (lines {loc['start_line']}-{loc['end_line']})"
+                                    else:
+                                        line_ref = f" (line {loc['start_line']})"
+                                f.write(f"{prefix} `{file_ref}`{line_ref}\n")
+                                if loc.get("label"):
+                                    f.write(f"  {loc['label']}\n")
+                                if loc.get("snippet"):
+                                    f.write(f"  ```\n  {loc['snippet']}\n  ```\n")
+                                if loc.get("fix_before") or loc.get("fix_after"):
+                                    f.write("\n  **Suggested Fix:**\n")
+                                    f.write("```diff\n")
+                                    if loc.get("fix_before"):
+                                        for line in loc["fix_before"].splitlines():
+                                            f.write(f"- {line}\n")
+                                    if loc.get("fix_after"):
+                                        for line in loc["fix_after"].splitlines():
+                                            f.write(f"+ {line}\n")
+                                    f.write("```\n")
+                                f.write("\n")
 
                         if report.get("remediation_steps"):
                             f.write("## Remediation\n\n")
                             f.write(f"{report['remediation_steps']}\n\n")
 
-                    with self._lock:
-                        self._saved_vuln_ids.add(report["id"])
+                    self._saved_vuln_ids.add(report["id"])
 
                 vuln_csv_file = run_dir / "vulnerabilities.csv"
                 with vuln_csv_file.open("w", encoding="utf-8", newline="") as f:
@@ -424,65 +749,25 @@ class Tracer:
 
                 if new_reports:
                     logger.info(
-                        f"Saved {len(new_reports)} new vulnerability report(s) to: {vuln_dir}"
+                        "Saved %d new vulnerability report(s) to: %s",
+                        len(new_reports),
+                        vuln_dir,
                     )
-                logger.info(f"Updated vulnerability index: {vuln_csv_file}")
+                logger.info("Updated vulnerability index: %s", vuln_csv_file)
 
-            logger.info(f"📊 Essential scan data saved to: {run_dir}")
-
-            # Write LLM cost/token stats and scan summary
-            if mark_complete:
-                try:
-                    import json as _json
-                    llm_stats = self.get_total_llm_stats()
-                    duration = self._calculate_duration()
-                    tool_count = self.get_real_tool_count()
-                    stats = {
-                        "scan_id": self.run_id,
-                        "started_at": self.start_time,
-                        "completed_at": self.end_time,
-                        "duration_seconds": round(duration, 1),
-                        "vulnerabilities_found": len(vuln_reports),
-                        "tool_executions": tool_count,
-                        "llm_usage": llm_stats,
-                    }
-
-                    # L5-FIX: Include cost controller data in scan stats.
-                    # The cost controller has authoritative budget/limit info that
-                    # the per-agent LLM stats don't include (compression costs,
-                    # budget remaining, etc.)
-                    try:
-                        from phantom.core.cost_controller import get_cost_controller
-                        cc = get_cost_controller()
-                        if cc is not None:
-                            stats["cost_controller"] = cc.get_snapshot().to_dict()
-                            stats["cost_summary"] = cc.get_cost_summary()
-                    except (ImportError, AttributeError):
-                        pass
-
-                    stats_path = run_dir / "scan_stats.json"
-                    stats_path.write_text(_json.dumps(stats, indent=2), encoding="utf-8")
-                    logger.info("Saved scan stats to: %s", stats_path)
-
-                    # Also log cost summary to audit logger
-                    try:
-                        from phantom.core.audit_logger import get_global_audit_logger
-                        al = get_global_audit_logger()
-                        if al:
-                            al.log_event(
-                                event_type="scan_completed",
-                                category="scan",
-                                data={
-                                    "duration_seconds": round(duration, 1),
-                                    "vulnerabilities_found": len(vuln_reports),
-                                    "tool_executions": tool_count,
-                                    "llm_usage": llm_stats,
-                                },
-                            )
-                    except Exception:
-                        logger.debug("Audit log write for scan stats failed", exc_info=True)
-                except Exception as e:
-                    logger.debug("Could not write scan stats: %s", e)
+            logger.info("📊 Essential scan data saved to: %s", run_dir)
+            if mark_complete and not self._run_completed_emitted:
+                self._emit_event(
+                    "run.completed",
+                    payload={
+                        "duration_seconds": self._calculate_duration(),
+                        "vulnerability_count": len(self.vulnerability_reports),
+                    },
+                    status="completed",
+                    source="phantom.run",
+                    include_run_metadata=True,
+                )
+                self._run_completed_emitted = True
 
         except (OSError, RuntimeError):
             logger.exception("Failed to save scan data")
@@ -498,23 +783,21 @@ class Tracer:
         return 0.0
 
     def get_agent_tools(self, agent_id: str) -> list[dict[str, Any]]:
-        with self._lock:
-            return [
-                exec_data
-                for exec_data in list(self.tool_executions.values())
-                if exec_data.get("agent_id") == agent_id
-            ]
+        return [
+            exec_data
+            for exec_data in list(self.tool_executions.values())
+            if exec_data.get("agent_id") == agent_id
+        ]
 
     def get_real_tool_count(self) -> int:
-        with self._lock:
-            return sum(
-                1
-                for exec_data in list(self.tool_executions.values())
-                if exec_data.get("tool_name") not in ["scan_start_info", "subagent_start_info"]
-            )
+        return sum(
+            1
+            for exec_data in list(self.tool_executions.values())
+            if exec_data.get("tool_name") not in ["scan_start_info", "subagent_start_info"]
+        )
 
     def get_total_llm_stats(self) -> dict[str, Any]:
-        from phantom.tools.agents_graph.agents_graph_actions import _agent_instances, _graph_lock
+        from phantom.tools.agents_graph.agents_graph_actions import _agent_instances
 
         total_stats = {
             "input_tokens": 0,
@@ -524,10 +807,7 @@ class Tracer:
             "requests": 0,
         }
 
-        with _graph_lock:
-            instances_snapshot = list(_agent_instances.values())
-
-        for agent_instance in instances_snapshot:
+        for agent_instance in _agent_instances.values():
             if hasattr(agent_instance, "llm") and hasattr(agent_instance.llm, "_total_stats"):
                 agent_stats = agent_instance.llm._total_stats
                 total_stats["input_tokens"] += agent_stats.input_tokens
@@ -544,23 +824,18 @@ class Tracer:
         }
 
     def update_streaming_content(self, agent_id: str, content: str) -> None:
-        with self._lock:
-            self.streaming_content[agent_id] = content
+        self.streaming_content[agent_id] = content
 
     def clear_streaming_content(self, agent_id: str) -> None:
-        with self._lock:
-            self.streaming_content.pop(agent_id, None)
+        self.streaming_content.pop(agent_id, None)
 
     def get_streaming_content(self, agent_id: str) -> str | None:
-        with self._lock:
-            return self.streaming_content.get(agent_id)
+        return self.streaming_content.get(agent_id)
 
     def finalize_streaming_as_interrupted(self, agent_id: str) -> str | None:
-        with self._lock:
-            content = self.streaming_content.pop(agent_id, None)
+        content = self.streaming_content.pop(agent_id, None)
         if content and content.strip():
-            with self._lock:
-                self.interrupted_content[agent_id] = content
+            self.interrupted_content[agent_id] = content
             self.log_chat_message(
                 content=content,
                 role="assistant",
@@ -569,8 +844,7 @@ class Tracer:
             )
             return content
 
-        with self._lock:
-            return self.interrupted_content.pop(agent_id, None)
+        return self.interrupted_content.pop(agent_id, None)
 
     def cleanup(self) -> None:
         self.save_run_data(mark_complete=True)

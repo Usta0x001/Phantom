@@ -69,10 +69,98 @@ Professional, customer-facing penetration test report rules (PDF-ready):
     <examples>
 
 <function=finish_scan>
-  <parameter=executive_summary>External penetration test identified SSRF, broken access control, and session hardening gaps. Overall risk: Elevated. Prioritize SSRF remediation and centralized authorization.</parameter>
-  <parameter=methodology>Black-box assessment per OWASP WSTG against production-equivalent staging. Covered: recon, auth review, authorization testing, input handling, SSRF, file handling, config review.</parameter>
-  <parameter=technical_analysis>1) SSRF in URL preview (Critical) - fetches internal hosts. 2) Broken tenant isolation (High) - missing ownership checks. 3) Admin hardening gaps (Medium). Root cause: inconsistent authorization enforcement.</parameter>
-  <parameter=recommendations>Immediate: SSRF allowlist + egress controls. Short-term: Centralize authz middleware. Medium-term: Monitoring improvements. Retest after remediation.</parameter>
+  <parameter=executive_summary>An external penetration test of the Acme Customer Portal and associated API identified multiple security weaknesses that, if exploited, could result in unauthorized access to customer data, cross-tenant exposure, and access to internal network resources.
+
+Overall risk posture: Elevated.
+
+Key findings
+- Confirmed server-side request forgery (SSRF) in a URL preview capability that enables the application to initiate outbound requests to attacker-controlled destinations and internal network ranges.
+- Identified broken access control patterns in business-critical workflows that can enable cross-tenant data access (tenant isolation failures).
+- Observed session and authorization hardening gaps that materially increase risk when combined with other weaknesses.
+
+Business impact
+- Increased likelihood of sensitive data exposure across customers/tenants, including invoices, orders, and account information.
+- Increased risk of internal service exposure through server-side outbound request functionality (including link-local and private network destinations).
+- Increased potential for account compromise and administrative abuse if tokens are stolen or misused.
+
+Remediation theme
+Prioritize eliminating SSRF pathways and centralizing authorization enforcement (deny-by-default). Follow with session hardening and monitoring improvements, then validate with a focused retest.</parameter>
+  <parameter=methodology>The assessment was conducted in accordance with the OWASP Web Security Testing Guide (WSTG) and aligned to industry-standard penetration testing methodology.
+
+Engagement details
+- Assessment type: External penetration test (black-box with limited gray-box context)
+- Target environment: Production-equivalent staging
+
+Scope (in-scope assets)
+- Web application: https://app.acme-corp.com
+- API base: https://app.acme-corp.com/api/v1/
+
+High-level testing activities
+- Reconnaissance and attack-surface mapping (routes, parameters, workflows)
+- Authentication and session management review (token handling, session lifetime, sensitive actions)
+- Authorization and tenant-isolation testing (object access and privilege boundaries)
+- Input handling and server-side request testing (URL fetchers, imports, previews, callbacks)
+- File handling and content rendering review (uploads, previews, unsafe content types)
+- Configuration review (transport security, security headers, caching behavior, error handling)
+
+Evidence handling and validation standard
+Only validated issues with reproducible impact were treated as findings. Each finding was documented with clear reproduction steps and sufficient evidence to support remediation and verification testing.</parameter>
+  <parameter=technical_analysis>This section provides a consolidated view of the confirmed findings and observed risk patterns. Detailed reproduction steps and evidence are documented in the individual vulnerability reports.
+
+Severity model
+Severity reflects a combination of exploitability and potential impact to confidentiality, integrity, and availability, considering realistic attacker capabilities.
+
+Confirmed findings
+1) Server-side request forgery (SSRF) in URL preview (Critical)
+The application fetches user-supplied URLs server-side to generate previews. Validation controls were insufficient to prevent access to internal and link-local destinations. This creates a pathway to internal network enumeration and potential access to sensitive internal services. Redirect and DNS/normalization bypass risk must be assumed unless controls are comprehensive and applied on every request hop.
+
+2) Broken tenant isolation in order/invoice workflows (High)
+Multiple endpoints accepted object identifiers without consistently enforcing tenant ownership. This is indicative of broken function- and object-level authorization checks. In practice, this can enable cross-tenant access to business-critical resources (viewing or modifying data outside the attacker’s tenant boundary).
+
+3) Administrative action hardening gaps (Medium)
+Several sensitive actions lacked defense-in-depth controls (e.g., re-authentication for high-risk actions, consistent authorization checks across related endpoints, and protections against session misuse). While not all behaviors were immediately exploitable in isolation, they increase the likelihood and blast radius of account compromise when chained with other vulnerabilities.
+
+4) Unsafe file preview/content handling patterns (Medium)
+File preview and rendering behaviors can create exposure to script execution or content-type confusion if unsafe formats are rendered inline. Controls should be consistent: strong content-type validation, forced download where appropriate, and hardening against active content.
+
+Systemic themes and root causes
+- Authorization enforcement appears distributed and inconsistent across endpoints instead of centralized and testable.
+- Outbound request functionality lacks a robust, deny-by-default policy for destination validation.
+- Hardening controls (session lifetime, sensitive-action controls, logging) are applied unevenly, increasing the likelihood of successful attack chains.</parameter>
+  <parameter=recommendations>The following recommendations are prioritized by urgency and potential risk reduction.
+
+Immediate priority
+These items address the most severe confirmed risks and should be prioritized for immediate remediation.
+
+1. Remediate server-side request forgery
+Implement a strict destination allowlist with a deny-by-default policy for all server-initiated outbound requests. Block private, loopback, and link-local address ranges (IPv4 and IPv6) at the application layer after DNS resolution. Re-validate destination addresses on every redirect hop. Apply URL normalization to prevent bypass via ambiguous encodings, alternate IP notations, or DNS rebinding.
+
+2. Enforce network-level egress controls
+Restrict application runtime network egress to prevent outbound connections to internal and link-local address spaces at the network layer. Route legitimate outbound requests through a policy-enforcing egress proxy with request logging and alerting.
+
+3. Enforce tenant-scoped authorization
+Implement consistent tenant-ownership validation on every read and write path for business-critical resources, including orders, invoices, and account data. Adopt centralized, deny-by-default authorization middleware that enforces object- and function-level access controls uniformly across all endpoints.
+
+Short-term priority
+These items reduce residual risk and harden defensive controls.
+
+4. Centralize and harden authorization logic
+Consolidate authorization enforcement into a centralized policy layer. Require re-authentication for high-risk administrative actions. Add regression tests covering cross-tenant access, privilege escalation, and negative authorization cases.
+
+5. Harden session management
+Enforce secure cookie attributes (Secure, HttpOnly, SameSite). Implement session rotation after authentication events and privilege changes. Reduce session lifetime for privileged contexts. Apply consistent CSRF protections to all state-changing operations.
+
+Medium-term priority
+These items strengthen defense-in-depth and improve operational visibility.
+
+6. Harden file handling and content rendering
+Enforce strict content-type allowlists for file uploads and previews. Force download disposition for active content types. Implement content sanitization and scanning where applicable. Prevent inline rendering of potentially executable formats.
+
+7. Improve security monitoring and detection
+Implement alerting for high-risk events: repeated authorization failures, anomalous outbound request patterns, sensitive administrative actions, and unusual access to business-critical resources. Ensure sufficient logging granularity to support incident investigation.
+
+Retest and validation
+Conduct a focused retest after remediation of immediate-priority items to verify the effectiveness of SSRF controls, tenant isolation enforcement, and session hardening. Validate that no bypasses exist through redirect chains, DNS rebinding, or encoding edge cases. Repeat authorization regression tests to confirm consistent enforcement across all endpoints.</parameter>
 </function>
     </examples>
   </tool>

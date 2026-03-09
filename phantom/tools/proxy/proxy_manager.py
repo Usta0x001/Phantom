@@ -1,166 +1,15 @@
 import base64
-import ipaddress
-import logging
 import os
 import re
-import socket
 import time
 from typing import TYPE_CHECKING, Any
 from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
 import requests
-try:
-    from gql import Client, gql
-    from gql.transport.exceptions import TransportQueryError
-    from gql.transport.requests import RequestsHTTPTransport
-except ImportError:
-    # gql is only available inside Docker sandbox; these are not needed on host
-    Client = None  # type: ignore[assignment,misc]
-    gql = None  # type: ignore[assignment]
-    TransportQueryError = Exception  # type: ignore[assignment,misc]
-    RequestsHTTPTransport = None  # type: ignore[assignment]
+from gql import Client, gql
+from gql.transport.exceptions import TransportQueryError
+from gql.transport.requests import RequestsHTTPTransport
 from requests.exceptions import ProxyError, RequestException, Timeout
-
-_logger = logging.getLogger(__name__)
-
-# PHT-010 FIX: Configurable TLS verification instead of hardcoded verify=False
-# In proxy mode, TLS verification is disabled because Caido proxy handles
-# TLS interception. In direct mode, honour the environment setting.
-_PROXY_TLS_VERIFY: bool = False  # proxy always needs verify=False for interception
-_DIRECT_TLS_VERIFY: bool = os.environ.get("PHANTOM_TLS_VERIFY", "0").lower() in ("1", "true", "yes")
-
-# Explicitly allowed hostnames (populated from scan targets).
-# Requests to these hosts bypass the private-IP SSRF check because
-# they ARE the scan target — blocking them would break the scan.
-_ALLOWED_SSRF_HOSTS: set[str] = set()
-
-# ---- Session / Auth Token Store ----
-# Automatically captures auth tokens from login responses and carries them
-# across subsequent send_request calls so subagents don't need to re-login.
-# Thread-safe: uses a simple dict guarded by the GIL for reads/writes.
-_MAX_AUTH_TOKENS = 50  # PHT-060: Prevent unbounded growth
-_auth_token_store: dict[str, str] = {}  # header_name -> header_value
-
-
-def get_auth_token_store() -> dict[str, str]:
-    """Return the current auth token store (for injection into scanner tools)."""
-    return dict(_auth_token_store)
-
-
-def set_auth_token(header_name: str, header_value: str) -> None:
-    """Manually register an auth token for auto-injection."""
-    # Evict oldest entry when at capacity
-    if header_name not in _auth_token_store and len(_auth_token_store) >= _MAX_AUTH_TOKENS:
-        oldest = next(iter(_auth_token_store))
-        del _auth_token_store[oldest]
-    _auth_token_store[header_name] = header_value
-
-
-def _capture_auth_from_response(
-    response_headers: dict, response_body: str, *, request_host: str = ""
-) -> None:
-    """Auto-capture auth tokens from login-like responses.
-
-    Detects JWT tokens in response JSON and Set-Cookie headers,
-    stores them for auto-injection into subsequent requests.
-
-    PHT-061: Only captures tokens when *request_host* is in the
-    allowed SSRF hosts set (i.e. a legitimate scan target) to
-    prevent cross-domain token confusion.
-    """
-    import json as _json
-
-    # PHT-061: Scope capture to scan-target domains only
-    if request_host and request_host.lower().strip() not in _ALLOWED_SSRF_HOSTS:
-        return
-
-    # Capture Set-Cookie headers
-    set_cookie = response_headers.get("set-cookie", "") or response_headers.get("Set-Cookie", "")
-    if set_cookie:
-        # Store the cookie for future requests
-        set_auth_token("Cookie", set_cookie.split(";")[0])  # first cookie value
-
-    # Capture JWT from JSON response body (common in REST APIs like Juice Shop)
-    if response_body:
-        try:
-            data = _json.loads(response_body[:5000])  # limit parsing
-            if isinstance(data, dict):
-                # Look for token fields in response
-                for key in ("token", "access_token", "accessToken", "jwt", "auth_token",
-                            "authentication", "id_token"):
-                    val = data.get(key)
-                    if not val:
-                        # Check nested: data.authentication.token
-                        auth_obj = data.get("authentication", {})
-                        if isinstance(auth_obj, dict):
-                            val = auth_obj.get("token") or auth_obj.get("access_token")
-                    if val and isinstance(val, str) and len(val) > 20:
-                        set_auth_token("Authorization", f"Bearer {val}")
-                        _logger.info("Auto-captured auth token from response (field: %s)", key)
-                        break
-        except (_json.JSONDecodeError, ValueError, TypeError):
-            pass
-
-
-def allow_ssrf_host(hostname: str) -> None:
-    """Register a hostname as safe for SSRF checks (scan target)."""
-    _ALLOWED_SSRF_HOSTS.add(hostname.lower().strip())
-
-
-def _is_ssrf_safe(url: str) -> bool:
-    """Block requests to private/loopback IPs.
-
-    PHT-003 FIX: Resolves DNS BEFORE checking IP addresses to prevent
-    DNS rebinding attacks where a hostname initially resolves to a public
-    IP during the check but is later re-resolved to a private IP.
-    """
-    try:
-        parsed = urlparse(url)
-        hostname = parsed.hostname
-        if not hostname:
-            return False
-        # Block file:// and other dangerous schemes
-        if parsed.scheme not in ("http", "https"):
-            return False
-
-        # Allow explicitly registered scan targets even if they resolve to
-        # private IPs (e.g. host.docker.internal → 192.168.x.x).
-        # CHECK THIS FIRST — before the localhost block — because the target
-        # may be localhost itself when running locally.
-        if hostname.lower() in _ALLOWED_SSRF_HOSTS:
-            return True
-
-        # Block known dangerous hostnames (only if NOT an allowed target)
-        if hostname.lower() in ("localhost", "0.0.0.0"):
-            return False
-
-        # PHT-003 FIX: Resolve DNS first, then check ALL resolved IPs
-        try:
-            addrinfos = socket.getaddrinfo(
-                hostname, parsed.port or (443 if parsed.scheme == "https" else 80),
-                proto=socket.IPPROTO_TCP,
-            )
-        except socket.gaierror:
-            return False  # Can't resolve = not safe
-
-        for family, type_, proto, canonname, sockaddr in addrinfos:
-            resolved_ip = sockaddr[0]
-            try:
-                addr = ipaddress.ip_address(resolved_ip)
-            except ValueError:
-                return False
-            # Allow 127.0.0.1 since requests go through local Caido proxy
-            if str(addr) == "127.0.0.1":
-                continue
-            if addr.is_private or addr.is_loopback or addr.is_link_local or addr.is_reserved:
-                _logger.warning(
-                    "SSRF blocked: %s resolved to private IP %s", hostname, resolved_ip
-                )
-                return False
-
-        return True
-    except Exception:
-        return False
 
 
 if TYPE_CHECKING:
@@ -196,8 +45,6 @@ class ProxyManager:
         sort_order: str = "desc",
         scope_id: str | None = None,
     ) -> dict[str, Any]:
-        if gql is None:
-            return {"error": "Proxy request listing requires the gql package (only available in Docker sandbox)", "requests": [], "count": 0}
         offset = (start_page - 1) * page_size
         limit = (end_page - start_page + 1) * page_size
 
@@ -328,9 +175,6 @@ class ProxyManager:
     def _search_content(
         self, request_data: dict[str, Any], content: str, pattern: str
     ) -> dict[str, Any]:
-        # Limit pattern length to mitigate ReDoS
-        if len(pattern) > 500:
-            return {"error": "Search pattern too long (max 500 chars)"}
         try:
             regex = re.compile(pattern, re.IGNORECASE | re.MULTILINE | re.DOTALL)
             matches = []
@@ -399,99 +243,38 @@ class ProxyManager:
         headers: dict[str, str] | None = None,
         body: str = "",
         timeout: int = 30,
-        follow_redirects: bool = True,
     ) -> dict[str, Any]:
         if headers is None:
             headers = {}
+        try:
+            start_time = time.time()
+            response = requests.request(
+                method=method,
+                url=url,
+                headers=headers,
+                data=body or None,
+                proxies=self.proxies,
+                timeout=timeout,
+                verify=False,
+            )
+            response_time = int((time.time() - start_time) * 1000)
 
-        # Auto-inject stored auth tokens (from previous login responses)
-        # Only inject if the caller hasn't already set the header.
-        for hdr_name, hdr_value in _auth_token_store.items():
-            if hdr_name not in headers and hdr_name.lower() not in {k.lower() for k in headers}:
-                headers[hdr_name] = hdr_value
+            body_content = response.text
+            if len(body_content) > 10000:
+                body_content = body_content[:10000] + "\n... [truncated]"
 
-        if not _is_ssrf_safe(url):
-            return {"error": "Blocked: URL targets a private/internal address", "url": url}
-
-        # Try through proxy first, fall back to direct on 502/proxy failures
-        for attempt, use_proxy in enumerate([(True, "proxy"), (False, "direct")]):
-            proxy_mode = use_proxy[1]
-            current_proxies = self.proxies if use_proxy[0] else None
-            try:
-                start_time = time.time()
-                # PHT-010 FIX: Use configurable TLS verification
-                tls_verify = _PROXY_TLS_VERIFY if use_proxy[0] else _DIRECT_TLS_VERIFY
-                response = requests.request(
-                    method=method,
-                    url=url,
-                    headers=headers,
-                    data=body or None,
-                    proxies=current_proxies,
-                    timeout=timeout,
-                    verify=tls_verify,
-                    allow_redirects=follow_redirects,
-                )
-                response_time = int((time.time() - start_time) * 1000)
-
-                # If proxy returns 502, retry without proxy
-                if response.status_code == 502 and proxy_mode == "proxy":
-                    _logger.warning("Proxy returned 502 for %s, retrying direct", url)
-                    continue
-
-                body_content = response.text
-
-                # Auto-capture auth tokens from successful login-like responses
-                if response.status_code in (200, 201) and method.upper() in ("POST", "PUT"):
-                    from urllib.parse import urlparse as _urlparse
-                    _req_host = _urlparse(url).hostname or ""
-                    _capture_auth_from_response(dict(response.headers), body_content, request_host=_req_host)
-
-                # Body truncation: 8K for HTML (need to see XSS reflections, SQL errors),
-                # 10K for JSON/API responses (need full data for IDOR/auth analysis)
-                content_type = response.headers.get("content-type", "")
-                body_limit = 8000 if "text/html" in content_type else 10000
-                if len(body_content) > body_limit:
-                    body_content = body_content[:body_limit] + "\n... [truncated]"
-
-                msg = (
+            return {
+                "status_code": response.status_code,
+                "headers": dict(response.headers),
+                "body": body_content,
+                "response_time_ms": response_time,
+                "url": response.url,
+                "message": (
                     "Request sent through proxy - check list_requests() for captured traffic"
-                    if proxy_mode == "proxy"
-                    else "Request sent directly (proxy unavailable)"
-                )
-                # Filter to security-relevant headers only (saves ~800 tokens/call)
-                _RELEVANT_HEADERS = {
-                    "content-type", "content-length", "server", "set-cookie",
-                    "location", "www-authenticate", "x-powered-by",
-                    "access-control-allow-origin", "x-frame-options",
-                    "content-security-policy", "strict-transport-security",
-                    "x-content-type-options", "authorization",
-                }
-                filtered_headers = {
-                    k: v for k, v in response.headers.items()
-                    if k.lower() in _RELEVANT_HEADERS
-                }
-                result = {
-                    "status_code": response.status_code,
-                    "headers": filtered_headers,
-                    "body": body_content,
-                    "response_time_ms": response_time,
-                    "url": response.url,
-                    "message": msg,
-                }
-                # Show stored auth info to help the agent
-                if _auth_token_store:
-                    result["auto_auth_applied"] = list(_auth_token_store.keys())
-                return result
-            except (ProxyError, ConnectionError) as e:
-                if proxy_mode == "proxy":
-                    _logger.warning("Proxy error for %s (%s), retrying direct", url, e)
-                    continue
-                return {"error": f"Request failed: {type(e).__name__}", "details": str(e), "url": url}
-            except (RequestException, Timeout) as e:
-                return {"error": f"Request failed: {type(e).__name__}", "details": str(e), "url": url}
-
-        # Should not reach here, but just in case
-        return {"error": "Request failed after proxy and direct attempts", "url": url}
+                ),
+            }
+        except (RequestException, ProxyError, Timeout) as e:
+            return {"error": f"Request failed: {type(e).__name__}", "details": str(e), "url": url}
 
     def repeat_request(
         self, request_id: str, modifications: dict[str, Any] | None = None
@@ -600,79 +383,60 @@ class ProxyManager:
     def _send_modified_request(
         self, request_data: dict[str, Any], request_id: str, modifications: dict[str, Any]
     ) -> dict[str, Any]:
-        # SSRF check: validate modified URL before sending
-        if not _is_ssrf_safe(request_data["url"]):
-            return {"error": "Blocked: modified URL targets a private/internal address", "url": request_data["url"]}
+        try:
+            start_time = time.time()
+            response = requests.request(
+                method=request_data["method"],
+                url=request_data["url"],
+                headers=request_data["headers"],
+                data=request_data["body"] or None,
+                proxies=self.proxies,
+                timeout=30,
+                verify=False,
+            )
+            response_time = int((time.time() - start_time) * 1000)
 
-        # Try through proxy first, fall back to direct on 502/proxy failures
-        for use_proxy, proxy_label in [(True, "proxy"), (False, "direct")]:
-            current_proxies = self.proxies if use_proxy else None
-            try:
-                start_time = time.time()
-                # PHT-010 FIX: Use configurable TLS verification
-                tls_verify = _PROXY_TLS_VERIFY if use_proxy else _DIRECT_TLS_VERIFY
-                response = requests.request(
-                    method=request_data["method"],
-                    url=request_data["url"],
-                    headers=request_data["headers"],
-                    data=request_data["body"] or None,
-                    proxies=current_proxies,
-                    timeout=30,
-                    verify=tls_verify,
-                )
-                response_time = int((time.time() - start_time) * 1000)
+            response_body = response.text
+            truncated = len(response_body) > 10000
+            if truncated:
+                response_body = response_body[:10000] + "\n... [truncated]"
 
-                # If proxy returns 502, retry without proxy
-                if response.status_code == 502 and proxy_label == "proxy":
-                    _logger.warning("Proxy returned 502 for modified request, retrying direct")
-                    continue
+            return {
+                "status_code": response.status_code,
+                "status_text": response.reason,
+                "headers": {
+                    k: v
+                    for k, v in response.headers.items()
+                    if k.lower()
+                    in ["content-type", "content-length", "server", "set-cookie", "location"]
+                },
+                "body": response_body,
+                "body_truncated": truncated,
+                "body_size": len(response.content),
+                "response_time_ms": response_time,
+                "url": response.url,
+                "original_request_id": request_id,
+                "modifications_applied": modifications,
+                "request": {
+                    "method": request_data["method"],
+                    "url": request_data["url"],
+                    "headers": request_data["headers"],
+                    "has_body": bool(request_data["body"]),
+                },
+            }
 
-                response_body = response.text
-                # Reduced body cap for repeat_request (was 15K, now 5K — targeted probing)
-                truncated = len(response_body) > 5000
-                if truncated:
-                    response_body = response_body[:5000] + "\n... [truncated]"
-
-                return {
-                    "status_code": response.status_code,
-                    "status_text": response.reason,
-                    "headers": {
-                        k: v
-                        for k, v in response.headers.items()
-                        if k.lower()
-                        in ["content-type", "content-length", "server", "set-cookie", "location"]
-                    },
-                    "body": response_body,
-                    "body_truncated": truncated,
-                    "body_size": len(response.content),
-                    "response_time_ms": response_time,
-                    "url": response.url,
-                    "original_request_id": request_id,
-                    "modifications_applied": modifications,
-                    "request": {
-                        "method": request_data["method"],
-                        "url": request_data["url"],
-                        "headers": request_data["headers"],
-                        "has_body": bool(request_data["body"]),
-                    },
-                }
-            except (ProxyError, ConnectionError) as e:
-                if proxy_label == "proxy":
-                    _logger.warning("Proxy error for modified request (%s), retrying direct", e)
-                    continue
-                return {
-                    "error": "Proxy connection failed - is Caido running?",
-                    "details": str(e),
-                    "original_request_id": request_id,
-                }
-            except (RequestException, Timeout) as e:
-                return {
-                    "error": f"Failed to repeat request: {type(e).__name__}",
-                    "details": str(e),
-                    "original_request_id": request_id,
-                }
-
-        return {"error": "Request failed after proxy and direct attempts", "original_request_id": request_id}
+        except ProxyError as e:
+            return {
+                "error": "Proxy connection failed - is Caido running?",
+                "details": str(e),
+                "original_request_id": request_id,
+            }
+        except (RequestException, Timeout) as e:
+            return {
+                "error": f"Failed to repeat request: {type(e).__name__}",
+                "details": str(e),
+                "original_request_id": request_id,
+            }
 
     def _handle_scope_list(self) -> dict[str, Any]:
         result = self._get_client().execute(
@@ -1023,15 +787,11 @@ class ProxyManager:
         pass
 
 
-import threading
-
 _PROXY_MANAGER: ProxyManager | None = None
-_proxy_manager_lock = threading.Lock()
 
 
 def get_proxy_manager() -> ProxyManager:
     global _PROXY_MANAGER  # noqa: PLW0603
-    with _proxy_manager_lock:
-        if _PROXY_MANAGER is None:
-            _PROXY_MANAGER = ProxyManager()
-        return _PROXY_MANAGER
+    if _PROXY_MANAGER is None:
+        _PROXY_MANAGER = ProxyManager()
+    return _PROXY_MANAGER

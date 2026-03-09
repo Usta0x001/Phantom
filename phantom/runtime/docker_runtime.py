@@ -20,8 +20,9 @@ from .runtime import AbstractRuntime, SandboxInfo
 
 
 HOST_GATEWAY_HOSTNAME = "host.docker.internal"
-DOCKER_TIMEOUT = 180  # Increased from 60 — prevents NpipeHTTPConnectionPool Read timeouts on slow Docker Desktop
+DOCKER_TIMEOUT = 60
 CONTAINER_TOOL_SERVER_PORT = 48081
+CONTAINER_CAIDO_PORT = 48080
 
 
 class DockerRuntime(AbstractRuntime):
@@ -37,63 +38,12 @@ class DockerRuntime(AbstractRuntime):
         self._scan_container: Container | None = None
         self._tool_server_port: int | None = None
         self._tool_server_token: str | None = None
-
-        # P1-FIX5: Clean up orphaned phantom containers from previous crashed runs
-        self._cleanup_orphaned_containers()
-
-    def _cleanup_orphaned_containers(self) -> None:
-        """P1-FIX5: Remove stale phantom-scan-* containers from previous crashed runs.
-        
-        On startup, checks for any stopped/exited containers with the phantom-scan-
-        prefix and removes them. Running containers are left alone (they belong to
-        an active scan in another process).
-        """
-        import logging as _log
-        _logger = _log.getLogger(__name__)
-        try:
-            containers = self.client.containers.list(
-                all=True,  # include stopped containers
-                filters={"name": "phantom-scan-"},
-            )
-            for container in containers:
-                try:
-                    container.reload()
-                    if container.status in ("exited", "dead", "created"):
-                        _logger.info(
-                            "Removing orphaned container: %s (status=%s)",
-                            container.name, container.status,
-                        )
-                        container.remove(force=True)
-                except Exception as e:  # noqa: BLE001
-                    _logger.debug("Failed to clean orphan %s: %s", container.name, e)
-        except DockerException as e:
-            _logger.debug("Orphan cleanup skipped: %s", e)
+        self._caido_port: int | None = None
 
     def _find_available_port(self) -> int:
-        """Find an available port with minimal TOCTOU window.
-
-        Binds to port 0 to let the OS pick a free port, stores the socket
-        so it stays bound until Docker takes over.  The caller must call
-        ``_release_port_reservation()`` after the container has started.
-        """
-        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        s.bind(("", 0))
-        port = cast("int", s.getsockname()[1])
-        # Keep the socket alive to block other processes from grabbing
-        # the same port before Docker binds to it.
-        self._port_reservation_socket: socket.socket | None = s
-        return port
-
-    def _release_port_reservation(self) -> None:
-        """Release the port-reservation socket after Docker has bound the port."""
-        sock = getattr(self, "_port_reservation_socket", None)
-        if sock is not None:
-            try:
-                sock.close()
-            except OSError:
-                pass
-            self._port_reservation_socket = None
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.bind(("", 0))
+            return cast("int", s.getsockname()[1])
 
     def _get_scan_id(self, agent_id: str) -> str:
         try:
@@ -130,9 +80,15 @@ class DockerRuntime(AbstractRuntime):
         if port_bindings.get(port_key):
             self._tool_server_port = int(port_bindings[port_key][0]["HostPort"])
 
+        caido_port_key = f"{CONTAINER_CAIDO_PORT}/tcp"
+        if port_bindings.get(caido_port_key):
+            self._caido_port = int(port_bindings[caido_port_key][0]["HostPort"])
+
     def _wait_for_tool_server(self, max_retries: int = 30, timeout: int = 5) -> None:
         host = self._resolve_docker_host()
         health_url = f"http://{host}:{self._tool_server_port}/health"
+
+        time.sleep(5)
 
         for attempt in range(max_retries):
             try:
@@ -145,7 +101,7 @@ class DockerRuntime(AbstractRuntime):
             except (httpx.ConnectError, httpx.TimeoutException, httpx.RequestError):
                 pass
 
-            time.sleep(min(0.5 * (1.5 ** attempt), 5))
+            time.sleep(min(2**attempt * 0.5, 5))
 
         raise SandboxInitializationError(
             "Tool server failed to start",
@@ -153,8 +109,7 @@ class DockerRuntime(AbstractRuntime):
         )
 
     def _create_container(self, scan_id: str, max_retries: int = 2) -> Container:
-        # P1-004 FIX: Add PID to container name to avoid collisions across processes
-        container_name = f"phantom-scan-{scan_id}-{os.getpid()}"
+        container_name = f"phantom-scan-{scan_id}"
         image_name = Config.get("phantom_image")
         if not image_name:
             raise ValueError("PHANTOM_IMAGE must be configured")
@@ -172,68 +127,42 @@ class DockerRuntime(AbstractRuntime):
                     time.sleep(1)
 
                 self._tool_server_port = self._find_available_port()
+                self._caido_port = self._find_available_port()
                 self._tool_server_token = secrets.token_urlsafe(32)
-                execution_timeout = Config.get("phantom_sandbox_execution_timeout") or "600"
+                execution_timeout = Config.get("phantom_sandbox_execution_timeout") or "120"
 
                 container = self.client.containers.run(
                     image_name,
-                    command=["sleep", "infinity"],
+                    command="sleep infinity",
                     detach=True,
                     name=container_name,
                     hostname=container_name,
-                    ports={f"{CONTAINER_TOOL_SERVER_PORT}/tcp": ("127.0.0.1", self._tool_server_port)},
-                    # P2-FIX10: Security hardening — drop dangerous capabilities
-                    # Cannot use cap_drop=ALL because the sandbox runs security tools
-                    # (Caido proxy, nmap, sqlmap) that need standard container caps.
-                    # Instead, add only the extra caps needed for pentest tooling.
-                    cap_add=["NET_ADMIN", "NET_RAW", "SYS_PTRACE"],
+                    ports={
+                        f"{CONTAINER_TOOL_SERVER_PORT}/tcp": self._tool_server_port,
+                        f"{CONTAINER_CAIDO_PORT}/tcp": self._caido_port,
+                    },
+                    cap_add=["NET_ADMIN", "NET_RAW"],
                     labels={"phantom-scan-id": scan_id},
-                    # PHT-006 FIX: Per-container resource limits to prevent DoS
-                    mem_limit="4g",
-                    memswap_limit="6g",
-                    cpu_period=100000,
-                    cpu_quota=200000,  # 2 CPUs max
-                    pids_limit=512,    # Limit process spawning
-                    # NOTE: storage_opt (disk quota) only supported with devicemapper.
-                    # On overlay2/overlayfs it is silently ignored or errors out.
-                    # Omitted for maximum Docker compatibility.
                     environment={
                         "PYTHONUNBUFFERED": "1",
                         "TOOL_SERVER_PORT": str(CONTAINER_TOOL_SERVER_PORT),
                         "TOOL_SERVER_TOKEN": self._tool_server_token,
                         "PHANTOM_SANDBOX_EXECUTION_TIMEOUT": str(execution_timeout),
                         "HOST_GATEWAY": HOST_GATEWAY_HOSTNAME,
-                        "PHANTOM_SANDBOX_MODE": "true",
-                        # Bypass proxy for target hosts — prevents 502 when Caido
-                        # proxy becomes unreachable or overloaded.
-                        "no_proxy": f"{HOST_GATEWAY_HOSTNAME},localhost,127.0.0.1",
-                        "NO_PROXY": f"{HOST_GATEWAY_HOSTNAME},localhost,127.0.0.1",
                     },
                     extra_hosts={HOST_GATEWAY_HOSTNAME: "host-gateway"},
                     tty=True,
                 )
 
                 self._scan_container = container
-                # Release port reservation BEFORE health check — Docker needs the port
-                self._release_port_reservation()
-                # Give entrypoint time to start Caido + tool server
-                # Entrypoint takes ~15-20s: Caido start, token fetch, project create, proxy config
-                time.sleep(10)
                 self._wait_for_tool_server()
 
-            except (DockerException, RequestsConnectionError, RequestsTimeout, SandboxInitializationError) as e:
+            except (DockerException, RequestsConnectionError, RequestsTimeout) as e:
                 last_error = e
-                self._release_port_reservation()
                 if attempt < max_retries:
                     self._tool_server_port = None
                     self._tool_server_token = None
-                    # Clean up the failed container before retrying
-                    if self._scan_container is not None:
-                        with contextlib.suppress(Exception):
-                            self._scan_container.stop(timeout=5)
-                        with contextlib.suppress(Exception):
-                            self._scan_container.remove(force=True)
-                        self._scan_container = None
+                    self._caido_port = None
                     time.sleep(2**attempt)
             else:
                 return container
@@ -244,30 +173,18 @@ class DockerRuntime(AbstractRuntime):
         ) from last_error
 
     def _get_or_create_container(self, scan_id: str) -> Container:
-        container_name = f"phantom-scan-{scan_id}-{os.getpid()}"
+        container_name = f"phantom-scan-{scan_id}"
 
         if self._scan_container:
             try:
                 self._scan_container.reload()
                 if self._scan_container.status == "running":
                     return self._scan_container
-                # P2-FIX7: Container auto-recovery — if container died, recreate it
-                if self._scan_container.status in ("exited", "dead"):
-                    import logging as _log
-                    _log.getLogger(__name__).warning(
-                        "Container %s died (status=%s), auto-recovering...",
-                        container_name, self._scan_container.status,
-                    )
-                    with contextlib.suppress(Exception):
-                        self._scan_container.remove(force=True)
-                    self._scan_container = None
-                    self._tool_server_port = None
-                    self._tool_server_token = None
-                    return self._create_container(scan_id)
             except NotFound:
                 self._scan_container = None
                 self._tool_server_port = None
                 self._tool_server_token = None
+                self._caido_port = None
 
         try:
             container = self.client.containers.get(container_name)
@@ -308,31 +225,15 @@ class DockerRuntime(AbstractRuntime):
         import tarfile
         from io import BytesIO
 
-        # M25 FIX: limit total tar archive size to prevent memory exhaustion
-        _MAX_TAR_BYTES = 500 * 1024 * 1024  # 500 MB
-
         try:
             local_path_obj = Path(local_path).resolve()
             if not local_path_obj.exists() or not local_path_obj.is_dir():
                 return
 
             tar_buffer = BytesIO()
-            total_bytes = 0
             with tarfile.open(fileobj=tar_buffer, mode="w") as tar:
                 for item in local_path_obj.rglob("*"):
-                    # H8 FIX: skip symlinks to prevent path traversal
-                    if item.is_symlink():
-                        continue
                     if item.is_file():
-                        file_size = item.stat().st_size
-                        total_bytes += file_size
-                        if total_bytes > _MAX_TAR_BYTES:
-                            import logging as _log_m25
-                            _log_m25.getLogger(__name__).warning(
-                                "Tar size limit reached (%d bytes), skipping remaining files",
-                                total_bytes,
-                            )
-                            break
                         rel_path = item.relative_to(local_path_obj)
                         arcname = Path(target_name) / rel_path if target_name else rel_path
                         tar.add(item, arcname=arcname)
@@ -371,7 +272,7 @@ class DockerRuntime(AbstractRuntime):
             raise RuntimeError("Docker container ID is unexpectedly None")
 
         token = existing_token or self._tool_server_token
-        if self._tool_server_port is None or token is None:
+        if self._tool_server_port is None or self._caido_port is None or token is None:
             raise RuntimeError("Tool server not initialized")
 
         host = self._resolve_docker_host()
@@ -384,51 +285,27 @@ class DockerRuntime(AbstractRuntime):
             "api_url": api_url,
             "auth_token": token,
             "tool_server_port": self._tool_server_port,
+            "caido_port": self._caido_port,
             "agent_id": agent_id,
         }
 
     async def _register_agent(self, api_url: str, agent_id: str, token: str) -> None:
-        max_retries = 3
-        for attempt in range(1, max_retries + 1):
-            try:
-                async with httpx.AsyncClient(trust_env=False) as client:
-                    response = await client.post(
-                        f"{api_url}/register_agent",
-                        params={"agent_id": agent_id},
-                        headers={"Authorization": f"Bearer {token}"},
-                        timeout=30,
-                    )
-                    response.raise_for_status()
-                    return  # success
-            except httpx.RequestError as exc:
-                import logging
-                _log = logging.getLogger(__name__)
-                _log.warning(
-                    "Agent registration attempt %d/%d failed: %s",
-                    attempt, max_retries, exc,
+        try:
+            async with httpx.AsyncClient(trust_env=False) as client:
+                response = await client.post(
+                    f"{api_url}/register_agent",
+                    params={"agent_id": agent_id},
+                    headers={"Authorization": f"Bearer {token}"},
+                    timeout=30,
                 )
-                if attempt < max_retries:
-                    import asyncio
-                    await asyncio.sleep(2 * attempt)
-        # All retries exhausted — log error but don't crash the scan
-        import logging
-        logging.getLogger(__name__).error(
-            "Agent registration failed after %d retries for %s", max_retries, agent_id
-        )
+                response.raise_for_status()
+        except httpx.RequestError:
+            pass
 
     async def get_sandbox_url(self, container_id: str, port: int) -> str:
-        # Cache the resolved URL to avoid hitting Docker API on every tool call.
-        # The NpipeHTTPConnectionPool timeout (60s→180s) still applies but we
-        # skip the Docker round-trip entirely for subsequent calls.
-        cache_key = f"_url_cache_{container_id}_{port}"
-        cached = getattr(self, cache_key, None)
-        if cached:
-            return cached
         try:
             self.client.containers.get(container_id)
-            url = f"http://{self._resolve_docker_host()}:{port}"
-            setattr(self, cache_key, url)
-            return url
+            return f"http://{self._resolve_docker_host()}:{port}"
         except NotFound:
             raise ValueError(f"Container {container_id} not found.") from None
 
@@ -450,22 +327,26 @@ class DockerRuntime(AbstractRuntime):
             self._scan_container = None
             self._tool_server_port = None
             self._tool_server_token = None
+            self._caido_port = None
         except (NotFound, DockerException):
             pass
 
     def cleanup(self) -> None:
         if self._scan_container is not None:
-            container = self._scan_container
+            container_name = self._scan_container.name
             self._scan_container = None
             self._tool_server_port = None
             self._tool_server_token = None
+            self._caido_port = None
 
-            # Use Docker SDK (already initialised) instead of fire-and-forget subprocess
-            try:
-                container.stop(timeout=5)
-                container.remove(force=True)
-            except Exception as exc:  # noqa: BLE001
-                import logging
-                logging.getLogger(__name__).warning(
-                    "Container cleanup failed for %s: %s", getattr(container, 'id', '?'), exc
-                )
+            if container_name is None:
+                return
+
+            import subprocess
+
+            subprocess.Popen(  # noqa: S603
+                ["docker", "rm", "-f", container_name],  # noqa: S607
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+            )

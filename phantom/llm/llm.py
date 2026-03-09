@@ -279,7 +279,7 @@ class LLM:
     def _raise_error(self, e: Exception) -> None:
         from phantom.telemetry import posthog
 
-        pass  #("llm_error", type(e).__name__)
+        posthog.error("llm_error", type(e).__name__)
         raise LLMRequestFailedError(f"LLM request failed: {type(e).__name__}", str(e)) from e
 
     def _is_anthropic(self) -> bool:

@@ -1,5 +1,4 @@
 import json
-import threading
 import uuid
 from datetime import UTC, datetime
 from typing import Any
@@ -11,14 +10,12 @@ VALID_PRIORITIES = ["low", "normal", "high", "critical"]
 VALID_STATUSES = ["pending", "in_progress", "done"]
 
 _todos_storage: dict[str, dict[str, dict[str, Any]]] = {}
-_todos_lock = threading.Lock()
 
 
 def _get_agent_todos(agent_id: str) -> dict[str, dict[str, Any]]:
-    with _todos_lock:
-        if agent_id not in _todos_storage:
-            _todos_storage[agent_id] = {}
-        return _todos_storage[agent_id]
+    if agent_id not in _todos_storage:
+        _todos_storage[agent_id] = {}
+    return _todos_storage[agent_id]
 
 
 def _normalize_priority(priority: str | None, default: str = "normal") -> str:

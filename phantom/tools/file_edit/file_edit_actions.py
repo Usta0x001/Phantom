@@ -1,22 +1,9 @@
 import json
 import re
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 from typing import Any, cast
 
 from phantom.tools.registry import register_tool
-
-_WORKSPACE_ROOT = Path("/workspace")
-
-
-def _validate_workspace_path(path: str) -> str:
-    """Ensure path resolves within /workspace to prevent path traversal."""
-    path_obj = Path(path)
-    if not path_obj.is_absolute():
-        path_obj = _WORKSPACE_ROOT / path_obj
-    resolved = path_obj.resolve()
-    if not str(resolved).startswith(str(_WORKSPACE_ROOT)):
-        raise ValueError(f"Path traversal blocked: path must be inside /workspace, got {path}")
-    return str(path_obj)
 
 
 def _parse_file_editor_output(output: str) -> dict[str, Any]:
@@ -46,7 +33,9 @@ def str_replace_editor(
     from openhands_aci import file_editor
 
     try:
-        path = _validate_workspace_path(path)
+        path_obj = Path(path)
+        if not path_obj.is_absolute():
+            path = str(Path("/workspace") / path_obj)
 
         result = file_editor(
             command=command,
@@ -77,8 +66,10 @@ def list_files(
     from openhands_aci.utils.shell import run_shell_cmd
 
     try:
-        path = _validate_workspace_path(path)
         path_obj = Path(path)
+        if not path_obj.is_absolute():
+            path = str(Path("/workspace") / path_obj)
+            path_obj = Path(path)
 
         if not path_obj.exists():
             return {"error": f"Directory not found: {path}"}
@@ -129,7 +120,9 @@ def search_files(
     from openhands_aci.utils.shell import run_shell_cmd
 
     try:
-        path = _validate_workspace_path(path)
+        path_obj = Path(path)
+        if not path_obj.is_absolute():
+            path = str(Path("/workspace") / path_obj)
 
         if not Path(path).exists():
             return {"error": f"Directory not found: {path}"}

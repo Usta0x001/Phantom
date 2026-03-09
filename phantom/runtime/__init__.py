@@ -1,5 +1,3 @@
-import threading
-
 from phantom.config import Config
 
 from .runtime import AbstractRuntime
@@ -15,7 +13,6 @@ class SandboxInitializationError(Exception):
 
 
 _global_runtime: AbstractRuntime | None = None
-_runtime_lock = threading.Lock()
 
 
 def get_runtime() -> AbstractRuntime:
@@ -26,10 +23,9 @@ def get_runtime() -> AbstractRuntime:
     if runtime_backend == "docker":
         from .docker_runtime import DockerRuntime
 
-        with _runtime_lock:
-            if _global_runtime is None:
-                _global_runtime = DockerRuntime()
-            return _global_runtime
+        if _global_runtime is None:
+            _global_runtime = DockerRuntime()
+        return _global_runtime
 
     raise ValueError(
         f"Unsupported runtime backend: {runtime_backend}. Only 'docker' is supported for now."

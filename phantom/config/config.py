@@ -1,82 +1,20 @@
 import contextlib
 import json
-import logging
 import os
 from pathlib import Path
 from typing import Any
 
-_logger = logging.getLogger(__name__)
 
-# IMPL-004 FIX: Credential keys that should use OS keyring when available
-_SENSITIVE_KEYS = frozenset({
-    "LLM_API_KEY", "GROQ_API_KEY", "OPENAI_API_KEY", "PERPLEXITY_API_KEY",
-    "OPENROUTER_API_KEY",
-})
-
-
-def _get_keyring() -> Any:
-    """Try to import and return the keyring module. Returns None if unavailable."""
-    try:
-        import keyring as _kr  # type: ignore[import-untyped]
-        # Verify it's functional (not a null backend)
-        backend = _kr.get_keyring()
-        if "fail" in type(backend).__name__.lower() or "null" in type(backend).__name__.lower():
-            return None
-        return _kr
-    except Exception:  # noqa: BLE001
-        return None
-
-
-def _store_secret(key: str, value: str) -> bool:
-    """Store a secret in OS keyring. Returns True on success.
-    
-    P1-003 FIX: Verify readback after write to detect silent keyring failures.
-    """
-    kr = _get_keyring()
-    if kr is None:
-        return False
-    try:
-        kr.set_password("phantom", key, value)
-        # Verify the write succeeded by reading back
-        stored = kr.get_password("phantom", key)
-        if stored != value:
-            _logger.warning("Keyring write verification failed for %s — readback mismatch", key)
-            return False
-        return True
-    except Exception:  # noqa: BLE001
-        return False
-
-
-def _load_secret(key: str) -> str | None:
-    """Load a secret from OS keyring. Returns None if unavailable."""
-    kr = _get_keyring()
-    if kr is None:
-        return None
-    try:
-        return kr.get_password("phantom", key)
-    except Exception:  # noqa: BLE001
-        return None
-
-
-def _delete_secret(key: str) -> None:
-    """Delete a secret from OS keyring (best-effort)."""
-    kr = _get_keyring()
-    if kr is None:
-        return
-    with contextlib.suppress(Exception):
-        kr.delete_password("phantom", key)
+PHANTOM_API_BASE = "https://models.phantom.ai/api/v1"
 
 
 class Config:
-    """Configuration Manager for phantom."""
+    """Configuration Manager for Phantom."""
 
     # LLM Configuration
     phantom_llm = None
-    phantom_llm_fallback = None
     llm_api_key = None
     llm_api_base = None
-    groq_api_key = None
-    openai_api_key = None
     openai_api_base = None
     litellm_base_url = None
     ollama_api_base = None
@@ -86,11 +24,8 @@ class Config:
     llm_timeout = "300"
     _LLM_CANONICAL_NAMES = (
         "phantom_llm",
-        "phantom_llm_fallback",
         "llm_api_key",
         "llm_api_base",
-        "groq_api_key",
-        "openai_api_key",
         "openai_api_base",
         "litellm_base_url",
         "ollama_api_base",
@@ -105,17 +40,21 @@ class Config:
     phantom_disable_browser = "false"
 
     # Runtime Configuration
-    phantom_image = "ghcr.io/usta0x001/phantom-sandbox:latest"
+    phantom_image = "ghcr.io/usephantom/phantom-sandbox:0.1.12"
     phantom_runtime_backend = "docker"
-    phantom_sandbox_execution_timeout = "600"
+    phantom_sandbox_execution_timeout = "120"
     phantom_sandbox_connect_timeout = "10"
+
+    # Telemetry
+    phantom_telemetry = "1"
+    phantom_otel_telemetry = None
+    phantom_posthog_telemetry = None
+    traceloop_base_url = None
+    traceloop_api_key = None
+    traceloop_headers = None
 
     # Config file override (set via --config CLI arg)
     _config_file_override: Path | None = None
-
-    # Variables that are tracked (readable) but NOT automatically persisted on
-    # every scan run.  They must be set explicitly via `phantom config set`.
-    _NON_PERSISTENT: frozenset[str] = frozenset({"PHANTOM_IMAGE", "PHANTOM_RUNTIME_BACKEND"})
 
     @classmethod
     def _tracked_names(cls) -> list[str]:
@@ -150,21 +89,6 @@ class Config:
         return os.getenv(env_name, default)
 
     @classmethod
-    def get_redacted(cls, name: str) -> str | None:
-        """Return config value with sensitive data redacted for display."""
-        value = cls.get(name)
-        if value is None:
-            return None
-        # Check if the config key holds a sensitive value (API key, token, secret)
-        sensitive_keywords = ("api_key", "token", "secret", "password", "credential")
-        is_sensitive = any(kw in name.lower() for kw in sensitive_keywords)
-        if is_sensitive:
-            if len(value) <= 8:
-                return "***"
-            return value[:4] + "..." + value[-4:]
-        return value
-
-    @classmethod
     def config_dir(cls) -> Path:
         return Path.home() / ".phantom"
 
@@ -180,21 +104,8 @@ class Config:
         if not path.exists():
             return {}
         try:
-            with path.open("r", encoding="utf-8-sig") as f:
+            with path.open("r", encoding="utf-8") as f:
                 data: dict[str, Any] = json.load(f)
-
-                # IMPL-004 FIX: Restore sensitive values from OS keyring
-                env_vars = data.get("env", {})
-                if isinstance(env_vars, dict):
-                    for key, value in list(env_vars.items()):
-                        if value == "__KEYRING__":
-                            secret = _load_secret(key)
-                            if secret:
-                                env_vars[key] = secret
-                            else:
-                                # Keyring unavailable — remove sentinel
-                                env_vars.pop(key, None)
-
                 return data
         except (json.JSONDecodeError, OSError):
             return {}
@@ -203,21 +114,7 @@ class Config:
     def save(cls, config: dict[str, Any]) -> bool:
         try:
             cls.config_dir().mkdir(parents=True, exist_ok=True)
-            config_path = cls.config_file()
-
-            # IMPL-004 FIX: Move sensitive values to OS keyring when available
-            env_vars = config.get("env", {})
-            if isinstance(env_vars, dict):
-                keys_moved_to_keyring: list[str] = []
-                for key in list(env_vars.keys()):
-                    if key.upper() in _SENSITIVE_KEYS and env_vars[key]:
-                        if _store_secret(key, env_vars[key]):
-                            keys_moved_to_keyring.append(key)
-                            # Replace with sentinel so load() knows to check keyring
-                            env_vars[key] = "__KEYRING__"
-                if keys_moved_to_keyring:
-                    _logger.debug("Stored %d secrets in OS keyring", len(keys_moved_to_keyring))
-
+            config_path = cls.config_dir() / "cli-config.json"
             with config_path.open("w", encoding="utf-8") as f:
                 json.dump(config, f, indent=2)
         except OSError:
@@ -271,9 +168,6 @@ class Config:
         merged = dict(existing)
 
         for var_name in cls.tracked_vars():
-            if var_name in cls._NON_PERSISTENT:
-                # Never auto-persist these; they require an explicit `phantom config set`.
-                continue
             value = os.getenv(var_name)
             if value is None:
                 pass
@@ -294,20 +188,28 @@ def save_current_config() -> bool:
 
 
 def resolve_llm_config() -> tuple[str | None, str | None, str | None]:
-    """Resolve LLM model, api_key, and api_base from Phantom config.
+    """Resolve LLM model, api_key, and api_base based on PHANTOM_LLM prefix.
 
     Returns:
         tuple: (model_name, api_key, api_base)
+        - model_name: Original model name (phantom/ prefix preserved for display)
+        - api_key: LLM API key
+        - api_base: API base URL (auto-set to PHANTOM_API_BASE for phantom/ models)
     """
     model = Config.get("phantom_llm")
     if not model:
         return None, None, None
 
     api_key = Config.get("llm_api_key")
-    api_base = (
-        Config.get("llm_api_base")
-        or Config.get("openai_api_base")
-        or Config.get("litellm_base_url")
-        or Config.get("ollama_api_base")
-    )
+
+    if model.startswith("phantom/"):
+        api_base: str | None = PHANTOM_API_BASE
+    else:
+        api_base = (
+            Config.get("llm_api_base")
+            or Config.get("openai_api_base")
+            or Config.get("litellm_base_url")
+            or Config.get("ollama_api_base")
+        )
+
     return model, api_key, api_base

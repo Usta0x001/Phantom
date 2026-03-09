@@ -1,5 +1,4 @@
 import atexit
-import os
 import signal
 import sys
 import threading
@@ -13,18 +12,6 @@ from rich.text import Text
 
 from phantom.agents.PhantomAgent import PhantomAgent
 from phantom.llm.config import LLMConfig
-
-# Simple inline scan profiles (replaces phantom.core.scan_profiles)
-_PROFILES: dict[str, dict] = {
-    "quick":    {"max_iterations": 100, "reasoning_effort": "medium", "sandbox_timeout_s": 120},
-    "standard": {"max_iterations": 200, "reasoning_effort": "high",   "sandbox_timeout_s": 300},
-    "deep":     {"max_iterations": 300, "reasoning_effort": "high",   "sandbox_timeout_s": 600},
-    "stealth":  {"max_iterations": 200, "reasoning_effort": "high",   "sandbox_timeout_s": 300},
-    "api_only": {"max_iterations": 150, "reasoning_effort": "high",   "sandbox_timeout_s": 240},
-}
-
-def _get_profile(scan_mode: str) -> dict:
-    return _PROFILES.get(scan_mode, _PROFILES["deep"])
 from phantom.telemetry.tracer import Tracer, set_global_tracer
 
 from .utils import (
@@ -32,41 +19,12 @@ from .utils import (
     format_vulnerability_report,
 )
 
-# ── Phantom Identity ──
-_PHANTOM_COLOR = "#dc2626"
-_ACCENT_COLOR = "#f59e0b"
-_PHANTOM_TITLE = f"[bold {_PHANTOM_COLOR}]☠ PHANTOM[/]"
-_PHANTOM_SUBTITLE = f"[italic {_ACCENT_COLOR}]\" The Ghost in the Machine \"[/]"
-
-
-def _phantom_panel(content: Text | str, *, border: str = _PHANTOM_COLOR, **kw: Any) -> Panel:
-    """Create a consistently-branded Phantom panel."""
-    return Panel(
-        content,
-        title=_PHANTOM_TITLE,
-        title_align="left",
-        subtitle=_PHANTOM_SUBTITLE,
-        subtitle_align="right",
-        border_style=border,
-        padding=(1, 2),
-        **kw,
-    )
-
 
 async def run_cli(args: Any) -> None:  # noqa: PLR0915
     console = Console()
 
-    # ── Phantom Banner ──
-    banner = Text()
-    banner.append("\n  ☠ PHANTOM", style="bold #dc2626")
-    banner.append("  —  ", style="dim")
-    banner.append("Autonomous Adversary Simulation Platform", style="dim white")
-    banner.append("\n", style="")
-
-    console.print(Panel(banner, border_style="#dc2626", padding=(0, 2)))
-
     start_text = Text()
-    start_text.append("▶ Scan initiated", style="bold #dc2626")
+    start_text.append("Penetration test initiated", style="bold #dc2626")
 
     target_text = Text()
     target_text.append("Target", style="dim")
@@ -84,75 +42,43 @@ async def run_cli(args: Any) -> None:  # noqa: PLR0915
     results_text.append("  ")
     results_text.append(f"phantom_runs/{args.run_name}", style="#60a5fa")
 
-    scan_mode = getattr(args, "scan_mode", "deep")
-
-    # ── Load Scan Profile ──
-    try:
-        profile = _get_profile(scan_mode)
-    except KeyError:
-        console.print(f"[yellow]Unknown scan mode '{scan_mode}', falling back to 'deep'[/]")
-        profile = _get_profile("deep")
-
-    profile_text = Text()
-    profile_text.append("Profile", style="dim")
-    profile_text.append(" ")
-    profile_text.append(f"{scan_mode}", style="bold #f59e0b")
-    profile_text.append(f"  (max {profile['max_iterations']} iterations, {profile['reasoning_effort']} effort)", style="dim")
-
     note_text = Text()
     note_text.append("\n\n", style="dim")
     note_text.append("Vulnerabilities will be displayed in real-time.", style="dim")
 
-    startup_panel = _phantom_panel(
+    startup_panel = Panel(
         Text.assemble(
             start_text,
             "\n\n",
             target_text,
             "\n",
             results_text,
-            "\n",
-            profile_text,
             note_text,
         ),
+        title="[bold white]PHANTOM",
+        title_align="left",
+        border_style="#dc2626",
+        padding=(1, 2),
     )
 
     console.print("\n")
     console.print(startup_panel)
     console.print()
 
+    scan_mode = getattr(args, "scan_mode", "deep")
+
     scan_config = {
         "scan_id": args.run_name,
         "targets": args.targets_info,
         "user_instructions": args.instruction or "",
         "run_name": args.run_name,
-        "scan_mode": scan_mode,
-        "profile": profile,
     }
 
-    # ── Authenticated Scanning ──
-    auth_headers = getattr(args, "auth_headers", [])
-    if auth_headers:
-        parsed_headers = {}
-        for h in auth_headers:
-            if ":" in h:
-                key, value = h.split(":", 1)
-                parsed_headers[key.strip()] = value.strip()
-        if parsed_headers:
-            scan_config["auth_headers"] = parsed_headers
-
     llm_config = LLMConfig(scan_mode=scan_mode)
-
-    # Wire scan profile sandbox timeout into the environment so executor
-    # and tool_server pick it up (unless the user already specified --timeout).
-    import os
-    if not os.environ.get("PHANTOM_SANDBOX_EXECUTION_TIMEOUT"):
-        os.environ["PHANTOM_SANDBOX_EXECUTION_TIMEOUT"] = str(profile["sandbox_timeout_s"])
-
     agent_config = {
         "llm_config": llm_config,
-        "max_iterations": profile["max_iterations"],
+        "max_iterations": 300,
         "non_interactive": True,
-        "scan_profile": profile,
     }
 
     if getattr(args, "local_sources", None):
@@ -160,54 +86,6 @@ async def run_cli(args: Any) -> None:  # noqa: PLR0915
 
     tracer = Tracer(args.run_name)
     tracer.set_scan_config(scan_config)
-
-    target_urls = [t["original"] for t in args.targets_info]
-
-    # ── Cost Controller ──
-    try:
-        from phantom.core.cost_controller import init_cost_controller
-        max_cost = float(os.environ.get("PHANTOM_MAX_COST", "25.0"))
-        cost_controller = init_cost_controller(max_cost_usd=max_cost)
-        console.print(f"  [dim]Cost limit:[/] ${max_cost:.2f}")
-    except Exception:
-        pass  # Cost controller is optional
-
-    # ── Knowledge Store — load past findings for this target ──
-    try:
-        from phantom.core.knowledge_store import get_knowledge_store
-
-        knowledge_store = get_knowledge_store()
-        known_vulns = knowledge_store.get_all_vulnerabilities()
-        target_lower = target_urls[0].lower() if target_urls else ""
-        past_findings = [
-            v for v in known_vulns
-            if target_lower and target_lower in (v.target or "").lower()
-        ]
-        if past_findings:
-            scan_config["known_vulnerabilities"] = len(past_findings)
-            console.print(
-                f"  [dim]Knowledge Store:[/] {len(past_findings)} previously known"
-                f" vulnerabilities for this target"
-            )
-    except Exception:
-        pass  # Knowledge store is optional enhancement
-
-    # ── Plugin Loader — load user plugins if enabled ──
-    try:
-        from phantom.core.plugin_loader import PluginLoader
-        from phantom.tools.registry import tools as _tool_registry
-
-        plugin_loader = PluginLoader()
-        discovered = plugin_loader.discover()
-        if discovered:
-            loaded = plugin_loader.load_all(registry=_tool_registry)
-            if loaded:
-                console.print(
-                    f"  [dim]Plugins:[/] {len(loaded)} plugin(s) loaded from"
-                    f" {plugin_loader.plugin_dir}"
-                )
-    except Exception:
-        pass  # Plugin loading is optional
 
     def display_vulnerability(report: dict[str, Any]) -> None:
         report_id = report.get("id", "unknown")
@@ -227,28 +105,14 @@ async def run_cli(args: Any) -> None:  # noqa: PLR0915
 
     tracer.vulnerability_found_callback = display_vulnerability
 
-    _cleanup_done = False
-
     def cleanup_on_exit() -> None:
-        nonlocal _cleanup_done
-        if _cleanup_done:
-            return
-        _cleanup_done = True
         from phantom.runtime import cleanup_runtime
 
         tracer.cleanup()
         cleanup_runtime()
 
     def signal_handler(_signum: int, _frame: Any) -> None:
-        # P1-FIX1: Perform cleanup BEFORE setting done flag.
-        # Previous bug: setting _cleanup_done=True first caused atexit to skip cleanup,
-        # orphaning the Docker container on Ctrl+C.
-        nonlocal _cleanup_done
-        if not _cleanup_done:
-            try:
-                cleanup_on_exit()
-            except Exception:  # noqa: BLE001
-                pass
+        tracer.cleanup()
         sys.exit(1)
 
     atexit.register(cleanup_on_exit)
@@ -261,14 +125,20 @@ async def run_cli(args: Any) -> None:  # noqa: PLR0915
 
     def create_live_status() -> Panel:
         status_text = Text()
-        status_text.append("▶ Scan in progress", style="bold #dc2626")
+        status_text.append("Penetration test in progress", style="bold #dc2626")
         status_text.append("\n\n")
 
         stats_text = build_live_stats_text(tracer, agent_config)
         if stats_text:
             status_text.append(stats_text)
 
-        return _phantom_panel(status_text)
+        return Panel(
+            status_text,
+            title="[bold white]PHANTOM",
+            title_align="left",
+            border_style="#dc2626",
+            padding=(1, 2),
+        )
 
     try:
         console.print()
@@ -296,60 +166,15 @@ async def run_cli(args: Any) -> None:  # noqa: PLR0915
                 if isinstance(result, dict) and not result.get("success", True):
                     error_msg = result.get("error", "Unknown error")
                     error_details = result.get("details")
-                    # Store error on tracer so completion message can display it
-                    tracer.scan_error = error_msg
-                    tracer.scan_error_details = error_details
-
-                    # ── Attempt partial finish_scan on crash ──
-                    # Even when the LLM dies, try to generate a summary report
-                    # from whatever vulnerabilities were found so far.
-                    try:
-                        from phantom.tools.finish.finish_actions import finish_scan
-
-                        partial_state = agent.state
-                        error_snippet = error_msg[:200] if error_msg else "Unknown"
-                        finish_result = finish_scan(
-                            executive_summary=f"PARTIAL SCAN — terminated by LLM error: {error_snippet}",
-                            methodology="Scan was interrupted before completion. Partial results only.",
-                            technical_analysis="See enhanced_state.json and crash_summary.json for details.",
-                            recommendations="Re-run the scan after resolving the LLM API issue.",
-                            agent_state=partial_state,
-                        )
-                        if isinstance(finish_result, dict) and finish_result.get("success"):
-                            tracer.final_scan_result = finish_result.get("report_summary", "")
-                    except Exception:  # noqa: BLE001
-                        pass  # Best-effort; crash_summary.json already saved by base_agent
+                    console.print()
+                    console.print(f"[bold red]Penetration test failed:[/] {error_msg}")
+                    if error_details:
+                        console.print(f"[dim]{error_details}[/]")
+                    console.print()
+                    sys.exit(1)
             finally:
                 stop_updates.set()
                 update_thread.join(timeout=1)
-
-        # Print error AFTER Live context closes so it's visible to user
-        if hasattr(tracer, "scan_error") and tracer.scan_error:
-            error_text = Text()
-            error_text.append("☠ Scan Failed", style="bold red")
-            error_text.append("\n\n")
-            error_text.append(str(tracer.scan_error), style="white")
-            if hasattr(tracer, "scan_error_details") and tracer.scan_error_details:
-                error_text.append(f"\n{tracer.scan_error_details}", style="dim")
-
-            # Detect rate limiting and add helpful guidance
-            err_lower = str(tracer.scan_error).lower()
-            if "ratelimit" in err_lower or "rate_limit" in err_lower or "quota" in err_lower or "429" in err_lower:
-                error_text.append("\n\n")
-                error_text.append("💡 Tip: ", style="bold yellow")
-                error_text.append("Your API key hit a rate limit. Options:\n", style="yellow")
-                error_text.append("   • Wait for the rate limit window to reset\n", style="dim")
-                error_text.append("   • Use a paid API key with higher quotas\n", style="dim")
-                error_text.append("   • Switch to a different LLM provider\n", style="dim")
-                error_text.append("   • Set PHANTOM_LLM to a different model", style="dim")
-
-            error_panel = _phantom_panel(
-                error_text,
-                border="red",
-            )
-            console.print()
-            console.print(error_panel)
-            console.print()
 
     except Exception as e:
         console.print(f"[bold red]Error during penetration test:[/] {e}")
@@ -359,14 +184,18 @@ async def run_cli(args: Any) -> None:  # noqa: PLR0915
         console.print()
 
         final_report_text = Text()
-        final_report_text.append("☠ Scan Complete", style="bold #dc2626")
+        final_report_text.append("Penetration test summary", style="bold #60a5fa")
 
-        final_report_panel = _phantom_panel(
+        final_report_panel = Panel(
             Text.assemble(
                 final_report_text,
                 "\n\n",
                 tracer.final_scan_result,
             ),
+            title="[bold white]PHANTOM",
+            title_align="left",
+            border_style="#60a5fa",
+            padding=(1, 2),
         )
 
         console.print(final_report_panel)

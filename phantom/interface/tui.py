@@ -38,6 +38,9 @@ from phantom.llm.config import LLMConfig
 from phantom.telemetry.tracer import Tracer, set_global_tracer
 
 
+logger = logging.getLogger(__name__)
+
+
 def get_package_version() -> str:
     try:
         return pkg_version("phantom-agent")
@@ -91,17 +94,15 @@ class ChatTextArea(TextArea):  # type: ignore[misc]
 
 
 class SplashScreen(Static):  # type: ignore[misc]
-    PRIMARY_COLOR = "#dc2626"
-    ACCENT_COLOR = "#f59e0b"
+    ALLOW_SELECT = False
+    PRIMARY_GREEN = "#dc2626"
     BANNER = (
-        "          ░▒▓█  PHANTOM SECURITY  █▓▒░\n"
-        "\n"
-        " ██████╗ ██╗  ██╗ █████╗ ███╗   ██╗████████╗ ██████╗ ███╗   ███╗\n"
-        " ██╔══██╗██║  ██║██╔══██╗████╗  ██║╚══██╔══╝██╔═══██╗████╗ ████║\n"
-        " ██████╔╝███████║███████║██╔██╗ ██║   ██║   ██║   ██║██╔████╔██║\n"
-        " ██╔═══╝ ██╔══██║██╔══██║██║╚██╗██║   ██║   ██║   ██║██║╚██╔╝██║\n"
-        " ██║     ██║  ██║██║  ██║██║ ╚████║   ██║   ╚██████╔╝██║ ╚═╝ ██║\n"
-        " ╚═╝     ╚═╝  ╚═╝╚═╝  ╚═╝╚═╝  ╚═══╝   ╚═╝    ╚═════╝ ╚═╝     ╚═╝"
+        " ███████╗████████╗██████╗ ██╗██╗  ██╗\n"
+        " ██╔════╝╚══██╔══╝██╔══██╗██║╚██╗██╔╝\n"
+        " ███████╗   ██║   ██████╔╝██║ ╚███╔╝\n"
+        " ╚════██║   ██║   ██╔══██╗██║ ██╔██╗\n"
+        " ███████║   ██║   ██║  ██║██║██╔╝ ██╗\n"
+        " ╚══════╝   ╚═╝   ╚═╝  ╚═╝╚═╝╚═╝  ╚═╝"
     )
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
@@ -140,7 +141,7 @@ class SplashScreen(Static):  # type: ignore[misc]
 
     def _build_panel(self, start_line: Text) -> Panel:
         content = Group(
-            Align.center(Text(self.BANNER.strip("\n"), style=self.PRIMARY_COLOR, justify="center")),
+            Align.center(Text(self.BANNER.strip("\n"), style=self.PRIMARY_GREEN, justify="center")),
             Align.center(Text(" ")),
             Align.center(self._build_welcome_text()),
             Align.center(self._build_version_text()),
@@ -148,44 +149,28 @@ class SplashScreen(Static):  # type: ignore[misc]
             Align.center(Text(" ")),
             Align.center(start_line.copy()),
             Align.center(Text(" ")),
-            Align.center(self._build_motto_text()),
-            Align.center(Text(" ")),
+            Align.center(self._build_url_text()),
         )
 
-        panel = Panel.fit(
-            content,
-            border_style=self.PRIMARY_COLOR,
-            padding=(1, 6),
-            subtitle=Text('" The Ghost in the Machine "', style=Style(color=self.ACCENT_COLOR, bold=True, italic=True)),
-            subtitle_align="right",
-        )
-        return panel
-
-    def _build_motto_text(self) -> Text:
-        text = Text()
-        text.append("\" ", style=Style(color="#f59e0b", dim=True))
-        text.append("The Ghost in the Machine", style=Style(color="#f59e0b", bold=True, italic=True))
-        text.append(" \"", style=Style(color="#f59e0b", dim=True))
-        return text
+        return Panel.fit(content, border_style=self.PRIMARY_GREEN, padding=(1, 6))
 
     def _build_url_text(self) -> Text:
-        return Text("phantom-sec.io", style=Style(color=self.PRIMARY_COLOR, bold=True))
+        return Text("phantom.ai", style=Style(color=self.PRIMARY_GREEN, bold=True))
 
     def _build_welcome_text(self) -> Text:
-        text = Text("☠ ", style=Style(color=self.PRIMARY_COLOR, bold=True))
-        text.append("PHANTOM", style=Style(color=self.PRIMARY_COLOR, bold=True))
-        text.append("  —  ", style=Style(color="white", dim=True))
-        text.append("AI-Powered Red Team Agent", style=Style(color=self.ACCENT_COLOR, bold=True))
+        text = Text("Welcome to ", style=Style(color="white", bold=True))
+        text.append("Phantom", style=Style(color=self.PRIMARY_GREEN, bold=True))
+        text.append("!", style=Style(color="white", bold=True))
         return text
 
     def _build_version_text(self) -> Text:
         return Text(f"v{self._version}", style=Style(color="white", dim=True))
 
     def _build_tagline_text(self) -> Text:
-        return Text("Autonomous Adversary Simulation Platform", style=Style(color="white", dim=True))
+        return Text("Open-source AI hackers for your apps", style=Style(color="white", dim=True))
 
     def _build_start_line_text(self, phase: int) -> Text:
-        full_text = "Starting PHANTOM Agent"
+        full_text = "Starting Phantom Agent"
         text_len = len(full_text)
 
         shine_pos = phase % (text_len + 8)
@@ -211,18 +196,10 @@ class SplashScreen(Static):  # type: ignore[misc]
 class HelpScreen(ModalScreen):  # type: ignore[misc]
     def compose(self) -> ComposeResult:
         yield Grid(
-            Label("☠ PHANTOM — Keyboard Shortcuts", id="help_title"),
+            Label("Phantom Help", id="help_title"),
             Label(
-                "F1        Toggle this help screen\n"
-                "Ctrl+Q    Quit Phantom\n"
-                "Ctrl+C    Quit Phantom\n"
-                "ESC       Stop selected agent\n"
-                "Enter     Send message to agent\n"
-                "Shift+↵   New line in input\n"
-                "Tab       Cycle focus between panels\n"
-                "↑ / ↓     Navigate agent tree\n"
-                "─────────────────────────────────\n"
-                "☠  Hunt. Exploit. Report.",
+                "F1        Help\nCtrl+Q/C  Quit\nESC       Stop Agent\n"
+                "Enter     Send message to agent\nTab       Switch panels\n↑/↓       Navigate tree",
                 id="help_content",
             ),
             id="dialog",
@@ -240,10 +217,10 @@ class StopAgentScreen(ModalScreen):  # type: ignore[misc]
 
     def compose(self) -> ComposeResult:
         yield Grid(
-            Label(f"☠ Terminate '{self.agent_name}'?", id="stop_agent_title"),
+            Label(f"🛑 Stop '{self.agent_name}'?", id="stop_agent_title"),
             Grid(
-                Button("Kill", variant="error", id="stop_agent"),
-                Button("Cancel", variant="default", id="cancel_stop"),
+                Button("Yes", variant="error", id="stop_agent"),
+                Button("No", variant="default", id="cancel_stop"),
                 id="stop_agent_buttons",
             ),
             id="stop_agent_dialog",
@@ -288,8 +265,8 @@ class VulnerabilityDetailScreen(ModalScreen):  # type: ignore[misc]
         "critical": "#dc2626",  # Red
         "high": "#ea580c",  # Orange
         "medium": "#d97706",  # Amber
-        "low": "#22c55e",  # Green
-        "info": "#3b82f6",  # Blue
+        "low": "#dc2626",  # Green
+        "info": "#f59e0b",  # Blue
     }
 
     FIELD_STYLE: ClassVar[str] = "bold #4ade80"
@@ -554,16 +531,30 @@ class VulnerabilityDetailScreen(ModalScreen):  # type: ignore[misc]
                 lines.append("```")
 
         # Code Analysis
-        if vuln.get("code_file") or vuln.get("code_diff"):
+        if vuln.get("code_locations"):
             lines.extend(["", "## Code Analysis", ""])
-            if vuln.get("code_file"):
-                lines.append(f"**File:** {vuln['code_file']}")
+            for i, loc in enumerate(vuln["code_locations"]):
+                file_ref = loc.get("file", "unknown")
+                line_ref = ""
+                if loc.get("start_line") is not None:
+                    if loc.get("end_line") and loc["end_line"] != loc["start_line"]:
+                        line_ref = f" (lines {loc['start_line']}-{loc['end_line']})"
+                    else:
+                        line_ref = f" (line {loc['start_line']})"
+                lines.append(f"**Location {i + 1}:** `{file_ref}`{line_ref}")
+                if loc.get("label"):
+                    lines.append(f"  {loc['label']}")
+                if loc.get("snippet"):
+                    lines.append(f"```\n{loc['snippet']}\n```")
+                if loc.get("fix_before") or loc.get("fix_after"):
+                    lines.append("**Suggested Fix:**")
+                    lines.append("```diff")
+                    if loc.get("fix_before"):
+                        lines.extend(f"- {line}" for line in loc["fix_before"].splitlines())
+                    if loc.get("fix_after"):
+                        lines.extend(f"+ {line}" for line in loc["fix_after"].splitlines())
+                    lines.append("```")
                 lines.append("")
-            if vuln.get("code_diff"):
-                lines.append("**Changes:**")
-                lines.append("```diff")
-                lines.append(vuln["code_diff"])
-                lines.append("```")
 
         # Remediation
         if vuln.get("remediation_steps"):
@@ -608,8 +599,8 @@ class VulnerabilitiesPanel(VerticalScroll):  # type: ignore[misc]
         "critical": "#dc2626",  # Red
         "high": "#ea580c",  # Orange
         "medium": "#d97706",  # Amber
-        "low": "#22c55e",  # Green
-        "info": "#3b82f6",  # Blue
+        "low": "#dc2626",  # Green
+        "info": "#f59e0b",  # Blue
     }
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
@@ -638,7 +629,7 @@ class VulnerabilitiesPanel(VerticalScroll):  # type: ignore[misc]
         for vuln in self._vulnerabilities:
             severity = vuln.get("severity", "info").lower()
             title = vuln.get("title", "Unknown Vulnerability")
-            color = self.SEVERITY_COLORS.get(severity, "#3b82f6")
+            color = self.SEVERITY_COLORS.get(severity, "#f59e0b")
 
             label = Text()
             label.append("● ", style=Style(color=color))
@@ -651,10 +642,10 @@ class VulnerabilitiesPanel(VerticalScroll):  # type: ignore[misc]
 class QuitScreen(ModalScreen):  # type: ignore[misc]
     def compose(self) -> ComposeResult:
         yield Grid(
-            Label("☠ Exit Phantom?", id="quit_title"),
+            Label("Quit Phantom?", id="quit_title"),
             Grid(
-                Button("Exit", variant="error", id="quit"),
-                Button("Stay", variant="default", id="cancel"),
+                Button("Yes", variant="error", id="quit"),
+                Button("No", variant="default", id="cancel"),
                 id="quit_buttons",
             ),
             id="quit_dialog",
@@ -694,8 +685,9 @@ class QuitScreen(ModalScreen):  # type: ignore[misc]
 
 class PhantomTUIApp(App):  # type: ignore[misc]
     CSS_PATH = "assets/tui_styles.tcss"
+    ALLOW_SELECT = True
 
-    SIDEBAR_MIN_WIDTH = 140
+    SIDEBAR_MIN_WIDTH = 120
 
     selected_agent_id: reactive[str | None] = reactive(default=None)
     show_splash: reactive[bool] = reactive(default=True)
@@ -733,13 +725,13 @@ class PhantomTUIApp(App):  # type: ignore[misc]
         self._sweep_num_squares: int = 6  # Number of squares in sweep animation
         self._sweep_colors: list[str] = [
             "#000000",  # Dimmest (shows dot)
-            "#1a0000",
-            "#330a0a",
-            "#4d1515",
-            "#801f1f",
+            "#031a09",
+            "#052e16",
+            "#0d4a2a",
+            "#15803d",
             "#dc2626",
-            "#ef4444",
-            "#fca5a5",  # Brightest
+            "#4ade80",
+            "#86efac",  # Brightest
         ]
         self._dot_animation_timer: Any | None = None
 
@@ -810,13 +802,16 @@ class PhantomTUIApp(App):  # type: ignore[misc]
             chat_history.can_focus = True
 
             status_text = Static("", id="status_text")
+            status_text.ALLOW_SELECT = False
             keymap_indicator = Static("", id="keymap_indicator")
+            keymap_indicator.ALLOW_SELECT = False
 
             agent_status_display = Horizontal(
                 status_text, keymap_indicator, id="agent_status_display", classes="hidden"
             )
 
             chat_prompt = Static("> ", id="chat_prompt")
+            chat_prompt.ALLOW_SELECT = False
             chat_input = ChatTextArea(
                 "",
                 id="chat_input",
@@ -834,10 +829,11 @@ class PhantomTUIApp(App):  # type: ignore[misc]
             agents_tree.guide_style = "dashed"
 
             stats_display = Static("", id="stats_display")
+            stats_scroll = VerticalScroll(stats_display, id="stats_scroll")
 
             vulnerabilities_panel = VulnerabilitiesPanel(id="vulnerabilities_panel")
 
-            sidebar = Vertical(agents_tree, vulnerabilities_panel, stats_display, id="sidebar")
+            sidebar = Vertical(agents_tree, vulnerabilities_panel, stats_scroll, id="sidebar")
 
             content_container.mount(chat_area_container)
             content_container.mount(sidebar)
@@ -881,7 +877,7 @@ class PhantomTUIApp(App):  # type: ignore[misc]
             self.call_after_refresh(self._focus_agents_tree)
 
     def on_mount(self) -> None:
-        self.title = "☠ PHANTOM"
+        self.title = "phantom"
 
         self.set_timer(4.5, self._hide_splash_screen)
 
@@ -1032,6 +1028,33 @@ class PhantomTUIApp(App):  # type: ignore[misc]
         text.append(message)
         return text, f"chat-placeholder {placeholder_class}"
 
+    @staticmethod
+    def _merge_renderables(renderables: list[Any]) -> Text:
+        """Merge renderables into a single Text for mouse text selection support."""
+        combined = Text()
+        for i, item in enumerate(renderables):
+            if i > 0:
+                combined.append("\n")
+            PhantomTUIApp._append_renderable(combined, item)
+        return combined
+
+    @staticmethod
+    def _append_renderable(combined: Text, item: Any) -> None:
+        """Recursively append a renderable's text content to a combined Text."""
+        if isinstance(item, Text):
+            combined.append_text(item)
+        elif isinstance(item, Group):
+            for j, sub in enumerate(item.renderables):
+                if j > 0:
+                    combined.append("\n")
+                PhantomTUIApp._append_renderable(combined, sub)
+        else:
+            inner = getattr(item, "renderable", None)
+            if inner is not None:
+                PhantomTUIApp._append_renderable(combined, inner)
+            else:
+                combined.append(str(item))
+
     def _get_rendered_events_content(self, events: list[dict[str, Any]]) -> Any:
         renderables: list[Any] = []
 
@@ -1063,10 +1086,10 @@ class PhantomTUIApp(App):  # type: ignore[misc]
         if not renderables:
             return Text()
 
-        if len(renderables) == 1:
+        if len(renderables) == 1 and isinstance(renderables[0], Text):
             return renderables[0]
 
-        return Group(*renderables)
+        return self._merge_renderables(renderables)
 
     def _render_streaming_content(self, content: str, agent_id: str | None = None) -> Any:
         cache_key = agent_id or self.selected_agent_id or ""
@@ -1099,10 +1122,10 @@ class PhantomTUIApp(App):  # type: ignore[misc]
 
         if not renderables:
             result = Text()
-        elif len(renderables) == 1:
+        elif len(renderables) == 1 and isinstance(renderables[0], Text):
             result = renderables[0]
         else:
-            result = Group(*renderables)
+            result = self._merge_renderables(renderables)
 
         self._streaming_render_cache[cache_key] = (content_len, result)
         return result
@@ -1249,6 +1272,9 @@ class PhantomTUIApp(App):  # type: ignore[misc]
         if not self._is_widget_safe(stats_display):
             return
 
+        if self.screen.selections:
+            return
+
         stats_content = Text()
 
         stats_text = build_tui_stats_text(self.tracer, self.agent_config)
@@ -1258,15 +1284,7 @@ class PhantomTUIApp(App):  # type: ignore[misc]
         version = get_package_version()
         stats_content.append(f"\nv{version}", style="white")
 
-        from rich.panel import Panel
-
-        stats_panel = Panel(
-            stats_content,
-            border_style="#333333",
-            padding=(0, 1),
-        )
-
-        self._safe_widget_operation(stats_display.update, stats_panel)
+        self._safe_widget_operation(stats_display.update, stats_content)
 
     def _update_vulnerabilities_panel(self) -> None:
         """Update the vulnerabilities panel with current vulnerability data."""
@@ -1322,7 +1340,7 @@ class PhantomTUIApp(App):  # type: ignore[misc]
         wave_pos = total_range - abs(total_range - frame_in_cycle)
         sweep_pos = wave_pos - offset
 
-        dot_color = "#1a0505"
+        dot_color = "#0a3d1f"
 
         for i in range(num_squares):
             dist = abs(i - sweep_pos)
@@ -1649,7 +1667,7 @@ class PhantomTUIApp(App):  # type: ignore[misc]
             interrupted_text.append("\n")
             interrupted_text.append("⚠ ", style="yellow")
             interrupted_text.append("Interrupted by user", style="yellow dim")
-            return Group(streaming_result, interrupted_text)
+            return self._merge_renderables([streaming_result, interrupted_text])
 
         return AgentMessageRenderer.render_simple(content)
 
@@ -1957,6 +1975,92 @@ class PhantomTUIApp(App):  # type: ignore[misc]
         else:
             sidebar.remove_class("-hidden")
             chat_area.remove_class("-full-width")
+
+    def on_mouse_up(self, _event: events.MouseUp) -> None:
+        self.set_timer(0.05, self._auto_copy_selection)
+
+    _ICON_PREFIXES: ClassVar[tuple[str, ...]] = (
+        "🐞 ",
+        "🌐 ",
+        "📋 ",
+        "🧠 ",
+        "◆ ",
+        "◇ ",
+        "◈ ",
+        "→ ",
+        "○ ",
+        "● ",
+        "✓ ",
+        "✗ ",
+        "⚠ ",
+        "▍ ",
+        "▍",
+        "┃ ",
+        "• ",
+        ">_ ",
+        "</> ",
+        "<~> ",
+        "[ ] ",
+        "[~] ",
+        "[•] ",
+    )
+
+    _DECORATIVE_LINES: ClassVar[frozenset[str]] = frozenset(
+        {
+            "● In progress...",
+            "✓ Done",
+            "✗ Failed",
+            "✗ Error",
+            "○ Unknown",
+        }
+    )
+
+    @staticmethod
+    def _clean_copied_text(text: str) -> str:
+        lines = text.split("\n")
+        cleaned: list[str] = []
+        for line in lines:
+            stripped = line.lstrip()
+            if stripped in PhantomTUIApp._DECORATIVE_LINES:
+                continue
+            if stripped and all(c == "─" for c in stripped):
+                continue
+            out = line
+            for prefix in PhantomTUIApp._ICON_PREFIXES:
+                if stripped.startswith(prefix):
+                    leading = line[: len(line) - len(line.lstrip())]
+                    out = leading + stripped[len(prefix) :]
+                    break
+            cleaned.append(out)
+        return "\n".join(cleaned)
+
+    def _auto_copy_selection(self) -> None:
+        copied = False
+
+        try:
+            if self.screen.selections:
+                selected = self.screen.get_selected_text()
+                self.screen.clear_selection()
+                if selected and selected.strip():
+                    cleaned = self._clean_copied_text(selected)
+                    self.copy_to_clipboard(cleaned if cleaned.strip() else selected)
+                    copied = True
+        except Exception:  # noqa: BLE001
+            logger.debug("Failed to copy screen selection", exc_info=True)
+
+        if not copied:
+            try:
+                chat_input = self.query_one("#chat_input", ChatTextArea)
+                selected = chat_input.selected_text
+                if selected and selected.strip():
+                    self.copy_to_clipboard(selected)
+                    chat_input.move_cursor(chat_input.cursor_location)
+                    copied = True
+            except Exception:  # noqa: BLE001
+                logger.debug("Failed to copy chat input selection", exc_info=True)
+
+        if copied:
+            self.notify("Copied to clipboard", timeout=2)
 
 
 async def run_tui(args: argparse.Namespace) -> None:

@@ -1,8 +1,8 @@
-# 📚 phantom Skills
+# 📚 Phantom Skills
 
 ## 🎯 Overview
 
-Skills are specialized knowledge packages that enhance phantom agents with deep expertise in specific vulnerability types, technologies, and testing methodologies. Each skill provides advanced techniques, practical examples, and validation methods that go beyond baseline security knowledge.
+Skills are specialized knowledge packages that enhance Phantom agents with deep expertise in specific vulnerability types, technologies, and testing methodologies. Each skill provides advanced techniques, practical examples, and validation methods that go beyond baseline security knowledge.
 
 ---
 
@@ -57,7 +57,7 @@ Skills focus on deep, specialized knowledge to significantly enhance agent capab
 
 ## 🤝 Contributing
 
-Community contributions are more than welcome — contribute new skills via [pull requests](https://github.com/usephantom/phantom/pulls) or [GitHub issues](https://github.com/usephantom/phantom/issues) to help expand the collection and improve extensibility for phantom agents.
+Community contributions are more than welcome — contribute new skills via [pull requests](https://github.com/usephantom/phantom/pulls) or [GitHub issues](https://github.com/usephantom/phantom/issues) to help expand the collection and improve extensibility for Phantom agents.
 
 ---
 

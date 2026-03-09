@@ -1,0 +1,38 @@
+<tools>
+  <tool name="katana_crawl">
+    <description>Crawl and spider a web application using Katana to discover all URLs, endpoints, JavaScript files, API routes, and forms.
+Use this BEFORE vulnerability scanning to build a full attack surface map. Essential for discovering hidden endpoints that manual browsing misses.</description>
+    <parameters>
+      <parameter name="target" type="string" required="true">
+        <description>Target URL to crawl (e.g., "http://target.com")</description>
+      </parameter>
+      <parameter name="depth" type="integer" required="false">
+        <description>Crawl depth - how many links deep to follow (default: 3)</description>
+      </parameter>
+      <parameter name="js_crawl" type="boolean" required="false">
+        <description>Also parse JavaScript files for hidden endpoints and API routes (default: true)</description>
+      </parameter>
+      <parameter name="headless" type="boolean" required="false">
+        <description>Use headless browser for JavaScript-heavy Single Page Applications (Angular, React, Vue). Renders JS before crawling to discover dynamically loaded endpoints. (default: false)</description>
+      </parameter>
+      <parameter name="scope_in_domain" type="boolean" required="false">
+        <description>Stay within the target domain to avoid crawling external sites (default: true)</description>
+      </parameter>
+      <parameter name="rate_limit" type="integer" required="false">
+        <description>Requests per second (default: 100)</description>
+      </parameter>
+      <parameter name="max_duration" type="integer" required="false">
+        <description>Maximum crawl duration in seconds (default: 120)</description>
+      </parameter>
+      <parameter name="extra_args" type="string" required="false">
+        <description>Additional katana command-line arguments</description>
+      </parameter>
+    </parameters>
+    <returns type="Dict[str, Any]">
+      <description>Discovered endpoints with:
+      - endpoints: list of discovered URLs with method, status, content_type
+      - total_found: count of unique endpoints
+      - by_type: breakdown by content type (html, js, api, etc.)</description>
+    </returns>
+  </tool>
+</tools>

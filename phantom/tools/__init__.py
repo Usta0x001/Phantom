@@ -24,7 +24,6 @@ from .registry import (
 
 SANDBOX_MODE = os.getenv("PHANTOM_SANDBOX_MODE", "false").lower() == "true"
 
-# web_search now has DuckDuckGo fallback, so always register it
 HAS_PERPLEXITY_API = bool(Config.get("perplexity_api_key"))
 
 DISABLE_BROWSER = (Config.get("phantom_disable_browser") or "false").lower() == "true"
@@ -35,24 +34,25 @@ if not SANDBOX_MODE:
     if not DISABLE_BROWSER:
         from .browser import *  # noqa: F403
     from .file_edit import *  # noqa: F403
-    from .findings import *  # noqa: F403 (persistent findings ledger)
     from .finish import *  # noqa: F403
     from .notes import *  # noqa: F403
     from .proxy import *  # noqa: F403
     from .python import *  # noqa: F403
     from .reporting import *  # noqa: F403
-    from .security import *  # noqa: F403 (typed security tool wrappers)
     from .terminal import *  # noqa: F403
     from .thinking import *  # noqa: F403
     from .todo import *  # noqa: F403
-    from .web_search import *  # noqa: F403 (DuckDuckGo fallback when no Perplexity key)
+    from .security import *  # noqa: F403
+    from .findings import *  # noqa: F403
+
+    if HAS_PERPLEXITY_API:
+        from .web_search import *  # noqa: F403
 else:
     if not DISABLE_BROWSER:
         from .browser import *  # noqa: F403
     from .file_edit import *  # noqa: F403
     from .proxy import *  # noqa: F403
     from .python import *  # noqa: F403
-    from .security import *  # noqa: F403 (typed security tool wrappers)
     from .terminal import *  # noqa: F403
 
 __all__ = [

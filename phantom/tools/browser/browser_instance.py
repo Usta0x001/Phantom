@@ -5,11 +5,8 @@ import logging
 import threading
 from pathlib import Path
 from typing import Any, cast
-from urllib.parse import urlparse
 
 from playwright.async_api import Browser, BrowserContext, Page, Playwright, async_playwright
-
-_BLOCKED_SCHEMES = frozenset({"file", "javascript", "data", "vbscript"})
 
 
 logger = logging.getLogger(__name__)
@@ -70,8 +67,7 @@ async def _create_browser() -> Browser:
             "--no-sandbox",
             "--disable-dev-shm-usage",
             "--disable-gpu",
-            "--disable-extensions",
-            "--disable-background-networking",
+            "--disable-web-security",
         ],
     )
     return _state.browser
@@ -137,17 +133,11 @@ class BrowserInstance:
     async def _create_context(self, url: str | None = None) -> dict[str, Any]:
         assert self._browser is not None
 
-        # Block dangerous URL schemes before creating context
-        if url:
-            parsed = urlparse(url)
-            if parsed.scheme.lower() in _BLOCKED_SCHEMES:
-                raise ValueError(f"Blocked URL scheme: {parsed.scheme}")
-
         self.context = await self._browser.new_context(
             viewport={"width": 1280, "height": 720},
             user_agent=(
                 "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
-                "(KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36"
+                "(KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
             ),
         )
 
@@ -216,11 +206,6 @@ class BrowserInstance:
 
         if not tab_id or tab_id not in self.pages:
             raise ValueError(f"Tab '{tab_id}' not found")
-
-        # Block dangerous URL schemes
-        parsed = urlparse(url)
-        if parsed.scheme.lower() in _BLOCKED_SCHEMES:
-            raise ValueError(f"Blocked URL scheme: {parsed.scheme}")
 
         page = self.pages[tab_id]
         await page.goto(url, wait_until="domcontentloaded")
@@ -325,12 +310,6 @@ class BrowserInstance:
     async def _new_tab(self, url: str | None = None) -> dict[str, Any]:
         if not self.context:
             raise ValueError("Browser not launched")
-
-        # Block dangerous URL schemes (same check as _goto)
-        if url:
-            parsed = urlparse(url)
-            if parsed.scheme.lower() in _BLOCKED_SCHEMES:
-                raise ValueError(f"Blocked URL scheme: {parsed.scheme}")
 
         page = await self.context.new_page()
         tab_id = f"tab_{self._next_tab_id}"
@@ -565,11 +544,6 @@ class BrowserInstance:
 
         if not Path(file_path).is_absolute():
             file_path = str(Path("/workspace") / file_path)
-
-        # Prevent path traversal outside /workspace
-        resolved = Path(file_path).resolve()
-        if not str(resolved).startswith("/workspace"):
-            raise ValueError(f"Path traversal blocked: {file_path}")
 
         page = self.pages[tab_id]
         await page.pdf(path=file_path)
