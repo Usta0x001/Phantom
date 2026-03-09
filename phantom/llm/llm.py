@@ -111,10 +111,16 @@ class LLM:
             skill_content = load_skills(skills_to_load)
             env.globals["get_skill"] = lambda name: skill_content.get(name, "")
 
-            # TOOL_PROFILES filtering REMOVED (H-12). All tools are always
-            # included. Filtering hides tools like ffuf_parameter_fuzz,
-            # arjun, jwt_tool, etc. which the agent needs for deep exploitation.
-            tools_prompt_fn = lambda: get_tools_prompt()  # noqa: E731
+            # Use QUICK_MODE_TOOLS for scan modes that map to "quick" profile,
+            # show all 55 tools otherwise. The quick set (38 tools) covers every
+            # security capability while dropping file/note/todo management tools
+            # that add noise and inflate token cost by ~24%.
+            from phantom.tools.registry import TOOL_PROFILES
+            _profile_set = TOOL_PROFILES.get(self.config.scan_mode)
+            if _profile_set is not None:
+                tools_prompt_fn = lambda: get_tools_prompt(include_only=_profile_set)  # noqa: E731
+            else:
+                tools_prompt_fn = lambda: get_tools_prompt()  # noqa: E731
 
             result = env.get_template("system_prompt.jinja").render(
                 get_tools_prompt=tools_prompt_fn,
