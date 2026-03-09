@@ -117,6 +117,8 @@ class TestDuckDuckGoFallback:
 # ── Dynamic memory per profile tests ──────────────────────────────────
 
 
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
 class TestDynamicMemory:
     """Test per-profile memory thresholds."""
 
@@ -192,6 +194,8 @@ class TestDynamicMemory:
 # ── EnhancedAgentState activation tests ───────────────────────────────
 
 
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
 class TestEnhancedAgentState:
     """Test that EnhancedAgentState is activated for scans."""
 
@@ -311,6 +315,8 @@ class TestCICD:
 # ── Cost dashboard tests ───────────────────────────────────────────────
 
 
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
 class TestCostDashboard:
     """Test cost dashboard utilities."""
 

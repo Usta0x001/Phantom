@@ -3,6 +3,34 @@ import re
 from typing import Any
 
 
+_INVOKE_OPEN = re.compile(r'<invoke\s+name=["\']([^"\']+)["\']>')
+_PARAM_NAME_ATTR = re.compile(r'<parameter\s+name=["\']([^"\']+)["\']>')
+_FUNCTION_CALLS_TAG = re.compile(r"</?function_calls>")
+_STRIP_TAG_QUOTES = re.compile(r"<(function|parameter)\s*=\s*([^>]*?)>")
+
+
+def normalize_tool_format(content: str) -> str:
+    """Convert alternative tool-call XML formats to the expected canonical one.
+
+    Handles:
+      <function_calls>...</function_calls>  → stripped
+      <invoke name="X">                     → <function=X>
+      <parameter name="X">                  → <parameter=X>
+      </invoke>                             → </function>
+      <function="X">                        → <function=X>
+      <parameter="X">                       → <parameter=X>
+    """
+    if "<invoke" in content or "<function_calls" in content:
+        content = _FUNCTION_CALLS_TAG.sub("", content)
+        content = _INVOKE_OPEN.sub(r"<function=\1>", content)
+        content = _PARAM_NAME_ATTR.sub(r"<parameter=\1>", content)
+        content = content.replace("</invoke>", "</function>")
+
+    return _STRIP_TAG_QUOTES.sub(
+        lambda m: f"<{m.group(1)}={m.group(2).strip().strip(chr(34) + chr(39))}>", content
+    )
+
+
 def _truncate_to_first_function(content: str) -> str:
     """P2-001 FIX: Keep ALL tool calls, not just the first one.
     

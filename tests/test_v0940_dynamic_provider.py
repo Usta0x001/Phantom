@@ -18,6 +18,8 @@ import pytest
 # Section 1: Provider auto-detection
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
 class TestProviderAutoDetection:
     """infer_api_base() and get_context_window() must handle arbitrary models."""
 

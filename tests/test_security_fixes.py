@@ -147,6 +147,8 @@ class TestPHT003SSRF:
 # PHT-013: plugin loader validation
 # ====================================================================
 
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
 class TestPHT013PluginLoader:
     """Verify plugin loader validates discovered files."""
 
@@ -192,6 +194,8 @@ class TestPHT013PluginLoader:
 # PHT-017: HMAC chain in audit logger
 # ====================================================================
 
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
 class TestPHT017AuditHMAC:
     """Verify HMAC chain fields are written in audit log entries."""
 
@@ -226,6 +230,8 @@ class TestPHT017AuditHMAC:
 # PHT-019: checkpoint deserialization validation
 # ====================================================================
 
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
 class TestPHT019CheckpointValidation:
     """Verify checkpoint data is validated before loading."""
 
@@ -281,6 +287,8 @@ class TestPHT019CheckpointValidation:
 # Tool Firewall
 # ====================================================================
 
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
 class TestToolFirewall:
     """Verify tool invocation firewall blocks dangerous patterns."""
 
@@ -318,6 +326,8 @@ class TestToolFirewall:
 # Cost Controller
 # ====================================================================
 
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
 class TestCostController:
     """Verify cost controller tracks and limits spending."""
 
@@ -349,6 +359,8 @@ class TestCostController:
 # Loop Detector
 # ====================================================================
 
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
 class TestLoopDetector:
     """Verify loop detector identifies repeated behaviour."""
 

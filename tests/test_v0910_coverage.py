@@ -11,6 +11,8 @@ import pytest
 
 # ── Graceful crash handling ──
 
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
 class TestGracefulCrashHandling:
     """Test that partial results are saved when LLM errors occur."""
 
@@ -125,6 +127,8 @@ class TestSubAgentBudget:
 
 # ── Recon-first enforcement ──
 
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
 class TestReconFirstEnforcement:
     """Test that task description includes mandatory recon-first steps."""
 

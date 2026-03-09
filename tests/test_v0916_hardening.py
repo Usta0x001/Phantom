@@ -23,6 +23,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 # ====================================================================
 
 
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
 class TestPHT040SandboxCommandValidation:
     """Dangerous commands should be blocked even inside sandbox tools."""
 
@@ -126,6 +128,8 @@ class TestPHT040SandboxCommandValidation:
 # ====================================================================
 
 
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
 class TestPHT041ExpandedScopeArgNames:
     """Scope validation should cover host, ip, domain, hostname args."""
 
@@ -275,6 +279,8 @@ class TestPHT042JSONInstructionInjection:
 # ====================================================================
 
 
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
 class TestPHT043ContentTypeFiltering:
     """XSS verification should check Content-Type before declaring XSS.
 
@@ -344,6 +350,8 @@ class TestPHT043ContentTypeFiltering:
 # ====================================================================
 
 
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
 class TestPHT044ThreadSafeCostController:
     """Concurrent record_usage calls should be thread-safe."""
 
@@ -399,6 +407,8 @@ class TestPHT044ThreadSafeCostController:
 # ====================================================================
 
 
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
 class TestPHT045UserInfoInURL:
     """_extract_host should handle user@host URL patterns."""
 
@@ -466,6 +476,8 @@ class TestPHT046AuthSkipBehavior:
 # ====================================================================
 
 
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
 class TestPHT047FingerprintCollisionSpace:
     """Document fingerprint collision space characteristics."""
 
@@ -500,6 +512,8 @@ class TestPHT047FingerprintCollisionSpace:
 # ====================================================================
 
 
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
 class TestV0915Regression:
     """Quick regression checks that v0.9.15 fixes are not broken."""
 

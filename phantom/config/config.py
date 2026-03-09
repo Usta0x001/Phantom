@@ -291,3 +291,23 @@ def apply_saved_config(force: bool = False) -> dict[str, str]:
 
 def save_current_config() -> bool:
     return Config.save_current()
+
+
+def resolve_llm_config() -> tuple[str | None, str | None, str | None]:
+    """Resolve LLM model, api_key, and api_base from Phantom config.
+
+    Returns:
+        tuple: (model_name, api_key, api_base)
+    """
+    model = Config.get("phantom_llm")
+    if not model:
+        return None, None, None
+
+    api_key = Config.get("llm_api_key")
+    api_base = (
+        Config.get("llm_api_base")
+        or Config.get("openai_api_base")
+        or Config.get("litellm_base_url")
+        or Config.get("ollama_api_base")
+    )
+    return model, api_key, api_base

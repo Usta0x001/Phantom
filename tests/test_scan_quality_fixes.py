@@ -148,6 +148,8 @@ class TestTimeoutConfig:
         )
 
 
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
 class TestLogic002CompressionBoundary:
     """LOGIC-002: Compression limit check must happen BEFORE incrementing."""
 

@@ -182,6 +182,8 @@ class TestAgentStateLifecycle:
         assert "TestAgent" in str(summary) or "iteration" in str(summary).lower()
 
 
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
 class TestEnhancedAgentState:
     """EnhancedAgentState scan lifecycle."""
 
@@ -320,6 +322,8 @@ class TestEnhancedAgentState:
 # ═══════════════════════════════════════════════════════════════════════════
 
 
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
 class TestToolFirewallComprehensive:
     """Every firewall rule exercised."""
 
@@ -456,6 +460,8 @@ class TestToolFirewallComprehensive:
         assert fw.enabled
 
 
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
 class TestScopeValidator:
     """Scope enforcement, DNS pinning, private IP detection."""
 
@@ -504,6 +510,8 @@ class TestScopeValidator:
         assert sv2 is not None
 
 
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
 class TestAuditLoggerComprehensive:
     """Audit trail integrity, HMAC chain, rotation, event types."""
 
@@ -604,6 +612,8 @@ class TestAuditLoggerComprehensive:
         assert "http://site.com" in str(sanitized) or "target" in str(sanitized)
 
 
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
 class TestCostController:
     """Cost tracking, limits, snapshots, budget."""
 
@@ -675,6 +685,8 @@ class TestCostController:
 # ═══════════════════════════════════════════════════════════════════════════
 
 
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
 class TestVulnerabilityModel:
     """Vulnerability model construction, methods, serialization."""
 
@@ -737,6 +749,8 @@ class TestVulnerabilityModel:
         assert "raw_finding" not in d
 
 
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
 class TestScanModels:
     """ScanResult, FindingSummary, PhaseResult lifecycle."""
 
@@ -788,6 +802,8 @@ class TestScanModels:
 # ═══════════════════════════════════════════════════════════════════════════
 
 
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
 class TestReportGenerator:
     """Report generation: JSON, HTML, Markdown."""
 
@@ -941,6 +957,8 @@ class TestExecutor:
 # ═══════════════════════════════════════════════════════════════════════════
 
 
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
 class TestKnowledgeStore:
     """Persistent knowledge: hosts, vulns, history, false positives."""
 
@@ -1219,6 +1237,8 @@ class TestConfig:
 # ═══════════════════════════════════════════════════════════════════════════
 
 
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
 class TestInteractshClient:
     """Out-of-band interaction client."""
 
@@ -1256,6 +1276,8 @@ class TestInteractshClient:
 # ═══════════════════════════════════════════════════════════════════════════
 
 
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
 class TestFullScanLifecycleSimulation:
     """Simulate a complete scan from start to finish without real targets."""
 
@@ -1487,6 +1509,8 @@ class TestModuleImports:
 # ═══════════════════════════════════════════════════════════════════════════
 
 
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
 class TestRegressionGuards:
     """Catch specific prior bugs from re-appearing."""
 

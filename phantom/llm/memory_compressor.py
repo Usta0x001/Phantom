@@ -1,48 +1,46 @@
-import asyncio
 import logging
 from typing import Any
 
 import litellm
 
-from phantom.config import Config
+from phantom.config.config import Config, resolve_llm_config
 
 
 logger = logging.getLogger(__name__)
 
 
-MAX_TOTAL_TOKENS = 80_000
-MAX_MESSAGES = 500  # Raised from 150 — no cap needed. 150 caused silent loss of early recon data on deep scans.
-MIN_RECENT_MESSAGES = 15  # 15 msgs (~45K) keeps last 7-8 tool rounds for exploit continuity
+MAX_TOTAL_TOKENS = 100_000
+MIN_RECENT_MESSAGES = 15
 
-SUMMARY_PROMPT_TEMPLATE = """You are performing context condensation for a security
-assessment agent.  Compress the conversation while preserving every piece of
-operationally critical information.  The agent that reads your output must be
-able to continue the assessment exactly where it left off.
+SUMMARY_PROMPT_TEMPLATE = """You are an agent performing context
+condensation for a security agent. Your job is to compress scan data while preserving
+ALL operationally critical information for continuing the security assessment.
 
-MUST PRESERVE (copy verbatim when possible):
-1. **Exact URLs, endpoints, and parameters** discovered or tested
-2. **Working payloads and PoC details** (SQL queries, XSS payloads, etc.)
-3. **Credentials, tokens, API keys, session cookies** found
-4. **Vulnerability findings** — type, location, severity, evidence
-5. **HTTP status codes and response lengths** that indicate anomalies
-6. **Technology stack** — exact versions (e.g. "Express 4.17.1", "Node 18.x")
-7. **Failed attempts and dead ends** (so they are NOT repeated)
-8. **Attack surface map** — which endpoints exist, which were tested, which remain
-9. **Decision rationale** — why particular paths were chosen
-10. **Subagent tasks and results** — what was delegated and what came back
+CRITICAL ELEMENTS TO PRESERVE:
+- Discovered vulnerabilities and potential attack vectors
+- Scan results and tool outputs (compressed but maintaining key findings)
+- Access credentials, tokens, or authentication details found
+- System architecture insights and potential weak points
+- Progress made in the assessment
+- Failed attempts and dead ends (to avoid duplication)
+- Any decisions made about the testing approach
 
-COMPRESSION RULES:
-- Strip duplicate/repeated tool outputs but keep ONE representative entry
-- Condense verbose nmap/nuclei/httpx raw output into structured findings
-- NEVER remove a URL, parameter name, or payload string
-- Consolidate similar scan results (e.g. "ports 22,80,443,8080 open")
-- Keep exact error messages that hint at vulnerabilities
-- Preserve the chronological order of discoveries
+COMPRESSION GUIDELINES:
+- Preserve exact technical details (URLs, paths, parameters, payloads)
+- Summarize verbose tool outputs while keeping critical findings
+- Maintain version numbers, specific technologies identified
+- Keep exact error messages that might indicate vulnerabilities
+- Compress repetitive or similar findings into consolidated form
 
-CONVERSATION SEGMENT:
+Remember: Another security agent will use this summary to continue the assessment.
+They must be able to pick up exactly where you left off without losing any
+operational advantage or context needed to find vulnerabilities.
+
+CONVERSATION SEGMENT TO SUMMARIZE:
 {conversation}
 
-Write a technically precise summary preserving all details above."""
+Provide a technically precise summary that preserves all operational security context while
+keeping the summary concise and to the point."""
 
 
 def _count_tokens(text: str, model: str) -> int:
@@ -88,12 +86,12 @@ def _extract_message_text(msg: dict[str, Any]) -> str:
 def _summarize_messages(
     messages: list[dict[str, Any]],
     model: str,
-    timeout: int = 60,
+    timeout: int = 30,
 ) -> dict[str, Any]:
     if not messages:
         empty_summary = "<context_summary message_count='0'>{text}</context_summary>"
         return {
-            "role": "assistant",
+            "role": "user",
             "content": empty_summary.format(text="No messages to summarize"),
         }
 
@@ -106,29 +104,7 @@ def _summarize_messages(
     conversation = "\n".join(formatted)
     prompt = SUMMARY_PROMPT_TEMPLATE.format(conversation=conversation)
 
-    api_key = Config.get("llm_api_key")
-    api_base = (
-        Config.get("llm_api_base")
-        or Config.get("openai_api_base")
-        or Config.get("litellm_base_url")
-        or Config.get("ollama_api_base")
-    )
-
-    # Resolve provider-specific key / base for known presets
-    try:
-        from phantom.llm.provider_registry import PROVIDER_PRESETS
-        import os as _os
-
-        preset = PROVIDER_PRESETS.get(model.lower())
-        if preset:
-            if preset.api_key_env:
-                _pkey = _os.getenv(preset.api_key_env) or Config.get(preset.api_key_env.lower())
-                if _pkey:
-                    api_key = _pkey
-            if preset.api_base:
-                api_base = preset.api_base
-    except Exception:  # noqa: BLE001
-        pass
+    _, api_key, api_base = resolve_llm_config()
 
     try:
         completion_args: dict[str, Any] = {
@@ -143,55 +119,16 @@ def _summarize_messages(
 
         response = litellm.completion(**completion_args)
         summary = response.choices[0].message.content or ""
-
-        # LOGIC-004 FIX: Log compression calls to audit trail so data flows
-        # to external LLM providers are visible and auditable.
-        try:
-            from phantom.core.audit_logger import get_global_audit_logger
-            _audit = get_global_audit_logger()
-            if _audit:
-                _audit.log_event(
-                    event_type="compression",
-                    severity="info",
-                    category="llm",
-                    data={
-                        "model": model,
-                        "input_messages": len(messages),
-                        "input_chars": len(conversation),
-                        "output_chars": len(summary),
-                        "provider": model.split("/")[0] if "/" in model else "unknown",
-                    },
-                )
-        except Exception:  # noqa: BLE001
-            pass  # Non-fatal — audit logging should never break compression
-
         if not summary.strip():
             return messages[0]
         summary_msg = "<context_summary message_count='{count}'>{text}</context_summary>"
         return {
-            "role": "assistant",
+            "role": "user",
             "content": summary_msg.format(count=len(messages), text=summary),
         }
     except Exception:
         logger.exception("Failed to summarize messages")
-        # Fallback: keep the LAST few messages from the chunk (most recent = most useful)
-        # plus extract any critical data.  NEVER return an empty summary.
-        fallback_parts = []
-        for msg in messages[-3:]:  # keep last 3 messages from chunk
-            text = _extract_message_text(msg)
-            if text:
-                fallback_parts.append(text[:1000])
-        fallback_text = "\n---\n".join(fallback_parts) if fallback_parts else "(compression failed — no messages preserved)"
-        error_summary = (
-            "<context_summary message_count='{count}'>"
-            "[Summarization failed — preserving last {kept} messages from chunk]\n"
-            "{text}"
-            "</context_summary>"
-        )
-        return {
-            "role": "assistant",
-            "content": error_summary.format(count=len(messages), kept=min(3, len(messages)), text=fallback_text),
-        }
+        return messages[0]
 
 
 def _handle_images(messages: list[dict[str, Any]], max_images: int) -> None:
@@ -218,45 +155,25 @@ class MemoryCompressor:
         max_images: int = 3,
         model_name: str | None = None,
         timeout: int | None = None,
-        max_tokens: int | None = None,
     ):
         self.max_images = max_images
         self.model_name = model_name or Config.get("phantom_llm")
-        self.timeout = timeout or int(Config.get("phantom_memory_compressor_timeout") or "60")
-        # Per-profile override; falls back to the module-level default
-        self.max_total_tokens = max_tokens or MAX_TOTAL_TOKENS
+        self.timeout = timeout or int(Config.get("phantom_memory_compressor_timeout") or "120")
 
         if not self.model_name:
             raise ValueError("PHANTOM_LLM environment variable must be set and not empty")
 
-        # Optional back-reference to the agent state so we can read its
-        # findings ledger during compression.  Set by the LLM class.
-        self._agent_state: Any | None = None
-
-    async def compress_history(
+    def compress_history(
         self,
         messages: list[dict[str, Any]],
-        overhead_tokens: int = 0,
     ) -> list[dict[str, Any]]:
         """Compress conversation history to stay within token limits.
-
-        This method is async because summarization calls the LLM (blocking I/O).
-        Wrapping with ``asyncio.to_thread`` prevents blocking the event loop
-        during multi-agent scans.
 
         Strategy:
         1. Handle image limits first
         2. Keep all system messages
         3. Keep minimum recent messages
         4. Summarize older messages when total tokens exceed limit
-        5. Inject findings ledger as a pinned context message (never lost)
-
-        Args:
-            messages: The conversation history to compress.
-            overhead_tokens: Token count of content already committed to the
-                request (e.g. the system prompt) that is NOT in *messages*.
-                Subtracted from the effective threshold so compression fires
-                before the full request exceeds ``max_total_tokens``.
 
         The compression preserves:
         - All system messages unchanged
@@ -264,35 +181,9 @@ class MemoryCompressor:
         - Critical security context in summaries
         - Recent images for visual context
         - Technical details and findings
-        - Findings ledger (persistent, never compressed)
         """
         if not messages:
             return messages
-
-        # L3-FIX: Strip expired advisory messages before compression.
-        # Advisories tagged with <advisory ttl='N' iter='M'> expire after N
-        # iterations to prevent token accumulation from persistent warnings.
-        import re as _adv_re
-        current_iter = 0
-        if self._agent_state and hasattr(self._agent_state, "iteration"):
-            current_iter = self._agent_state.iteration
-        if current_iter > 0:
-            cleaned = []
-            for msg in messages:
-                content = msg.get("content", "")
-                if isinstance(content, str) and "<advisory" in content:
-                    m = _adv_re.search(r"ttl='(\d+)'\s+iter='(\d+)'", content)
-                    if m:
-                        ttl = int(m.group(1))
-                        created_iter = int(m.group(2))
-                        if current_iter - created_iter > ttl:
-                            continue  # expired — drop
-                cleaned.append(msg)
-            messages = cleaned
-
-        # Hard cap on message count to prevent unbounded memory growth
-        if len(messages) > MAX_MESSAGES:
-            messages = messages[-MAX_MESSAGES:]
 
         _handle_images(messages, self.max_images)
 
@@ -314,159 +205,15 @@ class MemoryCompressor:
             _get_message_tokens(msg, model_name) for msg in system_msgs + regular_msgs
         )
 
-        # Subtract the caller-supplied overhead (e.g. system prompt tokens that
-        # are NOT in *messages* but WILL be sent in the same API call) so the
-        # effective budget reflects the true per-call token spend.
-        effective_max = max(
-            self.max_total_tokens - overhead_tokens,
-            MIN_RECENT_MESSAGES * 500,  # safety floor so we never compress to zero
-        )
-
-        if total_tokens <= effective_max * 0.90:
-            # Compression fires when total_tokens EXCEEDS 90% of effective_max.
-            # Previous 0.80 threshold was too aggressive — caused premature
-            # compression, wasting LLM tokens and losing exploit context.
-            ledger_msg = self._build_ledger_message()
-            if ledger_msg:
-                # Insert ledger just before the last few messages
-                insert_idx = max(len(system_msgs), len(messages) - MIN_RECENT_MESSAGES)
-                messages = messages[:insert_idx] + [ledger_msg] + messages[insert_idx:]
+        if total_tokens <= MAX_TOTAL_TOKENS * 0.9:
             return messages
 
         compressed = []
-        chunk_size = 25  # Raised from 10 — fewer LLM calls during compression
+        chunk_size = 10
         for i in range(0, len(old_msgs), chunk_size):
             chunk = old_msgs[i : i + chunk_size]
-
-            # PHT-014 FIX: Before summarizing, extract and pin critical
-            # data (working payloads, PoC, exact URLs with params) so the
-            # LLM summariser cannot lose them even if it hallucinates.
-            critical_extracts: list[str] = []
-            import re as _cre
-            for cmsg in chunk:
-                ctext = _extract_message_text(cmsg)
-                # Preserve working payloads (SQL, XSS, command-injection strings)
-                for payload in _cre.findall(
-                    r"(?:payload|poc|proof.of.concept|working.exploit)[:\s]*(.{10,200})",
-                    ctext, _cre.IGNORECASE,
-                ):
-                    critical_extracts.append(f"[PAYLOAD] {payload.strip()}")
-                # Preserve URLs with query params (likely tested endpoints)
-                for url in _cre.findall(r"https?://[^\s\"'<>]+\?[^\s\"'<>]+", ctext):
-                    critical_extracts.append(f"[URL] {url.rstrip('.,;)')}")
-                # Preserve HTTP status anomalies
-                for anomaly in _cre.findall(
-                    r"(?:status|HTTP)\s*(?:code)?\s*[:=]?\s*(4\d\d|5\d\d)\b[^.]{0,80}",
-                    ctext, _cre.IGNORECASE,
-                ):
-                    critical_extracts.append(f"[HTTP] {anomaly.strip()}")
-                # Preserve JWT tokens and Bearer auth
-                for jwt in _cre.findall(
-                    r"(?:Bearer\s+|token[\"']?\s*[:=]\s*[\"']?)(eyJ[A-Za-z0-9_-]+\.eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+)",
-                    ctext, _cre.IGNORECASE,
-                ):
-                    critical_extracts.append(f"[JWT] {jwt[:200]}")
-                # Preserve Set-Cookie values
-                for cookie in _cre.findall(
-                    r"(?:Set-Cookie|cookie)[:\s]*([^\n;]{5,150})",
-                    ctext, _cre.IGNORECASE,
-                ):
-                    critical_extracts.append(f"[COOKIE] {cookie.strip()}")
-                # Preserve discovered API endpoints (REST paths)
-                for endpoint in _cre.findall(
-                    r"(?:GET|POST|PUT|DELETE|PATCH)\s+(\/[a-zA-Z0-9/_\-.]+)",
-                    ctext,
-                ):
-                    critical_extracts.append(f"[ENDPOINT] {endpoint}")
-                # Preserve credentials found during scan
-                # P1-005 FIX: Redact literal credential values to prevent leaking
-                # them to the external LLM. Store a hash reference so the agent
-                # knows credentials exist without exposing them.
-                for cred in _cre.findall(
-                    r"(?:password|secret|api[_-]?key|admin)[:\s=]+([^\s\"']{3,80})",
-                    ctext, _cre.IGNORECASE,
-                ):
-                    import hashlib as _hl
-                    cred_hash = _hl.sha256(cred.strip().encode()).hexdigest()[:8]
-                    critical_extracts.append(f"[CRED] credential_ref:{cred_hash} (redacted)")
-                # Preserve numeric IDs (for IDOR testing)
-                for idor in _cre.findall(
-                    r"(?:user[_-]?id|id|uid|basket[_-]?id)[\"']?\s*[:=]\s*(\d+)",
-                    ctext, _cre.IGNORECASE,
-                ):
-                    critical_extracts.append(f"[ID] {idor}")
-
-            # Run the blocking LLM summarization in a thread pool so we don't
-            # block the asyncio event loop during multi-agent scans.
-            summary = await asyncio.to_thread(_summarize_messages, chunk, model_name, self.timeout)
+            summary = _summarize_messages(chunk, model_name, self.timeout)
             if summary:
-                if isinstance(summary, list):
-                    compressed.extend(summary)  # fallback returned all messages
-                else:
-                    # Append critical extracts that may have been lost
-                    if critical_extracts:
-                        extract_text = "\n".join(dict.fromkeys(critical_extracts))  # dedup
-                        existing = summary.get("content", "")
-                        summary["content"] = (
-                            f"{existing}\n\n"
-                            f"<critical_data_preserved>\n{extract_text}\n</critical_data_preserved>"
-                        )
-                    compressed.append(summary)
+                compressed.append(summary)
 
-        # Inject findings ledger as a pinned context message so it is
-        # NEVER lost during compression.  The ledger is a compact list that
-        # the agent (and subagents) can rely on for continuity.
-        ledger_msg = self._build_ledger_message()
-
-        result = system_msgs + compressed
-        if ledger_msg:
-            result.append(ledger_msg)
-        result.extend(recent_msgs)
-        return result
-
-    # ------------------------------------------------------------------
-    # Helpers
-    # ------------------------------------------------------------------
-
-    def _build_ledger_message(self) -> dict[str, Any] | None:
-        """Build a synthetic message from the agent's findings ledger and
-        tested endpoint tracking."""
-        state = self._agent_state
-        if state is None:
-            return None
-
-        parts: list[str] = []
-
-        # Findings ledger
-        ledger = getattr(state, "findings_ledger", None)
-        if ledger:
-            text = "\n".join(f"- {f}" for f in ledger[-100:])
-            parts.append(
-                "<persistent_findings_ledger>\n"
-                "The following is a PERSISTENT list of key discoveries that must\n"
-                "not be forgotten.  Use this to avoid re-testing endpoints and\n"
-                "to remember what has already been found.\n\n"
-                f"{text}\n"
-                "</persistent_findings_ledger>"
-            )
-
-        # Tested endpoint dedup summary
-        endpoint_summary_fn = getattr(state, "get_tested_endpoints_summary", None)
-        if endpoint_summary_fn:
-            summary = endpoint_summary_fn()
-            if summary:
-                parts.append(
-                    "<tested_endpoints>\n"
-                    "Endpoints already tested — do NOT re-test these with the same\n"
-                    "tool/technique.  Focus on UNTESTED endpoints and attack vectors.\n\n"
-                    f"{summary}\n"
-                    "</tested_endpoints>"
-                )
-
-        if not parts:
-            return None
-
-        return {
-            "role": "user",
-            "content": "\n\n".join(parts),
-        }
+        return system_msgs + compressed + recent_msgs

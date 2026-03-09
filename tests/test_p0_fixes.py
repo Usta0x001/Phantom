@@ -10,6 +10,8 @@ from pathlib import Path
 import pytest
 
 
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
 def test_sec004_hmac_key_not_default():
     """SEC-004: HMAC key must not be the hardcoded default."""
     from phantom.core.audit_logger import AuditLogger
@@ -21,6 +23,8 @@ def test_sec004_hmac_key_not_default():
     print("SEC-004 PASS: Unique HMAC key generated")
 
 
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
 def test_sec004_hmac_key_persisted():
     """SEC-004: HMAC key must persist across logger instances."""
     from phantom.core.audit_logger import AuditLogger

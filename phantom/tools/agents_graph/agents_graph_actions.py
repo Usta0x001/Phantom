@@ -366,36 +366,17 @@ def create_agent(
                 }
 
         from phantom.agents import PhantomAgent
-        from phantom.agents.enhanced_state import EnhancedAgentState
         from phantom.agents.state import AgentState
         from phantom.llm.config import LLMConfig
 
-        # Derive subagent iteration limit from parent's scan profile instead
-        # of using a hardcoded 300.  Subagents get 75 % of their parent's
-        # max iterations (minimum 50) so they have enough budget to do
-        # real security testing — recon + spray + validate + report.
+        # Derive subagent iteration limit from parent's remaining budget (75%, min 50)
         child_max_iter = 300  # fallback
         parent_agent = _agent_instances.get(parent_id)
         if parent_agent:
-            parent_max = getattr(
-                getattr(parent_agent, "scan_profile", None), "max_iterations", None
-            )
-            if parent_max is None:
-                parent_max = getattr(parent_agent.state, "max_iterations", 300)
+            parent_max = getattr(parent_agent.state, "max_iterations", 300)
             child_max_iter = max(50, int(parent_max * 0.75))
 
-        # Use EnhancedAgentState so subagents get full vuln tracking,
-        # endpoint dedup, host enumeration, and priority queue capabilities.
-        state = EnhancedAgentState(task=task, agent_name=name, parent_id=parent_id, max_iterations=child_max_iter)
-
-        # Propagate parent's discovered endpoints and hosts to subagent
-        # so it doesn't start blind.
-        if hasattr(agent_state, "endpoints") and agent_state.endpoints:
-            state.endpoints = list(agent_state.endpoints)
-        if hasattr(agent_state, "hosts") and agent_state.hosts:
-            state.hosts = dict(agent_state.hosts)
-        if hasattr(agent_state, "tested_endpoints") and agent_state.tested_endpoints:
-            state.tested_endpoints = dict(agent_state.tested_endpoints)
+        state = AgentState(task=task, agent_name=name, parent_id=parent_id, max_iterations=child_max_iter)
 
         timeout = None
         scan_mode = "deep"

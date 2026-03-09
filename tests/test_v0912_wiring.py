@@ -14,6 +14,8 @@ import pytest
 # Knowledge Store — get_all_vulnerabilities
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
 class TestKnowledgeStoreAllVulns:
     """Test the new get_all_vulnerabilities method."""
 
@@ -72,6 +74,8 @@ class TestKnowledgeStoreAllVulns:
 # Knowledge Store — Scan History Recording
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
 class TestKnowledgeStoreScanHistory:
     """Test scan history recording."""
 
@@ -123,6 +127,8 @@ class TestKnowledgeStoreScanHistory:
 # Knowledge Store — Host Persistence
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
 class TestKnowledgeStoreHosts:
     """Test host storage and retrieval."""
 
@@ -171,6 +177,8 @@ class TestKnowledgeStoreHosts:
 # Verification Engine — Core Tests
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
 class TestVerificationEngine:
     """Test verification engine core logic."""
 
@@ -270,6 +278,8 @@ class TestVerificationEngine:
 # verify_vulnerability Tool
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
 class TestVerifyVulnerabilityTool:
     """Test the verify_vulnerability agent tool."""
 
@@ -331,6 +341,8 @@ class TestVerifyVulnerabilityTool:
 # check_known_vulnerabilities Tool
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
 class TestCheckKnownVulnerabilities:
     """Test that check_known_vulnerabilities reads from the store."""
 
@@ -373,6 +385,8 @@ class TestCheckKnownVulnerabilities:
 # EnhancedAgentState — VulnerabilityStatus Import Fix
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
 class TestEnhancedStateStatusFix:
     """Verify VulnerabilityStatus is now properly imported."""
 
@@ -420,6 +434,8 @@ class TestEnhancedStateStatusFix:
 # PhantomAgent — Prior Intel Injection
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
 class TestPriorIntelInjection:
     """Test that _query_prior_intel retrieves and formats knowledge store data."""
 
@@ -467,6 +483,8 @@ class TestPriorIntelInjection:
 # Post-Scan Enrichment — Verification Step
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
 class TestPostScanVerification:
     """Test that _run_post_scan_enrichment includes verification."""
 
@@ -522,6 +540,8 @@ class TestPostScanVerification:
 # Post-Scan Enrichment — Knowledge Store Hosts + History
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
 class TestPostScanKnowledgeStoreExpanded:
     """Test that enrichment saves hosts and scan history."""
 
@@ -590,6 +610,8 @@ class TestPostScanKnowledgeStoreExpanded:
 # Statistics and Reporting
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
 class TestKnowledgeStoreStatistics:
     """Test knowledge store statistics."""
 
@@ -627,6 +649,8 @@ class TestKnowledgeStoreStatistics:
 # Tool Registration
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
 class TestToolRegistration:
     """Verify new tools are importable and registered."""
 

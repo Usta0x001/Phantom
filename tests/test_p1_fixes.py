@@ -1,3 +1,4 @@
+import pytest
 """
 P1 Fix Verification Tests
 Tests for SEC-007, LOGIC-001, LOGIC-005, IMPL-003
@@ -60,6 +61,8 @@ def test_sec007_sqlmap_headers_crlf_stripped():
         _tracer_mod._global_tracer = original
 
 
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
 def test_logic001_check_limits_inside_lock():
     """LOGIC-001: _check_limits() must be called inside the lock scope."""
     import inspect

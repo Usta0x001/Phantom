@@ -24,6 +24,8 @@ import pytest
 # =========================================================================
 
 
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
 class TestScanProfilesV096:
     """Validate new iteration limits and tool configurations."""
 

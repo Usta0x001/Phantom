@@ -20,6 +20,8 @@ import pytest
 # =========================================================================
 
 
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
 class TestEndpointDeduplication:
     """Test the tested_endpoints tracking in EnhancedAgentState."""
 
@@ -78,6 +80,8 @@ class TestEndpointDeduplication:
 # =========================================================================
 
 
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
 class TestExecutorEndpointTracking:
     """Test _track_tested_endpoint in executor.py."""
 
@@ -120,6 +124,8 @@ class TestExecutorEndpointTracking:
 # =========================================================================
 
 
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
 class TestDoubleSetCompletedFix:
     """Verify that complete_scan() and set_completed() are not both called."""
 
@@ -143,6 +149,8 @@ class TestDoubleSetCompletedFix:
 # =========================================================================
 
 
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
 class TestVulnAutoRecordWiring:
     """Test that create_vulnerability_report results wire to EnhancedState."""
 
@@ -171,6 +179,8 @@ class TestVulnAutoRecordWiring:
 # =========================================================================
 
 
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
 class TestMemoryCompressorLedger:
     """Test that the ledger message includes endpoint summary."""
 
@@ -251,6 +261,8 @@ class TestAuthenticatedScanning:
 # =========================================================================
 
 
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
 class TestScanResultPersistence:
     """Test that EnhancedAgentState.to_report_data() produces valid data."""
 
@@ -280,6 +292,8 @@ class TestScanResultPersistence:
 # =========================================================================
 
 
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
 class TestV099Integration:
     """Integration tests combining multiple v0.9.9 features."""
 

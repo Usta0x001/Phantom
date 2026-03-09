@@ -1,34 +1,10 @@
 import inspect
-import logging
 import os
-import time as _time
-from html import escape as _xml_escape
 from typing import Any
 
 import httpx
 
 from phantom.config import Config
-
-_logger = logging.getLogger(__name__)
-
-# L17 FIX: module-level constant instead of per-call recreation
-_ENDPOINT_TOOLS_MAP: dict[str, str] = {
-    "sqlmap_test": "sqli",
-    "sqlmap_forms": "sqli",
-    "sqlmap_dump_database": "sqli-dump",
-    "nuclei_scan": "nuclei",
-    "nuclei_scan_cves": "nuclei-cve",
-    "nuclei_scan_misconfigs": "nuclei-misconfig",
-    "ffuf_directory_scan": "fuzz",
-    "ffuf_parameter_fuzz": "param-fuzz",
-    "ffuf_vhost_fuzz": "vhost-fuzz",
-    "nmap_scan": "portscan",
-    "nmap_vuln_scan": "vuln-scan",
-    "httpx_probe": "httpx",
-    "httpx_full_analysis": "httpx-full",
-    "send_request": "manual",
-    "repeat_request": "manual-repeat",
-}
 
 
 if os.getenv("PHANTOM_SANDBOX_MODE", "false").lower() == "false":
@@ -44,15 +20,9 @@ from .registry import (
 )
 
 
-try:
-    _SERVER_TIMEOUT = float(Config.get("phantom_sandbox_execution_timeout") or "600")
-except (ValueError, TypeError):
-    _SERVER_TIMEOUT = 600.0
+_SERVER_TIMEOUT = float(Config.get("phantom_sandbox_execution_timeout") or "120")
 SANDBOX_EXECUTION_TIMEOUT = _SERVER_TIMEOUT + 30
-try:
-    SANDBOX_CONNECT_TIMEOUT = float(Config.get("phantom_sandbox_connect_timeout") or "10")
-except (ValueError, TypeError):
-    SANDBOX_CONNECT_TIMEOUT = 10.0
+SANDBOX_CONNECT_TIMEOUT = float(Config.get("phantom_sandbox_connect_timeout") or "10")
 
 
 async def execute_tool(tool_name: str, agent_state: Any | None = None, **kwargs: Any) -> Any:
@@ -100,18 +70,6 @@ async def _execute_tool_in_sandbox(tool_name: str, agent_state: Any, **kwargs: A
         "Content-Type": "application/json",
     }
 
-    # P2-FIX8: Stealth enforcement middleware — enforce rate limiting when
-    # stealth profile is active. This is a hard limit, not advisory-only.
-    try:
-        from phantom.core.scan_profiles import get_active_profile_flags
-        flags = get_active_profile_flags()
-        delay_ms = flags.get("delay_ms", 0)
-        if delay_ms > 0:
-            import asyncio as _asyncio
-            await _asyncio.sleep(delay_ms / 1000.0)
-    except (ImportError, AttributeError):
-        pass
-
     timeout = httpx.Timeout(
         timeout=SANDBOX_EXECUTION_TIMEOUT,
         connect=SANDBOX_CONNECT_TIMEOUT,
@@ -125,14 +83,17 @@ async def _execute_tool_in_sandbox(tool_name: str, agent_state: Any, **kwargs: A
             response.raise_for_status()
             response_data = response.json()
             if response_data.get("error"):
+                pass  #("tool_execution_error", f"{tool_name}: {response_data['error']}")
                 raise RuntimeError(f"Sandbox execution error: {response_data['error']}")
             return response_data.get("result")
         except httpx.HTTPStatusError as e:
+            pass  #("tool_http_error", f"{tool_name}: HTTP {e.response.status_code}")
             if e.response.status_code == 401:
                 raise RuntimeError("Authentication failed: Invalid or missing sandbox token") from e
             raise RuntimeError(f"HTTP error calling tool server: {e.response.status_code}") from e
         except httpx.RequestError as e:
             error_type = type(e).__name__
+            pass  #("tool_request_error", f"{tool_name}: {error_type}")
             raise RuntimeError(f"Request error calling tool server: {error_type}") from e
 
 
@@ -224,148 +185,11 @@ async def execute_tool_with_validation(
         return result
 
 
-# Per-tool parameter alias maps: alias → canonical name.
-# Only remapping is done — if the canonical name already exists, alias is dropped.
-_TOOL_PARAM_ALIASES: dict[str, dict[str, str]] = {
-    "report_vulnerability": {
-        "vuln_title": "title",
-        "vulnerability_title": "title",
-        "vuln_description": "description",
-        "vulnerability_description": "description",
-        "vuln_severity": "severity",
-        "cvss_severity": "severity",
-        "risk_level": "severity",
-        "vuln_target": "target",
-        "target_url": "target",
-        "poc": "proof",
-        "poc_description": "proof",
-        "proof_of_concept": "proof",
-        "evidence": "proof",
-    },
-}
-
-
-def _normalize_tool_args(tool_name: str | None, args: dict[str, Any]) -> dict[str, Any]:
-    """Remap aliased parameter names to their canonical names for known tools."""
-    if tool_name is None:
-        return args
-    aliases = _TOOL_PARAM_ALIASES.get(tool_name)
-    if not aliases:
-        return args
-    normalized = dict(args)
-    for alias, canonical in aliases.items():
-        if alias in normalized and canonical not in normalized:
-            normalized[canonical] = normalized.pop(alias)
-        elif alias in normalized:
-            # Canonical already present — drop the alias silently
-            normalized.pop(alias)
-    return normalized
-
-
 async def execute_tool_invocation(tool_inv: dict[str, Any], agent_state: Any | None = None) -> Any:
     tool_name = tool_inv.get("toolName")
     tool_args = tool_inv.get("args", {})
 
-    # v0.9.35: Tool firewall DISABLED (H-02). The injection pattern matching
-    # blocks legitimate pentest payloads: SQLi (;), SSTI (${...}), command
-    # injection (`...`), boolean SQLi (||). The sandbox provides isolation.
-    # The sandbox already provides isolation.
-
-    # Normalise common parameter name aliases that some LLMs emit.
-    tool_args = _normalize_tool_args(tool_name, tool_args)
-
-    # Auto-inject auth headers for security tools that support extra_args
-    tool_args = _inject_auth_headers(tool_name, tool_args, agent_state)
-
     return await execute_tool_with_validation(tool_name, agent_state, **tool_args)
-
-
-# Tools that accept extra_args and support header-style flags
-_AUTH_INJECTABLE_TOOLS: dict[str, str] = {
-    # tool_name -> header flag format
-    "httpx_probe": "-H",
-    "httpx_full_analysis": "-H",
-    "katana_crawl": "-H",
-    "nuclei_scan": "-header",
-    "nuclei_scan_cves": "-header",
-    "nuclei_scan_misconfigs": "-header",
-    "ffuf_directory_scan": "-H",
-    "ffuf_parameter_fuzz": "-H",
-    "ffuf_vhost_fuzz": "-H",
-    "sqlmap_test": "--headers",
-    "sqlmap_forms": "--headers",
-    "sqlmap_dump_database": "--headers",
-}
-
-
-def _inject_auth_headers(
-    tool_name: str | None, tool_args: dict[str, Any], agent_state: Any | None
-) -> dict[str, Any]:
-    """Auto-inject auth headers into security tools that support extra_args.
-
-    Reads auth_headers from:
-    1. Scan config (user-provided at scan start)
-    2. Session token store (auto-captured during scanning from login responses)
-    Appends appropriate header flags to the tool's extra_args parameter.
-    """
-    if not tool_name or tool_name not in _AUTH_INJECTABLE_TOOLS:
-        return tool_args
-
-    auth_headers: dict[str, str] = {}
-
-    # Source 1: User-provided auth headers from scan config
-    try:
-        from phantom.telemetry.tracer import get_global_tracer
-        tracer = get_global_tracer()
-        if tracer and tracer.scan_config:
-            config_headers = tracer.scan_config.get("auth_headers")
-            if config_headers:
-                auth_headers.update(config_headers)
-    except (ImportError, AttributeError):
-        pass
-
-    # Source 2: Auto-captured session tokens from proxy_manager
-    try:
-        from phantom.tools.proxy.proxy_manager import get_auth_token_store
-        session_tokens = get_auth_token_store()
-        for hdr_name, hdr_value in session_tokens.items():
-            if hdr_name not in auth_headers:
-                auth_headers[hdr_name] = hdr_value
-    except (ImportError, AttributeError):
-        pass
-
-    if not auth_headers:
-        return tool_args
-
-    flag = _AUTH_INJECTABLE_TOOLS[tool_name]
-    header_parts: list[str] = []
-    if flag == "--headers":
-        # SQLMap: --headers="Header1: val1\nHeader2: val2"
-        # SEC-007 FIX: Strip CRLF from header names and values
-        hdr_lines = "\\n".join(
-            f"{n.replace(chr(13),'').replace(chr(10),'')}: {v.replace(chr(13),'').replace(chr(10),'')}"
-            for n, v in auth_headers.items()
-        )
-        header_parts.append(f'--headers="{hdr_lines}"')
-    else:
-        # PHT-004 FIX: Use shlex.quote for each header value to prevent
-        # shell metacharacter injection via double-quote breakout.
-        # SEC-007 FIX: Also strip \r\n (CRLF) to prevent HTTP header injection.
-        import shlex as _shlex
-        for name, value in auth_headers.items():
-            # Validate header name/value don't contain injection chars
-            safe_name = str(name).replace('"', '').replace("'", "").replace(";", "").replace("\r", "").replace("\n", "")
-            safe_value = str(value).replace('"', '').replace(";", "").replace("`", "").replace("\r", "").replace("\n", "")
-            header_parts.append(f"{flag} {_shlex.quote(f'{safe_name}: {safe_value}')}")
-
-    header_str = " ".join(header_parts)
-    existing = tool_args.get("extra_args", "") or ""
-    if existing:
-        tool_args["extra_args"] = f"{existing} {header_str}"
-    else:
-        tool_args["extra_args"] = header_str
-
-    return tool_args
 
 
 def _check_error_result(result: Any) -> tuple[bool, Any]:
@@ -418,39 +242,14 @@ def _format_tool_result(tool_name: str, result: Any) -> tuple[str, list[dict[str
         final_result_str = f"Tool {tool_name} executed successfully"
     else:
         final_result_str = str(result_str)
-        # BUG-05 FIX: Scanner tools (nuclei, sqlmap, nmap, ffuf) need higher
-        # limits — their structured output contains multiple findings that get
-        # destroyed by aggressive truncation. 18K for scanners, 8K for others.
-        # Increased from 12K/6K — nuclei now returns richer fields (references,
-        # curl commands, extracted results) that need more space.
-        _scanner_tools = {"nuclei_scan", "sqlmap_test", "sqlmap_forms", "nmap_scan",
-                          "ffuf_directory_scan", "katana_crawl", "httpx_probe",
-                          "nuclei_scan_cves", "nuclei_scan_misconfigs", "nmap_vuln_scan"}
-        _trunc_limit = 18000 if tool_name in _scanner_tools else 8000
-        _start_chars = _trunc_limit // 2
-        _end_chars = _trunc_limit // 2
-        if len(final_result_str) > _trunc_limit:
-            start_part = final_result_str[:_start_chars]
-            end_part = final_result_str[-_end_chars:]
-            # Snap to nearest newline to avoid cutting mid-line/mid-tag
-            last_nl = start_part.rfind('\n')
-            if last_nl > 2000:
-                start_part = start_part[:last_nl]
-            first_nl = end_part.find('\n')
-            if first_nl != -1 and first_nl < 500:
-                end_part = end_part[first_nl + 1:]
-            omitted = len(final_result_str) - len(start_part) - len(end_part)
-            final_result_str = (
-                start_part
-                + f"\n\n... [{omitted} characters truncated] ...\n\n"
-                + end_part
-            )
+        if len(final_result_str) > 10000:
+            start_part = final_result_str[:4000]
+            end_part = final_result_str[-4000:]
+            final_result_str = start_part + "\n\n... [middle content truncated] ...\n\n" + end_part
 
-    # BUG-17 FIX: Use CDATA to avoid double-encoding security payloads
-    # (XSS/SQLi payloads in results were being HTML-escaped, hiding reflections)
     observation_xml = (
-        f"<tool_result>\n<tool_name>{_xml_escape(tool_name)}</tool_name>\n"
-        f"<result><![CDATA[{final_result_str}]]></result>\n</tool_result>"
+        f"<tool_result>\n<tool_name>{tool_name}</tool_name>\n"
+        f"<result>{final_result_str}</result>\n</tool_result>"
     )
 
     return observation_xml, images
@@ -470,7 +269,6 @@ async def _execute_single_tool(
     if tracer:
         execution_id = tracer.log_tool_execution_start(agent_id, tool_name, args)
 
-    _start_ts = _time.monotonic()
     try:
         result = await execute_tool_invocation(tool_inv, agent_state)
 
@@ -488,56 +286,10 @@ async def _execute_single_tool(
 
         _update_tracer_with_result(tracer, execution_id, is_error, result, error_payload)
 
-        # ── Auto-record findings to persistent ledger ──
-        _auto_record_findings(tool_name, result, agent_state)
-
-        # ── Track tested endpoints for deduplication ──
-        _track_tested_endpoint(tool_name, tool_inv.get("args", {}), agent_state)
-
-        # ── Audit logging ──
-        _duration_ms = (_time.monotonic() - _start_ts) * 1000
-        try:
-            from phantom.core.audit_logger import get_global_audit_logger
-
-            _audit = get_global_audit_logger()
-            if _audit:
-                _summary = None
-                if isinstance(result, dict):
-                    _summary = result.get("message", result.get("error", None))
-                elif isinstance(result, str):
-                    _summary = result[:200] if len(result) > 200 else result
-                _audit.log_tool_call(
-                    tool_name,
-                    args,
-                    agent_id=agent_id,
-                    result_summary=str(_summary) if _summary else None,
-                    success=not is_error,
-                    duration_ms=round(_duration_ms, 2),
-                )
-        except Exception as exc:  # noqa: BLE001
-            _logger.debug("Audit log failed for tool %s: %s", tool_name, exc)
-
     except (ConnectionError, RuntimeError, ValueError, TypeError, OSError) as e:
-        _duration_ms = (_time.monotonic() - _start_ts) * 1000
         error_msg = str(e)
         if tracer and execution_id:
             tracer.update_tool_execution(execution_id, "error", error_msg)
-        # Audit log the failure
-        try:
-            from phantom.core.audit_logger import get_global_audit_logger
-
-            _audit = get_global_audit_logger()
-            if _audit:
-                _audit.log_tool_call(
-                    tool_name,
-                    args,
-                    agent_id=agent_id,
-                    result_summary=error_msg[:200],
-                    success=False,
-                    duration_ms=round(_duration_ms, 2),
-                )
-        except Exception as exc:  # noqa: BLE001
-            _logger.debug("Audit log failed for tool error %s: %s", tool_name, exc)
         raise
 
     observation_xml, images = _format_tool_result(tool_name, result)
@@ -569,20 +321,9 @@ async def process_tool_invocations(
     tracer, agent_id = _get_tracer_and_agent_id(agent_state)
 
     for tool_inv in tool_invocations:
-        try:
-            observation_xml, images, tool_should_finish = await _execute_single_tool(
-                tool_inv, agent_state, tracer, agent_id
-            )
-        except Exception as exc:  # noqa: BLE001
-            # Capture error as a tool result so results from prior tools are preserved
-            tool_name = tool_inv.get("toolName", "unknown")
-            error_text = f"Error executing {tool_name}: {str(exc)[:500]}"
-            observation_xml = (
-                f"<tool_result>\n<tool_name>{_xml_escape(tool_name)}</tool_name>\n"
-                f"<result>{_xml_escape(error_text)}</result>\n</tool_result>"
-            )
-            images = []
-            tool_should_finish = False
+        observation_xml, images, tool_should_finish = await _execute_single_tool(
+            tool_inv, agent_state, tracer, agent_id
+        )
         observation_parts.append(observation_xml)
         all_images.extend(images)
 
@@ -611,345 +352,12 @@ def extract_screenshot_from_result(result: Any) -> str | None:
     return None
 
 
-# ── v0.9.33: Auto-report pipeline ──────────────────────────────────────
-# The #1 root cause of low vuln count: nuclei/sqlmap find real vulns but
-# they are NEVER reported because the LLM must manually call
-# create_vulnerability_report with 16 parameters.  This function auto-
-# converts scanner findings into proper vulnerability reports.
-
-_SEVERITY_TO_CVSS: dict[str, dict[str, str]] = {
-    "critical": {"AV": "N", "AC": "L", "PR": "N", "UI": "N", "S": "C", "C": "H", "I": "H", "A": "H"},
-    "high":     {"AV": "N", "AC": "L", "PR": "N", "UI": "N", "S": "U", "C": "H", "I": "H", "A": "N"},
-    "medium":   {"AV": "N", "AC": "L", "PR": "N", "UI": "R", "S": "U", "C": "L", "I": "L", "A": "N"},
-    "low":      {"AV": "N", "AC": "H", "PR": "L", "UI": "R", "S": "U", "C": "L", "I": "N", "A": "N"},
-}
-
-
-def _auto_report_scanner_findings(scanner: str, findings: list[dict], agent_state: Any) -> None:
-    """Auto-create vulnerability reports from scanner findings without LLM involvement.
-
-    This bridges the gap between 'nuclei found 40 findings' and '0 vulnerability reports'.
-    Only reports medium+ severity to avoid flooding with info disclosures.
-    """
-    try:
-        from phantom.telemetry.tracer import get_global_tracer
-        tracer = get_global_tracer()
-        if not tracer:
-            return
-
-        existing = tracer.get_existing_vulnerabilities()
-        existing_titles = {r.get("title", "").lower() for r in existing}
-        reported = 0
-
-        for f in findings:
-            if scanner == "nuclei":
-                sev = f.get("severity", "info").lower()
-                if sev not in ("critical", "high", "medium", "low"):
-                    continue
-                name = f.get("name") or f.get("template_name") or f.get("template_id", "unknown")
-                url = f.get("matched_at") or f.get("host", "")
-                desc = f.get("description", "") or f"Detected by Nuclei template {f.get('template_id', '')}"
-                tags = f.get("tags", "")
-                refs = f.get("references", [])
-                curl_cmd = f.get("curl_command", "")
-                title = f"{name} at {url.split('?')[0]}" if url else name
-
-                # Skip if already reported (simple title dedup)
-                if title.lower() in existing_titles:
-                    continue
-
-                poc = curl_cmd if curl_cmd else f"Nuclei template: {f.get('template_id', 'N/A')}"
-                if refs:
-                    poc += "\nReferences: " + ", ".join(refs[:3])
-
-                impact = f"{sev.upper()} severity vulnerability detected by automated scanning."
-                remediation = f"Investigate and remediate the {name} finding. Tags: {tags}"
-                if refs:
-                    remediation += f"\nSee: {refs[0]}"
-
-            elif scanner == "sqlmap":
-                sev = "critical"
-                url = f.get("url", f.get("target", "?"))
-                params = f.get("injection_points", f.get("vulnerable_params", []))
-                title = f"SQL Injection at {url.split('?')[0]}"
-                if title.lower() in existing_titles:
-                    continue
-                desc = f"SQLMap confirmed SQL injection at {url} with parameters: {params}"
-                poc = f"sqlmap -u '{url}' --batch --level=3 --risk=2"
-                impact = "CRITICAL: Full database read/write access via SQL injection."
-                remediation = "Use parameterized queries. Implement input validation."
-            else:
-                continue
-
-            # Map severity to CVSS params
-            cvss_map = _SEVERITY_TO_CVSS.get(sev, _SEVERITY_TO_CVSS["medium"])
-
-            try:
-                from phantom.tools.reporting.reporting_actions import (
-                    calculate_cvss_and_severity,
-                )
-                cvss_score, severity_str, cvss_vector = calculate_cvss_and_severity(
-                    cvss_map["AV"], cvss_map["AC"], cvss_map["PR"], cvss_map["UI"],
-                    cvss_map["S"], cvss_map["C"], cvss_map["I"], cvss_map["A"],
-                )
-            except Exception:
-                cvss_score = {"critical": 9.5, "high": 7.5, "medium": 5.0, "low": 3.0}.get(sev, 5.0)
-                severity_str = sev
-                cvss_vector = ""
-
-            report_id = tracer.add_vulnerability_report(
-                title=title,
-                description=desc[:500],
-                severity=severity_str,
-                impact=impact,
-                target=url or "unknown",
-                technical_analysis=f"Detected by {scanner} automated scanner. {desc[:300]}",
-                poc_description=poc[:500],
-                poc_script_code="",
-                remediation_steps=remediation[:500],
-                cvss=cvss_score,
-                cvss_breakdown=cvss_map,
-                endpoint=url.split("?")[0] if url and "?" in url else url,
-                method="GET",
-            )
-
-            if report_id:
-                existing_titles.add(title.lower())
-                reported += 1
-
-            if reported >= 25:  # Safety cap per scanner call
-                break
-
-        if reported > 0:
-            _logger.info("Auto-reported %d %s findings as vulnerability reports", reported, scanner)
-
-    except Exception as exc:
-        _logger.debug("Auto-report failed for %s: %s", scanner, exc)
-
-
-def _auto_record_findings(tool_name: str, result: Any, agent_state: Any) -> None:
-    """Automatically record key findings from security tool results to the
-    persistent findings ledger.  This ensures critical discoveries survive
-    memory compression even if the agent forgets to call ``record_finding``."""
-    if not isinstance(result, dict):
-        return
-    # Tools with explicit "success" field: require it to be truthy.
-    # Tools WITHOUT "success" (e.g. send_request): allow through.
-    if "success" in result and not result.get("success"):
-        return
-    if not agent_state or not hasattr(agent_state, "add_finding"):
-        return
-
-    try:
-        # --- Nuclei ---
-        if tool_name in ("nuclei_scan", "nuclei_scan_cves", "nuclei_scan_misconfigs"):
-            findings = result.get("findings", [])
-            # v0.9.33 FIX: Record ALL severity levels (was medium+ only — lost 40 findings)
-            for f in findings[:30]:
-                sev = f.get("severity", "unknown").lower()
-                name = f.get("template_name") or f.get("name") or f.get("template_id", "unknown")
-                url = f.get("matched_at") or f.get("host", "")
-                if sev in ("critical", "high", "medium", "low"):
-                    verified_tag = "[UNVERIFIED] " if sev in ("critical", "high") else ""
-                    agent_state.add_finding(f"[vuln/nuclei] {verified_tag}{sev.upper()} {name} at {url}")
-                elif sev in ("unknown", "info") and name:
-                    agent_state.add_finding(f"[info/nuclei] {name} at {url}")
-                # Queue for verification if EnhancedAgentState supports it
-                if sev in ("critical", "high") and hasattr(agent_state, "unverified_findings"):
-                    agent_state.unverified_findings.append({
-                        "tool": "nuclei", "severity": sev, "name": name, "url": url,
-                    })
-
-            # v0.9.33 FIX: AUTO-REPORT nuclei findings as vulnerabilities
-            # This is the #1 impact fix — nuclei found 40 findings but 0 were reported.
-            _auto_report_scanner_findings("nuclei", findings, agent_state)
-
-        # --- Nmap ---
-        elif tool_name == "nmap_scan":
-            for host in result.get("hosts", []):
-                hostname = host.get("hostname", host.get("ip", "?"))
-                ports = host.get("ports", [])
-                open_ports = [p for p in ports if p.get("state") == "open"]
-                if open_ports:
-                    port_list = ", ".join(
-                        f"{p['port']}/{p.get('service','?')}" for p in open_ports[:20]
-                    )
-                    agent_state.add_finding(f"[recon/nmap] {hostname}: {port_list}")
-
-        # --- Katana ---
-        elif tool_name == "katana_crawl":
-            total = result.get("total_urls", 0)
-            api_count = result.get("summary", {}).get("api_endpoints", 0)
-            js_count = result.get("summary", {}).get("js_files", 0)
-            form_count = result.get("summary", {}).get("forms", 0)
-            if total > 0:
-                agent_state.add_finding(
-                    f"[recon/katana] {total} URLs discovered "
-                    f"({api_count} APIs, {js_count} JS, {form_count} forms)"
-                )
-            for ep in result.get("api_endpoints", [])[:10]:
-                url = ep.get("url", "")
-                if url:
-                    agent_state.add_finding(f"[endpoint] API: {url}")
-                    # BUG-07 FIX: Wire add_endpoint for structured tracking
-                    if hasattr(agent_state, "add_endpoint"):
-                        agent_state.add_endpoint(url)
-            # Also register crawled URLs as endpoints
-            for url in result.get("urls", [])[:100]:
-                if isinstance(url, str) and hasattr(agent_state, "add_endpoint"):
-                    agent_state.add_endpoint(url)
-
-        # --- Httpx ---
-        elif tool_name in ("httpx_probe", "httpx_full_analysis"):
-            for host in result.get("findings", result.get("results", [])):
-                url = host.get("url", "")
-                tech = host.get("tech", host.get("technologies", []))
-                status = host.get("status_code", "")
-                if url:
-                    parts = [f"[recon/httpx] {url} ({status})"]
-                    if tech:
-                        parts.append(f"  tech: {', '.join(tech[:5])}")
-                    agent_state.add_finding(" ".join(parts))
-                    # BUG-07 FIX: Wire add_endpoint for structured tracking
-                    if hasattr(agent_state, "add_endpoint"):
-                        agent_state.add_endpoint(url)
-
-        # --- Nmap vuln ---
-        elif tool_name == "nmap_vuln_scan":
-            for vuln in result.get("vulnerabilities", []):
-                title = vuln.get("title", "unknown vuln")
-                agent_state.add_finding(f"[vuln/nmap] {title}")
-
-        # --- Vulnerability Report ---
-        elif tool_name == "create_vulnerability_report":
-            title = result.get("message", "")
-            severity = result.get("severity", "unknown")
-            cvss = result.get("cvss_score", "?")
-            report_id = result.get("report_id", "")
-            agent_state.add_finding(
-                f"[vuln/report] {severity.upper()} (CVSS {cvss}) {title}"
-            )
-            # Also populate EnhancedAgentState vulnerability tracking
-            if hasattr(agent_state, "add_vulnerability") and report_id:
-                try:
-                    from phantom.telemetry.tracer import get_global_tracer
-                    from phantom.tools.finish.finish_actions import _dict_to_vulnerability
-                    tracer = get_global_tracer()
-                    if tracer:
-                        for r in tracer.vulnerability_reports:
-                            if r.get("id") == report_id:
-                                vuln_model = _dict_to_vulnerability(r)
-                                if vuln_model:
-                                    agent_state.add_vulnerability(vuln_model)
-                                    # Mark as verified — the agent has confirmed this vuln
-                                    if hasattr(agent_state, "mark_vuln_verified"):
-                                        agent_state.mark_vuln_verified(vuln_model.id)
-                                break
-                except Exception as exc:  # noqa: BLE001
-                    _logger.debug("Auto-record findings failed for %s: %s", tool_name, exc)
-
-        # --- SQLMap ---
-        elif tool_name in ("sqlmap_test", "sqlmap_forms", "sqlmap_dump_database"):
-            if result.get("vulnerable"):
-                url = result.get("url", result.get("target", "?"))
-                # BUG-13 FIX: sqlmap returns "injection_points", not "vulnerable_params"
-                params = result.get("injection_points", result.get("vulnerable_params", []))
-                agent_state.add_finding(
-                    f"[vuln/sqlmap] SQLi CONFIRMED at {url} params={params}"
-                )
-            elif tool_name == "sqlmap_dump_database":
-                tables = result.get("tables", [])
-                if tables:
-                    agent_state.add_finding(
-                        f"[data/sqlmap] DB dump: {len(tables)} tables extracted"
-                    )
-
-        # --- FFuf ---
-        elif tool_name in ("ffuf_directory_scan", "ffuf_parameter_fuzz", "ffuf_vhost_fuzz"):
-            findings = result.get("findings", [])
-            for f in findings[:15]:
-                url = f.get("url", f.get("input", ""))
-                status = f.get("status", "")
-                size = f.get("length", f.get("words", ""))
-                agent_state.add_finding(
-                    f"[recon/ffuf] {url} (status={status} size={size})"
-                )
-                # BUG-07 FIX: Wire add_endpoint for structured tracking
-                if url and hasattr(agent_state, "add_endpoint"):
-                    agent_state.add_endpoint(url)
-
-        # --- Subfinder ---
-        elif tool_name == "subfinder_enumerate":
-            subdomains = result.get("subdomains", [])
-            if subdomains:
-                agent_state.add_finding(
-                    f"[recon/subfinder] {len(subdomains)} subdomains: "
-                    + ", ".join(subdomains[:10])
-                )
-
-        # --- SQLMap auto-report ---
-        # v0.9.33: Auto-report confirmed SQLi findings
-        if tool_name in ("sqlmap_test", "sqlmap_forms") and result.get("vulnerable"):
-            _auto_report_scanner_findings("sqlmap", [result], agent_state)
-
-        # --- Send Request (manual testing) ---
-        elif tool_name in ("send_request", "repeat_request"):
-            status = result.get("status_code", 0)
-            url = str(result.get("url", ""))
-            body = result.get("body", "")[:500].lower()
-            # Track endpoints
-            if url and hasattr(agent_state, "add_endpoint"):
-                agent_state.add_endpoint(url)
-            # Record interesting HTTP responses
-            if status in (200, 201, 301, 302, 403, 500) and url:
-                agent_state.add_finding(f"[recon/request] {url} (status={status})")
-            # Detect SQLi indicators in response
-            if any(kw in body for kw in ("sql", "syntax error", "sqlite", "sequelize",
-                                          "unrecognized token", "near \"")):
-                agent_state.add_finding(f"[vuln/sqli-indicator] SQL error in response from {url}")
-            # Detect XSS reflection
-            if "<script" in body or "javascript:" in body or "onerror" in body:
-                agent_state.add_finding(f"[vuln/xss-indicator] Script reflection at {url}")
-            # Detect sensitive data exposure
-            if any(kw in body for kw in ("password", "secret", "api_key", "private_key")):
-                agent_state.add_finding(f"[vuln/info-disclosure] Sensitive data at {url}")
-
-    except Exception as exc:  # noqa: BLE001
-        _logger.debug("auto-record findings swallowed: %s", exc, exc_info=True)
-
-
 def remove_screenshot_from_result(result: Any) -> Any:
     if not isinstance(result, dict):
         return result
 
     result_copy = result.copy()
     if "screenshot" in result_copy:
-        # H11 FIX: validate the data before passing it along
-        raw = result_copy["screenshot"]
-        if isinstance(raw, str) and len(raw) > 10_000_000:  # >~7.5 MB decoded
-            result_copy["screenshot"] = "[Screenshot too large — removed]"
-        else:
-            result_copy["screenshot"] = "[Image data extracted - see attached image]"
+        result_copy["screenshot"] = "[Image data extracted - see attached image]"
 
     return result_copy
-
-
-def _track_tested_endpoint(tool_name: str, args: dict[str, Any], agent_state: Any) -> None:
-    """Track which endpoints have been tested to avoid duplicate testing."""
-    if not agent_state or not hasattr(agent_state, "mark_endpoint_tested"):
-        return
-
-    try:
-        # L17 FIX: use module-level constant instead of recreating per call
-        test_type = _ENDPOINT_TOOLS_MAP.get(tool_name)
-        if not test_type:
-            return
-
-        url = args.get("url") or args.get("target") or args.get("target_url") or ""
-        method = args.get("method", "GET").upper()
-        parameter = args.get("parameter") or args.get("param") or ""
-
-        if url:
-            agent_state.mark_endpoint_tested(url, method, parameter, test_type)
-    except Exception as e:  # noqa: BLE001
-        _logger.debug("auto-record findings failed: %s", e, exc_info=True)

@@ -75,6 +75,8 @@ class TestC4MaxMessagesConstant:
 # H2: Tool firewall — extra_args whitelist
 # ═══════════════════════════════════════════════════════════════════════
 
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
 class TestH2ExtraArgsWhitelist:
     def test_allowed_nmap_flags_pass(self):
         pytest.skip("Feature removed in v0.9.36")
@@ -104,6 +106,8 @@ class TestH2ExtraArgsWhitelist:
 # H7: Pipe regex — fixed-width lookbehind (Python 3.14 compat)
 # ═══════════════════════════════════════════════════════════════════════
 
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
 class TestH7PipeRegexFixedWidth:
     def test_pipe_regex_compiles_on_python314(self):
         """The fixed regex should not raise re.PatternError."""
@@ -156,6 +160,8 @@ class TestH14ResumeAwareTimeLimit:
 # M7: DNS pin cache bounded
 # ═══════════════════════════════════════════════════════════════════════
 
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
 class TestM7DNSCacheBounded:
     def test_cache_eviction_at_10k(self):
         from phantom.core.scope_validator import ScopeValidator
@@ -180,6 +186,8 @@ class TestM7DNSCacheBounded:
 # M9: Default max cost lowered
 # ═══════════════════════════════════════════════════════════════════════
 
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
 class TestM9DefaultCostLowered:
     def test_max_cost_is_25(self):
         from phantom.core.cost_controller import CostController
@@ -191,6 +199,8 @@ class TestM9DefaultCostLowered:
 # M12: CSV formula injection
 # ═══════════════════════════════════════════════════════════════════════
 
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
 class TestM12CSVFormulaInjection:
     def test_sanitize_csv_cell(self):
         from phantom.core.report_generator import _sanitize_csv_cell
@@ -263,6 +273,8 @@ class TestM25TarArchiveCap:
 # M26: Firewall violations logged to audit trail
 # ═══════════════════════════════════════════════════════════════════════
 
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
 class TestM26ViolationsAuditLogged:
     def test_violation_recorded(self):
         pytest.skip("Feature removed in v0.9.36")
@@ -291,6 +303,8 @@ class TestM29MaxIterationsDefault:
 # M32: Audit logger no longer swallows exceptions silently
 # ═══════════════════════════════════════════════════════════════════════
 
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
 class TestM32AuditLoggerLogging:
     def test_rotate_logs_error(self, tmp_path):
         """M32 FIX: _rotate_if_needed should log errors, not swallow."""
@@ -340,6 +354,8 @@ class TestH5AgentStateCleanup:
 # H6: HMAC chain verification on resume
 # ═══════════════════════════════════════════════════════════════════════
 
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
 class TestH6HMACChainVerification:
     def test_verify_and_resume_chain_method_exists(self):
         from phantom.core.audit_logger import AuditLogger
@@ -416,6 +432,8 @@ class TestH11ScreenshotSizeValidation:
 # Integration: Full firewall validation chain
 # ═══════════════════════════════════════════════════════════════════════
 
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
 class TestFirewallIntegration:
     def test_sandbox_dangerous_patterns_block(self):
         pytest.skip("Feature removed in v0.9.36")

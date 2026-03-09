@@ -17,63 +17,6 @@ _tools_by_name: dict[str, Callable[..., Any]] = {}
 _tool_param_schemas: dict[str, dict[str, Any]] = {}
 logger = logging.getLogger(__name__)
 
-# ── Tool profiles: which tools to include per scan mode ──
-# quick mode loads 38 attack-relevant tools instead of all 55, saving ~24% of
-# the system-prompt tokens.  The set covers EVERY security capability while
-# dropping file/code-editor, note, and todo management tools that have no
-# value in a live web-application scan.
-#
-# Previous removal note (H-12 in v0.9.35): filtering was removed because the
-# old QUICK_MODE_TOOLS set (27 tools) was missing critical exploit tools like
-# ffuf_parameter_fuzz, report_vulnerability, sqlmap_dump_database, and
-# verify_vulnerability.  This updated set (38 tools) is comprehensive —
-# every tool needed for recon → scan → exploit → report is present.
-QUICK_MODE_TOOLS: set[str] = {
-    # ── Core control ────────────────────────────────────────────────
-    "think", "finish_scan",
-    "create_agent", "agent_finish", "send_message_to_agent", "wait_for_message",
-    # ── Findings & reporting ────────────────────────────────────────
-    "record_finding", "get_findings_ledger",
-    "report_vulnerability", "create_vulnerability_report",
-    "verify_vulnerability", "enrich_vulnerability",
-    # ── Recon ───────────────────────────────────────────────────────
-    "scope_rules",
-    "subfinder_enumerate",
-    "nmap_scan", "nmap_vuln_scan",
-    "httpx_probe", "httpx_full_analysis",
-    "katana_crawl",
-    # ── Vulnerability scanning ──────────────────────────────────────
-    "nuclei_scan", "nuclei_scan_cves", "nuclei_scan_misconfigs",
-    "check_known_vulnerabilities",
-    # ── HTTP / proxy ────────────────────────────────────────────────
-    "send_request", "repeat_request",
-    "list_requests", "view_request",
-    "list_sitemap", "view_sitemap_entry",
-    # ── Fuzzing ─────────────────────────────────────────────────────
-    "ffuf_directory_scan", "ffuf_parameter_fuzz",
-    # ── Exploitation ────────────────────────────────────────────────
-    "sqlmap_test", "sqlmap_forms", "sqlmap_dump_database",
-    "python_action", "terminal_execute", "browser_action",
-    # ── Research ────────────────────────────────────────────────────
-    "web_search",
-}
-
-# NOT included in quick mode (17 tools, ~24% of token cost):
-#   File/code management : str_replace_editor, list_files, search_files
-#   Note management      : create_note, update_note, list_notes, delete_note
-#   Todo management      : create_todo, update_todo, list_todos,
-#                          mark_todo_done, mark_todo_pending, delete_todo
-#   Misc                 : view_agent_graph, httpx_screenshot,
-#                          subfinder_with_sources, ffuf_vhost_fuzz
-
-TOOL_PROFILES: dict[str, set[str] | None] = {
-    "quick": QUICK_MODE_TOOLS,
-    "standard": None,  # None = include all
-    "deep": None,
-    "stealth": None,
-    "api_only": None,
-}
-
 
 class ImplementedInClientSideOnlyError(Exception):
     def __init__(
@@ -201,18 +144,9 @@ def _get_schema_path(func: Callable[..., Any]) -> Path | None:
 
     folder = parts[0]
     file_stem = parts[1]
+    schema_file = f"{file_stem}_schema.xml"
 
-    # Try per-file schema first (e.g., verification_actions_schema.xml)
-    per_file = get_phantom_resource_path("tools", folder, f"{file_stem}_schema.xml")
-    if per_file.exists():
-        return per_file
-
-    # Fall back to consolidated folder schema (e.g., security_tools_schema.xml)
-    consolidated = get_phantom_resource_path("tools", folder, f"{folder}_tools_schema.xml")
-    if consolidated.exists():
-        return consolidated
-
-    return None
+    return get_phantom_resource_path("tools", folder, schema_file)
 
 
 def register_tool(
@@ -256,18 +190,11 @@ def register_tool(
         tools.append(func_dict)
         _tools_by_name[str(func_dict["name"])] = f
 
-        if inspect.iscoroutinefunction(f):
-            @wraps(f)
-            async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
-                return await f(*args, **kwargs)
+        @wraps(f)
+        def wrapper(*args: Any, **kwargs: Any) -> Any:
+            return f(*args, **kwargs)
 
-            return async_wrapper
-        else:
-            @wraps(f)
-            def wrapper(*args: Any, **kwargs: Any) -> Any:
-                return f(*args, **kwargs)
-
-            return wrapper
+        return wrapper
 
     if func is None:
         return decorator
@@ -301,16 +228,9 @@ def should_execute_in_sandbox(tool_name: str) -> bool:
     return True
 
 
-def get_tools_prompt(include_only: set[str] | None = None, exclude: set[str] | None = None) -> str:
+def get_tools_prompt() -> str:
     tools_by_module: dict[str, list[dict[str, Any]]] = {}
     for tool in tools:
-        tool_name = tool.get("name", "")
-        # Filter by include_only (whitelist) if provided
-        if include_only is not None and tool_name not in include_only:
-            continue
-        # Filter by exclude (blacklist) if provided
-        if exclude is not None and tool_name in exclude:
-            continue
         module = tool.get("module", "unknown")
         if module not in tools_by_module:
             tools_by_module[module] = []

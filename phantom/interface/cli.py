@@ -12,10 +12,19 @@ from rich.panel import Panel
 from rich.text import Text
 
 from phantom.agents.PhantomAgent import PhantomAgent
-from phantom.core.audit_logger import AuditLogger, set_global_audit_logger
-from phantom.core.scan_profiles import ScanProfile, get_profile
-from phantom.core.scope_validator import ScopeValidator
 from phantom.llm.config import LLMConfig
+
+# Simple inline scan profiles (replaces phantom.core.scan_profiles)
+_PROFILES: dict[str, dict] = {
+    "quick":    {"max_iterations": 100, "reasoning_effort": "medium", "sandbox_timeout_s": 120},
+    "standard": {"max_iterations": 200, "reasoning_effort": "high",   "sandbox_timeout_s": 300},
+    "deep":     {"max_iterations": 300, "reasoning_effort": "high",   "sandbox_timeout_s": 600},
+    "stealth":  {"max_iterations": 200, "reasoning_effort": "high",   "sandbox_timeout_s": 300},
+    "api_only": {"max_iterations": 150, "reasoning_effort": "high",   "sandbox_timeout_s": 240},
+}
+
+def _get_profile(scan_mode: str) -> dict:
+    return _PROFILES.get(scan_mode, _PROFILES["deep"])
 from phantom.telemetry.tracer import Tracer, set_global_tracer
 
 from .utils import (
@@ -79,16 +88,16 @@ async def run_cli(args: Any) -> None:  # noqa: PLR0915
 
     # ── Load Scan Profile ──
     try:
-        profile: ScanProfile = get_profile(scan_mode)
+        profile = _get_profile(scan_mode)
     except KeyError:
         console.print(f"[yellow]Unknown scan mode '{scan_mode}', falling back to 'deep'[/]")
-        profile = get_profile("deep")
+        profile = _get_profile("deep")
 
     profile_text = Text()
     profile_text.append("Profile", style="dim")
     profile_text.append(" ")
-    profile_text.append(f"{profile.name}", style="bold #f59e0b")
-    profile_text.append(f"  (max {profile.max_iterations} iterations, {profile.reasoning_effort} effort)", style="dim")
+    profile_text.append(f"{scan_mode}", style="bold #f59e0b")
+    profile_text.append(f"  (max {profile['max_iterations']} iterations, {profile['reasoning_effort']} effort)", style="dim")
 
     note_text = Text()
     note_text.append("\n\n", style="dim")
@@ -117,7 +126,7 @@ async def run_cli(args: Any) -> None:  # noqa: PLR0915
         "user_instructions": args.instruction or "",
         "run_name": args.run_name,
         "scan_mode": scan_mode,
-        "profile": profile.to_dict(),
+        "profile": profile,
     }
 
     # ── Authenticated Scanning ──
@@ -137,36 +146,14 @@ async def run_cli(args: Any) -> None:  # noqa: PLR0915
     # and tool_server pick it up (unless the user already specified --timeout).
     import os
     if not os.environ.get("PHANTOM_SANDBOX_EXECUTION_TIMEOUT"):
-        os.environ["PHANTOM_SANDBOX_EXECUTION_TIMEOUT"] = str(profile.sandbox_timeout_s)
+        os.environ["PHANTOM_SANDBOX_EXECUTION_TIMEOUT"] = str(profile["sandbox_timeout_s"])
 
     agent_config = {
         "llm_config": llm_config,
-        "max_iterations": profile.max_iterations,
+        "max_iterations": profile["max_iterations"],
         "non_interactive": True,
         "scan_profile": profile,
     }
-
-    # ── Scan Resume ──
-    resume_run = getattr(args, "resume_run", None)
-    if resume_run:
-        from pathlib import Path as _Path
-        checkpoint_path = _Path("phantom_runs") / resume_run / "checkpoint.json"
-        if checkpoint_path.exists():
-            from phantom.agents.enhanced_state import EnhancedAgentState
-            resumed_state = EnhancedAgentState.from_checkpoint(checkpoint_path)
-            resumed_state.max_iterations = profile.max_iterations
-            agent_config["state"] = resumed_state
-            console.print(
-                f"  [bold green]Resuming[/] scan from checkpoint: "
-                f"iteration {resumed_state.iteration}, "
-                f"phase {resumed_state.current_phase.value}, "
-                f"{resumed_state.vuln_stats.get('total', 0)} vulns already found"
-            )
-        else:
-            console.print(
-                f"  [yellow]Warning:[/] No checkpoint found for '{resume_run}', "
-                f"starting fresh scan"
-            )
 
     if getattr(args, "local_sources", None):
         agent_config["local_sources"] = args.local_sources
@@ -174,10 +161,7 @@ async def run_cli(args: Any) -> None:  # noqa: PLR0915
     tracer = Tracer(args.run_name)
     tracer.set_scan_config(scan_config)
 
-    # ── Scope Validator ──
     target_urls = [t["original"] for t in args.targets_info]
-    scope_validator = ScopeValidator.from_targets(target_urls)
-    tracer.scope_validator = scope_validator  # attach for downstream access
 
     # ── Cost Controller ──
     try:
@@ -187,17 +171,6 @@ async def run_cli(args: Any) -> None:  # noqa: PLR0915
         console.print(f"  [dim]Cost limit:[/] ${max_cost:.2f}")
     except Exception:
         pass  # Cost controller is optional
-
-    # ── Audit Logger ──
-    audit_log_path = tracer.get_run_dir() / "audit.jsonl"
-    audit_logger = AuditLogger(audit_log_path)
-    set_global_audit_logger(audit_logger)
-    tracer.audit_logger = audit_logger  # attach for downstream access
-    audit_logger.log_scan_start(
-        scan_id=args.run_name,
-        targets=target_urls,
-        scan_mode=scan_mode,
-    )
 
     # ── Knowledge Store — load past findings for this target ──
     try:

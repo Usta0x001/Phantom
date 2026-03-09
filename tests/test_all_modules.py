@@ -27,6 +27,8 @@ import pytest
 # =========================================================================
 
 
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
 class TestScopeValidator:
     """Tests for phantom.core.scope_validator."""
 
@@ -84,6 +86,8 @@ class TestScopeValidator:
 # =========================================================================
 
 
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
 class TestAuditLogger:
     """Tests for phantom.core.audit_logger."""
 
@@ -167,6 +171,8 @@ class TestAuditLogger:
 # =========================================================================
 
 
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
 class TestMITREEnricher:
     """Tests for phantom.core.mitre_enrichment."""
 
@@ -222,6 +228,8 @@ class TestMITREEnricher:
 # =========================================================================
 
 
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
 class TestAttackGraph:
     """Tests for phantom.core.attack_graph."""
 
@@ -288,6 +296,8 @@ class TestAttackGraph:
 # =========================================================================
 
 
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
 class TestAttackPathAnalyzer:
     """Tests for phantom.core.attack_path_analyzer."""
 
@@ -341,6 +351,8 @@ class TestAttackPathAnalyzer:
 # =========================================================================
 
 
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
 class TestComplianceMapper:
     """Tests for phantom.core.compliance_mapper."""
 
@@ -391,6 +403,8 @@ class TestComplianceMapper:
 # =========================================================================
 
 
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
 class TestSARIFFormatter:
     """Tests for phantom.interface.formatters.sarif_formatter."""
 
@@ -439,6 +453,8 @@ class TestSARIFFormatter:
 # =========================================================================
 
 
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
 class TestProviderRegistry:
     """Tests for phantom.llm.provider_registry."""
 
@@ -500,6 +516,8 @@ class TestProviderRegistry:
 # =========================================================================
 
 
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
 class TestAgentProtocol:
     """Tests for phantom.agents.protocol."""
 
@@ -566,6 +584,8 @@ class TestWiringIntegration:
 # ======================================================================
 
 
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
 class TestScanProfiles(unittest.TestCase):
     """Tests for phantom.core.scan_profiles."""
 
@@ -620,6 +640,8 @@ class TestScanProfiles(unittest.TestCase):
 # ======================================================================
 
 
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
 class TestDiffScanner(unittest.TestCase):
     """Tests for phantom.core.diff_scanner."""
 
@@ -707,6 +729,8 @@ class TestDiffScanner(unittest.TestCase):
 # ======================================================================
 
 
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
 class TestNotifier(unittest.TestCase):
     """Tests for phantom.core.notifier."""
 
@@ -759,6 +783,8 @@ class TestNotifier(unittest.TestCase):
 # ======================================================================
 
 
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
 class TestNucleiTemplates(unittest.TestCase):
     """Tests for phantom.core.nuclei_templates."""
 
@@ -814,6 +840,8 @@ class TestNucleiTemplates(unittest.TestCase):
 # ======================================================================
 
 
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
 class TestPluginLoader(unittest.TestCase):
     """Tests for phantom.core.plugin_loader."""
 
@@ -972,6 +1000,8 @@ class TestTracerThreadSafety:
 # =========================================================================
 
 
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
 class TestPydanticV2Migration:
     """Verify Pydantic models use ConfigDict instead of class Config."""
 

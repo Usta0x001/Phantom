@@ -38,6 +38,8 @@ class TestAuthorizationSignature:
 # ── LOGIC-003: DNS pinning ──────────────────────────────────────────────────
 
 
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
 class TestDNSPinning:
     """Verify scope validator has DNS pin cache."""
 

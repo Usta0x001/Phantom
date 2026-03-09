@@ -65,6 +65,8 @@ class TestLLMHistoryPreservation:
 # =========================================================================
 
 
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
 class TestVerificationEngineFix:
     """Verify that failed verification doesn't mark vuln as false positive."""
 
@@ -105,6 +107,8 @@ class TestVerificationEngineFix:
 # =========================================================================
 
 
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
 class TestCompliancePassRate:
     """Verify pass_rate divides by total tested, not just failed."""
 
@@ -133,6 +137,8 @@ class TestCompliancePassRate:
 # =========================================================================
 
 
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
 class TestNucleiYAMLFix:
     """Verify YAML templates are valid after escape fix."""
 
@@ -236,6 +242,8 @@ class TestNewAgentTools:
 # =========================================================================
 
 
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
 class TestProfileIntegration:
     """Verify scan profiles are properly integrated."""
 
@@ -337,6 +345,8 @@ class TestEnrichmentPipeline:
 # =========================================================================
 
 
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
 class TestNotifierSSRFProtection:
     """Test the enhanced SSRF protection in the notifier."""
 
@@ -373,6 +383,8 @@ class TestNotifierSSRFProtection:
 # =========================================================================
 
 
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
 class TestKnowledgeStorePersistence:
     """Test knowledge store save/load cycle."""
 
@@ -410,6 +422,8 @@ class TestKnowledgeStorePersistence:
 # =========================================================================
 
 
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
 class TestDiffScanner:
     """Test diff scanning between runs."""
 
@@ -432,6 +446,8 @@ class TestDiffScanner:
 # =========================================================================
 
 
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
 class TestAttackGraphIntegration:
     """Test attack graph with enrichment data."""
 
@@ -481,6 +497,8 @@ class TestAttackGraphIntegration:
 # =========================================================================
 
 
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
 class TestReportGenerator:
     """Test report generation with Vulnerability models."""
 
@@ -554,6 +572,8 @@ class TestReportGenerator:
 # =========================================================================
 
 
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
 class TestScanPriorityQueueWiring:
     """Verify ScanPriorityQueue is instantiated + usable via EnhancedAgentState."""
 
@@ -620,6 +640,8 @@ class TestScanPriorityQueueWiring:
 # =========================================================================
 
 
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
 class TestFalsePositiveLearning:
     """Verify FP learning round-trips through knowledge store."""
 
@@ -688,6 +710,8 @@ class TestFalsePositiveLearning:
 # =========================================================================
 
 
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
 class TestCheckpointResume:
     """Verify scan state can be checkpointed and restored."""
 
@@ -776,6 +800,8 @@ class TestPersistentNotes:
 # =========================================================================
 
 
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
 class TestStealthCustomFlags:
     """Verify stealth profile custom_flags are injected into task description."""
 

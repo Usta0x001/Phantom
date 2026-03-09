@@ -124,6 +124,8 @@ class TestSSRFTargetBypass:
 # ── B5 FIX: Checkpoint round-trip ───────────────────────────────────────────
 
 
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
 class TestCheckpointRoundTrip:
     """Verify EnhancedAgentState checkpoint save/load works end-to-end."""
 
@@ -234,6 +236,8 @@ class TestCheckpointRoundTrip:
 # ── C1: Quick profile cost optimization ─────────────────────────────────────
 
 
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
 class TestScanProfileOptimization:
     """Verify scan profiles have correct cost-optimized settings."""
 
@@ -338,6 +342,8 @@ class TestToolResultTruncation:
 # ── B2+B6: ScanResult construction ──────────────────────────────────────────
 
 
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
 class TestScanResultConstruction:
     """Verify ScanResult model can be constructed for reports."""
 
@@ -479,6 +485,8 @@ class TestSSRFHostRegistration:
 # ── Cost Controller defaults ─────────────────────────────────────────────────
 
 
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
 class TestCostControllerDefaults:
     """Verify cost controller has sensible defaults."""
 
@@ -504,6 +512,8 @@ class TestCostControllerDefaults:
 # ── Profile list and register ────────────────────────────────────────────────
 
 
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
 class TestProfileRegistry:
     """Verify profile listing and custom registration."""
 

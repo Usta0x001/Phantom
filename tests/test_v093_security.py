@@ -373,6 +373,8 @@ class TestProxySsrfProtection:
 # =========================================================================
 
 
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
 class TestProviderRegistry:
     """C-02/C-03: Provider registry must resolve correct keys and bases."""
 
@@ -608,6 +610,8 @@ class TestSecurityToolSanitisation:
 # =========================================================================
 
 
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
 class TestScopeValidator:
     """Verify scope validation logic."""
 

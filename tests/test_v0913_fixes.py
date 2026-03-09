@@ -99,6 +99,8 @@ class TestRegisterToolAsyncWrapper:
 # ── Finding 6: no duplicate provider keys ──
 
 
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
 class TestProviderRegistryNoDuplicates:
     """Verify no duplicate keys in PROVIDER_PRESETS."""
 
@@ -170,6 +172,8 @@ class TestSanitizationStripsAllTags:
 # ── Finding 9: false positive updates scan_result ──
 
 
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
 class TestFalsePositiveStatsSync:
     """Verify mark_vuln_false_positive updates scan_result.finding_summary."""
 
@@ -300,6 +304,8 @@ class TestTracerRunDirThreadSafe:
 # ── Wiring: VerificationEngine accepts interactsh_client ──
 
 
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
 class TestVerificationEngineInteractsh:
     """Verify VerificationEngine accepts and uses InteractshClient."""
 
@@ -342,6 +348,8 @@ class TestVerificationEngineInteractsh:
 # ── Wiring: ScanResult.remove_vulnerability ──
 
 
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
 class TestScanResultRemoveVulnerability:
     """Verify ScanResult supports removing vulnerabilities."""
 
@@ -366,6 +374,8 @@ class TestScanResultRemoveVulnerability:
 # ── Wiring: PluginLoader ──
 
 
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
 class TestPluginLoaderDiscovery:
     """Verify PluginLoader can discover plugins."""
 

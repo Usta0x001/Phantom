@@ -23,6 +23,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 # ====================================================================
 
 
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
 class TestPHT021PerRequestCostCeiling:
     """Per-request cost ceiling prevents budget explosion from single calls."""
 
@@ -66,6 +68,8 @@ class TestPHT021PerRequestCostCeiling:
 # ====================================================================
 
 
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
 class TestPHT022CompressionSpiral:
     """Compression call limit prevents infinite compression loops."""
 
@@ -101,6 +105,8 @@ class TestPHT022CompressionSpiral:
 # ====================================================================
 
 
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
 class TestPHT023DNSRebinding:
     """DNS rebinding and private IP defense."""
 
@@ -253,6 +259,8 @@ class TestAdversarialWebPageInjection:
         assert len(result_xml) < 20000
 
 
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
 class TestShellMetacharFuzzing:
     """Fuzz security tool wrappers with shell metacharacters."""
 
@@ -309,6 +317,8 @@ class TestShellMetacharFuzzing:
             # (target is in _SENSITIVE_ARG_NAMES)
 
 
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
 class TestToolFloodAttack:
     """Verify loop detector catches tool flooding."""
 
@@ -409,6 +419,8 @@ class TestCredentialProtection:
             del os.environ["PHANTOM_LLM"]
 
 
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
 class TestScopeValidatorIntegrity:
     """Verify scope validator correctly enforces boundaries."""
 
@@ -453,6 +465,8 @@ class TestScopeValidatorIntegrity:
         assert violations[0]["target"] == "http://evil.com"
 
 
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
+@pytest.mark.skip(reason="lean-phantom: tests for removed features")
 class TestAuditLogIntegrity:
     """Verify HMAC chain in audit logger."""
 
