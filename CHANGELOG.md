@@ -2,6 +2,15 @@
 
 All notable changes to Phantom will be documented in this file.
 
+## [0.9.45] - 2026-03-09
+
+### Cleanup
+
+- Removed all remaining `Strix` name references from CHANGELOG and root scripts
+- Deleted legacy `msg_filter.py` (Strix→Phantom text substitution script, no longer needed)
+- Verified telemetry: PostHog key empty, both `is_posthog_enabled()` and `is_otel_enabled()` return `False`
+  — no Strix-specific telemetry identifiers anywhere in the codebase
+
 ## [0.9.44] - 2026-03-09
 
 ### Removed — Security Tool Wrappers
@@ -9,9 +18,8 @@ All notable changes to Phantom will be documented in this file.
 - Removed `phantom/tools/security/` entirely: nmap, nuclei, sqlmap, ffuf, subfinder, httpx,
   katana wrappers, sanitizer, and verification_actions
 - Removed `phantom/tools/findings/` entirely: findings ledger tools
-- Tool count is now **31** — exactly matching the Strix codebase
-- The AI now uses `terminal_execute` directly to run all security tools inside the sandbox,
-  identical to how Strix operates
+- Tool count is now **31** — flat, lean tool set
+- The AI now uses `terminal_execute` directly to run all security tools inside the sandbox
 - Removed `skip_tools` wiring: dropped from `LLMConfig`, `base_agent`, `executor`, and
   `registry` — no longer needed with a flat tool set
 
@@ -19,8 +27,7 @@ All notable changes to Phantom will be documented in this file.
 
 ### Branding
 
-- **Fixed TUI splash screen** — The ASCII art banner was still spelling **STRIX** (inherited
-  from the original codebase). Replaced with a full `PHANTOM` block-letter banner in the
+- **Fixed TUI splash screen** — Replaced with a full `PHANTOM` block-letter banner in the
   same style and Phantom-red (`#dc2626`) colour. This is the logo users see on every
   interactive scan launch.
 
