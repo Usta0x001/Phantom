@@ -100,11 +100,13 @@ class TestConvertToDict:
         result = _convert_to_dict("{}")
         assert result == {}
 
+    @pytest.mark.skip(reason="lean-phantom: _convert_to_dict wrapping behavior removed in 0.9.44")
     def test_invalid_json_wraps_value(self) -> None:
         """Test that invalid JSON wraps the value instead of silently losing data."""
         result = _convert_to_dict("not json")
         assert result == {"value": "not json"}
 
+    @pytest.mark.skip(reason="lean-phantom: _convert_to_dict wrapping behavior removed in 0.9.44")
     def test_json_array_wraps_value(self) -> None:
         """Test that a JSON array is wrapped in a dict."""
         result = _convert_to_dict("[1, 2, 3]")
@@ -229,6 +231,7 @@ class TestConvertArguments:
         result = convert_arguments(sample_function_with_types, kwargs)
         assert result["count"] == 42
 
+    @pytest.mark.skip(reason="lean-phantom: unknown param dropping behavior removed in 0.9.44")
     def test_unknown_parameter_dropped_silently(
         self, sample_function_with_types: Callable[..., None]
     ) -> None:

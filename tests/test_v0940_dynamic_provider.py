@@ -83,6 +83,7 @@ class TestProviderAutoDetection:
 # Section 2: Memory compression overhead accounting
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
+@pytest.mark.skip(reason="lean-phantom: memory compression overhead removed in 0.9.44")
 class TestMemoryCompressionOverhead:
     """compress_history() must fire earlier when overhead_tokens reduces effective budget."""
 
@@ -168,6 +169,7 @@ class TestMemoryCompressionOverhead:
 # Section 3: Param alias normalizer (report_vulnerability)
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
+@pytest.mark.skip(reason="lean-phantom: param alias normalizer removed in 0.9.44")
 class TestParamAliasNormalizer:
     """_normalize_tool_args() must remap LLM alias names to canonical params."""
 

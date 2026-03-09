@@ -9,6 +9,7 @@ import time
 from datetime import UTC, datetime
 
 
+@pytest.mark.skip(reason="lean-phantom: _inject_auth_headers removed in 0.9.44")
 def test_sec007_crlf_stripped_from_headers():
     """SEC-007: CRLF characters must be stripped from auth header names/values."""
     from phantom.tools.executor import _inject_auth_headers
@@ -36,6 +37,7 @@ def test_sec007_crlf_stripped_from_headers():
         _tracer_mod._global_tracer = original
 
 
+@pytest.mark.skip(reason="lean-phantom: _inject_auth_headers removed in 0.9.44")
 def test_sec007_sqlmap_headers_crlf_stripped():
     """SEC-007: SQLMap header injection must also strip CRLF."""
     from phantom.tools.executor import _inject_auth_headers
@@ -93,6 +95,7 @@ def test_logic001_check_limits_inside_lock():
     print("LOGIC-001 PASS: _check_limits() inside lock scope")
 
 
+@pytest.mark.skip(reason="lean-phantom: max_scan_duration_seconds removed in 0.9.44")
 def test_logic005_time_limit_exists():
     """LOGIC-005: AgentState must have max_scan_duration_seconds field."""
     from phantom.agents.state import AgentState
@@ -103,6 +106,7 @@ def test_logic005_time_limit_exists():
     print("LOGIC-005 PASS: Wall-clock time limit field exists")
 
 
+@pytest.mark.skip(reason="lean-phantom: time limit removed in 0.9.44")
 def test_logic005_should_stop_respects_time_limit():
     """LOGIC-005: should_stop() must return True when time limit exceeded."""
     from phantom.agents.state import AgentState
@@ -116,6 +120,7 @@ def test_logic005_should_stop_respects_time_limit():
     print("LOGIC-005 PASS: should_stop() respects wall-clock time")
 
 
+@pytest.mark.skip(reason="lean-phantom: _has_exceeded_time_limit removed in 0.9.44")
 def test_logic005_time_limit_zero_disables():
     """LOGIC-005: Setting time limit to 0 should disable the check."""
     from phantom.agents.state import AgentState
@@ -126,6 +131,7 @@ def test_logic005_time_limit_zero_disables():
     print("LOGIC-005 PASS: Zero disables time limit")
 
 
+@pytest.mark.skip(reason="lean-phantom: _sanitize_inter_agent_content removed in 0.9.44")
 def test_impl003_unicode_normalization():
     """IMPL-003: _sanitize_inter_agent_content must normalize Unicode."""
     from phantom.agents.base_agent import BaseAgent
@@ -138,6 +144,7 @@ def test_impl003_unicode_normalization():
     print("IMPL-003 PASS: Unicode normalization catches fullwidth bypass")
 
 
+@pytest.mark.skip(reason="lean-phantom: _sanitize_inter_agent_content removed in 0.9.44")
 def test_impl003_zero_width_chars_stripped():
     """IMPL-003: Zero-width characters must be stripped."""
     from phantom.agents.base_agent import BaseAgent

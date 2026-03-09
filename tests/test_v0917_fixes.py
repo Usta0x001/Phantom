@@ -74,6 +74,7 @@ class TestDNSPinning:
 # ── LOGIC-004: Compression audit logging ────────────────────────────────────
 
 
+@pytest.mark.skip(reason="lean-phantom: compression audit logging removed in 0.9.44")
 class TestCompressionAuditLogging:
     """Verify memory compressor logs to audit trail."""
 
@@ -94,6 +95,7 @@ class TestCompressionAuditLogging:
 # ── IMPL-004: Keyring credential storage ────────────────────────────────────
 
 
+@pytest.mark.skip(reason="lean-phantom: keyring/_SENSITIVE_KEYS/_load_secret removed in 0.9.44")
 class TestKeyringIntegration:
     """Verify Config uses OS keyring for sensitive credentials."""
 
@@ -155,6 +157,7 @@ class TestEgressFiltering:
 # ── Timeout chain verification ──────────────────────────────────────────────
 
 
+@pytest.mark.skip(reason="lean-phantom: timeout chain 600s removed in 0.9.44")
 class TestTimeoutChain:
     """Verify timeout is consistently 600s across all components."""
 
@@ -217,6 +220,7 @@ class TestSandboxDockerfile:
 # ── Dedupe resilience ───────────────────────────────────────────────────────
 
 
+@pytest.mark.skip(reason="lean-phantom: dedupe resilience removed in 0.9.44")
 class TestDedupeResilience:
     """Verify dedupe parser handles non-XML LLM responses."""
 

@@ -26,6 +26,7 @@ import pytest
 # ═══════════════════════════════════════════════════════════════════════════
 
 
+@pytest.mark.skip(reason="lean-phantom: tests for removed functionality (0.9.44)")
 class TestAgentStateLifecycle:
     """Full lifecycle of AgentState from creation → completion."""
 
@@ -874,6 +875,7 @@ class TestReportGenerator:
 # ═══════════════════════════════════════════════════════════════════════════
 
 
+@pytest.mark.skip(reason="lean-phantom: nmap_scan/nuclei_scan deleted in 0.9.44")
 class TestToolRegistry:
     """Tool registration, lookup, schema extraction."""
 
@@ -931,6 +933,7 @@ class TestExecutor:
         text, images = _format_tool_result("test_tool", None)
         assert "successfully" in text.lower()
 
+    @pytest.mark.skip(reason="lean-phantom: nmap_scan deleted in 0.9.44")
     def test_validate_tool_availability(self):
         from phantom.tools.executor import validate_tool_availability
         ok, msg = validate_tool_availability("nmap_scan")
@@ -946,6 +949,7 @@ class TestExecutor:
         ok, msg = validate_tool_availability(None)
         assert ok is False
 
+    @pytest.mark.skip(reason="lean-phantom: nmap_scan deleted in 0.9.44")
     def test_endpoint_tools_map_constant(self):
         from phantom.tools.executor import _ENDPOINT_TOOLS_MAP
         assert isinstance(_ENDPOINT_TOOLS_MAP, dict)
@@ -1035,6 +1039,7 @@ class TestKnowledgeStore:
 # ═══════════════════════════════════════════════════════════════════════════
 
 
+@pytest.mark.skip(reason="lean-phantom: _scrub_credentials/_scrub_dict removed in 0.9.44")
 class TestCredentialScrubbing:
     """H1 FIX: Credential pattern scrubbing in reports."""
 
@@ -1225,6 +1230,7 @@ class TestConfig:
         assert isinstance(tracked, list)
         assert len(tracked) > 0
 
+    @pytest.mark.skip(reason="lean-phantom: Config.get_redacted removed in 0.9.44")
     def test_get_redacted(self):
         from phantom.config.config import Config
         # Should not crash even with no key set
@@ -1473,18 +1479,9 @@ class TestModuleImports:
 
     MODULES = [
         "phantom.agents.state",
-        "phantom.agents.enhanced_state",
         "phantom.agents.base_agent",
         "phantom.tools.executor",
         "phantom.tools.registry",
-        "phantom.core.audit_logger",
-        "phantom.core.scope_validator",
-        "phantom.core.cost_controller",
-        "phantom.core.report_generator",
-        "phantom.core.knowledge_store",
-        "phantom.core.verification_engine",
-        "phantom.core.interactsh_client",
-        "phantom.core.priority_queue",
         "phantom.runtime.docker_runtime",
         "phantom.tools.finish.finish_actions",
         "phantom.tools.agents_graph.agents_graph_actions",
@@ -1492,9 +1489,6 @@ class TestModuleImports:
         "phantom.llm.config",
         "phantom.telemetry.tracer",
         "phantom.config.config",
-        "phantom.models.vulnerability",
-        "phantom.models.scan",
-        "phantom.models.host",
     ]
 
     @pytest.mark.parametrize("module", MODULES)

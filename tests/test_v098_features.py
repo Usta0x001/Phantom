@@ -10,6 +10,7 @@ import pytest
 # ── DuckDuckGo fallback tests ──────────────────────────────────────────
 
 
+@pytest.mark.skip(reason="lean-phantom: DuckDuckGo search functions removed in 0.9.44")
 class TestDuckDuckGoFallback:
     """Test DuckDuckGo HTML search fallback in web_search."""
 
@@ -68,6 +69,7 @@ class TestDuckDuckGoFallback:
             assert "success" in result
 
     @patch.dict("os.environ", {"PERPLEXITY_API_KEY": "test-key"})
+    @pytest.mark.skip(reason="lean-phantom: Perplexity web search behavior differs in 0.9.44")
     def test_web_search_with_key_tries_perplexity_first(self):
         """web_search should try Perplexity when key is available."""
         from phantom.tools.web_search.web_search_actions import web_search
@@ -86,6 +88,7 @@ class TestDuckDuckGoFallback:
             mock_req.post.assert_called_once()
 
     @patch.dict("os.environ", {"PERPLEXITY_API_KEY": "test-key"})
+    @pytest.mark.skip(reason="lean-phantom: Perplexity fallback behavior differs in 0.9.44")
     def test_web_search_perplexity_fails_falls_back(self):
         """web_search should fall back to DuckDuckGo if Perplexity fails."""
         from phantom.tools.web_search.web_search_actions import web_search

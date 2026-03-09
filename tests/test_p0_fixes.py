@@ -125,6 +125,7 @@ def test_auto001_allows_sufficient_work():
     print("AUTO-001 PASS: Allowed at iteration 40 with sufficient work")
 
 
+@pytest.mark.skip(reason="lean-phantom: unverified_findings field removed in 0.9.44")
 def test_arch003_unverified_findings_field():
     """ARCH-003: AgentState must have _unverified_findings field."""
     from phantom.agents.state import AgentState

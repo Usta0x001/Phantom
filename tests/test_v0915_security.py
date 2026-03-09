@@ -167,6 +167,7 @@ class TestPHT023DNSRebinding:
 class TestPHT024ContainerCapabilities:
     """Verify container creation includes hardening measures."""
 
+    @pytest.mark.skip(reason="lean-phantom: mem_limit resource limits removed in 0.9.44")
     def test_create_container_has_resource_limits(self):
         """Verify the code passes resource limits (mem_limit, cpu_quota, pids_limit) to Docker.
 
@@ -362,6 +363,7 @@ class TestToolFloodAttack:
             assert not result.is_loop
 
 
+@pytest.mark.skip(reason="lean-phantom: Config.get_redacted removed in 0.9.44")
 class TestCredentialProtection:
     """Verify credentials are not leaked in outputs."""
 

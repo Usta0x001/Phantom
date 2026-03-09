@@ -25,6 +25,7 @@ import pytest
 # =========================================================================
 
 
+@pytest.mark.skip(reason="lean-phantom: phantom.tools.security.sanitizer deleted in 0.9.44")
 class TestSanitizerPathTraversal:
     """C-01: validate_workspace_path must block path traversal."""
 
@@ -92,6 +93,7 @@ class TestSanitizerPathTraversal:
 # =========================================================================
 
 
+@pytest.mark.skip(reason="lean-phantom: phantom.tools.security.sanitizer deleted in 0.9.44")
 class TestSanitizeExtraArgs:
     """Ensure extra_args filtering works correctly."""
 
@@ -133,6 +135,7 @@ class TestSanitizeExtraArgs:
 # =========================================================================
 
 
+@pytest.mark.skip(reason="lean-phantom: phantom.tools.security.sanitizer deleted in 0.9.44")
 class TestValidateNoMetachar:
     """Shell metacharacter detection."""
 
@@ -170,6 +173,7 @@ class TestValidateNoMetachar:
 # =========================================================================
 
 
+@pytest.mark.skip(reason="lean-phantom: phantom.tools.security.sanitizer deleted in 0.9.44")
 class TestHeredocAndTempPath:
     """Utility functions in sanitizer."""
 
@@ -559,6 +563,7 @@ class TestConfigApplySaved:
 # =========================================================================
 
 
+@pytest.mark.skip(reason="lean-phantom: phantom.tools.security deleted in 0.9.44")
 class TestSecurityToolSanitisation:
     """Verify security tool wrappers use sanitizer properly."""
 

@@ -69,6 +69,7 @@ class TestSchemaLoading:
         assert "security_tools_schema.xml" in path.name
 
 
+@pytest.mark.skip(reason="lean-phantom: argument alias resolution removed in 0.9.44")
 class TestArgumentAliases:
     """Verify argument alias resolution in convert_arguments."""
 
@@ -130,6 +131,7 @@ class TestArgumentAliases:
 class TestTimeoutConfig:
     """Verify sandbox timeout default is sufficient for long-running tools."""
 
+    @pytest.mark.skip(reason="lean-phantom: timeout 600s removed in 0.9.44")
     def test_sandbox_timeout_default_sufficient(self):
         """Default SANDBOX_EXECUTION_TIMEOUT should be >= 600s for nuclei scans."""
         # Test the code default, not the runtime value (which may come from saved config)

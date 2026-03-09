@@ -37,6 +37,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 # PHT-001: nmap command injection
 # ====================================================================
 
+@pytest.mark.skip(reason="lean-phantom: phantom.tools.security deleted in 0.9.44")
 class TestPHT001NmapInjection:
     """Verify nmap port/script parameters are validated."""
 
@@ -72,6 +73,7 @@ class TestPHT001NmapInjection:
 # PHT-002: inter-agent prompt injection
 # ====================================================================
 
+@pytest.mark.skip(reason="lean-phantom: BaseAgent._sanitize_inter_agent_content removed in 0.9.44")
 class TestPHT002InterAgentInjection:
     """Verify inter-agent message sanitization."""
 
@@ -396,6 +398,7 @@ class TestLoopDetector:
 # PHT-015: credential redaction
 # ====================================================================
 
+@pytest.mark.skip(reason="lean-phantom: _build_smart_context removed in 0.9.44")
 class TestPHT015CredentialPropagation:
     """P1-007 FIX: Verify credentials are REDACTED (not leaked) to child agents."""
 

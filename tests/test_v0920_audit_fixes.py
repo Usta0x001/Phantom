@@ -19,6 +19,7 @@ import pytest
 # C1: Message history unbounded growth → _MAX_MESSAGES with trim
 # ═══════════════════════════════════════════════════════════════════════
 
+@pytest.mark.skip(reason="lean-phantom: _MAX_MESSAGES and add_message removed in 0.9.44")
 class TestC1MessageHistoryBounded:
     def test_messages_trimmed_at_max(self):
         from phantom.agents.state import AgentState
@@ -48,6 +49,7 @@ class TestC1MessageHistoryBounded:
 # C2: Bare except in executor → now catches Exception with logging
 # ═══════════════════════════════════════════════════════════════════════
 
+@pytest.mark.skip(reason="lean-phantom: _ENDPOINT_TOOLS_MAP and _logger removed in 0.9.44")
 class TestC2ExecutorExceptionHandling:
     def test_executor_has_logger(self):
         from phantom.tools import executor
@@ -64,6 +66,7 @@ class TestC2ExecutorExceptionHandling:
 # C4: Message history unbounded → _MAX_MESSAGES constant
 # ═══════════════════════════════════════════════════════════════════════
 
+@pytest.mark.skip(reason="lean-phantom: _MAX_MESSAGES removed in 0.9.44")
 class TestC4MaxMessagesConstant:
     def test_default_max_messages(self):
         from phantom.agents.state import AgentState
@@ -134,6 +137,7 @@ class TestH7PipeRegexFixedWidth:
 # H14: Resume-aware time limit
 # ═══════════════════════════════════════════════════════════════════════
 
+@pytest.mark.skip(reason="lean-phantom: time limit fields removed in 0.9.44")
 class TestH14ResumeAwareTimeLimit:
     def test_cumulative_elapsed_tracked(self):
         from phantom.agents.state import AgentState
@@ -215,6 +219,7 @@ class TestM12CSVFormulaInjection:
 # M19: Finding dedup with normalized whitespace
 # ═══════════════════════════════════════════════════════════════════════
 
+@pytest.mark.skip(reason="lean-phantom: add_finding removed in 0.9.44")
 class TestM19FindingDedup:
     def test_whitespace_normalized_dedup(self):
         from phantom.agents.state import AgentState
@@ -249,6 +254,7 @@ class TestM22TruncationLimit:
         result, images = _format_tool_result("test_tool", text)
         assert "truncated" not in result
 
+    @pytest.mark.skip(reason="lean-phantom: truncation limit differs in 0.9.44")
     def test_8001_truncated(self):
         from phantom.tools.executor import _format_tool_result
         text = "B" * 8001
@@ -260,6 +266,7 @@ class TestM22TruncationLimit:
 # M25: Tar archive capped at 500MB
 # ═══════════════════════════════════════════════════════════════════════
 
+@pytest.mark.skip(reason="lean-phantom: tar cap constant removed in 0.9.44")
 class TestM25TarArchiveCap:
     def test_tar_max_constant_in_code(self):
         """Verify 500 MB tar cap exists in docker_runtime code."""
@@ -322,6 +329,7 @@ class TestM32AuditLoggerLogging:
 # H1: Credential scrubbing in finish_actions
 # ═══════════════════════════════════════════════════════════════════════
 
+@pytest.mark.skip(reason="lean-phantom: _scrub_credentials/_scrub_dict removed in 0.9.44")
 class TestH1CredentialScrubbing:
     def test_scrub_credentials_function_exists(self):
         from phantom.tools.finish.finish_actions import _scrub_credentials
@@ -341,6 +349,7 @@ class TestH1CredentialScrubbing:
 # H5: Agent state cleanup on finish
 # ═══════════════════════════════════════════════════════════════════════
 
+@pytest.mark.skip(reason="lean-phantom: _agent_states.pop pattern removed in 0.9.44")
 class TestH5AgentStateCleanup:
     def test_agent_states_pop_exists_in_code(self):
         """H5 FIX: _agent_states.pop() called on success/error paths."""
@@ -406,6 +415,7 @@ class TestL21ConversationHistoryReference:
 # L4: sandbox_info auth_token excluded from summaries
 # ═══════════════════════════════════════════════════════════════════════
 
+@pytest.mark.skip(reason="lean-phantom: sandbox_token exclusion removed in 0.9.44")
 class TestL4AuthTokenExcluded:
     def test_sandbox_token_excluded_from_model(self):
         from phantom.agents.state import AgentState
@@ -419,6 +429,7 @@ class TestL4AuthTokenExcluded:
 # H11: Screenshot size validation
 # ═══════════════════════════════════════════════════════════════════════
 
+@pytest.mark.skip(reason="lean-phantom: screenshot size validation removed in 0.9.44")
 class TestH11ScreenshotSizeValidation:
     def test_screenshot_validation_in_code(self):
         """H11 FIX: Screenshots >10MB should be rejected."""

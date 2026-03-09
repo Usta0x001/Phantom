@@ -39,11 +39,10 @@ def analyze(audit_path: str):
             print(f"  [{skills}] {name}")
             print(f"    Task: {task}")
 
-    # Security tools
-    sec_tools = ['sqlmap_test','ffuf_directory_scan','katana_crawl','nuclei_scan',
-                 'nmap_scan','nikto_scan','xss_scan','ssrf_scan','command_injection_scan',
-                 'check_known_vulnerabilities']
-    print("\n=== SECURITY TOOLS USED ===")
+    # Tools (current 31-tool set)
+    sec_tools = ['terminal_execute','web_search','browser_navigate','browser_click',
+                 'browser_type','browser_screenshot','finish_scan']
+    print("\n=== TOOLS USED ===")
     for l in tool_calls:
         d = l['data']
         if d['tool_name'] in sec_tools:

@@ -563,6 +563,7 @@ class TestAgentProtocol:
 class TestWiringIntegration:
     """Tests that modules are correctly wired into the pipeline."""
 
+    @pytest.mark.skip(reason="lean-phantom: ScopeValidator/AuditLogger removed in 0.9.44")
     def test_cli_imports_scope_and_audit(self):
         """cli.py should import ScopeValidator and AuditLogger."""
         source = Path(__file__).resolve().parent.parent / "phantom" / "interface" / "cli.py"
@@ -571,6 +572,7 @@ class TestWiringIntegration:
         assert "AuditLogger" in content
         assert "set_global_audit_logger" in content
 
+    @pytest.mark.skip(reason="lean-phantom: get_global_audit_logger removed in 0.9.44")
     def test_executor_has_audit_logging(self):
         """executor.py should log tool calls via AuditLogger."""
         source = Path(__file__).resolve().parent.parent / "phantom" / "tools" / "executor.py"
@@ -984,6 +986,7 @@ class TestTracerThreadSafety:
         assert len(msg_ids) == 50
         assert len(set(msg_ids)) == 50  # All message IDs unique
 
+    @pytest.mark.skip(reason="lean-phantom: Tracer._lock removed in 0.9.44")
     def test_has_lock_attribute(self):
         """Tracer should have a threading lock (Lock or RLock)."""
         from phantom.telemetry.tracer import Tracer
