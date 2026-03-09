@@ -12,7 +12,9 @@ from phantom.telemetry.flags import is_posthog_enabled
 if TYPE_CHECKING:
     from phantom.telemetry.tracer import Tracer
 
-_POSTHOG_PUBLIC_API_KEY = "phc_7rO3XRuNT5sgSKAl6HDIrWdSGh1COzxw0vxVIAR6vVZ"
+# Configure your own PostHog project key via PHANTOM_POSTHOG_API_KEY env var
+# or set phantom_posthog_api_key in ~/.phantom/config.yaml
+_POSTHOG_PUBLIC_API_KEY = ""
 _POSTHOG_HOST = "https://us.i.posthog.com"
 
 _SESSION_ID = uuid4().hex[:16]
@@ -46,6 +48,8 @@ def _get_version() -> str:
 def _send(event: str, properties: dict[str, Any]) -> None:
     if not _is_enabled():
         return
+    if not _POSTHOG_PUBLIC_API_KEY:
+        return  # No key configured — telemetry disabled
     try:
         payload = {
             "api_key": _POSTHOG_PUBLIC_API_KEY,

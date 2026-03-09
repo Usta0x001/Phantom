@@ -10,12 +10,11 @@
 
 <br/>
 
-[![PyPI](https://img.shields.io/pypi/v/phantom-agent?style=for-the-badge&logo=pypi&logoColor=white&label=phantom-agent&color=6c5ce7)](https://pypi.org/project/phantom-agent/)
+[![PyPI](https://img.shields.io/pypi/v/phantom-agent?style=for-the-badge&logo=pypi&logoColor=white&label=phantom-agent&color=dc2626)](https://pypi.org/project/phantom-agent/)
 [![Python](https://img.shields.io/badge/Python-3.12+-3776AB?style=for-the-badge&logo=python&logoColor=white)](https://python.org)
 [![License](https://img.shields.io/badge/License-Apache%202.0-4DB6AC?style=for-the-badge)](LICENSE)
 [![Docker](https://img.shields.io/badge/Docker-Sandbox-2496ED?style=for-the-badge&logo=docker&logoColor=white)](#architecture)
-[![Tests](https://img.shields.io/badge/Tests-731%20Passing-2ECC71?style=for-the-badge&logo=pytest&logoColor=white)](#testing)
-[![Bugs Fixed](https://img.shields.io/badge/Bugs%20Fixed-88-E74C3C?style=for-the-badge)](#security-audit)
+[![Tools](https://img.shields.io/badge/Security%20Tools-53-dc2626?style=for-the-badge)](#tools)
 [![Status](https://img.shields.io/badge/Status-Beta-F39C12?style=for-the-badge)](#)
 [![Platform](https://img.shields.io/badge/Platform-Linux%20|%20macOS%20|%20Windows-555555?style=for-the-badge&logo=linux&logoColor=white)](#quick-start)
 
@@ -54,7 +53,7 @@ Unlike CVE-signature scanners, Phantom **reasons** about your target: it reads H
 </tr>
 <tr>
 <td align="center">🔧</td>
-<td><strong>30+ Security Tools</strong> — nmap · nuclei · sqlmap · ffuf · httpx · katana · nikto · gobuster · arjun · semgrep · playwright — all orchestrated automatically.</td>
+<td><strong>53 Security Tools</strong> — nmap · nuclei · sqlmap · ffuf · httpx · katana · subfinder · nikto · gobuster · arjun · semgrep · playwright — all orchestrated automatically.</td>
 </tr>
 <tr>
 <td align="center">🐳</td>
@@ -458,7 +457,7 @@ Every scan automatically runs a 7-stage enrichment pass:
 |-------|--------|
 | 1. MITRE ATT&CK | CWE, CAPEC, technique-level tagging |
 | 2. Compliance | OWASP Top 10 · PCI DSS v4 · NIST 800-53 |
-| 3. Attack Graph | NetworkX path analysis |
+| 3. Attack Graph | Dependency-based path analysis |
 | 4. Nuclei Templates | Auto-generated YAML for regression testing |
 | 5. Knowledge Store | Persistent cross-scan memory updated |
 | 6. Notifications | Webhook / Slack alerts for critical findings |
@@ -603,7 +602,7 @@ Apache License 2.0 — see [LICENSE](LICENSE).
 
 Built on the shoulders of giants:
 
-[LiteLLM](https://github.com/BerriAI/litellm) · [Nuclei](https://github.com/projectdiscovery/nuclei) · [SQLMap](https://github.com/sqlmapproject/sqlmap) · [Playwright](https://github.com/microsoft/playwright) · [Textual](https://github.com/Textualize/textual) · [Rich](https://github.com/Textualize/rich) · [NetworkX](https://github.com/networkx/networkx) · [ffuf](https://github.com/ffuf/ffuf) · [Caido](https://caido.io)
+[LiteLLM](https://github.com/BerriAI/litellm) · [Nuclei](https://github.com/projectdiscovery/nuclei) · [SQLMap](https://github.com/sqlmapproject/sqlmap) · [Playwright](https://github.com/microsoft/playwright) · [Textual](https://github.com/Textualize/textual) · [Rich](https://github.com/Textualize/rich) · [ffuf](https://github.com/ffuf/ffuf) · [Subfinder](https://github.com/projectdiscovery/subfinder) · [Caido](https://caido.io)
 
 ---
 

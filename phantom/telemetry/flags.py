@@ -20,4 +20,4 @@ def is_posthog_enabled() -> bool:
     explicit = Config.get("phantom_posthog_telemetry")
     if explicit is not None:
         return _is_enabled(explicit)
-    return _is_enabled(Config.get("phantom_telemetry"), default="1")
+    return _is_enabled(Config.get("phantom_telemetry"), default="0")
