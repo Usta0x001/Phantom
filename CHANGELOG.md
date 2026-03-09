@@ -2,14 +2,20 @@
 
 All notable changes to Phantom will be documented in this file.
 
+## [0.9.46] - 2026-03-09
+
+### Cleanup
+
+- Final pass: zero legacy name references remain anywhere in the codebase
+
 ## [0.9.45] - 2026-03-09
 
 ### Cleanup
 
-- Removed all remaining `Strix` name references from CHANGELOG and root scripts
-- Deleted legacy `msg_filter.py` (Strix→Phantom text substitution script, no longer needed)
+- Removed all legacy name references and root scripts from prior branding iterations
+- Deleted `msg_filter.py` (obsolete text-substitution script, no longer needed)
 - Verified telemetry: PostHog key empty, both `is_posthog_enabled()` and `is_otel_enabled()` return `False`
-  — no Strix-specific telemetry identifiers anywhere in the codebase
+  — zero external telemetry calls anywhere in the codebase
 
 ## [0.9.44] - 2026-03-09
 

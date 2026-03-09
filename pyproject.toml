@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "phantom-agent"
-version = "0.9.45"
+version = "0.9.46"
 description = "Autonomous Offensive Security Intelligence — AI-powered penetration testing"
 authors = ["Usta0x001 <r_gadouri@estin.dz>"]
 readme = "README.md"
