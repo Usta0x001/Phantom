@@ -224,24 +224,6 @@ async def execute_tool_with_validation(
         return result
 
 
-async def execute_tool_invocation(tool_inv: dict[str, Any], agent_state: Any | None = None) -> Any:
-    tool_name = tool_inv.get("toolName")
-    tool_args = tool_inv.get("args", {})
-
-    # v0.9.35: Tool firewall DISABLED (H-02). The injection pattern matching
-    # blocks legitimate pentest payloads: SQLi (;), SSTI (${...}), command
-    # injection (`...`), boolean SQLi (||). The sandbox provides isolation.
-
-    # Normalise common parameter name aliases that some LLMs emit.
-    # This prevents silent finding loss when an LLM uses a variant name.
-    tool_args = _normalize_tool_args(tool_name, tool_args)
-
-    # Auto-inject auth headers for security tools that support extra_args
-    tool_args = _inject_auth_headers(tool_name, tool_args, agent_state)
-
-    return await execute_tool_with_validation(tool_name, agent_state, **tool_args)
-
-
 # Per-tool parameter alias maps: alias → canonical name.
 # Only remapping is done — if the canonical name already exists, alias is dropped.
 _TOOL_PARAM_ALIASES: dict[str, dict[str, str]] = {
@@ -278,6 +260,24 @@ def _normalize_tool_args(tool_name: str | None, args: dict[str, Any]) -> dict[st
             # Canonical already present — drop the alias silently
             normalized.pop(alias)
     return normalized
+
+
+async def execute_tool_invocation(tool_inv: dict[str, Any], agent_state: Any | None = None) -> Any:
+    tool_name = tool_inv.get("toolName")
+    tool_args = tool_inv.get("args", {})
+
+    # v0.9.35: Tool firewall DISABLED (H-02). The injection pattern matching
+    # blocks legitimate pentest payloads: SQLi (;), SSTI (${...}), command
+    # injection (`...`), boolean SQLi (||). The sandbox provides isolation.
+    # The sandbox already provides isolation.
+
+    # Normalise common parameter name aliases that some LLMs emit.
+    tool_args = _normalize_tool_args(tool_name, tool_args)
+
+    # Auto-inject auth headers for security tools that support extra_args
+    tool_args = _inject_auth_headers(tool_name, tool_args, agent_state)
+
+    return await execute_tool_with_validation(tool_name, agent_state, **tool_args)
 
 
 # Tools that accept extra_args and support header-style flags
@@ -450,7 +450,7 @@ def _format_tool_result(tool_name: str, result: Any) -> tuple[str, list[dict[str
     # (XSS/SQLi payloads in results were being HTML-escaped, hiding reflections)
     observation_xml = (
         f"<tool_result>\n<tool_name>{_xml_escape(tool_name)}</tool_name>\n"
-        f"<result><![CDATA[{final_result_str.replace(']]>', ']]]]><![CDATA[>')}]]></result>\n</tool_result>"
+        f"<result><![CDATA[{final_result_str}]]></result>\n</tool_result>"
     )
 
     return observation_xml, images
@@ -717,7 +717,7 @@ def _auto_report_scanner_findings(scanner: str, findings: list[dict], agent_stat
                 existing_titles.add(title.lower())
                 reported += 1
 
-            if reported >= 100:  # Safety cap per scanner call
+            if reported >= 25:  # Safety cap per scanner call
                 break
 
         if reported > 0:
@@ -893,10 +893,10 @@ def _auto_record_findings(tool_name: str, result: Any, agent_state: Any) -> None
             _auto_report_scanner_findings("sqlmap", [result], agent_state)
 
         # --- Send Request (manual testing) ---
-        if tool_name in ("send_request", "repeat_request"):
+        elif tool_name in ("send_request", "repeat_request"):
             status = result.get("status_code", 0)
             url = str(result.get("url", ""))
-            body = result.get("body", "")[:2000].lower()
+            body = result.get("body", "")[:500].lower()
             # Track endpoints
             if url and hasattr(agent_state, "add_endpoint"):
                 agent_state.add_endpoint(url)
@@ -915,7 +915,7 @@ def _auto_record_findings(tool_name: str, result: Any, agent_state: Any) -> None
                 agent_state.add_finding(f"[vuln/info-disclosure] Sensitive data at {url}")
 
     except Exception as exc:  # noqa: BLE001
-        _logger.warning("auto-record findings failed for %s: %s", tool_name, exc, exc_info=True)
+        _logger.debug("auto-record findings swallowed: %s", exc, exc_info=True)
 
 
 def remove_screenshot_from_result(result: Any) -> Any:

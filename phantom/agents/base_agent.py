@@ -1,4 +1,4 @@
-import asyncio
+﻿import asyncio
 import logging
 from typing import TYPE_CHECKING, Any, Optional
 
@@ -46,7 +46,7 @@ class AgentMeta(type):
 
 
 class BaseAgent(metaclass=AgentMeta):
-    max_iterations = 300  # v0.9.34: Default iteration budget
+    max_iterations = 300  # Default: 300 iterations for thorough scan coverage
     agent_name: str = ""
     jinja_env: Environment
     default_llm_config: LLMConfig | None = None
@@ -224,7 +224,7 @@ class BaseAgent(metaclass=AgentMeta):
                 )
                 self.state.add_message("user", warning_msg)
 
-            if self.state.max_iterations > 3 and self.state.iteration == self.state.max_iterations - 3:
+            if self.state.iteration == self.state.max_iterations - 3:
                 final_warning_msg = (
                     "CRITICAL: You have only 3 iterations left! "
                     "Your next message MUST be the tool call to the appropriate "
@@ -465,9 +465,7 @@ class BaseAgent(metaclass=AgentMeta):
             self.state.add_error("Tool execution cancelled by user")
             raise
 
-        # PHT-062: Don't reassign — process_tool_invocations already mutated
-        # conversation_history in-place and state.messages IS that list.
-        # Reassignment would overwrite any trimming done by the LLM loop.
+        self.state.messages = list(conversation_history)
 
         if should_agent_finish:
             # Finalize EnhancedAgentState scan tracking when available.
@@ -666,7 +664,7 @@ class BaseAgent(metaclass=AgentMeta):
             import logging
 
             logger = logging.getLogger(__name__)
-            logger.warning("Error checking agent messages: %s", e)
+            logger.warning(f"Error checking agent messages: {e}")
             return
 
     def _handle_sandbox_error(
@@ -802,25 +800,24 @@ class BaseAgent(metaclass=AgentMeta):
     ) -> bool:
         """Handle non-LLM iteration errors.
 
-        Returns ``True`` to absorb the error so the agent loop continues.
-        Transient sandbox/Docker errors,
-        tool execution failures, and network glitches should NOT kill
-        the entire scan — the agent can recover on the next iteration.
+        Returns ``False`` to signal that the caller should propagate the
+        error (non-interactive) or enter waiting state (interactive).
+        Returning ``True`` means the error was absorbed and the loop
+        should continue — only used for genuinely transient errors.
         """
         error_msg = f"Error in iteration {self.state.iteration}: {error!s}"
         logger.exception(error_msg)
         self.state.add_error(error_msg)
         if tracer:
             tracer.update_agent_status(self.state.agent_id, "error")
-        return True  # absorb — loop continues
+        return False  # propagate — let caller decide how to handle
 
     def cancel_current_execution(self) -> None:
         self._force_stop = True
-        task = self._current_task          # snapshot to avoid TOCTOU race
-        if task and not task.done():
+        if self._current_task and not self._current_task.done():
             try:
-                loop = task.get_loop()
-                loop.call_soon_threadsafe(task.cancel)
-            except (RuntimeError, AttributeError):
-                task.cancel()
+                loop = self._current_task.get_loop()
+                loop.call_soon_threadsafe(self._current_task.cancel)
+            except RuntimeError:
+                self._current_task.cancel()
         self._current_task = None

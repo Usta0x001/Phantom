@@ -1,6 +1,5 @@
 import asyncio
 import logging
-import threading
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from typing import Any
@@ -67,23 +66,15 @@ class LLM:
         self.agent_name = agent_name
         self.agent_id: str | None = None
         self._total_stats = RequestStats()
-        # P0-003 FIX: Lock for thread-safe stats updates
-        self._stats_lock = threading.Lock()
 
         # L1-FIX: Dynamic context window — use the provider registry to set
         # the memory compressor threshold based on the ACTUAL model context
         # window instead of the hardcoded 80K default.  Use 75% of the
         # model's window as compression threshold (safety margin for the
         # system prompt + response tokens).
-        # COST-CAP: Hard ceiling of 150K tokens regardless of context window
-        # size.  Large-context models (e.g. MiniMax 1M, Gemini 2M) would
-        # otherwise accumulate ~700K+ tokens per call before compressing,
-        # inflating per-call cost dramatically.  150K keeps per-call spend
-        # proportional while still leaving ample room for tool output.
         from phantom.llm.provider_registry import get_context_window
-        _COST_OPTIMIZED_MAX_TOKENS = 150_000
         model_context = get_context_window(config.model_name)
-        dynamic_max_tokens = min(int(model_context * 0.75), _COST_OPTIMIZED_MAX_TOKENS)
+        dynamic_max_tokens = int(model_context * 0.75)
         self.memory_compressor = MemoryCompressor(
             model_name=config.model_name,
             max_tokens=dynamic_max_tokens,
@@ -94,28 +85,12 @@ class LLM:
         )
 
         self.system_prompt = self._load_system_prompt(agent_name)
-        # Lazily computed token count of the system prompt.  Used to offset
-        # the compression threshold so compression fires BEFORE the total call
-        # (system + history) exceeds max_total_tokens, not after.
-        self._system_prompt_tokens: int = 0
 
         reasoning = Config.get("phantom_reasoning_effort")
         if reasoning:
             self._reasoning_effort = reasoning
         else:
             self._reasoning_effort = "high"  # always high — profile overrides via scan_profile
-
-    def _get_system_prompt_tokens(self) -> int:
-        """Return (cached) token count of the system prompt for overhead tracking."""
-        if not self._system_prompt_tokens and self.system_prompt:
-            from phantom.llm.memory_compressor import _count_tokens
-            try:
-                self._system_prompt_tokens = _count_tokens(
-                    self.system_prompt, self.config.model_name
-                )
-            except Exception:  # noqa: BLE001
-                self._system_prompt_tokens = len(self.system_prompt) // 4
-        return self._system_prompt_tokens
 
     def _load_system_prompt(self, agent_name: str | None) -> str:
         if not agent_name:
@@ -136,13 +111,10 @@ class LLM:
             skill_content = load_skills(skills_to_load)
             env.globals["get_skill"] = lambda name: skill_content.get(name, "")
 
-            # Phase-aware tool filtering: quick mode loads only the 38 curated
-            # attack-relevant tools, saving ~24% of system-prompt tokens.
-            # standard/deep/stealth/api_only modes always load ALL 55 tools.
-            # See registry.QUICK_MODE_TOOLS for the inclusion criteria.
-            from phantom.tools.registry import TOOL_PROFILES
-            tool_filter = TOOL_PROFILES.get(self.config.scan_mode)
-            tools_prompt_fn = lambda: get_tools_prompt(include_only=tool_filter)  # noqa: E731
+            # TOOL_PROFILES filtering REMOVED (H-12). All tools are always
+            # included. Filtering hides tools like ffuf_parameter_fuzz,
+            # arjun, jwt_tool, etc. which the agent needs for deep exploitation.
+            tools_prompt_fn = lambda: get_tools_prompt()  # noqa: E731
 
             result = env.get_template("system_prompt.jinja").render(
                 get_tools_prompt=tools_prompt_fn,
@@ -251,22 +223,13 @@ class LLM:
                 }
             )
 
-        # v0.9.35: In-place compression. Previously operated on a
-        # copy, causing unbounded memory growth across 300 iterations.
-        # P0-001 FIX: Atomic slice assignment instead of clear()+extend()
-        # to prevent data loss if compress_history() raises mid-operation.
-        # Pass system-prompt tokens as overhead so the compressor fires
-        # while there's still budget left for the system message.
-        compressed = list(await self.memory_compressor.compress_history(
-            conversation_history,
-            overhead_tokens=self._get_system_prompt_tokens(),
-        ))
-        conversation_history[:] = compressed
+        # Async compression — non-blocking during multi-agent scans.
+        compressed = list(await self.memory_compressor.compress_history(conversation_history))
+        conversation_history.clear()
+        conversation_history.extend(compressed)
         messages.extend(compressed)
 
-        # Apply prompt caching for ALL models that support it (not just Anthropic).
-        # litellm.drop_params=True ensures unsupported params are silently dropped.
-        if self.config.enable_prompt_caching:
+        if self._is_anthropic() and self.config.enable_prompt_caching:
             messages = self._add_cache_control(messages)
 
         return messages
@@ -286,9 +249,9 @@ class LLM:
         if self.config.temperature is not None:
             args["temperature"] = self.config.temperature
 
-            # v0.9.35: max_tokens cap REMOVED (H-01). Do NOT set max_tokens.
-        # When set to 8192/16384, it truncates complex tool calls mid-output,
-        # causing XML parse failures and lost exploitation progress.
+        # max_tokens cap REMOVED (H-01). When set to 8192/16384, it truncates
+        # complex tool calls mid-output, causing XML parse failures and
+        # lost exploitation progress.
 
         from phantom.llm.provider_registry import PROVIDER_PRESETS, get_provider_max_tokens
 
@@ -312,11 +275,6 @@ class LLM:
                 or Config.get("litellm_base_url")
                 or Config.get("ollama_api_base")
             )
-            # Auto-infer api_base from model name routing prefix for unknown
-            # models (e.g. any openrouter/* or ollama/* not in PROVIDER_PRESETS).
-            if not api_base:
-                from phantom.llm.provider_registry import infer_api_base as _infer
-                api_base = _infer(self.config.model_name)
 
         # Last resort key fallback
         if not api_key:
@@ -392,12 +350,10 @@ class LLM:
                 except (ImportError, AttributeError):
                     pass
 
-            # P0-003 FIX: Thread-safe stats update
-            with self._stats_lock:
-                self._total_stats.input_tokens += input_tokens
-                self._total_stats.output_tokens += output_tokens
-                self._total_stats.cached_tokens += cached_tokens
-                self._total_stats.cost += cost
+            self._total_stats.input_tokens += input_tokens
+            self._total_stats.output_tokens += output_tokens
+            self._total_stats.cached_tokens += cached_tokens
+            self._total_stats.cost += cost
 
             # ---- Cost Controller integration (PHT security control) ----
             try:

@@ -94,7 +94,7 @@ PROFILES: dict[str, ScanProfile] = {
     ProfileName.quick: ScanProfile(
         name="quick",
         description="Time-boxed rapid assessment (~30-60 min). Broad vuln-class coverage.",
-        max_iterations=150,  # Restored to match Strix default — 50 was too low; agent escaped at iter 22/50
+        max_iterations=150,  # Quick mode: 150 iters gives broad coverage without burning budget
         sandbox_timeout_s=120,
         reasoning_effort="high",
         priority_tools=[

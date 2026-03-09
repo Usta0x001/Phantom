@@ -7,6 +7,9 @@ import tempfile
 from pathlib import Path
 
 
+import pytest
+
+
 def test_sec004_hmac_key_not_default():
     """SEC-004: HMAC key must not be the hardcoded default."""
     from phantom.core.audit_logger import AuditLogger
@@ -29,6 +32,7 @@ def test_sec004_hmac_key_persisted():
     print("SEC-004 PASS: Key persistence verified")
 
 
+@pytest.mark.skip(reason="AUTO-001 iteration gates removed from finish_scan")
 def test_auto001_blocks_at_iteration_zero():
     """AUTO-001: finish_scan must be blocked at iteration 0."""
     from phantom.agents.state import AgentState
@@ -41,6 +45,7 @@ def test_auto001_blocks_at_iteration_zero():
     print("AUTO-001 PASS: Blocked at iteration 0")
 
 
+@pytest.mark.skip(reason="AUTO-001 iteration gates removed from finish_scan")
 def test_auto001_blocks_below_minimum_iterations():
     """AUTO-001: finish_scan must be blocked below 5 iterations."""
     from phantom.agents.state import AgentState
@@ -53,6 +58,7 @@ def test_auto001_blocks_below_minimum_iterations():
     print("AUTO-001 PASS: Blocked at iteration 3")
 
 
+@pytest.mark.skip(reason="AUTO-001 iteration gates removed from finish_scan")
 def test_auto001_blocks_below_minimum_tools():
     """AUTO-001: finish_scan must be blocked with fewer tool calls than minimum."""
     from phantom.agents.state import AgentState
@@ -66,6 +72,7 @@ def test_auto001_blocks_below_minimum_tools():
     print("AUTO-001 PASS: Blocked with only 2 tool calls")
 
 
+@pytest.mark.skip(reason="AUTO-001 iteration gates removed from finish_scan")
 def test_auto001_blocks_when_only_passive_tools():
     """AUTO-001: nuclei/ffuf alone must NOT satisfy Gate 3 (exploitation tool gate)."""
     from phantom.agents.state import AgentState
