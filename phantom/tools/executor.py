@@ -224,6 +224,30 @@ def _update_tracer_with_result(
         raise
 
 
+def _get_truncation_limit(tool_name: str) -> int:
+    """Return the char truncation limit for *tool_name*.
+
+    Default is 6000.  Override per-tool via the env var::
+
+        PHANTOM_TOOL_TRUNCATION_OVERRIDES=nuclei=10000,grep=3000
+    """
+    default = 6000
+    raw = Config.get("phantom_tool_truncation_overrides")
+    if not raw:
+        return default
+    for entry in raw.split(","):
+        entry = entry.strip()
+        if "=" not in entry:
+            continue
+        name, _, value = entry.partition("=")
+        if name.strip() == tool_name:
+            try:
+                return int(value.strip())
+            except ValueError:
+                return default
+    return default
+
+
 def _format_tool_result(tool_name: str, result: Any) -> tuple[str, list[dict[str, Any]]]:
     images: list[dict[str, Any]] = []
 
@@ -243,9 +267,11 @@ def _format_tool_result(tool_name: str, result: Any) -> tuple[str, list[dict[str
         final_result_str = f"Tool {tool_name} executed successfully"
     else:
         final_result_str = str(result_str)
-        if len(final_result_str) > 6000:
-            start_part = final_result_str[:2500]
-            end_part = final_result_str[-2500:]
+        limit = _get_truncation_limit(tool_name)
+        if len(final_result_str) > limit:
+            half = limit // 2
+            start_part = final_result_str[:half]
+            end_part = final_result_str[-half:]
             final_result_str = start_part + "\n\n... [middle content truncated] ...\n\n" + end_part
 
     observation_xml = (

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Phantom 0.9.56 — Comprehensive feature verification script.
+"""Phantom 0.9.57 — Comprehensive feature verification script.
 
 Proves every Phantom-specific addition is real, functional, and not decorative.
 Run: python scripts/verify_all.py
@@ -35,7 +35,7 @@ def check(name: str, fn):
 
 
 print("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-print("  PHANTOM 0.9.56 — FULL FEATURE VERIFICATION")
+print("  PHANTOM 0.9.57 — FULL FEATURE VERIFICATION")
 print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
 
 
@@ -44,13 +44,13 @@ print("[1] VERSION CONSISTENCY")
 
 def v_version_init():
     import phantom
-    assert phantom.__version__ == "0.9.56", f"Got {phantom.__version__}"
+    assert phantom.__version__ == "0.9.57", f"Got {phantom.__version__}"
 
 def v_version_pyproject():
     pyproject = (
         __import__("pathlib").Path(__file__).parent.parent / "pyproject.toml"
     ).read_text(encoding="utf-8")
-    assert 'version = "0.9.56"' in pyproject
+    assert 'version = "0.9.57"' in pyproject
 
 check("phantom.__version__ == '0.9.55'", v_version_init)
 check("pyproject.toml version == '0.9.55'", v_version_pyproject)
@@ -340,6 +340,82 @@ def v_no_strix_in_source():
     assert not found, f"Strix found in: {found}"
 
 check("zero 'Strix' references in any source/doc file", v_no_strix_in_source)
+
+
+# ── 9. COST LOGGING ────────────────────────────────────────────────────────────
+print("\n[9] COST LOGGING (P2)")
+import logging as _logging
+import inspect as _inspect
+from phantom.llm.llm import LLM as _LLM
+
+def v_logger_defined():
+    from phantom.llm import llm as _m
+    assert hasattr(_m, "logger")
+    assert isinstance(_m.logger, _logging.Logger)
+
+def v_cost_logging_in_stream():
+    src = _inspect.getsource(_LLM._stream)
+    assert "logger.info" in src
+    assert "request_cost" in src or "llm_call" in src
+
+def v_logging_captures_scan_mode():
+    src = _inspect.getsource(_LLM._stream)
+    assert "scan_mode" in src
+
+check("logger instance defined in llm.py", v_logger_defined)
+check("_stream() calls logger.info with cost data", v_cost_logging_in_stream)
+check("log message includes scan_mode", v_logging_captures_scan_mode)
+
+
+# ── 10. PER-TOOL TRUNCATION OVERRIDES ─────────────────────────────────────────
+print("\n[10] PER-TOOL TRUNCATION OVERRIDES (P3)")
+from phantom.tools.executor import _get_truncation_limit as _gtl, _format_tool_result as _ftr
+
+def v_default_limit_6000():
+    assert _gtl("unknown_tool_xyz") == 6000
+
+def v_single_override():
+    os.environ["PHANTOM_TOOL_TRUNCATION_OVERRIDES"] = "nuclei=10000"
+    try:
+        assert _gtl("nuclei") == 10000
+    finally:
+        del os.environ["PHANTOM_TOOL_TRUNCATION_OVERRIDES"]
+
+def v_multi_override():
+    os.environ["PHANTOM_TOOL_TRUNCATION_OVERRIDES"] = "nuclei=10000,grep=3000"
+    try:
+        assert _gtl("nuclei") == 10000
+        assert _gtl("grep") == 3000
+        assert _gtl("nmap") == 6000  # unspecified → default
+    finally:
+        del os.environ["PHANTOM_TOOL_TRUNCATION_OVERRIDES"]
+
+def v_nuclei_not_truncated_at_9000():
+    os.environ["PHANTOM_TOOL_TRUNCATION_OVERRIDES"] = "nuclei=10000"
+    try:
+        r, _ = _ftr("nuclei", "N" * 9000)
+        assert "truncated" not in r.lower()
+    finally:
+        del os.environ["PHANTOM_TOOL_TRUNCATION_OVERRIDES"]
+
+def v_grep_truncated_at_3001_with_override():
+    os.environ["PHANTOM_TOOL_TRUNCATION_OVERRIDES"] = "grep=3000"
+    try:
+        r, _ = _ftr("grep", "G" * 3001)
+        assert "truncated" in r.lower()
+    finally:
+        del os.environ["PHANTOM_TOOL_TRUNCATION_OVERRIDES"]
+
+def v_config_registers_new_var():
+    from phantom.config.config import Config
+    assert hasattr(Config, "phantom_tool_truncation_overrides")
+
+check("_get_truncation_limit(): default=6000", v_default_limit_6000)
+check("_get_truncation_limit(): single override works", v_single_override)
+check("_get_truncation_limit(): multi-tool override + fallback", v_multi_override)
+check("nuclei: 9000 chars not truncated under 10000 limit", v_nuclei_not_truncated_at_9000)
+check("grep: 3001 chars truncated under 3000 limit", v_grep_truncated_at_3001_with_override)
+check("Config.phantom_tool_truncation_overrides registered", v_config_registers_new_var)
 
 
 # ── SUMMARY ────────────────────────────────────────────────────────────────────

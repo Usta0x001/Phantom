@@ -24,6 +24,7 @@ class Config:
     llm_max_tokens = None
     phantom_max_cost = None
     phantom_per_request_ceiling = None
+    phantom_tool_truncation_overrides = None
     _LLM_CANONICAL_NAMES = (
         "phantom_llm",
         "llm_api_key",

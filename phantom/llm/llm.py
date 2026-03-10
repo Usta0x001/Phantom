@@ -1,9 +1,12 @@
 import asyncio
+import logging
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from typing import Any
 
 import litellm
+
+logger = logging.getLogger(__name__)
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 from litellm import acompletion, completion_cost, stream_chunk_builder, supports_reasoning
 from litellm.utils import supports_prompt_caching, supports_vision
@@ -161,6 +164,16 @@ class LLM:
 
         if chunks:
             self._update_usage_stats(stream_chunk_builder(chunks))
+            request_cost = self._total_stats.cost - cost_before
+            logger.info(
+                "llm_call scan_mode=%s tokens_in=%d tokens_out=%d "
+                "request_cost=$%.4f cumulative_cost=$%.4f",
+                self.config.scan_mode,
+                self._total_stats.input_tokens,
+                self._total_stats.output_tokens,
+                request_cost,
+                self._total_stats.cost,
+            )
             self._check_per_request_budget(cost_before)
 
         accumulated = normalize_tool_format(accumulated)
