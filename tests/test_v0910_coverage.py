@@ -196,11 +196,11 @@ class TestSystemPromptImprovements:
     def test_prompt_has_budget_discipline(self):
         """System prompt includes AGGRESSIVE SCANNING MANDATE section (v0.9.34)."""
         prompt_path = Path(__file__).parent.parent / "phantom" / "agents" / "PhantomAgent" / "system_prompt.jinja"
-        content = prompt_path.read_text()
+        content = prompt_path.read_text(encoding="utf-8")
 
         assert "AGGRESSIVE SCANNING MANDATE" in content
         assert "think" in content
-        assert "WORKFLOW GUIDANCE" in content
+        assert "SIMPLE WORKFLOW RULES" in content
 
 
 # ── Integration: scan coverage analysis ──
