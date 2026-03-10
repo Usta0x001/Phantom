@@ -5,11 +5,11 @@ from dataclasses import dataclass
 from typing import Any
 
 import litellm
-
-logger = logging.getLogger(__name__)
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 from litellm import acompletion, completion_cost, stream_chunk_builder, supports_reasoning
 from litellm.utils import supports_prompt_caching, supports_vision
+
+logger = logging.getLogger(__name__)
 
 from phantom.config import Config
 from phantom.llm.config import LLMConfig
@@ -129,6 +129,17 @@ class LLM:
             except LLMRequestFailedError:
                 raise
             except Exception as e:  # noqa: BLE001
+                if self._is_context_too_large(e):
+                    # Shrink context aggressively and retry immediately (no sleep)
+                    logger.warning(
+                        "Context too large for model %s — force-compressing and retrying "
+                        "(attempt %d/%d)",
+                        self.config.scan_mode,
+                        attempt + 1,
+                        max_retries,
+                    )
+                    messages = self._force_compress_messages(messages)
+                    continue
                 if attempt >= max_retries or not self._should_retry(e):
                     self._raise_error(e)
                 wait = min(10, 2 * (2**attempt))
@@ -330,6 +341,48 @@ class LLM:
             return completion_cost(response, model=self.config.canonical_model) or 0.0
         except Exception:  # noqa: BLE001
             return 0.0
+
+    def _is_context_too_large(self, e: Exception) -> bool:
+        """Detect 'request body too large' / context-window-exceeded errors from any provider."""
+        msg = str(e).lower()
+        return any(
+            phrase in msg
+            for phrase in (
+                "request body too large",
+                "context_length_exceeded",
+                "maximum context length",
+                "too many tokens",
+                "reduce the length",
+                "input is too long",
+            )
+        )
+
+    def _force_compress_messages(
+        self, messages: list[dict[str, Any]]
+    ) -> list[dict[str, Any]]:
+        """Aggressively halve the non-system messages to recover from a context overflow."""
+        from phantom.llm.memory_compressor import _summarize_messages, MIN_RECENT_MESSAGES
+
+        system_msgs = [m for m in messages if m.get("role") == "system"]
+        non_system = [m for m in messages if m.get("role") != "system"]
+
+        if len(non_system) <= MIN_RECENT_MESSAGES:
+            # Nothing we can compress further — just keep the tail
+            return system_msgs + non_system[-MIN_RECENT_MESSAGES:]
+
+        # Summarize the entire older half into one message
+        keep_count = max(MIN_RECENT_MESSAGES, len(non_system) // 2)
+        to_compress = non_system[:-keep_count]
+        recent = non_system[-keep_count:]
+
+        if to_compress:
+            summary = _summarize_messages(
+                to_compress,
+                self.config.litellm_model,
+                timeout=30,
+            )
+            return system_msgs + [summary] + recent
+        return system_msgs + recent
 
     def _should_retry(self, e: Exception) -> bool:
         code = getattr(e, "status_code", None) or getattr(

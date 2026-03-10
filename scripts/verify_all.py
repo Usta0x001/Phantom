@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Phantom 0.9.57 — Comprehensive feature verification script.
+"""Phantom 0.9.58 — Comprehensive feature verification script.
 
 Proves every Phantom-specific addition is real, functional, and not decorative.
 Run: python scripts/verify_all.py
@@ -35,7 +35,7 @@ def check(name: str, fn):
 
 
 print("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-print("  PHANTOM 0.9.57 — FULL FEATURE VERIFICATION")
+print("  PHANTOM 0.9.58 — FULL FEATURE VERIFICATION")
 print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
 
 
@@ -44,13 +44,13 @@ print("[1] VERSION CONSISTENCY")
 
 def v_version_init():
     import phantom
-    assert phantom.__version__ == "0.9.57", f"Got {phantom.__version__}"
+    assert phantom.__version__ == "0.9.58", f"Got {phantom.__version__}"
 
 def v_version_pyproject():
     pyproject = (
         __import__("pathlib").Path(__file__).parent.parent / "pyproject.toml"
     ).read_text(encoding="utf-8")
-    assert 'version = "0.9.57"' in pyproject
+    assert 'version = "0.9.58"' in pyproject
 
 check("phantom.__version__ == '0.9.55'", v_version_init)
 check("pyproject.toml version == '0.9.55'", v_version_pyproject)
@@ -416,6 +416,64 @@ check("_get_truncation_limit(): multi-tool override + fallback", v_multi_overrid
 check("nuclei: 9000 chars not truncated under 10000 limit", v_nuclei_not_truncated_at_9000)
 check("grep: 3001 chars truncated under 3000 limit", v_grep_truncated_at_3001_with_override)
 check("Config.phantom_tool_truncation_overrides registered", v_config_registers_new_var)
+
+
+# ── 11. CONTEXT-WINDOW AWARE COMPRESSION ──────────────────────────────────────
+print("\n[11] CONTEXT-WINDOW AWARE COMPRESSION (kimi-k2.5 fix)")
+from unittest.mock import patch as _patch
+from phantom.llm.memory_compressor import (
+    _get_model_context_window as _gcw,
+    MemoryCompressor as _MC,
+    MAX_TOTAL_TOKENS as _MAX_TOK,
+    _CONTEXT_FILL_RATIO as _RATIO,
+)
+
+def v_context_window_lookup_works():
+    with _patch("litellm.get_model_info", return_value={"max_input_tokens": 8000}):
+        assert _gcw("kimi-k2.5") == 8000
+
+def v_context_window_fallback():
+    with _patch("litellm.get_model_info", side_effect=Exception("no info")):
+        assert _gcw("unknown") == _MAX_TOK
+
+def v_kimi_gets_small_threshold():
+    with _patch("phantom.llm.memory_compressor._get_model_context_window", return_value=8000):
+        mc = _MC(model_name="openai/gpt-4o")
+    assert mc._max_total_tokens == int(8000 * _RATIO)
+
+def v_env_override_phantom_max_input_tokens():
+    os.environ["PHANTOM_MAX_INPUT_TOKENS"] = "5000"
+    try:
+        with _patch("phantom.llm.memory_compressor._get_model_context_window", return_value=128000):
+            mc = _MC(model_name="openai/gpt-4o")
+        assert mc._max_total_tokens == 5000
+    finally:
+        del os.environ["PHANTOM_MAX_INPUT_TOKENS"]
+
+def v_is_context_too_large_detects_kimi_error():
+    from phantom.llm.llm import LLM as _LLM
+    from phantom.llm.config import LLMConfig as _Cfg
+    llm = _LLM(_Cfg(model_name="openai/gpt-4o", scan_mode="standard"), "PhantomAgent")
+    e = Exception("Request body too large for kimi-k2.5 model. Max size: 8000 tokens.")
+    assert llm._is_context_too_large(e)
+
+def v_is_context_too_large_ignores_normal_errors():
+    from phantom.llm.llm import LLM as _LLM
+    from phantom.llm.config import LLMConfig as _Cfg
+    llm = _LLM(_Cfg(model_name="openai/gpt-4o", scan_mode="standard"), "PhantomAgent")
+    assert not llm._is_context_too_large(Exception("Connection timeout"))
+
+def v_config_registers_max_input_tokens():
+    from phantom.config.config import Config
+    assert hasattr(Config, "phantom_max_input_tokens")
+
+check("_get_model_context_window(): reads from litellm", v_context_window_lookup_works)
+check("_get_model_context_window(): fallback to MAX_TOTAL_TOKENS", v_context_window_fallback)
+check("kimi-k2.5 8k → threshold=int(8k*0.6)=4800", v_kimi_gets_small_threshold)
+check("PHANTOM_MAX_INPUT_TOKENS env overrides model info", v_env_override_phantom_max_input_tokens)
+check("_is_context_too_large(): detects kimi error string", v_is_context_too_large_detects_kimi_error)
+check("_is_context_too_large(): ignores normal errors", v_is_context_too_large_ignores_normal_errors)
+check("Config.phantom_max_input_tokens registered", v_config_registers_max_input_tokens)
 
 
 # ── SUMMARY ────────────────────────────────────────────────────────────────────

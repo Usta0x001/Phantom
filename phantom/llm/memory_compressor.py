@@ -15,6 +15,24 @@ MIN_RECENT_MESSAGES = 8
 # Max tokens for the compressor's own summarization call (cheap, non-thinking)
 COMPRESSOR_MAX_TOKENS = 1500
 
+# Fraction of context window to use as the compression trigger threshold.
+# 0.6 means we start compressing when we've used 60% of the model's context.
+# Leaves 40% headroom for system prompt + output tokens + overhead.
+_CONTEXT_FILL_RATIO = 0.6
+
+
+def _get_model_context_window(model: str) -> int:
+    """Return the model's context window size, or MAX_TOTAL_TOKENS if unknown."""
+    try:
+        info = litellm.get_model_info(model)
+        # litellm returns max_tokens (context window) or max_input_tokens
+        ctx = info.get("max_input_tokens") or info.get("max_tokens")
+        if ctx and isinstance(ctx, int) and ctx > 0:
+            return int(ctx)
+    except Exception:  # noqa: BLE001
+        pass
+    return MAX_TOTAL_TOKENS
+
 SUMMARY_PROMPT_TEMPLATE = """You are an agent performing context
 condensation for a security agent. Your job is to compress scan data while preserving
 ALL operationally critical information for continuing the security assessment.
@@ -173,6 +191,26 @@ class MemoryCompressor:
         if not self.model_name:
             raise ValueError("PHANTOM_LLM environment variable must be set and not empty")
 
+        # Compute compression threshold from model's actual context window.
+        # This ensures small-context models (e.g. kimi-k2.5 @ 8k) compress
+        # early enough to never overflow their request body limit.
+        env_override = Config.get("phantom_max_input_tokens")
+        if env_override:
+            self._max_total_tokens = int(env_override)
+        else:
+            ctx_window = _get_model_context_window(self.model_name)
+            # Use configured ratio to leave room for system prompt + output tokens
+            self._max_total_tokens = max(
+                MIN_RECENT_MESSAGES * 200,  # absolute minimum to not compress into nothing
+                int(ctx_window * _CONTEXT_FILL_RATIO),
+            )
+        logger.debug(
+            "MemoryCompressor: model=%s context_window=%d -> max_total_tokens=%d",
+            self.model_name,
+            _get_model_context_window(self.model_name),
+            self._max_total_tokens,
+        )
+
     def compress_history(
         self,
         messages: list[dict[str, Any]],
@@ -215,7 +253,7 @@ class MemoryCompressor:
             _get_message_tokens(msg, model_name) for msg in system_msgs + regular_msgs
         )
 
-        if total_tokens <= MAX_TOTAL_TOKENS * 0.9:
+        if total_tokens <= self._max_total_tokens * 0.9:
             return messages
 
         compressed = []
