@@ -1,5 +1,5 @@
 # Phantom LLM Selection Study
-**Version:** 1.0 | **Date:** July 2025 | **Author:** Gadouri Rodwan | **Supervisor:** Dr. Allama Oussama
+**Author:** Usta0x001
 
 ---
 
