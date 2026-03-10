@@ -165,6 +165,13 @@ def _format_schema_hint(tool_name: str, required: set[str], optional: set[str]) 
 async def execute_tool_with_validation(
     tool_name: str | None, agent_state: Any | None = None, **kwargs: Any
 ) -> Any:
+    # Normalize tool name: strip module prefix added by some LLMs
+    # e.g. "proxy_tools.scope_rules" → "scope_rules"
+    if tool_name and "." in tool_name:
+        stripped = tool_name.split(".")[-1]
+        if stripped in get_tool_names():
+            tool_name = stripped
+
     is_valid, error_msg = validate_tool_availability(tool_name)
     if not is_valid:
         return f"Error: {error_msg}"

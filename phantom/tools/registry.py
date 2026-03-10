@@ -238,14 +238,16 @@ def get_tools_prompt() -> str:
 
     xml_sections = []
     for module, module_tools in sorted(tools_by_module.items()):
-        tag_name = f"{module}_tools"
-        section_parts = [f"<{tag_name}>"]
+        # Use XML comments instead of wrapper tags so LLMs cannot misread the
+        # section header as a tool namespace prefix (e.g. won't call
+        # "proxy_tools.scope_rules" instead of "scope_rules").
+        section_parts = [f"<!-- {module} tools -->"]
         for tool in module_tools:
             tool_xml = tool.get("xml_schema", "")
             if tool_xml:
                 indented_tool = "\n".join(f"  {line}" for line in tool_xml.split("\n"))
                 section_parts.append(indented_tool)
-        section_parts.append(f"</{tag_name}>")
+        section_parts.append(f"<!-- end {module} tools -->")
         xml_sections.append("\n".join(section_parts))
 
     return "\n\n".join(xml_sections)

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Phantom 0.9.58 — Comprehensive feature verification script.
+"""Phantom 0.9.59 — Comprehensive feature verification script.
 
 Proves every Phantom-specific addition is real, functional, and not decorative.
 Run: python scripts/verify_all.py
@@ -35,7 +35,7 @@ def check(name: str, fn):
 
 
 print("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-print("  PHANTOM 0.9.58 — FULL FEATURE VERIFICATION")
+print("  PHANTOM 0.9.59 — FULL FEATURE VERIFICATION")
 print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
 
 
@@ -44,16 +44,16 @@ print("[1] VERSION CONSISTENCY")
 
 def v_version_init():
     import phantom
-    assert phantom.__version__ == "0.9.58", f"Got {phantom.__version__}"
+    assert phantom.__version__ == "0.9.59", f"Got {phantom.__version__}"
 
 def v_version_pyproject():
     pyproject = (
         __import__("pathlib").Path(__file__).parent.parent / "pyproject.toml"
     ).read_text(encoding="utf-8")
-    assert 'version = "0.9.58"' in pyproject
+    assert 'version = "0.9.59"' in pyproject
 
-check("phantom.__version__ == '0.9.55'", v_version_init)
-check("pyproject.toml version == '0.9.55'", v_version_pyproject)
+check("phantom.__version__ == '0.9.59'", v_version_init)
+check("pyproject.toml version == '0.9.59'", v_version_pyproject)
 
 
 # ── 2. COST CONTROLS ───────────────────────────────────────────────────────────
@@ -474,6 +474,83 @@ check("PHANTOM_MAX_INPUT_TOKENS env overrides model info", v_env_override_phanto
 check("_is_context_too_large(): detects kimi error string", v_is_context_too_large_detects_kimi_error)
 check("_is_context_too_large(): ignores normal errors", v_is_context_too_large_ignores_normal_errors)
 check("Config.phantom_max_input_tokens registered", v_config_registers_max_input_tokens)
+
+
+# ── 12. TOOL NAME PREFIX NORMALISATION ────────────────────────────────────────
+print("\n[12] TOOL NAME PREFIX NORMALISATION (0.9.59)")
+from unittest.mock import patch as _patch2, AsyncMock as _AsyncMock
+import asyncio as _asyncio
+from phantom.tools.executor import (
+    execute_tool_with_validation as _etwv,
+    validate_tool_availability as _vta,
+)
+from phantom.tools.registry import get_tools_prompt as _gtp, tools as _tools_list, clear_registry as _clear_reg
+
+def v_validate_valid_tool_passes():
+    with _patch2("phantom.tools.executor.get_tool_names", return_value=["scope_rules"]):
+        ok, msg = _vta("scope_rules")
+    assert ok is True and msg == ""
+
+def v_prefixed_name_is_normalised():
+    async def _run():
+        with (
+            _patch2("phantom.tools.executor.get_tool_names", return_value=["scope_rules"]),
+            _patch2("phantom.tools.executor.validate_tool_availability", return_value=(True, "")),
+            _patch2("phantom.tools.executor._validate_tool_arguments", return_value=None),
+            _patch2("phantom.tools.executor.execute_tool", new=_AsyncMock(return_value="OK")),
+        ):
+            return await _etwv("proxy_tools.scope_rules")
+    assert _asyncio.run(_run()) == "OK"
+
+def v_unknown_prefixed_name_errors():
+    async def _run():
+        with _patch2("phantom.tools.executor.get_tool_names", return_value=["scope_rules"]):
+            return await _etwv("proxy_tools.nonexistent")
+    result = _asyncio.run(_run())
+    assert "Error" in result and "not available" in result.lower()
+
+def v_tools_prompt_uses_comment_headers():
+    fake = [
+        {
+            "name": "scope_rules",
+            "module": "proxy",
+            "xml_schema": '<tool name="scope_rules"><description>scope</description></tool>',
+            "sandbox_execution": False,
+        },
+    ]
+    original = _tools_list[:]
+    _tools_list[:] = fake
+    try:
+        prompt = _gtp()
+    finally:
+        _tools_list[:] = original
+    assert "<!-- proxy tools -->" in prompt
+    assert "<proxy_tools>" not in prompt
+    assert "</proxy_tools>" not in prompt
+
+def v_tools_prompt_tool_names_intact():
+    """Individual <tool name="..."> tags must still be present inside the comment section."""
+    fake = [
+        {
+            "name": "scope_rules",
+            "module": "proxy",
+            "xml_schema": '<tool name="scope_rules"><description>scope</description></tool>',
+            "sandbox_execution": False,
+        },
+    ]
+    original = _tools_list[:]
+    _tools_list[:] = fake
+    try:
+        prompt = _gtp()
+    finally:
+        _tools_list[:] = original
+    assert 'name="scope_rules"' in prompt
+
+check("validate_tool_availability(): bare name passes", v_validate_valid_tool_passes)
+check("execute_tool_with_validation(): proxy_tools.scope_rules → scope_rules", v_prefixed_name_is_normalised)
+check("execute_tool_with_validation(): proxy_tools.nonexistent → error", v_unknown_prefixed_name_errors)
+check("get_tools_prompt(): section header uses <!-- comment -->", v_tools_prompt_uses_comment_headers)
+check("get_tools_prompt(): tool name= attributes intact", v_tools_prompt_tool_names_intact)
 
 
 # ── SUMMARY ────────────────────────────────────────────────────────────────────
