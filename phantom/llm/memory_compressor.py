@@ -168,7 +168,7 @@ class MemoryCompressor:
     ):
         self.max_images = max_images
         self.model_name = model_name or Config.get("phantom_llm")
-        self.timeout = timeout or int(Config.get("phantom_memory_compressor_timeout") or "120")
+        self.timeout = timeout or int(Config.get("phantom_memory_compressor_timeout") or "30")
 
         if not self.model_name:
             raise ValueError("PHANTOM_LLM environment variable must be set and not empty")

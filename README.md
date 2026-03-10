@@ -1,4 +1,4 @@
-﻿<div align="center">
+<div align="center">
 
 <br/>
 
@@ -497,10 +497,11 @@ jobs:
 |----------|-------------|---------|
 | `PHANTOM_LLM` | LLM model (LiteLLM format) | `openai/gpt-4o` |
 | `LLM_API_KEY` | API key — comma-separated for rotation | — |
-| `PHANTOM_REASONING_EFFORT` | `low` / `medium` / `high` | `high` |
+| `PHANTOM_REASONING_EFFORT` | `low` / `medium` / `high` | `medium` |
 | `PHANTOM_SCAN_MODE` | Default scan profile | `standard` |
 | `PHANTOM_IMAGE` | Sandbox Docker image | `ghcr.io/usta0x001/phantom-sandbox:latest` |
 | `PHANTOM_MAX_COST` | Hard stop when total scan cost (USD) reaches this limit | — |
+| `PHANTOM_PER_REQUEST_CEILING` | Hard stop when a single LLM call exceeds this cost in USD | — |
 | `LLM_MAX_TOKENS` | Override max output tokens per LLM call (overrides scan-mode defaults: quick=4000, stealth=6000, default=8000) | — |
 | `PHANTOM_WEBHOOK_URL` | Webhook URL for critical alerts | — |
 | `PHANTOM_DISABLE_BROWSER` | Disable Playwright browser | `false` |

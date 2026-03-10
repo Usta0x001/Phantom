@@ -136,6 +136,7 @@ class LLM:
         chunks: list[Any] = []
         done_streaming = 0
 
+        cost_before = self._total_stats.cost
         self._total_stats.requests += 1
         response = await acompletion(**self._build_completion_args(messages), stream=True)
 
@@ -160,6 +161,7 @@ class LLM:
 
         if chunks:
             self._update_usage_stats(stream_chunk_builder(chunks))
+            self._check_per_request_budget(cost_before)
 
         accumulated = normalize_tool_format(accumulated)
         accumulated = fix_incomplete_tool_call(_truncate_to_first_function(accumulated))
@@ -222,6 +224,21 @@ class LLM:
         if self._total_stats.cost >= max_cost:
             raise LLMRequestFailedError(
                 f"Budget exceeded: ${self._total_stats.cost:.4f} >= max ${max_cost:.4f}"
+            )
+
+    def _check_per_request_budget(self, cost_before: float) -> None:
+        """Hard-stop if a single LLM call exceeds PHANTOM_PER_REQUEST_CEILING."""
+        ceiling_str = Config.get("phantom_per_request_ceiling")
+        if not ceiling_str:
+            return
+        try:
+            ceiling = float(ceiling_str)
+        except ValueError:
+            return
+        request_cost = self._total_stats.cost - cost_before
+        if request_cost > ceiling:
+            raise LLMRequestFailedError(
+                f"Per-request budget exceeded: ${request_cost:.4f} > ceiling ${ceiling:.4f}"
             )
 
     def _build_completion_args(self, messages: list[dict[str, Any]]) -> dict[str, Any]:

@@ -18,12 +18,12 @@ class Config:
     openai_api_base = None
     litellm_base_url = None
     ollama_api_base = None
-    phantom_reasoning_effort = "high"
-    phantom_llm_max_retries = "5"
+    phantom_reasoning_effort = "medium"
     phantom_memory_compressor_timeout = "30"
     llm_timeout = "300"
     llm_max_tokens = None
     phantom_max_cost = None
+    phantom_per_request_ceiling = None
     _LLM_CANONICAL_NAMES = (
         "phantom_llm",
         "llm_api_key",
@@ -37,6 +37,7 @@ class Config:
         "llm_timeout",
         "llm_max_tokens",
         "phantom_max_cost",
+        "phantom_per_request_ceiling",
     )
 
     # Tool & Feature Configuration
