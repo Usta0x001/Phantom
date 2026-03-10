@@ -40,7 +40,7 @@ class TestLLMHistoryPreservation:
     def _set_llm_env(self, monkeypatch):
         monkeypatch.setenv("PHANTOM_LLM", "groq/llama-3.3-70b-versatile")
 
-    @pytest.mark.skip(reason="lean-phantom: async issue in 0.9.44 Strix-equivalent")
+    @pytest.mark.skip(reason="lean-phantom: async issue in 0.9.44, pending fix")
     def test_history_not_destroyed_on_prepare(self):
         """C-01: conversation_history should not be cleared by _prepare_messages."""
         llm = self._make_llm()

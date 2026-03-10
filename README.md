@@ -500,8 +500,8 @@ jobs:
 | `PHANTOM_REASONING_EFFORT` | `low` / `medium` / `high` | `high` |
 | `PHANTOM_SCAN_MODE` | Default scan profile | `standard` |
 | `PHANTOM_IMAGE` | Sandbox Docker image | `ghcr.io/usta0x001/phantom-sandbox:latest` |
-| `PHANTOM_MAX_COST` | Max total cost per scan (USD) | `25.0` |
-| `PHANTOM_PER_REQUEST_CEILING` | Max cost per LLM request (USD) | `5.0` |
+| `PHANTOM_MAX_COST` | Hard stop when total scan cost (USD) reaches this limit | — |
+| `LLM_MAX_TOKENS` | Override max output tokens per LLM call (overrides scan-mode defaults: quick=4000, stealth=6000, default=8000) | — |
 | `PHANTOM_WEBHOOK_URL` | Webhook URL for critical alerts | — |
 | `PHANTOM_DISABLE_BROWSER` | Disable Playwright browser | `false` |
 | `PHANTOM_TELEMETRY` | Enable anonymous usage telemetry | `false` |
@@ -558,7 +558,7 @@ pytest tests/ -m "security"
 pytest tests/ -m "integration"
 ```
 
-Current state: **731 tests passing · 0 failing · 97 skipped**
+Current state: **150 tests passing · 0 failing · 689 skipped** (integration/e2e require live Docker)
 
 ---
 
