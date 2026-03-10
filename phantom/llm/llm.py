@@ -114,6 +114,7 @@ class LLM:
     async def generate(
         self, conversation_history: list[dict[str, Any]]
     ) -> AsyncIterator[LLMResponse]:
+        self._check_budget()
         messages = self._prepare_messages(conversation_history)
         max_retries = int(Config.get("phantom_llm_max_retries") or "5")
 
@@ -122,6 +123,8 @@ class LLM:
                 async for response in self._stream(messages):
                     yield response
                 return  # noqa: TRY300
+            except LLMRequestFailedError:
+                raise
             except Exception as e:  # noqa: BLE001
                 if attempt >= max_retries or not self._should_retry(e):
                     self._raise_error(e)
@@ -196,6 +199,31 @@ class LLM:
 
         return messages
 
+    def _get_max_tokens(self) -> int:
+        """Cap output tokens based on scan mode to control cost."""
+        env_val = Config.get("llm_max_tokens")
+        if env_val:
+            return int(env_val)
+        if self.config.scan_mode == "quick":
+            return 4000
+        if self.config.scan_mode == "stealth":
+            return 6000
+        return 8000  # standard / deep
+
+    def _check_budget(self) -> None:
+        """Hard-stop if PHANTOM_MAX_COST is set and exceeded."""
+        max_cost_str = Config.get("phantom_max_cost")
+        if not max_cost_str:
+            return
+        try:
+            max_cost = float(max_cost_str)
+        except ValueError:
+            return
+        if self._total_stats.cost >= max_cost:
+            raise LLMRequestFailedError(
+                f"Budget exceeded: ${self._total_stats.cost:.4f} >= max ${max_cost:.4f}"
+            )
+
     def _build_completion_args(self, messages: list[dict[str, Any]]) -> dict[str, Any]:
         if not self._supports_vision():
             messages = self._strip_images(messages)
@@ -205,6 +233,7 @@ class LLM:
             "messages": messages,
             "timeout": self.config.timeout,
             "stream_options": {"include_usage": True},
+            "max_tokens": self._get_max_tokens(),
         }
 
         if self.config.api_key:

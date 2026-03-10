@@ -47,8 +47,8 @@ class AgentState(BaseModel):
         self, role: str, content: Any, thinking_blocks: list[dict[str, Any]] | None = None
     ) -> None:
         message = {"role": role, "content": content}
-        if thinking_blocks:
-            message["thinking_blocks"] = thinking_blocks
+        # Do NOT store thinking_blocks in history — they bloat context invisibly
+        # to the memory compressor and get re-sent on every subsequent call.
         self.messages.append(message)
         self.last_updated = datetime.now(UTC).isoformat()
 

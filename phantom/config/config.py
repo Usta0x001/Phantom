@@ -22,6 +22,8 @@ class Config:
     phantom_llm_max_retries = "5"
     phantom_memory_compressor_timeout = "30"
     llm_timeout = "300"
+    llm_max_tokens = None
+    phantom_max_cost = None
     _LLM_CANONICAL_NAMES = (
         "phantom_llm",
         "llm_api_key",
@@ -33,6 +35,8 @@ class Config:
         "phantom_llm_max_retries",
         "phantom_memory_compressor_timeout",
         "llm_timeout",
+        "llm_max_tokens",
+        "phantom_max_cost",
     )
 
     # Tool & Feature Configuration

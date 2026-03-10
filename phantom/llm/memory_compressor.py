@@ -9,8 +9,11 @@ from phantom.config.config import Config, resolve_llm_config
 logger = logging.getLogger(__name__)
 
 
-MAX_TOTAL_TOKENS = 100_000
-MIN_RECENT_MESSAGES = 15
+MAX_TOTAL_TOKENS = 20_000
+MIN_RECENT_MESSAGES = 8
+
+# Max tokens for the compressor's own summarization call (cheap, non-thinking)
+COMPRESSOR_MAX_TOKENS = 1500
 
 SUMMARY_PROMPT_TEMPLATE = """You are an agent performing context
 condensation for a security agent. Your job is to compress scan data while preserving
@@ -54,15 +57,19 @@ def _count_tokens(text: str, model: str) -> int:
 
 def _get_message_tokens(msg: dict[str, Any], model: str) -> int:
     content = msg.get("content", "")
+    base = 0
     if isinstance(content, str):
-        return _count_tokens(content, model)
-    if isinstance(content, list):
-        return sum(
+        base = _count_tokens(content, model)
+    elif isinstance(content, list):
+        base = sum(
             _count_tokens(item.get("text", ""), model)
             for item in content
             if isinstance(item, dict) and item.get("type") == "text"
         )
-    return 0
+    # Add a fixed overhead per tool_call entry to account for JSON structure
+    tool_calls = msg.get("tool_calls") or []
+    base += len(tool_calls) * 30
+    return base
 
 
 def _extract_message_text(msg: dict[str, Any]) -> str:
@@ -111,6 +118,9 @@ def _summarize_messages(
             "model": model,
             "messages": [{"role": "user", "content": prompt}],
             "timeout": timeout,
+            "max_tokens": COMPRESSOR_MAX_TOKENS,
+            # Disable thinking/reasoning for summarization — pure cost waste
+            "thinking": None,
         }
         if api_key:
             completion_args["api_key"] = api_key
@@ -209,7 +219,7 @@ class MemoryCompressor:
             return messages
 
         compressed = []
-        chunk_size = 10
+        chunk_size = 5
         for i in range(0, len(old_msgs), chunk_size):
             chunk = old_msgs[i : i + chunk_size]
             summary = _summarize_messages(chunk, model_name, self.timeout)
