@@ -35,7 +35,7 @@ def check(name: str, fn):
 
 
 print("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-print("  PHANTOM 0.9.59 — FULL FEATURE VERIFICATION")
+print("  PHANTOM 0.9.60 — FULL FEATURE VERIFICATION")
 print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
 
 
@@ -44,16 +44,16 @@ print("[1] VERSION CONSISTENCY")
 
 def v_version_init():
     import phantom
-    assert phantom.__version__ == "0.9.59", f"Got {phantom.__version__}"
+    assert phantom.__version__ == "0.9.60", f"Got {phantom.__version__}"
 
 def v_version_pyproject():
     pyproject = (
         __import__("pathlib").Path(__file__).parent.parent / "pyproject.toml"
     ).read_text(encoding="utf-8")
-    assert 'version = "0.9.59"' in pyproject
+    assert 'version = "0.9.60"' in pyproject
 
-check("phantom.__version__ == '0.9.59'", v_version_init)
-check("pyproject.toml version == '0.9.59'", v_version_pyproject)
+check("phantom.__version__ == '0.9.60'", v_version_init)
+check("pyproject.toml version == '0.9.60'", v_version_pyproject)
 
 
 # ── 2. COST CONTROLS ───────────────────────────────────────────────────────────
@@ -551,6 +551,184 @@ check("execute_tool_with_validation(): proxy_tools.scope_rules → scope_rules",
 check("execute_tool_with_validation(): proxy_tools.nonexistent → error", v_unknown_prefixed_name_errors)
 check("get_tools_prompt(): section header uses <!-- comment -->", v_tools_prompt_uses_comment_headers)
 check("get_tools_prompt(): tool name= attributes intact", v_tools_prompt_tool_names_intact)
+
+
+check("get_tools_prompt(): section header uses <!-- comment -->", v_tools_prompt_uses_comment_headers)
+check("get_tools_prompt(): tool name= attributes intact", v_tools_prompt_tool_names_intact)
+
+
+# ── [13] CHECKPOINT MODULE (0.9.60) ───────────────────────────────────────────
+print("\n[13] CHECKPOINT MODULE (0.9.60)")
+
+def v_checkpoint_models_importable():
+    from phantom.checkpoint.models import CheckpointData
+    cp = CheckpointData(run_name="x")
+    assert cp.version == "1"
+    assert cp.status == "in_progress"
+
+def v_checkpoint_manager_importable():
+    from phantom.checkpoint.checkpoint import CheckpointManager, CHECKPOINT_INTERVAL
+    import tempfile, pathlib
+    with tempfile.TemporaryDirectory() as td:
+        mgr = CheckpointManager(pathlib.Path(td))
+        assert not mgr.exists()
+        assert mgr.should_save(1)
+        assert not mgr.should_save(0)
+
+def v_checkpoint_save_load_roundtrip():
+    from phantom.checkpoint.checkpoint import CheckpointManager
+    from phantom.checkpoint.models import CheckpointData
+    import tempfile, pathlib
+    with tempfile.TemporaryDirectory() as td:
+        mgr = CheckpointManager(pathlib.Path(td))
+        cp = CheckpointData(run_name="test-run", iteration=7, compression_calls=2)
+        mgr.save(cp)
+        loaded = mgr.load()
+        assert loaded is not None
+        assert loaded.run_name == "test-run"
+        assert loaded.iteration == 7
+        assert loaded.compression_calls == 2
+
+def v_checkpoint_mark_completed():
+    from phantom.checkpoint.checkpoint import CheckpointManager
+    from phantom.checkpoint.models import CheckpointData
+    import tempfile, pathlib
+    with tempfile.TemporaryDirectory() as td:
+        mgr = CheckpointManager(pathlib.Path(td))
+        mgr.save(CheckpointData(run_name="r"))
+        mgr.mark_completed()
+        assert mgr.load().status == "completed"
+
+check("checkpoint.models: CheckpointData importable with defaults", v_checkpoint_models_importable)
+check("checkpoint.checkpoint: CheckpointManager importable, should_save(0)=False", v_checkpoint_manager_importable)
+check("CheckpointManager: save/load round-trip preserves all fields", v_checkpoint_save_load_roundtrip)
+check("CheckpointManager.mark_completed() sets status='completed'", v_checkpoint_mark_completed)
+
+
+# ── [14] PER-MODEL ANALYTICS + CALL COUNTERS (0.9.60) ────────────────────────
+print("\n[14] PER-MODEL ANALYTICS + CALL COUNTERS (0.9.60)")
+
+def v_llm_per_model_stats_dict_present():
+    from phantom.llm.llm import LLM
+    from phantom.llm.config import LLMConfig
+    cfg = LLMConfig(model_name="openai/gpt-4o", scan_mode="standard")
+    llm = LLM(cfg)
+    assert hasattr(llm, "_per_model_stats")
+    assert isinstance(llm._per_model_stats, dict)
+
+def v_llm_agent_calls_counter():
+    from phantom.llm.llm import LLM
+    from phantom.llm.config import LLMConfig
+    cfg = LLMConfig(model_name="openai/gpt-4o", scan_mode="standard")
+    llm = LLM(cfg)
+    assert llm._agent_calls == 0
+    assert llm._error_calls == 0
+
+def v_memory_compressor_compression_calls():
+    from phantom.llm.memory_compressor import MemoryCompressor
+    mc = MemoryCompressor(model_name="openai/gpt-4o")
+    assert mc.compression_calls == 0
+
+def v_tracer_get_per_model_stats_callable():
+    from phantom.telemetry.tracer import Tracer
+    t = Tracer("verify-test")
+    result = t.get_per_model_stats()
+    assert isinstance(result, dict)
+
+def v_tracer_compression_agent_error_callables():
+    from phantom.telemetry.tracer import Tracer
+    t = Tracer("verify-test-2")
+    assert isinstance(t.compression_calls, int)
+    assert isinstance(t.agent_calls, int)
+    assert isinstance(t.error_calls, int)
+
+def v_tracer_get_metrics_summary():
+    from phantom.telemetry.tracer import Tracer
+    t = Tracer("verify-test-3")
+    m = t.get_metrics_summary()
+    assert "requests_per_finding" in m
+    assert "compression_ratio" in m
+    assert "error_rate" in m
+    assert "avg_output_tokens_per_request" in m
+
+check("LLM._per_model_stats dict attribute present", v_llm_per_model_stats_dict_present)
+check("LLM._agent_calls and ._error_calls start at 0", v_llm_agent_calls_counter)
+check("MemoryCompressor.compression_calls starts at 0", v_memory_compressor_compression_calls)
+check("Tracer.get_per_model_stats() returns dict", v_tracer_get_per_model_stats_callable)
+check("Tracer.compression_calls / .agent_calls / .error_calls are int properties", v_tracer_compression_agent_error_callables)
+check("Tracer.get_metrics_summary() returns expected keys", v_tracer_get_metrics_summary)
+
+
+# ── [15] LLM FALLBACK + ADAPTIVE + ROUTING (0.9.60) ──────────────────────────
+print("\n[15] LLM FALLBACK + ADAPTIVE + ROUTING (0.9.60)")
+
+def v_llm_fallback_model_attr():
+    import os
+    from phantom.llm.llm import LLM
+    from phantom.llm.config import LLMConfig
+    os.environ.pop("PHANTOM_FALLBACK_LLM", None)
+    cfg = LLMConfig(model_name="openai/gpt-4o", scan_mode="standard")
+    llm = LLM(cfg)
+    assert llm._fallback_llm_name is None
+
+def v_llm_fallback_reads_env(monkeypatch=None):
+    import os
+    original = os.environ.get("PHANTOM_FALLBACK_LLM")
+    os.environ["PHANTOM_FALLBACK_LLM"] = "groq/llama-3.3-70b-versatile"
+    try:
+        from phantom.llm.llm import LLM
+        from phantom.llm.config import LLMConfig
+        cfg = LLMConfig(model_name="openai/gpt-4o", scan_mode="standard")
+        llm = LLM(cfg)
+        assert llm._fallback_llm_name == "groq/llama-3.3-70b-versatile"
+    finally:
+        if original is None:
+            os.environ.pop("PHANTOM_FALLBACK_LLM", None)
+        else:
+            os.environ["PHANTOM_FALLBACK_LLM"] = original
+
+def v_adaptive_scan_downgrade_deep():
+    import os
+    os.environ["PHANTOM_MAX_COST"] = "1.00"
+    try:
+        from phantom.llm.llm import LLM
+        from phantom.llm.config import LLMConfig
+        cfg = LLMConfig(model_name="openai/gpt-4o", scan_mode="deep")
+        llm = LLM(cfg)
+        llm._adaptive_scan_enabled = True
+        llm._adaptive_threshold = 0.8
+        llm._total_stats.cost = 0.85
+        llm._check_adaptive_scan_mode()
+        assert llm.config.scan_mode == "standard"
+    finally:
+        os.environ.pop("PHANTOM_MAX_COST", None)
+
+def v_routing_tool_model_selected():
+    from phantom.llm.llm import LLM
+    from phantom.llm.config import LLMConfig
+    cfg = LLMConfig(model_name="openai/gpt-4o", scan_mode="standard")
+    llm = LLM(cfg)
+    llm._routing_enabled = True
+    llm._routing_tool_model = "deepseek/deepseek-chat"
+    llm._routing_reasoning_model = "kimi/k2-5"
+    msgs = [{"role": "user", "content": "<tool_result>out</tool_result>"}]
+    assert llm._pick_routing_model(msgs) == "deepseek/deepseek-chat"
+
+def v_config_new_vars_present():
+    from phantom.config.config import Config
+    assert hasattr(Config, "phantom_fallback_llm")
+    assert hasattr(Config, "phantom_adaptive_scan")
+    assert hasattr(Config, "phantom_adaptive_scan_threshold")
+    assert hasattr(Config, "phantom_checkpoint_interval")
+    assert hasattr(Config, "phantom_routing_enabled")
+    assert hasattr(Config, "phantom_routing_reasoning_model")
+    assert hasattr(Config, "phantom_routing_tool_model")
+
+check("LLM._fallback_llm_name is None when env not set", v_llm_fallback_model_attr)
+check("LLM._fallback_llm_name reads PHANTOM_FALLBACK_LLM env var", v_llm_fallback_reads_env)
+check("adaptive scan: cost>threshold downgrades deep→standard", v_adaptive_scan_downgrade_deep)
+check("routing: tool_result message → tool model selected", v_routing_tool_model_selected)
+check("Config: all 0.9.60 env vars present as class attributes", v_config_new_vars_present)
 
 
 # ── SUMMARY ────────────────────────────────────────────────────────────────────

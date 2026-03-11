@@ -213,6 +213,10 @@ class BaseAgent(metaclass=AgentMeta):
                 should_finish = await iteration_task
                 self._current_task = None
 
+                # Periodic checkpoint save ─────────────────────────────────
+                self._maybe_save_checkpoint(tracer)
+                # ──────────────────────────────────────────────────────────
+
                 if should_finish:
                     if self.non_interactive:
                         self.state.set_completed({"success": True})
@@ -516,6 +520,29 @@ class BaseAgent(metaclass=AgentMeta):
             logger = logging.getLogger(__name__)
             logger.warning(f"Error checking agent messages: {e}")
             return
+
+    def _maybe_save_checkpoint(self, tracer: Optional["Tracer"]) -> None:
+        """Save a checkpoint if the checkpoint manager is configured and it's time to do so."""
+        # Only the root agent (no parent) saves checkpoint state
+        if self.state.parent_id is not None:
+            return
+        checkpoint_mgr = self.config.get("_checkpoint_manager")
+        if checkpoint_mgr is None:
+            return
+        if not checkpoint_mgr.should_save(self.state.iteration):
+            return
+        try:
+            from phantom.checkpoint.checkpoint import CheckpointManager
+
+            cp = CheckpointManager.build(
+                run_name=tracer.run_name if tracer else (self.config.get("_run_name") or "unknown"),
+                state=self.state,
+                tracer=tracer,
+                scan_config=tracer.scan_config if tracer else {},
+            )
+            checkpoint_mgr.save(cp)
+        except Exception:  # noqa: BLE001
+            logger.warning("Checkpoint save failed", exc_info=True)
 
     def _handle_sandbox_error(
         self,

@@ -337,7 +337,12 @@ async def _async_scan(args: object) -> None:
     await warm_up_llm()
     persist_config()
 
-    args.run_name = generate_run_name(args.targets_info)  # type: ignore[attr-defined]
+    # Use checkpoint run_name if resuming; otherwise generate a fresh one
+    resume_run = getattr(args, "resume_run", None)
+    if resume_run:
+        args.run_name = resume_run  # type: ignore[attr-defined]
+    else:
+        args.run_name = generate_run_name(args.targets_info)  # type: ignore[attr-defined]
 
     for target_info in args.targets_info:  # type: ignore[attr-defined]
         if target_info["type"] == "repository":

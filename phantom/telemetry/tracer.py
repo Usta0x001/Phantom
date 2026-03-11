@@ -823,6 +823,91 @@ class Tracer:
             "total_tokens": total_stats["input_tokens"] + total_stats["output_tokens"],
         }
 
+    def get_per_model_stats(self) -> dict[str, dict[str, Any]]:
+        """Aggregate per-model RequestStats from all active agent LLM instances."""
+        from phantom.tools.agents_graph.agents_graph_actions import _agent_instances
+
+        result: dict[str, dict[str, Any]] = {}
+        for agent_instance in _agent_instances.values():
+            if not (hasattr(agent_instance, "llm") and hasattr(agent_instance.llm, "_per_model_stats")):
+                continue
+            for model_name, stats in agent_instance.llm._per_model_stats.items():
+                if model_name not in result:
+                    result[model_name] = {
+                        "input_tokens": 0,
+                        "output_tokens": 0,
+                        "cached_tokens": 0,
+                        "cost": 0.0,
+                        "requests": 0,
+                    }
+                r = result[model_name]
+                r["input_tokens"] += stats.input_tokens
+                r["output_tokens"] += stats.output_tokens
+                r["cached_tokens"] += stats.cached_tokens
+                r["cost"] += stats.cost
+                r["requests"] += stats.requests
+        for v in result.values():
+            v["cost"] = round(v["cost"], 4)
+        return result
+
+    @property
+    def compression_calls(self) -> int:
+        """Total compression LLM calls across all agent instances."""
+        from phantom.tools.agents_graph.agents_graph_actions import _agent_instances
+
+        return sum(
+            getattr(getattr(inst, "llm", None) and getattr(inst.llm, "memory_compressor", None), "compression_calls", 0)
+            for inst in _agent_instances.values()
+        )
+
+    @property
+    def agent_calls(self) -> int:
+        """Total agent-loop LLM calls across all agent instances."""
+        from phantom.tools.agents_graph.agents_graph_actions import _agent_instances
+
+        return sum(
+            getattr(getattr(inst, "llm", None), "_agent_calls", 0)
+            for inst in _agent_instances.values()
+        )
+
+    @property
+    def error_calls(self) -> int:
+        """Total error-terminating LLM calls across all agent instances."""
+        from phantom.tools.agents_graph.agents_graph_actions import _agent_instances
+
+        return sum(
+            getattr(getattr(inst, "llm", None), "_error_calls", 0)
+            for inst in _agent_instances.values()
+        )
+
+    def get_metrics_summary(self) -> dict[str, Any]:
+        """Return derived scan metrics: efficiency, compression ratio, error rate."""
+        total = self.get_total_llm_stats()["total"]
+        num_vulns = len(self.vulnerability_reports)
+        total_requests = total["requests"]
+        comp_calls = self.compression_calls
+        agent_calls_total = self.agent_calls
+        error_calls_total = self.error_calls
+        total_llm_calls = agent_calls_total + comp_calls
+
+        return {
+            "requests_per_finding": round(total_requests / max(1, num_vulns), 2),
+            "compression_calls": comp_calls,
+            "agent_calls": agent_calls_total,
+            "error_calls": error_calls_total,
+            "compression_ratio": round(comp_calls / max(1, total_llm_calls), 4),
+            "error_rate": round(error_calls_total / max(1, total_llm_calls), 4),
+            "avg_output_tokens_per_request": round(
+                total["output_tokens"] / max(1, total_requests), 1
+            ),
+            "avg_input_tokens_per_request": round(
+                total["input_tokens"] / max(1, total_requests), 1
+            ),
+            "total_cost": total["cost"],
+            "total_requests": total_requests,
+            "vulnerability_count": num_vulns,
+        }
+
     def update_streaming_content(self, agent_id: str, content: str) -> None:
         self.streaming_content[agent_id] = content
 

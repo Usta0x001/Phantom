@@ -26,6 +26,17 @@ class Config:
     phantom_per_request_ceiling = None
     phantom_tool_truncation_overrides = None
     phantom_max_input_tokens = None
+    # Resume / checkpoint feature
+    phantom_checkpoint_interval = "5"      # save checkpoint every N agent iterations
+    # LLM fallback on persistent failure
+    phantom_fallback_llm = None            # PHANTOM_FALLBACK_LLM — secondary litellm model string
+    # Adaptive scan mode (auto-downgrade deep→standard→quick when budget is near)
+    phantom_adaptive_scan = "false"        # PHANTOM_ADAPTIVE_SCAN=true to enable
+    phantom_adaptive_scan_threshold = "0.8"  # fraction of PHANTOM_MAX_COST that triggers downgrade
+    # Multi-model routing (use different models for reasoning vs tool-heavy iterations)
+    phantom_routing_enabled = "false"      # PHANTOM_ROUTING_ENABLED=true to enable
+    phantom_routing_reasoning_model = None # PHANTOM_ROUTING_REASONING_MODEL
+    phantom_routing_tool_model = None      # PHANTOM_ROUTING_TOOL_MODEL
     _LLM_CANONICAL_NAMES = (
         "phantom_llm",
         "llm_api_key",
@@ -40,6 +51,9 @@ class Config:
         "llm_max_tokens",
         "phantom_max_cost",
         "phantom_per_request_ceiling",
+        "phantom_fallback_llm",
+        "phantom_routing_reasoning_model",
+        "phantom_routing_tool_model",
     )
 
     # Tool & Feature Configuration

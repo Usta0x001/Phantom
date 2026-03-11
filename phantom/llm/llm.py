@@ -62,11 +62,22 @@ class RequestStats:
 
 
 class LLM:
+    # Scan mode downgrade order for adaptive mode
+    _SCAN_MODE_DOWNGRADE: dict[str, str] = {
+        "deep": "standard",
+        "standard": "quick",
+    }
+
     def __init__(self, config: LLMConfig, agent_name: str | None = None):
         self.config = config
         self.agent_name = agent_name
         self.agent_id: str | None = None
         self._total_stats = RequestStats()
+        # Per-model breakdown: model_name -> RequestStats (only agent iteration calls)
+        self._per_model_stats: dict[str, RequestStats] = {}
+        # Call type counters
+        self._agent_calls: int = 0    # LLM calls during agent loop iterations
+        self._error_calls: int = 0    # LLM calls that ended in an error (after retries)
         self.memory_compressor = MemoryCompressor(model_name=config.litellm_model)
         self.system_prompt = self._load_system_prompt(agent_name)
 
@@ -79,6 +90,19 @@ class LLM:
             self._reasoning_effort = "low"
         else:
             self._reasoning_effort = "high"
+
+        # Fallback model: used when primary exhausts all retries
+        self._fallback_llm_name = Config.get("phantom_fallback_llm") or None
+        # Multi-model routing
+        self._routing_enabled = (Config.get("phantom_routing_enabled") or "").lower() == "true"
+        self._routing_reasoning_model = Config.get("phantom_routing_reasoning_model") or None
+        self._routing_tool_model = Config.get("phantom_routing_tool_model") or None
+        # Adaptive scan mode
+        self._adaptive_scan_enabled = (Config.get("phantom_adaptive_scan") or "").lower() == "true"
+        try:
+            self._adaptive_threshold = float(Config.get("phantom_adaptive_scan_threshold") or "0.8")
+        except ValueError:
+            self._adaptive_threshold = 0.8
 
     def _load_system_prompt(self, agent_name: str | None) -> str:
         if not agent_name:
@@ -118,15 +142,29 @@ class LLM:
         self, conversation_history: list[dict[str, Any]]
     ) -> AsyncIterator[LLMResponse]:
         self._check_budget()
+        self._agent_calls += 1
         messages = self._prepare_messages(conversation_history)
         max_retries = int(Config.get("phantom_llm_max_retries") or "5")
 
+        # Optionally switch model based on routing config
+        original_model = self.config.litellm_model
+        if self._routing_enabled:
+            routed = self._pick_routing_model(messages)
+            if routed and routed != original_model:
+                logger.debug("Routing: switching model %s → %s", original_model, routed)
+                self.config.litellm_model = routed
+
+        primary_exhausted = False
         for attempt in range(max_retries + 1):
             try:
                 async for response in self._stream(messages):
                     yield response
+                # Restore routing override after successful call
+                self.config.litellm_model = original_model
+                self._check_adaptive_scan_mode()
                 return  # noqa: TRY300
             except LLMRequestFailedError:
+                self.config.litellm_model = original_model
                 raise
             except Exception as e:  # noqa: BLE001
                 if self._is_context_too_large(e):
@@ -141,9 +179,32 @@ class LLM:
                     messages = self._force_compress_messages(messages)
                     continue
                 if attempt >= max_retries or not self._should_retry(e):
-                    self._raise_error(e)
+                    primary_exhausted = True
+                    break
                 wait = min(10, 2 * (2**attempt))
                 await asyncio.sleep(wait)
+
+        # Primary model exhausted — try fallback if configured
+        if primary_exhausted and self._fallback_llm_name:
+            logger.warning(
+                "Primary model %s exhausted — retrying with fallback %s",
+                original_model,
+                self._fallback_llm_name,
+            )
+            try:
+                self.config.litellm_model = self._fallback_llm_name
+                async for response in self._stream(messages):
+                    yield response
+                self.config.litellm_model = original_model
+                return  # noqa: TRY300
+            except Exception as e:  # noqa: BLE001
+                self.config.litellm_model = original_model
+                self._error_calls += 1
+                self._raise_error(e)
+        elif primary_exhausted:
+            self.config.litellm_model = original_model
+            self._error_calls += 1
+            raise LLMRequestFailedError("All retries exhausted for primary model")
 
     async def _stream(self, messages: list[dict[str, Any]]) -> AsyncIterator[LLMResponse]:
         accumulated = ""
@@ -174,11 +235,14 @@ class LLM:
                 yield LLMResponse(content=accumulated)
 
         if chunks:
-            self._update_usage_stats(stream_chunk_builder(chunks))
+            rebuilt = stream_chunk_builder(chunks)
+            self._update_usage_stats(rebuilt)
+            self._update_per_model_stats(rebuilt)
             request_cost = self._total_stats.cost - cost_before
             logger.info(
-                "llm_call scan_mode=%s tokens_in=%d tokens_out=%d "
+                "llm_call model=%s scan_mode=%s tokens_in=%d tokens_out=%d "
                 "request_cost=$%.4f cumulative_cost=$%.4f",
+                self.config.litellm_model,
                 self.config.scan_mode,
                 self._total_stats.input_tokens,
                 self._total_stats.output_tokens,
@@ -303,6 +367,78 @@ class LLM:
             pass
         return None
 
+    def _update_per_model_stats(self, response: Any) -> None:
+        """Track per-model token/cost breakdown (agent calls only)."""
+        try:
+            model_key = self.config.litellm_model or "unknown"
+            if model_key not in self._per_model_stats:
+                self._per_model_stats[model_key] = RequestStats()
+            stats = self._per_model_stats[model_key]
+            if hasattr(response, "usage") and response.usage:
+                stats.input_tokens += getattr(response.usage, "prompt_tokens", 0) or 0
+                stats.output_tokens += getattr(response.usage, "completion_tokens", 0) or 0
+                cached = 0
+                if hasattr(response.usage, "prompt_tokens_details"):
+                    cached = getattr(response.usage.prompt_tokens_details, "cached_tokens", 0) or 0
+                stats.cached_tokens += cached
+                stats.cost += self._extract_cost(response)
+            stats.requests += 1
+        except Exception:  # noqa: BLE001, S110  # nosec B110
+            pass
+
+    def _pick_routing_model(self, messages: list[dict[str, Any]]) -> str | None:
+        """
+        Decide which model to use based on conversation context.
+        Heuristic: if the last user message looks like a tool result
+        (starts with <tool_result or <function_results), we're in an
+        "execution" phase → use tool model. Otherwise → reasoning model.
+        """
+        if not self._routing_enabled:
+            return None
+        last_user = next(
+            (m for m in reversed(messages) if m.get("role") == "user"), None
+        )
+        content = (last_user or {}).get("content", "") or ""
+        if isinstance(content, list):
+            content = " ".join(
+                p.get("text", "") for p in content if isinstance(p, dict) and p.get("type") == "text"
+            )
+        content_lower = content.strip().lower()
+        is_tool_result = content_lower.startswith(("<tool_result", "<function_results"))
+        if is_tool_result and self._routing_tool_model:
+            return self._routing_tool_model
+        if not is_tool_result and self._routing_reasoning_model:
+            return self._routing_reasoning_model
+        return None
+
+    def _check_adaptive_scan_mode(self) -> None:
+        """Downgrade scan mode if cost has exceeded the adaptive threshold."""
+        if not self._adaptive_scan_enabled:
+            return
+        max_cost_str = Config.get("phantom_max_cost")
+        if not max_cost_str:
+            return
+        try:
+            max_cost = float(max_cost_str)
+        except ValueError:
+            return
+        if max_cost <= 0:
+            return
+        fraction = self._total_stats.cost / max_cost
+        if fraction >= self._adaptive_threshold:
+            new_mode = self._SCAN_MODE_DOWNGRADE.get(self.config.scan_mode)
+            if new_mode:
+                logger.warning(
+                    "Adaptive scan: cost $%.4f is %.0f%% of max $%.4f — "
+                    "downgrading scan mode %s → %s",
+                    self._total_stats.cost,
+                    fraction * 100,
+                    max_cost,
+                    self.config.scan_mode,
+                    new_mode,
+                )
+                self.config.scan_mode = new_mode
+
     def _update_usage_stats(self, response: Any) -> None:
         try:
             if hasattr(response, "usage") and response.usage:
@@ -381,6 +517,7 @@ class LLM:
                 self.config.litellm_model,
                 timeout=30,
             )
+            self.memory_compressor.compression_calls += 1
             return system_msgs + [summary] + recent
         return system_msgs + recent
 

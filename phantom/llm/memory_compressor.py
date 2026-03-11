@@ -210,6 +210,8 @@ class MemoryCompressor:
             _get_model_context_window(self.model_name),
             self._max_total_tokens,
         )
+        # Counter for compression LLM calls (separate from agent iteration calls)
+        self.compression_calls: int = 0
 
     def compress_history(
         self,
@@ -263,5 +265,6 @@ class MemoryCompressor:
             summary = _summarize_messages(chunk, model_name, self.timeout)
             if summary:
                 compressed.append(summary)
+                self.compression_calls += 1
 
         return system_msgs + compressed + recent_msgs
