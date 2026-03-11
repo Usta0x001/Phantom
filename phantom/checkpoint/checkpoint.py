@@ -29,16 +29,17 @@ class CheckpointManager:
     checkpoint survives intact.
     """
 
-    def __init__(self, run_dir: Path) -> None:
+    def __init__(self, run_dir: Path, interval: int = CHECKPOINT_INTERVAL) -> None:
         self.run_dir = run_dir
         self.checkpoint_file = run_dir / CHECKPOINT_FILE
         self._lock = threading.Lock()
+        self._interval = interval
 
     # ── Public API ────────────────────────────────────────────────────────────
 
     def should_save(self, iteration: int) -> bool:
         """True when it's time to write a checkpoint (iteration must be > 0)."""
-        return iteration > 0 and (iteration == 1 or iteration % CHECKPOINT_INTERVAL == 0)
+        return iteration > 0 and (iteration == 1 or iteration % self._interval == 0)
 
     def save(self, data: CheckpointData) -> None:
         """Atomically persist checkpoint data to disk."""

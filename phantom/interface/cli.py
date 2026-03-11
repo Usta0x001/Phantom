@@ -55,7 +55,7 @@ async def run_cli(args: Any) -> None:  # noqa: PLR0912, PLR0915
 
         interval = int(Config.get("phantom_checkpoint_interval") or str(CHECKPOINT_INTERVAL))
         run_dir = Path("phantom_runs") / resume_run
-        checkpoint_mgr = CheckpointManager(run_dir)
+        checkpoint_mgr = CheckpointManager(run_dir, interval=interval)
         cp = checkpoint_mgr.load()
 
         if cp is None:
@@ -78,6 +78,15 @@ async def run_cli(args: Any) -> None:  # noqa: PLR0912, PLR0915
 
         # Restore agent state
         restored_state = AgentState.model_validate(cp.root_agent_state)
+        # ── BUG FIX 1: clear stale sandbox fields ─────────────────────────
+        # The previous sandbox container is dead after a crash/SIGINT.
+        # _initialize_sandbox_and_state() checks `sandbox_id is None` to
+        # decide whether to create a new sandbox.  Without this clear,
+        # resume always skips sandbox creation and every tool call fails.
+        restored_state.sandbox_id = None
+        restored_state.sandbox_token = None
+        restored_state.sandbox_info = None
+        # ──────────────────────────────────────────────────────────────────
         # Inject resume notice so agent knows context was restored
         restored_state.add_message(
             "user",
@@ -95,7 +104,6 @@ async def run_cli(args: Any) -> None:  # noqa: PLR0912, PLR0915
         interval = int(Config.get("phantom_checkpoint_interval") or str(CHECKPOINT_INTERVAL))
 
     # ── Build startup panel ────────────────────────────────────────────────
-    start_text = Text()
     start_text.append("Penetration test initiated", style="bold #dc2626")
 
     target_text = Text()
@@ -159,7 +167,7 @@ async def run_cli(args: Any) -> None:  # noqa: PLR0912, PLR0915
     # Attach checkpoint manager to agent config so BaseAgent can save periodically
     if checkpoint_mgr is None:
         run_dir = Path("phantom_runs") / args.run_name
-        checkpoint_mgr = CheckpointManager(run_dir)
+        checkpoint_mgr = CheckpointManager(run_dir, interval=interval)
     agent_config["_checkpoint_manager"] = checkpoint_mgr
     agent_config["_run_name"] = args.run_name
 
@@ -173,6 +181,9 @@ async def run_cli(args: Any) -> None:  # noqa: PLR0912, PLR0915
     # Restore previously found vulnerabilities into tracer so they show in live view
     if resume_run and cp is not None:
         tracer.vulnerability_reports.extend(cp.vulnerability_reports)
+        # ── BUG FIX 5: seed _saved_vuln_ids so old vulns are NOT re-written ──
+        for v in cp.vulnerability_reports:
+            tracer._saved_vuln_ids.add(v["id"])
 
     def display_vulnerability(report: dict[str, Any]) -> None:
         report_id = report.get("id", "unknown")

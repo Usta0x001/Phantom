@@ -354,7 +354,10 @@ class BaseAgent(metaclass=AgentMeta):
         if not self.state.task:
             self.state.task = task
 
-        self.state.add_message("user", task)
+        # Only add the initial task message when the history is fresh.
+        # When resuming from a checkpoint, messages are already populated.
+        if not self.state.messages:
+            self.state.add_message("user", task)
 
     async def _process_iteration(self, tracer: Optional["Tracer"]) -> bool:
         final_response = None
@@ -538,7 +541,7 @@ class BaseAgent(metaclass=AgentMeta):
                 run_name=tracer.run_name if tracer else (self.config.get("_run_name") or "unknown"),
                 state=self.state,
                 tracer=tracer,
-                scan_config=tracer.scan_config if tracer else {},
+                scan_config=tracer.scan_config or {} if tracer else {},
             )
             checkpoint_mgr.save(cp)
         except Exception:  # noqa: BLE001

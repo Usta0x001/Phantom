@@ -35,7 +35,7 @@ def check(name: str, fn):
 
 
 print("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-print("  PHANTOM 0.9.60 — FULL FEATURE VERIFICATION")
+print("  PHANTOM 0.9.61 — FULL FEATURE VERIFICATION")
 print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
 
 
@@ -44,16 +44,16 @@ print("[1] VERSION CONSISTENCY")
 
 def v_version_init():
     import phantom
-    assert phantom.__version__ == "0.9.60", f"Got {phantom.__version__}"
+    assert phantom.__version__ == "0.9.61", f"Got {phantom.__version__}"
 
 def v_version_pyproject():
     pyproject = (
         __import__("pathlib").Path(__file__).parent.parent / "pyproject.toml"
     ).read_text(encoding="utf-8")
-    assert 'version = "0.9.60"' in pyproject
+    assert 'version = "0.9.61"' in pyproject
 
-check("phantom.__version__ == '0.9.60'", v_version_init)
-check("pyproject.toml version == '0.9.60'", v_version_pyproject)
+check("phantom.__version__ == '0.9.61'", v_version_init)
+check("pyproject.toml version == '0.9.61'", v_version_pyproject)
 
 
 # ── 2. COST CONTROLS ───────────────────────────────────────────────────────────
