@@ -13,7 +13,7 @@ class TerminalManager:
         self._sessions_by_agent: dict[str, dict[str, TerminalSession]] = {}
         self._lock = threading.Lock()
         self.default_terminal_id = "default"
-        self.default_timeout = 30.0
+        self.default_timeout = 60.0
 
         self._register_cleanup_handlers()
 

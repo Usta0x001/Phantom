@@ -181,7 +181,14 @@ class LLM:
                 if attempt >= max_retries or not self._should_retry(e):
                     primary_exhausted = True
                     break
-                wait = min(10, 2 * (2**attempt))
+                # Longer backoff for rate limits (429) — up to 60 s; others up to 10 s
+                code = getattr(e, "status_code", None) or getattr(
+                    getattr(e, "response", None), "status_code", None
+                )
+                if code == 429:
+                    wait = min(60, 4 * (2**attempt))
+                else:
+                    wait = min(10, 2 * (2**attempt))
                 await asyncio.sleep(wait)
 
         # Primary model exhausted — try fallback if configured
@@ -525,7 +532,11 @@ class LLM:
         code = getattr(e, "status_code", None) or getattr(
             getattr(e, "response", None), "status_code", None
         )
-        return code is None or litellm._should_retry(code)
+        if code is None:
+            return True  # Network/unknown error — always retry
+        # Retry on rate limits (429) and server errors (5xx).
+        # Do NOT retry auth failures (401/403), bad requests (400/422), not found (404).
+        return code == 429 or (500 <= code < 600)
 
     def _raise_error(self, e: Exception) -> None:
         from phantom.telemetry import posthog

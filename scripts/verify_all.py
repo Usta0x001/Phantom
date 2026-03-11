@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Phantom 0.9.63 — Comprehensive feature verification script.
+"""Phantom 0.9.64 — Comprehensive feature verification script.
 
 Proves every Phantom-specific addition is real, functional, and not decorative.
 Run: python scripts/verify_all.py
@@ -35,7 +35,7 @@ def check(name: str, fn):
 
 
 print("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-print("  PHANTOM 0.9.63 — FULL FEATURE VERIFICATION")
+print("  PHANTOM 0.9.64 — FULL FEATURE VERIFICATION")
 print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
 
 
@@ -44,16 +44,16 @@ print("[1] VERSION CONSISTENCY")
 
 def v_version_init():
     import phantom
-    assert phantom.__version__ == "0.9.63", f"Got {phantom.__version__}"
+    assert phantom.__version__ == "0.9.64", f"Got {phantom.__version__}"
 
 def v_version_pyproject():
     pyproject = (
         __import__("pathlib").Path(__file__).parent.parent / "pyproject.toml"
     ).read_text(encoding="utf-8")
-    assert 'version = "0.9.63"' in pyproject
+    assert 'version = "0.9.64"' in pyproject
 
-check("phantom.__version__ == '0.9.63'", v_version_init)
-check("pyproject.toml version == '0.9.63'", v_version_pyproject)
+check("phantom.__version__ == '0.9.64'", v_version_init)
+check("pyproject.toml version == '0.9.64'", v_version_pyproject)
 
 
 # ── 2. COST CONTROLS ───────────────────────────────────────────────────────────
@@ -816,6 +816,105 @@ check("BUG C: _check_error_result detects 'Error executing X: ...' as error", v_
 check("BUG C: _check_error_result 'Error: ...' prefix still works + false-positive free", v_bug_c_check_error_result_colon_still_works)
 check("BUG D: _summarize_messages thinking=None only for anthropic/ models", v_bug_d_compressor_thinking_only_anthropic)
 check("BUG D: No unconditional thinking=None in completion_args dict", v_bug_d_compressor_source_no_unconditional_thinking)
+
+
+# ── [17] RESUME + RELIABILITY FIXES (0.9.64) ─────────────────────────────────
+print("\n[17] RESUME + RELIABILITY FIXES (0.9.64)")
+
+def v_cli_app_is_entry_point():
+    """Entry point must now be cli_app:app (Typer) not main:main (argparse)."""
+    content = open("pyproject.toml", encoding="utf-8").read()
+    assert 'phantom = "phantom.interface.cli_app:app"' in content, (
+        "pyproject.toml entry point must point to cli_app:app"
+    )
+
+def v_resume_command_exists():
+    """phantom resume <run_name> subcommand must be defined in cli_app."""
+    import inspect
+    from phantom.interface import cli_app
+    src = inspect.getsource(cli_app)
+    assert "def resume(" in src, "resume() command must exist in cli_app"
+    assert "resume_run=run_name" in src, "resume() must pass resume_run to _async_scan"
+
+def v_resumes_command_exists():
+    """phantom resumes subcommand (list) must be defined in cli_app."""
+    import inspect
+    from phantom.interface import cli_app
+    src = inspect.getsource(cli_app)
+    assert "def resumes(" in src, "resumes() command must exist in cli_app"
+    assert "CheckpointManager" in src, "resumes() must use CheckpointManager"
+
+def v_tui_has_checkpoint_manager():
+    """TUIApp __init__ must set up a CheckpointManager."""
+    import inspect
+    from phantom.interface import tui
+    src = inspect.getsource(tui.PhantomTUIApp.__init__)
+    assert "CheckpointManager" in src, "TUI __init__ must create a CheckpointManager"
+    assert "_checkpoint_mgr" in src
+
+def v_tui_agent_config_has_checkpoint():
+    """TUI _build_agent_config must inject _checkpoint_manager."""
+    import inspect
+    from phantom.interface import tui
+    src = inspect.getsource(tui.PhantomTUIApp._build_agent_config)
+    assert '"_checkpoint_manager"' in src, "agent_config must include _checkpoint_manager"
+    assert '"_run_name"' in src, "agent_config must include _run_name"
+
+def v_tui_stop_saves_checkpoint():
+    """action_confirm_stop_agent must save an interrupted checkpoint."""
+    import inspect
+    from phantom.interface import tui
+    src = inspect.getsource(tui.PhantomTUIApp.action_confirm_stop_agent)
+    assert "_save_interrupted_checkpoint" in src, (
+        "action_confirm_stop_agent must call _save_interrupted_checkpoint"
+    )
+    assert "phantom resume" in src, "must show resume tip notification"
+
+def v_tui_quit_saves_checkpoint():
+    """action_custom_quit must save an interrupted checkpoint."""
+    import inspect
+    from phantom.interface import tui
+    src = inspect.getsource(tui.PhantomTUIApp.action_custom_quit)
+    assert "_save_interrupted_checkpoint" in src, (
+        "action_custom_quit must call _save_interrupted_checkpoint"
+    )
+
+def v_terminal_manager_default_timeout():
+    """Terminal manager default_timeout must be 60s (raised from 30s)."""
+    src = open("phantom/tools/terminal/terminal_manager.py", encoding="utf-8").read()
+    assert "self.default_timeout = 60.0" in src, (
+        "terminal_manager.py must set default_timeout = 60.0 (was 30.0)"
+    )
+
+def v_should_retry_no_private_litellm():
+    """LLM._should_retry must NOT call litellm._should_retry (private unsupported API)."""
+    import inspect
+    from phantom.llm.llm import LLM
+    src = inspect.getsource(LLM._should_retry)
+    assert "litellm._should_retry" not in src, (
+        "_should_retry must not call litellm._should_retry (private API)"
+    )
+    assert "500 <= code" in src or "500 <" in src, (
+        "_should_retry must retry on 5xx codes"
+    )
+
+def v_llm_retry_backoff_429():
+    """LLM.generate must use a longer backoff for 429 rate-limit responses."""
+    import inspect
+    from phantom.llm.llm import LLM
+    src = inspect.getsource(LLM.generate)
+    assert "code == 429" in src, "generate must check for 429 and apply longer backoff"
+
+check("entry point is cli_app:app (Typer)", v_cli_app_is_entry_point)
+check("phantom resume <run_name> command exists", v_resume_command_exists)
+check("phantom resumes (list) command exists", v_resumes_command_exists)
+check("TUI __init__ creates CheckpointManager", v_tui_has_checkpoint_manager)
+check("TUI agent_config includes _checkpoint_manager + _run_name", v_tui_agent_config_has_checkpoint)
+check("TUI stop (ESC) saves interrupted checkpoint + shows resume tip", v_tui_stop_saves_checkpoint)
+check("TUI quit (Ctrl+Q) saves interrupted checkpoint", v_tui_quit_saves_checkpoint)
+check("terminal_manager default_timeout == 60s (was 30s)", v_terminal_manager_default_timeout)
+check("LLM._should_retry: no private litellm API, retries 5xx", v_should_retry_no_private_litellm)
+check("LLM.generate: longer backoff for 429 rate-limit", v_llm_retry_backoff_429)
 
 
 # ── SUMMARY ────────────────────────────────────────────────────────────────────

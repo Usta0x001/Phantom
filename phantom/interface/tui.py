@@ -703,6 +703,17 @@ class PhantomTUIApp(App):  # type: ignore[misc]
         super().__init__()
         self.args = args
         self.scan_config = self._build_scan_config(args)
+
+        # ── Checkpoint manager (enables resume after stop / quit) ──────────
+        from pathlib import Path as _Path
+        from phantom.checkpoint.checkpoint import CheckpointManager, CHECKPOINT_INTERVAL
+        from phantom.config import Config
+        _interval = int(Config.get("phantom_checkpoint_interval") or str(CHECKPOINT_INTERVAL))
+        _run_dir = _Path("phantom_runs") / self.scan_config["run_name"]
+        self._checkpoint_mgr: CheckpointManager = CheckpointManager(_run_dir, interval=_interval)
+        self._phantom_agent: Any = None  # set when scan thread creates the agent
+        # ──────────────────────────────────────────────────────────────────
+
         self.agent_config = self._build_agent_config(args)
 
         self.tracer = Tracer(self.scan_config["run_name"])
@@ -749,9 +760,12 @@ class PhantomTUIApp(App):  # type: ignore[misc]
         scan_mode = getattr(args, "scan_mode", "deep")
         llm_config = LLMConfig(scan_mode=scan_mode)
 
-        config = {
+        config: dict[str, Any] = {
             "llm_config": llm_config,
             "max_iterations": 300,
+            # Wire checkpoint manager so the agent loop saves periodically
+            "_checkpoint_manager": self._checkpoint_mgr,
+            "_run_name": self.scan_config["run_name"],
         }
 
         if getattr(args, "local_sources", None):
@@ -767,6 +781,7 @@ class PhantomTUIApp(App):  # type: ignore[misc]
             cleanup_runtime()
 
         def signal_handler(_signum: int, _frame: Any) -> None:
+            self._save_interrupted_checkpoint("signal")
             self.tracer.cleanup()
             sys.exit(0)
 
@@ -1475,6 +1490,7 @@ class PhantomTUIApp(App):  # type: ignore[misc]
 
                 try:
                     agent = PhantomAgent(self.agent_config)
+                    self._phantom_agent = agent  # expose for checkpoint saving on stop/quit
 
                     if not self._scan_stop_event.is_set():
                         loop.run_until_complete(agent.execute_scan(self.scan_config))
@@ -1911,6 +1927,28 @@ class PhantomTUIApp(App):  # type: ignore[misc]
 
         return agent_name, False
 
+    def _save_interrupted_checkpoint(self, reason: str = "user_stopped") -> None:
+        """Save an interrupted checkpoint so the scan can be resumed later."""
+        agent = self._phantom_agent
+        if agent is None:
+            return
+        run_name = self.scan_config.get("run_name", "unknown")
+        try:
+            from phantom.checkpoint.checkpoint import CheckpointManager as CM
+
+            cp_data = CM.build(
+                run_name=run_name,
+                state=agent.state,
+                tracer=self.tracer,
+                scan_config=self.scan_config,
+                status="interrupted",
+                interruption_reason=reason,
+            )
+            self._checkpoint_mgr.save(cp_data)
+            logger.info("Interrupted checkpoint saved for run %s", run_name)
+        except Exception:  # noqa: BLE001
+            logger.warning("Failed to save interrupted checkpoint", exc_info=True)
+
     def action_confirm_stop_agent(self, agent_id: str) -> None:
         self.pop_screen()
 
@@ -1919,22 +1957,29 @@ class PhantomTUIApp(App):  # type: ignore[misc]
 
             result = stop_agent(agent_id)
 
-            import logging
-
             if result.get("success"):
-                logging.info(f"Stop request sent to agent: {result.get('message', 'Unknown')}")
+                logger.info("Stop request sent to agent: %s", result.get("message", "Unknown"))
+                # Save checkpoint so user can resume later
+                self._save_interrupted_checkpoint("user_stopped")
+                run_name = self.scan_config.get("run_name", "")
+                if run_name:
+                    self.notify(
+                        f"Scan paused — resume with: phantom resume {run_name}",
+                        title="Scan Paused",
+                        timeout=15,
+                        severity="warning",
+                    )
             else:
-                logging.warning(f"Failed to stop agent: {result.get('error', 'Unknown error')}")
+                logger.warning("Failed to stop agent: %s", result.get("error", "Unknown error"))
 
         except Exception:
-            import logging
-
-            logging.exception(f"Failed to stop agent {agent_id}")
+            logger.exception("Failed to stop agent %s", agent_id)
 
     def action_custom_quit(self) -> None:
         if self._scan_thread and self._scan_thread.is_alive():
             self._scan_stop_event.set()
-
+            # Save checkpoint before quitting so the scan can be resumed
+            self._save_interrupted_checkpoint("user_quit")
             self._scan_thread.join(timeout=1.0)
 
         self.tracer.cleanup()

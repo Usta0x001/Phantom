@@ -363,6 +363,226 @@ async def _async_scan(args: object) -> None:
         await run_tui(args)
 
 
+# ──────────────────────────── resume ────────────────────────────
+
+
+@app.command()
+def resume(
+    run_name: Annotated[
+        str,
+        typer.Argument(
+            help="Run name to resume (e.g. 'example-com_a1b2'). List all with: phantom resumes"
+        ),
+    ],
+    non_interactive: Annotated[
+        bool,
+        typer.Option(
+            "-n",
+            "--non-interactive",
+            help="Run without TUI (exits on completion).",
+        ),
+    ] = False,
+    scan_mode: Annotated[
+        ScanMode,
+        typer.Option(
+            "-m",
+            "--scan-mode",
+            help="Scan depth mode.",
+        ),
+    ] = ScanMode.deep,
+    model: Annotated[
+        Optional[str],
+        typer.Option(
+            "--model",
+            help="Override LLM model.",
+        ),
+    ] = None,
+) -> None:
+    """
+    Resume an interrupted or in-progress scan.
+
+    Examples:
+        phantom resume example-com_a1b2
+        phantom resumes    # list all resumable runs first
+    """
+    import argparse
+
+    from pathlib import Path
+    from phantom.checkpoint.checkpoint import CheckpointManager, CHECKPOINT_INTERVAL
+
+    run_dir = Path("phantom_runs") / run_name
+    cp_mgr = CheckpointManager(run_dir)
+    cp = cp_mgr.load()
+
+    if cp is None:
+        console.print(f"[bold red]Cannot resume:[/] no checkpoint found for run [cyan]{run_name}[/].")
+        console.print("[dim]Use [bold]phantom resumes[/] to list all available runs.[/]")
+        raise typer.Exit(1)
+
+    if cp.status == "completed":
+        console.print(
+            f"[yellow]Run [cyan]{run_name}[/] is already [bold]completed[/]. Nothing to resume.[/]"
+        )
+        raise typer.Exit(0)
+
+    targets_info = cp.scan_config.get("targets", [])
+    if not targets_info:
+        console.print(
+            f"[red]Checkpoint for [cyan]{run_name}[/] has no target info — cannot auto-resume.[/]\n"
+            "[dim]Please re-run [bold]phantom scan -t <target>[/] manually.[/]"
+        )
+        raise typer.Exit(1)
+
+    if model:
+        import os
+        os.environ["PHANTOM_LLM"] = model
+
+    if sys.platform == "win32":
+        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+        if hasattr(sys.stdout, "reconfigure"):
+            sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        if hasattr(sys.stderr, "reconfigure"):
+            sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
+    import threading
+    threading.Thread(target=_auto_install_completion, daemon=True).start()
+
+    from phantom.config import apply_saved_config
+    from phantom.interface.main import (
+        check_docker_installed,
+        display_completion_message,
+        pull_docker_image,
+        validate_environment,
+    )
+    from phantom.interface.utils import collect_local_sources, rewrite_localhost_targets
+    from phantom.runtime.docker_runtime import HOST_GATEWAY_HOSTNAME
+
+    apply_saved_config()
+    check_docker_installed()
+    pull_docker_image()
+    validate_environment()
+
+    # Restore targets from checkpoint and rewrite localhost refs
+    rewrite_localhost_targets(targets_info, HOST_GATEWAY_HOSTNAME)
+    local_sources = collect_local_sources(targets_info)
+
+    args = argparse.Namespace(
+        target=[t.get("original", "") for t in targets_info],
+        instruction=cp.scan_config.get("user_instructions") or None,
+        instruction_file=None,
+        non_interactive=non_interactive,
+        scan_mode=scan_mode.value,
+        config=None,
+        output_format=None,
+        timeout=None,
+        auth_headers=[],
+        resume_run=run_name,
+        targets_info=targets_info,
+        local_sources=local_sources,
+    )
+
+    asyncio.run(_async_scan(args))
+
+    results_path = Path("phantom_runs") / run_name
+    display_completion_message(args, results_path)
+
+    if non_interactive:
+        from phantom.telemetry.tracer import get_global_tracer
+
+        tracer = get_global_tracer()
+        if tracer and tracer.vulnerability_reports:
+            raise typer.Exit(2)
+
+
+# ──────────────────────────── resumes ────────────────────────────
+
+
+@app.command()
+def resumes() -> None:
+    """
+    List all scan runs that can be resumed (have an interrupted or in-progress checkpoint).
+
+    Example:
+        phantom resumes
+        phantom resume <run-name>
+    """
+    import datetime
+    from pathlib import Path
+
+    from rich.table import Table
+
+    from phantom.checkpoint.checkpoint import CheckpointManager
+
+    runs_dir = Path("phantom_runs")
+    if not runs_dir.exists():
+        console.print("[dim]No scan runs found. Run [bold]phantom scan[/] first.[/]")
+        return
+
+    table = Table(
+        title="[bold]Resumable Scans",
+        show_lines=False,
+        header_style="bold dim",
+    )
+    table.add_column("Run Name", style="cyan")
+    table.add_column("Status", no_wrap=True)
+    table.add_column("Target")
+    table.add_column("Iters", style="dim", justify="right")
+    table.add_column("Vulns", style="green", justify="right")
+    table.add_column("Last Saved", style="dim")
+
+    _STATUS_STYLE: dict[str, str] = {
+        "in_progress": "[bold yellow]in_progress[/]",
+        "interrupted": "[bold red]interrupted[/]",
+        "crashed": "[bold red]crashed[/]",
+    }
+
+    found_any = False
+    for run_dir in sorted(runs_dir.iterdir(), reverse=True):
+        if not run_dir.is_dir():
+            continue
+        cp_file = run_dir / "checkpoint.json"
+        if not cp_file.exists():
+            continue
+        try:
+            cp_mgr = CheckpointManager(run_dir)
+            cp = cp_mgr.load()
+            if cp is None or cp.status == "completed":
+                continue
+
+            targets = cp.scan_config.get("targets", [])
+            target_strs = [t.get("original", "?") for t in targets[:2]]
+            target_display = ", ".join(target_strs)
+            if len(targets) > 2:
+                target_display += f" (+{len(targets) - 2} more)"
+
+            mtime = datetime.datetime.fromtimestamp(
+                cp_file.stat().st_mtime, tz=datetime.timezone.utc
+            ).strftime("%Y-%m-%d %H:%M")
+
+            status_display = _STATUS_STYLE.get(cp.status, cp.status)
+
+            table.add_row(
+                run_dir.name,
+                status_display,
+                target_display or "[dim]unknown[/]",
+                str(cp.iteration),
+                str(len(cp.vulnerability_reports)),
+                mtime,
+            )
+            found_any = True
+        except Exception:  # noqa: BLE001
+            continue
+
+    if not found_any:
+        console.print("[dim]No resumable scans found (all scans are completed or no checkpoints).[/]")
+        return
+
+    console.print(table)
+    console.print(
+        "\n[dim]Resume a scan with:[/] [bold]phantom resume [cyan]<run-name>[/][/]"
+    )
+
+
 # ──────────────────────────── Report Renderers ────────────────────────────
 
 
