@@ -190,10 +190,32 @@ class TestCheckpointPathTraversal:
         result = self._sanitize(malicious)
         assert ".." not in result.parts
 
-    def test_absolute_path_preserved(self, tmp_path):
-        """Absolute paths (e.g., pytest tmp_path) must not be mangled."""
+    def test_absolute_path_preserved_from_code(self, tmp_path):
+        """_sanitize_run_dir preserves absolute paths supplied by internal code.
+
+        Absolute paths are legitimate when CheckpointManager is called from
+        trusted code (e.g. pytest tmp_path).  The H-11 boundary fix lives in
+        sanitize_run_name() which is called by tui.py on user-supplied input
+        *before* the Path construction — not in _sanitize_run_dir.
+        """
         result = self._sanitize(tmp_path)
-        assert result.is_absolute() or str(result) == str(tmp_path).replace("..", "")
+        # _sanitize_run_dir only strips '..', so absolute paths from code are kept
+        assert result == tmp_path, (
+            "_sanitize_run_dir must not strip absolute paths from trusted code; "
+            "use sanitize_run_name() at the CLI boundary instead"
+        )
+
+    def test_sanitize_run_name_blocks_absolute_root_bypass(self):
+        """sanitize_run_name() is the H-11 v2 boundary fix: strips '/' prefix
+        so Path('phantom_runs') / sanitize_run_name('/etc/passwd') is safe.
+        """
+        from phantom.checkpoint.checkpoint import sanitize_run_name
+        safe = sanitize_run_name("/etc/passwd")
+        result = Path("phantom_runs") / safe
+        assert not result.is_absolute(), (
+            "H-11 v2: sanitize_run_name must prevent absolute path bypass via / prefix"
+        )
+        assert "phantom_runs" in str(result)
 
     def test_empty_path_gets_default(self):
         result = self._sanitize(Path(""))
@@ -237,7 +259,8 @@ class TestTerminalQuarantineMode:
         from phantom.tools.terminal.terminal_session import TerminalSession
         session = TerminalSession.__new__(TerminalSession)
         session.quarantine = quarantine
-        session._QUARANTINE_METACHARACTERS = frozenset(";|&$`")
+        # Use the class's actual metachar set (v0.9.75 includes \n and \r)
+        session._QUARANTINE_METACHARACTERS = TerminalSession._QUARANTINE_METACHARACTERS
         session._initialized = True
         session._cwd = "/workspace"
         session.prev_output = ""

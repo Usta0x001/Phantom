@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import time
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from typing import Any
@@ -255,6 +256,21 @@ class LLM:
 
         cost_before = self._total_stats.cost
         self._total_stats.requests += 1
+
+        # ── Audit: log the outgoing request ───────────────────────────────────
+        from phantom.logging.audit import get_audit_logger as _get_audit
+        _audit = _get_audit()
+        _audit_rid = (
+            _audit.log_llm_request(
+                agent_id=self.agent_id or "unknown",
+                model=self.config.litellm_model,
+                messages=messages,
+            )
+            if _audit else None
+        )
+        _audit_t0 = time.monotonic()
+        # ─────────────────────────────────────────────────────────────────────
+
         response = await acompletion(**self._build_completion_args(messages), stream=True)
 
         async for chunk in response:
@@ -295,9 +311,26 @@ class LLM:
 
         accumulated = normalize_tool_format(accumulated)
         accumulated = fix_incomplete_tool_call(_truncate_to_first_function(accumulated))
+        _parsed_tools = parse_tool_invocations(accumulated)
+
+        # ── Audit: log the completed response ────────────────────────────────
+        if _audit and _audit_rid:
+            _audit.log_llm_response(
+                agent_id=self.agent_id or "unknown",
+                request_id=_audit_rid,
+                model=self.config.litellm_model,
+                response_text=accumulated,
+                tool_invocations=_parsed_tools,
+                tokens_in=self._total_stats.input_tokens,
+                tokens_out=self._total_stats.output_tokens,
+                cost_usd=self._total_stats.cost - cost_before,
+                duration_ms=(time.monotonic() - _audit_t0) * 1000,
+            )
+        # ─────────────────────────────────────────────────────────────────────
+
         yield LLMResponse(
             content=accumulated,
-            tool_invocations=parse_tool_invocations(accumulated),
+            tool_invocations=_parsed_tools,
             thinking_blocks=self._extract_thinking(chunks, rebuilt),
         )
 

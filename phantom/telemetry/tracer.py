@@ -88,6 +88,14 @@ class Tracer:
         self._setup_telemetry()
         self._emit_run_started_event()
 
+        # ── Audit logger: initialise per-run audit log (PHANTOM_AUDIT_LOG=true) ──
+        try:
+            from phantom.logging.audit import init_audit_logger as _init_audit
+            _init_audit(run_id=self.run_id, run_dir=self.get_run_dir())
+        except Exception:  # noqa: BLE001
+            pass
+        # ─────────────────────────────────────────────────────────────────────────
+
     @property
     def events_file_path(self) -> Path:
         if self._events_file_path is None:
@@ -274,6 +282,12 @@ class Tracer:
         self._run_completed_emitted = False
         self._set_association_properties({"run_id": self.run_id, "run_name": self.run_name or ""})
         self._emit_run_started_event()
+        # Reinit audit logger for the new run name / directory
+        try:
+            from phantom.logging.audit import init_audit_logger as _init_audit
+            _init_audit(run_id=self.run_id, run_dir=self.get_run_dir())
+        except Exception:  # noqa: BLE001
+            pass
 
     def _emit_run_started_event(self) -> None:
         if not self._telemetry_enabled:

@@ -24,27 +24,58 @@ CHECKPOINT_INTERVAL = 5   # persist every N agent iterations
 
 
 def _sanitize_run_dir(run_dir: Path) -> Path:
-    """Strip path-traversal ``..`` components from a CheckpointManager run_dir.
+    """Strip ``..`` path-traversal components from a CheckpointManager run_dir.
 
-    This prevents an attacker who controls ``run_name`` / ``resume_run`` from
-    writing checkpoint files outside the ``phantom_runs/`` directory.  Absolute
-    paths (e.g., pytest tmp_path) are preserved; only ``..`` segments are dropped.
+    Only strips ``..`` segments so that absolute paths supplied by internal code
+    (e.g. pytest ``tmp_path``) are preserved as-is.  User-supplied run names from
+    the CLI **must** be sanitised with :func:`sanitize_run_name` *before* the
+    ``Path("phantom_runs") / name`` join so that the resulting path is always
+    relative and cannot escape ``phantom_runs/``.
 
     Examples::
 
-        Path("phantom_runs") / "../../evil"  ->  Path("phantom_runs/evil")
-        Path("/tmp/pytest-0/test_x")         ->  unchanged
-        Path("phantom_runs") / "myScan-01"   ->  unchanged
+        Path("phantom_runs") / "../../evil"   ->  Path("phantom_runs/evil")
+        Path("phantom_runs") / "myScan-01"    ->  unchanged
+        Path("/tmp/pytest-123/test_foo")      ->  unchanged  (absolute OK from code)
     """
     parts = run_dir.parts
     safe_parts = [p for p in parts if p != ".."]
     if not safe_parts:
         return Path("phantom_runs") / "unnamed"
-    # Reconstruct: first part may be a root component (/, \, C:\) — keep it.
     result = Path(safe_parts[0])
     for part in safe_parts[1:]:
         result = result / part
     return result
+
+
+def sanitize_run_name(name: str) -> str:
+    """Sanitize a **user-supplied** run name before building a ``Path``.
+
+    Call this at the CLI/TUI boundary (``tui.py``) before
+    ``Path("phantom_runs") / name`` to prevent H-11 absolute-root bypass::
+
+        # Attack: Path("phantom_runs") / "/etc/passwd"  →  Path("/etc/passwd")
+        # Fix:    Path("phantom_runs") / sanitize_run_name("/etc/passwd")
+        #         → Path("phantom_runs/etc/passwd")
+
+    Strips:
+    * Windows drive letter prefix (``C:``, ``D:``, …)
+    * Leading forward and back slashes (POSIX / Windows root)
+    * Windows UNC prefixes (``\\\\server``, ``//server``)
+    * ``..`` components (path traversal)
+    * Empty components
+
+    Returns ``"unnamed"`` when the name reduces to nothing.
+    """
+    import re
+
+    # Strip Windows drive letter (C:, D:, …)
+    name = re.sub(r"^[A-Za-z]:", "", name)
+    # Strip leading slashes / backslashes (POSIX root, Windows root, UNC)
+    name = name.lstrip("/\\")
+    # Split on both separators, drop empty parts and '..' segments
+    parts = [p for p in re.split(r"[/\\]", name) if p and p != ".."]
+    return "/".join(parts) if parts else "unnamed"
 
 
 def _get_hmac_key() -> bytes:

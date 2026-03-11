@@ -759,10 +759,10 @@ class PhantomTUIApp(App):  # type: ignore[misc]
 
         # ── Checkpoint manager (enables resume after stop / quit) ──────────
         from pathlib import Path as _Path
-        from phantom.checkpoint.checkpoint import CheckpointManager, CHECKPOINT_INTERVAL
+        from phantom.checkpoint.checkpoint import CheckpointManager, CHECKPOINT_INTERVAL, sanitize_run_name as _sanitize_run_name
         from phantom.config import Config
         _interval = int(Config.get("phantom_checkpoint_interval") or str(CHECKPOINT_INTERVAL))
-        _run_dir = _Path("phantom_runs") / self.scan_config["run_name"]
+        _run_dir = _Path("phantom_runs") / _sanitize_run_name(self.scan_config["run_name"])
         self._checkpoint_mgr: CheckpointManager = CheckpointManager(_run_dir, interval=_interval)
         self._phantom_agent: Any = None  # set when scan thread creates the agent
 

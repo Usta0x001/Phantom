@@ -116,6 +116,20 @@ class BaseAgent(metaclass=AgentMeta):
 
         self._add_to_agents_graph()
 
+        # ── Audit: log agent creation ──────────────────────────────────────────────────
+        from phantom.logging.audit import get_audit_logger as _get_audit
+        _audit = _get_audit()
+        if _audit:
+            _audit.log_agent_created(
+                agent_id=self.state.agent_id,
+                name=self.state.agent_name,
+                task=self.state.task,
+                parent_id=self.state.parent_id,
+                agent_type=self.__class__.__name__,
+                model=getattr(self.llm_config, "litellm_model", "unknown") or "unknown",
+            )
+        # ──────────────────────────────────────────────────────────────────────────────
+
     def _add_to_agents_graph(self) -> None:
         from phantom.tools.agents_graph import agents_graph_actions
 
@@ -184,6 +198,15 @@ class BaseAgent(metaclass=AgentMeta):
                 continue
 
             self.state.increment_iteration()
+
+            # ── Audit: log iteration ──────────────────────────────────────────
+            from phantom.logging.audit import get_audit_logger as _get_audit_it
+            _audit_it = _get_audit_it()
+            if _audit_it:
+                _audit_it.log_agent_iteration(
+                    self.state.agent_id, self.state.iteration, self.state.max_iterations
+                )
+            # ─────────────────────────────────────────────────────────────────
 
             if (
                 self.state.is_approaching_max_iterations()
@@ -261,6 +284,18 @@ class BaseAgent(metaclass=AgentMeta):
                             f"infinite loop."
                         )
                         logger.error(_abort_msg)
+                        # ── Audit: log RL abort ──────────────────────────────
+                        from phantom.logging.audit import get_audit_logger as _get_audit_rl
+                        _audit_rl = _get_audit_rl()
+                        if _audit_rl:
+                            _audit_rl.log_rate_limit_abort(
+                                agent_id=self.state.agent_id,
+                                model=getattr(self.llm_config, "litellm_model", "?") or "?",
+                                consecutive=_rl_consecutive,
+                                max_consecutive=_rl_max,
+                                abort_message=_abort_msg,
+                            )
+                        # ────────────────────────────────────────────────────
                         self.state.set_completed({"success": False, "error": _abort_msg})
                         if tracer:
                             tracer.update_agent_status(self.state.agent_id, "failed")
@@ -275,6 +310,18 @@ class BaseAgent(metaclass=AgentMeta):
                         _rl_max,
                         _sleep,
                     )
+                    # ── Audit: log RL backoff hit ────────────────────────────
+                    from phantom.logging.audit import get_audit_logger as _get_audit_rlh
+                    _audit_rlh = _get_audit_rlh()
+                    if _audit_rlh:
+                        _audit_rlh.log_rate_limit_hit(
+                            agent_id=self.state.agent_id,
+                            model=getattr(self.llm_config, "litellm_model", "?") or "?",
+                            consecutive=_rl_consecutive,
+                            max_consecutive=_rl_max,
+                            backoff_s=_sleep,
+                        )
+                    # ────────────────────────────────────────────────────────
                     await asyncio.sleep(_sleep)
                     continue
                 result = self._handle_llm_error(e, tracer)

@@ -28,9 +28,11 @@ class TerminalSession:
     HISTORY_LIMIT = 10_000
     PS1_END = "]$ "
 
-    # C-04: shell metacharacters that enable injection/chaining.
+    # C-04: shell metacharacters that enable injection/chaining or newline-based
+    # multi-command injection (pane.send_keys receives the raw string, so \n/\r
+    # would physically press Enter and execute a second command).
     # Blocked when quarantine=True to prevent untrusted data from pivoting.
-    _QUARANTINE_METACHARACTERS: frozenset[str] = frozenset(";|&$`")
+    _QUARANTINE_METACHARACTERS: frozenset[str] = frozenset(";|&$`\n\r")
 
     def __init__(self, session_id: str, work_dir: str = "/workspace", quarantine: bool = False) -> None:
         self.session_id = session_id
@@ -409,6 +411,19 @@ class TerminalSession:
         if self.quarantine and not is_special_key:
             blocked = [c for c in self._QUARANTINE_METACHARACTERS if c in command]
             if blocked:
+                # ── Audit: log quarantine block ──────────────────────────────
+                try:
+                    from phantom.logging.audit import get_audit_logger as _get_aud_q
+                    _aud_q = _get_aud_q()
+                    if _aud_q:
+                        _aud_q.log_quarantine_block(
+                            agent_id="terminal",
+                            command=command,
+                            blocked_chars=blocked,
+                        )
+                except Exception:  # noqa: BLE001
+                    pass
+                # ────────────────────────────────────────────────────────────
                 return {
                     "content": (
                         f"[QUARANTINE] Command blocked: contains shell metacharacter(s) "

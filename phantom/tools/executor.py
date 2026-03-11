@@ -1,6 +1,7 @@
 import html
 import inspect
 import os
+import time
 from typing import Any
 
 import httpx
@@ -30,10 +31,33 @@ async def execute_tool(tool_name: str, agent_state: Any | None = None, **kwargs:
     execute_in_sandbox = should_execute_in_sandbox(tool_name)
     sandbox_mode = os.getenv("PHANTOM_SANDBOX_MODE", "false").lower() == "true"
 
-    if execute_in_sandbox and not sandbox_mode:
-        return await _execute_tool_in_sandbox(tool_name, agent_state, **kwargs)
-
-    return await _execute_tool_locally(tool_name, agent_state, **kwargs)
+    # ── Audit: log tool invocation ─────────────────────────────────────────
+    from phantom.logging.audit import get_audit_logger as _get_audit
+    _audit = _get_audit()
+    _agent_id = getattr(agent_state, "agent_id", "unknown") or "unknown"
+    _exec_id = _audit.log_tool_start(_agent_id, tool_name, kwargs) if _audit else None
+    _t0 = time.monotonic()
+    # ──────────────────────────────────────────────────────────────────
+    try:
+        if execute_in_sandbox and not sandbox_mode:
+            result = await _execute_tool_in_sandbox(tool_name, agent_state, **kwargs)
+        else:
+            result = await _execute_tool_locally(tool_name, agent_state, **kwargs)
+        if _audit and _exec_id:
+            _audit.log_tool_result(
+                _exec_id, _agent_id, tool_name, result,
+                (time.monotonic() - _t0) * 1000,
+            )
+        return result
+    except Exception:
+        if _audit and _exec_id:
+            import traceback as _tb
+            _audit.log_tool_error(
+                _exec_id, _agent_id, tool_name,
+                _tb.format_exc()[-500:],
+                (time.monotonic() - _t0) * 1000,
+            )
+        raise
 
 
 async def _execute_tool_in_sandbox(tool_name: str, agent_state: Any, **kwargs: Any) -> Any:
