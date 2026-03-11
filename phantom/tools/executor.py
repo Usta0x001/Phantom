@@ -205,7 +205,11 @@ def _check_error_result(result: Any) -> tuple[bool, Any]:
     error_payload: Any = None
 
     if (isinstance(result, dict) and "error" in result) or (
-        isinstance(result, str) and result.strip().lower().startswith("error:")
+        # BUG FIX C: also detect exceptions wrapped by execute_tool_with_validation,
+        # which returns f"Error executing {tool_name}: {error_str}" — different from
+        # the "Error: ..." prefix returned by validation helpers.
+        isinstance(result, str)
+        and result.strip().lower().startswith(("error:", "error executing"))
     ):
         is_error = True
         error_payload = result

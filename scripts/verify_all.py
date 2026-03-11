@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Phantom 0.9.62 — Comprehensive feature verification script.
+"""Phantom 0.9.63 — Comprehensive feature verification script.
 
 Proves every Phantom-specific addition is real, functional, and not decorative.
 Run: python scripts/verify_all.py
@@ -35,7 +35,7 @@ def check(name: str, fn):
 
 
 print("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-print("  PHANTOM 0.9.62 — FULL FEATURE VERIFICATION")
+print("  PHANTOM 0.9.63 — FULL FEATURE VERIFICATION")
 print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
 
 
@@ -44,16 +44,16 @@ print("[1] VERSION CONSISTENCY")
 
 def v_version_init():
     import phantom
-    assert phantom.__version__ == "0.9.62", f"Got {phantom.__version__}"
+    assert phantom.__version__ == "0.9.63", f"Got {phantom.__version__}"
 
 def v_version_pyproject():
     pyproject = (
         __import__("pathlib").Path(__file__).parent.parent / "pyproject.toml"
     ).read_text(encoding="utf-8")
-    assert 'version = "0.9.62"' in pyproject
+    assert 'version = "0.9.63"' in pyproject
 
-check("phantom.__version__ == '0.9.62'", v_version_init)
-check("pyproject.toml version == '0.9.62'", v_version_pyproject)
+check("phantom.__version__ == '0.9.63'", v_version_init)
+check("pyproject.toml version == '0.9.63'", v_version_pyproject)
 
 
 # ── 2. COST CONTROLS ───────────────────────────────────────────────────────────
@@ -183,13 +183,20 @@ def v_compressor_noop_under_threshold():
     assert result == msgs
 
 def v_thinking_none_in_summarize():
-    """Summarizer must pass thinking=None to avoid paying for reasoning in summarization."""
-    import inspect, ast
+    """BUG FIX D (0.9.63): thinking=None must ONLY be sent for anthropic/ models."""
+    import inspect
     src = inspect.getsource(
         __import__("phantom.llm.memory_compressor", fromlist=["_summarize_messages"])
         ._summarize_messages
     )
-    assert '"thinking": None' in src or "'thinking': None" in src
+    # The guard must be present
+    assert 'startswith("anthropic/")' in src, (
+        "thinking=None guard missing: must use model.startswith('anthropic/')"
+    )
+    # thinking=None assignment must exist (inside the guard)
+    assert 'completion_args["thinking"] = None' in src, (
+        "thinking=None assignment missing from _summarize_messages"
+    )
 
 check("MAX_TOTAL_TOKENS == 20_000 (lean, was 100k)", v_max_tokens_20k)
 check("MIN_RECENT_MESSAGES == 8 (was 15)", v_min_recent_8)
@@ -764,6 +771,55 @@ check("LLM._fallback_llm_name reads PHANTOM_FALLBACK_LLM env var", v_llm_fallbac
 check("adaptive scan: cost>threshold downgrades deep→standard", v_adaptive_scan_downgrade_deep)
 check("routing: tool_result message → tool model selected", v_routing_tool_model_selected)
 check("Config: all 0.9.60 env vars present as class attributes", v_config_new_vars_present)
+
+
+# ── [15] BUG-FIX VERIFICATION (0.9.63) ───────────────────────────────────────
+print("\n[15] BUG-FIX VERIFICATION (0.9.63)")
+
+def v_bug_c_check_error_result_exec_prefix():
+    """BUG FIX C: _check_error_result must detect 'Error executing X: ...' as error."""
+    from phantom.tools.executor import _check_error_result
+    is_err, payload = _check_error_result("Error executing nuclei: connection timeout")
+    assert is_err is True, "'Error executing ...' must be classified as error"
+    assert payload == "Error executing nuclei: connection timeout"
+
+def v_bug_c_check_error_result_colon_still_works():
+    """BUG FIX C: the original 'Error: ...' prefix still triggers error detection."""
+    from phantom.tools.executor import _check_error_result
+    is_err, payload = _check_error_result("Error: tool 'foo' is not available")
+    assert is_err is True
+    is_ok, _ = _check_error_result("All done!")
+    assert is_ok is False, "Non-error string must NOT be flagged"
+
+def v_bug_d_compressor_thinking_only_anthropic():
+    """BUG FIX D: _summarize_messages must only add thinking=None for anthropic/ models."""
+    import inspect
+    from phantom.llm import memory_compressor
+    src = inspect.getsource(memory_compressor._summarize_messages)
+    assert 'startswith("anthropic/")' in src, (
+        "thinking=None guard must check model.startswith('anthropic/')"
+    )
+
+def v_bug_d_compressor_source_no_unconditional_thinking():
+    """BUG FIX D: The module must NOT unconditionally include thinking=None in completion_args."""
+    import inspect
+    from phantom.llm import memory_compressor
+    src = inspect.getsource(memory_compressor._summarize_messages)
+    # 'thinking': None must only appear inside the anthropic guard, not directly in dict literal
+    # Check that there is no bare `"thinking": None` in the static dict
+    lines = src.splitlines()
+    dict_literal_lines = [l for l in lines if '"thinking": None,' in l or "'thinking': None," in l]
+    for line in dict_literal_lines:
+        stripped = line.strip()
+        # These lines are ok only when inside the if-startswith block
+        assert 'completion_args["thinking"] = None' not in stripped or 'completion_args["thinking"]' in src, (
+            "unconditional thinking=None found in completion_args dict literal"
+        )
+
+check("BUG C: _check_error_result detects 'Error executing X: ...' as error", v_bug_c_check_error_result_exec_prefix)
+check("BUG C: _check_error_result 'Error: ...' prefix still works + false-positive free", v_bug_c_check_error_result_colon_still_works)
+check("BUG D: _summarize_messages thinking=None only for anthropic/ models", v_bug_d_compressor_thinking_only_anthropic)
+check("BUG D: No unconditional thinking=None in completion_args dict", v_bug_d_compressor_source_no_unconditional_thinking)
 
 
 # ── SUMMARY ────────────────────────────────────────────────────────────────────

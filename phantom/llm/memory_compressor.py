@@ -137,9 +137,12 @@ def _summarize_messages(
             "messages": [{"role": "user", "content": prompt}],
             "timeout": timeout,
             "max_tokens": COMPRESSOR_MAX_TOKENS,
-            # Disable thinking/reasoning for summarization — pure cost waste
-            "thinking": None,
         }
+        # BUG FIX D: only disable extended thinking for native Anthropic models.
+        # Passing `thinking=None` to OpenAI-compatible (or Groq/Gemini) endpoints
+        # is an unknown parameter that may trigger a 400 Bad Request on strict APIs.
+        if model and model.startswith("anthropic/"):
+            completion_args["thinking"] = None
         if api_key:
             completion_args["api_key"] = api_key
         if api_base:
