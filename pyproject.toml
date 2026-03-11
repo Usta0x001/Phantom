@@ -92,6 +92,7 @@ bandit = "^1.8.3"
 pytest = "^8.4.0"
 pytest-asyncio = "^1.0.0"
 pytest-cov = "^6.1.1"
+pytest-timeout = "^2.4.0"
 pytest-mock = "^3.14.1"
 
 # Development tools
@@ -346,17 +347,31 @@ minversion = "6.0"
 addopts = [
     "--strict-markers",
     "--strict-config",
-    # Coverage flags require pytest-cov (installed via: pip install -e '.[dev]' or poetry install --with dev)
-    # Run with: pytest --cov=phantom --cov-report=term-missing
+    "--timeout=60",
+    # Add --cov=phantom --cov-branch --cov-report=term-missing to CI runs.
+    # fail_under=80 is enforced via [tool.coverage.report] below.
 ]
 testpaths = ["tests"]
 python_files = ["test_*.py", "*_test.py"]
 python_functions = ["test_*"]
 python_classes = ["Test*"]
 asyncio_mode = "auto"
+filterwarnings = [
+    # litellm internally calls asyncio.iscoroutinefunction(), deprecated in
+    # Python 3.12 and slated for removal in 3.16.  Third-party; suppress until
+    # litellm ships a fix.
+    "ignore:'asyncio.iscoroutinefunction' is deprecated:DeprecationWarning:litellm",
+    # traceloop-sdk still uses Pydantic v1 class-based `class Config:` pattern.
+    # Third-party; suppress until traceloop migrates to ConfigDict.
+    "ignore::pydantic.warnings.PydanticDeprecatedSince20:traceloop",
+]
+markers = [
+    "sandbox: mark test as requiring sandbox-only deps (libtmux, tmux, IPython kernel) — skip in CI without sandbox extras",
+]
 
 [tool.coverage.run]
 source = ["phantom"]
+branch = true
 omit = [
     "*/tests/*",
     "*/migrations/*",
@@ -364,6 +379,7 @@ omit = [
 ]
 
 [tool.coverage.report]
+fail_under = 80
 exclude_lines = [
     "pragma: no cover",
     "def __repr__",

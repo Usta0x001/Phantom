@@ -1,5 +1,6 @@
 import contextlib
 import os
+import random
 import secrets
 import socket
 import time
@@ -40,11 +41,29 @@ class DockerRuntime(AbstractRuntime):
         self._tool_server_token: str | None = None
         self._caido_port: int | None = None
 
-    def _find_available_port(self) -> int:
-        # Bind to port 0 to let the OS pick a free port, then record it.
-        # There is an inherent TOCTOU window between releasing the socket and
-        # Docker binding the same port, but retries in _create_container handle
-        # the rare collision case.
+    def _find_available_port(self, max_attempts: int = 5) -> int:
+        """Find a free TCP port with jittered exponential back-off.
+
+        Each attempt picks a fresh ephemeral port and then tries a strict
+        re-bind (no SO_REUSEADDR) to confirm the port is still unclaimed.
+        If the re-bind fails the port was seized in the TOCTOU window; back
+        off and pick a new one.  _create_container's retry loop handles the
+        residual rare collision between this method and Docker binding.
+        """
+        for attempt in range(max_attempts):
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                s.bind(("", 0))
+                port = cast("int", s.getsockname()[1])
+            # Strict re-bind: no SO_REUSEADDR means it fails if port is in use.
+            try:
+                with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as chk:
+                    chk.bind(("127.0.0.1", port))
+                return port
+            except OSError:
+                delay = min(0.025 * (2**attempt), 0.4) + random.uniform(0, 0.010)
+                time.sleep(delay)
+        # All probes collided — return best-effort; _create_container retries.
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
             s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             s.bind(("", 0))
