@@ -346,9 +346,6 @@ class BaseAgent(metaclass=AgentMeta):
                     if tracer:
                         tracer.caido_url = f"localhost:{caido_port}"
             except Exception as e:
-                from phantom.telemetry import posthog
-
-                posthog.error("sandbox_init_error", str(e))
                 raise
 
         if not self.state.task:

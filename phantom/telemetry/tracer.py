@@ -10,7 +10,6 @@ from opentelemetry import trace
 from opentelemetry.trace import SpanContext, SpanKind
 
 from phantom.config import Config
-from phantom.telemetry import posthog
 from phantom.telemetry.flags import is_otel_enabled
 from phantom.telemetry.utils import (
     TelemetrySanitizer,
@@ -362,7 +361,6 @@ class Tracer:
 
         self.vulnerability_reports.append(report)
         logger.info(f"Added vulnerability report: {report_id} - {title}")
-        posthog.finding(severity)
         self._emit_event(
             "finding.created",
             payload={"report": report},
@@ -423,7 +421,6 @@ class Tracer:
             source="phantom.findings",
         )
         self.save_run_data(mark_complete=True)
-        posthog.end(self, exit_reason="finished_by_tool")
 
     def log_agent_creation(
         self,

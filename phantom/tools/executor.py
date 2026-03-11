@@ -5,7 +5,6 @@ from typing import Any
 import httpx
 
 from phantom.config import Config
-from phantom.telemetry import posthog
 
 
 if os.getenv("PHANTOM_SANDBOX_MODE", "false").lower() == "false":
@@ -84,17 +83,14 @@ async def _execute_tool_in_sandbox(tool_name: str, agent_state: Any, **kwargs: A
             response.raise_for_status()
             response_data = response.json()
             if response_data.get("error"):
-                posthog.error("tool_execution_error", f"{tool_name}: {response_data['error']}")
                 raise RuntimeError(f"Sandbox execution error: {response_data['error']}")
             return response_data.get("result")
         except httpx.HTTPStatusError as e:
-            posthog.error("tool_http_error", f"{tool_name}: HTTP {e.response.status_code}")
             if e.response.status_code == 401:
                 raise RuntimeError("Authentication failed: Invalid or missing sandbox token") from e
             raise RuntimeError(f"HTTP error calling tool server: {e.response.status_code}") from e
         except httpx.RequestError as e:
             error_type = type(e).__name__
-            posthog.error("tool_request_error", f"{tool_name}: {error_type}")
             raise RuntimeError(f"Request error calling tool server: {error_type}") from e
 
 

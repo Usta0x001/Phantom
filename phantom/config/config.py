@@ -69,7 +69,6 @@ class Config:
     # Telemetry
     phantom_telemetry = "1"
     phantom_otel_telemetry = None
-    phantom_posthog_telemetry = None
     traceloop_base_url = None
     traceloop_api_key = None
     traceloop_headers = None

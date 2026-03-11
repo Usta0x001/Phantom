@@ -41,7 +41,6 @@ from phantom.interface.utils import (  # noqa: E402
     validate_llm_response,
 )
 from phantom.runtime.docker_runtime import HOST_GATEWAY_HOSTNAME  # noqa: E402
-from phantom.telemetry import posthog  # noqa: E402
 from phantom.telemetry.tracer import get_global_tracer  # noqa: E402
 
 
@@ -549,30 +548,15 @@ def main() -> None:
 
     is_whitebox = bool(args.local_sources)
 
-    posthog.start(
-        model=Config.get("phantom_llm"),
-        scan_mode=args.scan_mode,
-        is_whitebox=is_whitebox,
-        interactive=not args.non_interactive,
-        has_instructions=bool(args.instruction),
-    )
-
-    exit_reason = "user_exit"
     try:
         if args.non_interactive:
             asyncio.run(run_cli(args))
         else:
             asyncio.run(run_tui(args))
     except KeyboardInterrupt:
-        exit_reason = "interrupted"
-    except Exception as e:
-        exit_reason = "error"
-        posthog.error("unhandled_exception", str(e))
+        pass
+    except Exception:
         raise
-    finally:
-        tracer = get_global_tracer()
-        if tracer:
-            posthog.end(tracer, exit_reason=exit_reason)
 
     results_path = Path("phantom_runs") / args.run_name
     display_completion_message(args, results_path)

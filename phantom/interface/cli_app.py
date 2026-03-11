@@ -316,32 +316,12 @@ def scan(
     pull_docker_image()
     validate_environment()
 
-    from phantom.config import Config
-    from phantom.telemetry import posthog
-    from phantom.telemetry.tracer import get_global_tracer
-
-    is_whitebox = bool(getattr(args, "local_sources", None))
-    posthog.start(
-        model=Config.get("phantom_llm"),
-        scan_mode=args.scan_mode.value if hasattr(args.scan_mode, "value") else args.scan_mode,
-        is_whitebox=is_whitebox,
-        interactive=not non_interactive,
-        has_instructions=bool(instruction),
-    )
-
-    exit_reason = "user_exit"
     try:
         asyncio.run(_async_scan(args))
     except KeyboardInterrupt:
-        exit_reason = "interrupted"
-    except Exception as _exc:
-        exit_reason = "error"
-        posthog.error("unhandled_exception", str(_exc))
+        pass
+    except Exception:
         raise
-    finally:
-        _tracer = get_global_tracer()
-        if _tracer:
-            posthog.end(_tracer, exit_reason=exit_reason)
 
     results_path = Path("phantom_runs") / args.run_name
     display_completion_message(args, results_path)
@@ -504,31 +484,12 @@ def resume(
         local_sources=local_sources,
     )
 
-    from phantom.config import Config
-    from phantom.telemetry import posthog
-    from phantom.telemetry.tracer import get_global_tracer
-
-    posthog.start(
-        model=Config.get("phantom_llm"),
-        scan_mode=scan_mode.value,
-        is_whitebox=bool(local_sources),
-        interactive=not non_interactive,
-        has_instructions=bool(cp.scan_config.get("user_instructions")),
-    )
-
-    exit_reason = "user_exit"
     try:
         asyncio.run(_async_scan(args))
     except KeyboardInterrupt:
-        exit_reason = "interrupted"
-    except Exception as _exc:
-        exit_reason = "error"
-        posthog.error("unhandled_exception", str(_exc))
+        pass
+    except Exception:
         raise
-    finally:
-        _tracer = get_global_tracer()
-        if _tracer:
-            posthog.end(_tracer, exit_reason=exit_reason)
 
     results_path = Path("phantom_runs") / run_name
     display_completion_message(args, results_path)

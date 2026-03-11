@@ -44,16 +44,16 @@ print("[1] VERSION CONSISTENCY")
 
 def v_version_init():
     import phantom
-    assert phantom.__version__ == "0.9.65", f"Got {phantom.__version__}"
+    assert phantom.__version__ == "0.9.66", f"Got {phantom.__version__}"
 
 def v_version_pyproject():
     pyproject = (
         __import__("pathlib").Path(__file__).parent.parent / "pyproject.toml"
     ).read_text(encoding="utf-8")
-    assert 'version = "0.9.65"' in pyproject
+    assert 'version = "0.9.66"' in pyproject
 
-check("phantom.__version__ == '0.9.65'", v_version_init)
-check("pyproject.toml version == '0.9.65'", v_version_pyproject)
+check("phantom.__version__ == '0.9.66'", v_version_init)
+check("pyproject.toml version == '0.9.66'", v_version_pyproject)
 
 
 # ── 2. COST CONTROLS ───────────────────────────────────────────────────────────
@@ -1011,21 +1011,23 @@ def v_cli_resume_restores_scan_mode():
         "run_cli must restore scan_mode from cp.scan_config on resume"
     )
 
-def v_posthog_in_cli_app_scan():
-    """cli_app scan command must call posthog.start and posthog.end."""
+def v_no_posthog_in_cli_app_scan():
+    """cli_app scan command must NOT contain posthog calls (telemetry removed)."""
     import inspect
     from phantom.interface import cli_app
     src = inspect.getsource(cli_app.scan)
-    assert "posthog.start" in src, "scan() must call posthog.start"
-    assert "posthog.end" in src, "scan() must call posthog.end"
+    assert "posthog.start" not in src, "scan() must not call posthog.start"
+    assert "posthog.end" not in src, "scan() must not call posthog.end"
+    assert "posthog.error" not in src, "scan() must not call posthog.error"
 
-def v_posthog_in_cli_app_resume():
-    """cli_app resume command must call posthog.start and posthog.end."""
+def v_no_posthog_in_cli_app_resume():
+    """cli_app resume command must NOT contain posthog calls (telemetry removed)."""
     import inspect
     from phantom.interface import cli_app
     src = inspect.getsource(cli_app.resume)
-    assert "posthog.start" in src, "resume() must call posthog.start"
-    assert "posthog.end" in src, "resume() must call posthog.end"
+    assert "posthog.start" not in src, "resume() must not call posthog.start"
+    assert "posthog.end" not in src, "resume() must not call posthog.end"
+    assert "posthog.error" not in src, "resume() must not call posthog.error"
 
 check("interface/__init__.py uses lazy __getattr__ (no eager litellm import)", v_interface_init_lazy_import)
 check("phantom CLI startup import < 5 seconds", v_startup_time_fast)
@@ -1035,8 +1037,8 @@ check("TUI __init__ seeds tracer with prior vulnerabilities on resume", v_tui_re
 check("CLI run_cli extends max_iterations on resume", v_cli_resume_extends_iterations)
 check("scan_mode stored in checkpoint scan_config (cli + tui)", v_scan_mode_stored_in_checkpoint)
 check("CLI run_cli restores scan_mode from checkpoint", v_cli_resume_restores_scan_mode)
-check("posthog tracking in cli_app scan command", v_posthog_in_cli_app_scan)
-check("posthog tracking in cli_app resume command", v_posthog_in_cli_app_resume)
+check("no posthog calls in cli_app scan command", v_no_posthog_in_cli_app_scan)
+check("no posthog calls in cli_app resume command", v_no_posthog_in_cli_app_resume)
 
 
 # ── SUMMARY ────────────────────────────────────────────────────────────────────
