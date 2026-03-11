@@ -69,6 +69,10 @@ def sanitize_run_name(name: str) -> str:
     """
     import re
 
+    # Strip null bytes (\x00 is invalid in filesystem paths on POSIX and Windows)
+    name = name.replace("\x00", "")
+    # Cap length — filesystem names are typically limited to 255 bytes
+    name = name[:128]
     # Strip Windows drive letter (C:, D:, …)
     name = re.sub(r"^[A-Za-z]:", "", name)
     # Strip leading slashes / backslashes (POSIX root, Windows root, UNC)

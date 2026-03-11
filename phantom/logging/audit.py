@@ -82,9 +82,17 @@ class AuditLogger:
 
         if self.enabled:
             if run_dir is None:
+                import re as _re
+                # Sanitize run_id before using it in a path to prevent traversal
+                # (e.g. run_id="../../etc/evil" must not escape phantom_runs/)
+                _safe_id = _re.sub(r"^[A-Za-z]:", "", run_id.replace("\x00", "")).lstrip("/\\")
+                _safe_id = "/".join(
+                    p for p in _re.split(r"[/\\]", _safe_id) if p and p != ".."
+                ) or "unnamed"
+                _safe_id = _safe_id[:128]
                 base = Path.cwd() / "phantom_runs"
                 base.mkdir(exist_ok=True)
-                run_dir = base / run_id
+                run_dir = base / _safe_id
             run_dir.mkdir(parents=True, exist_ok=True)
             self._jsonl_path: Path | None = run_dir / "audit.jsonl"
             self._log_path: Path | None = run_dir / "audit.log"

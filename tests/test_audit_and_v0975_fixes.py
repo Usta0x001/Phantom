@@ -102,6 +102,43 @@ class TestH11AbsoluteRootBypass:
         safe = self._sanitize_name("/")
         assert safe == "unnamed"
 
+    def test_null_bytes_stripped(self):
+        """Null bytes in run_name must be stripped (invalid in filesystem paths)."""
+        safe = self._sanitize_name("good\x00name")
+        assert "\x00" not in safe
+        assert "good" in safe
+        assert "name" in safe
+
+    def test_excessively_long_name_capped(self):
+        """Run names over 128 characters must be truncated to prevent FS issues."""
+        long_name = "a" * 300
+        safe = self._sanitize_name(long_name)
+        assert len(safe) <= 128, f"Expected cap at 128, got {len(safe)}"
+
+    def test_audit_run_id_traversal_without_run_dir(self, tmp_path):
+        """init_audit_logger with run_id='../../evil' and run_dir=None must not escape phantom_runs/."""
+        import phantom.logging.audit as _audit_mod
+        orig = _audit_mod._instance
+        orig_cwd = Path.cwd()
+        try:
+            import os
+            os.chdir(tmp_path)
+            from phantom.logging.audit import AuditLogger
+            evil_id = "../../evil"
+            with patch.dict(os.environ, {"PHANTOM_AUDIT_LOG": "true"}):
+                al = AuditLogger(run_id=evil_id, run_dir=None)
+            assert al._jsonl_path is not None
+            # Must stay within tmp_path/phantom_runs/ — not escape via ..
+            resolved = al._jsonl_path.resolve()
+            phantom_runs = (tmp_path / "phantom_runs").resolve()
+            assert str(resolved).startswith(str(phantom_runs)), (
+                f"CRITICAL: audit log written outside phantom_runs/ — "
+                f"run_id traversal not blocked. Path: {resolved}"
+            )
+        finally:
+            os.chdir(orig_cwd)
+            _audit_mod._instance = orig
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # C-04 v2: Newline injection — \n and \r must be in quarantine blocklist
@@ -502,6 +539,29 @@ class TestAuditLoggerWiring:
         src = Path("phantom/agents/base_agent.py").read_text(encoding="utf-8")
         assert "log_rate_limit_hit" in src, "base_agent.py must call log_rate_limit_hit"
         assert "log_rate_limit_abort" in src, "base_agent.py must call log_rate_limit_abort"
+
+    def test_base_agent_has_agent_completed_hook(self):
+        """base_agent.py must call log_agent_completed on the successful return path."""
+        src = Path("phantom/agents/base_agent.py").read_text(encoding="utf-8")
+        assert "log_agent_completed" in src, (
+            "base_agent.py must call log_agent_completed — "
+            "the audit trail has no success-completion events without this"
+        )
+
+    def test_base_agent_has_agent_failed_hook(self):
+        """base_agent.py must call log_agent_failed on failure return paths."""
+        src = Path("phantom/agents/base_agent.py").read_text(encoding="utf-8")
+        assert "log_agent_failed" in src, (
+            "base_agent.py must call log_agent_failed — "
+            "failure paths (RL abort, sandbox error, LLM error) are invisible without this"
+        )
+
+    def test_base_agent_has_checkpoint_log_hook(self):
+        """base_agent.py must call log_checkpoint when saving a checkpoint."""
+        src = Path("phantom/agents/base_agent.py").read_text(encoding="utf-8")
+        assert "log_checkpoint" in src, (
+            "base_agent.py must call log_checkpoint after checkpoint saves"
+        )
 
     def test_terminal_session_has_quarantine_audit_hook(self):
         src = Path("phantom/tools/terminal/terminal_session.py").read_text(encoding="utf-8")

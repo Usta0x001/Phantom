@@ -251,6 +251,19 @@ class BaseAgent(metaclass=AgentMeta):
                         self.state.set_completed({"success": True})
                         if tracer:
                             tracer.update_agent_status(self.state.agent_id, "completed")
+                        # ── Audit: log agent completed ────────────────────────────
+                        from phantom.logging.audit import get_audit_logger as _get_audit_done
+                        _audit_done = _get_audit_done()
+                        if _audit_done:
+                            _audit_done.log_agent_completed(
+                                agent_id=self.state.agent_id,
+                                name=self.state.agent_name,
+                                task=self.state.task,
+                                result=self.state.final_result,
+                                iterations=self.state.iteration,
+                                duration_ms=0.0,
+                            )
+                        # ─────────────────────────────────────────────────────────
                         return self.state.final_result or {}
                     await self._enter_waiting_state(tracer, task_completed=True)
                     continue
@@ -299,6 +312,18 @@ class BaseAgent(metaclass=AgentMeta):
                         self.state.set_completed({"success": False, "error": _abort_msg})
                         if tracer:
                             tracer.update_agent_status(self.state.agent_id, "failed")
+                        # ── Audit: log agent failed (RL abort) ───────────────────
+                        from phantom.logging.audit import get_audit_logger as _get_audit_rla
+                        _audit_rla = _get_audit_rla()
+                        if _audit_rla:
+                            _audit_rla.log_agent_failed(
+                                agent_id=self.state.agent_id,
+                                name=self.state.agent_name,
+                                error=_abort_msg,
+                                iterations=_rl_consecutive,
+                                duration_ms=0.0,
+                            )
+                        # ────────────────────────────────────────────────────────
                         return self.state.final_result or {"success": False, "error": _abort_msg}
                     _backoff = min(300.0, 30.0 * (2.0 ** (_rl_consecutive - 1)))
                     _jitter = _backoff * random.uniform(0.0, 0.2)
@@ -335,6 +360,18 @@ class BaseAgent(metaclass=AgentMeta):
                         self.state.set_completed({"success": False, "error": str(e)})
                         if tracer:
                             tracer.update_agent_status(self.state.agent_id, "failed")
+                        # ── Audit: log agent failed (unhandled error) ─────────────
+                        from phantom.logging.audit import get_audit_logger as _get_audit_err
+                        _audit_err = _get_audit_err()
+                        if _audit_err:
+                            _audit_err.log_agent_failed(
+                                agent_id=self.state.agent_id,
+                                name=self.state.agent_name,
+                                error=str(e),
+                                iterations=self.state.iteration,
+                                duration_ms=0.0,
+                            )
+                        # ────────────────────────────────────────────────────────
                         raise
                     await self._enter_waiting_state(tracer, error_occurred=True)
                     continue
@@ -636,6 +673,16 @@ class BaseAgent(metaclass=AgentMeta):
                 scan_config=tracer.scan_config or {} if tracer else {},
             )
             checkpoint_mgr.save(cp)
+            # ── Audit: log checkpoint saved ──────────────────────────────
+            from phantom.logging.audit import get_audit_logger as _get_audit_ck
+            _audit_ck = _get_audit_ck()
+            if _audit_ck:
+                _audit_ck.log_checkpoint(
+                    agent_id=self.state.agent_id,
+                    run_dir=str(checkpoint_mgr.run_dir),
+                    iteration=self.state.iteration,
+                )
+            # ────────────────────────────────────────────────────────────
         except Exception:  # noqa: BLE001
             logger.warning("Checkpoint save failed", exc_info=True)
 
@@ -659,6 +706,18 @@ class BaseAgent(metaclass=AgentMeta):
                         {"error": error_msg, "details": error_details},
                     )
                     tracer.update_tool_execution(exec_id, "failed", {"details": error_details})
+            # ── Audit: log agent failed (sandbox error) ───────────────────
+            from phantom.logging.audit import get_audit_logger as _get_audit_sb
+            _audit_sb = _get_audit_sb()
+            if _audit_sb:
+                _audit_sb.log_agent_failed(
+                    agent_id=self.state.agent_id,
+                    name=self.state.agent_name,
+                    error=error_msg,
+                    iterations=self.state.iteration,
+                    duration_ms=0.0,
+                )
+            # ─────────────────────────────────────────────────────────────
             return {"success": False, "error": error_msg, "details": error_details}
 
         self.state.enter_waiting_state()
@@ -694,6 +753,18 @@ class BaseAgent(metaclass=AgentMeta):
                         {"error": error_msg, "details": error_details},
                     )
                     tracer.update_tool_execution(exec_id, "failed", {"details": error_details})
+            # ── Audit: log agent failed (LLM error) ───────────────────────
+            from phantom.logging.audit import get_audit_logger as _get_audit_llme
+            _audit_llme = _get_audit_llme()
+            if _audit_llme:
+                _audit_llme.log_agent_failed(
+                    agent_id=self.state.agent_id,
+                    name=self.state.agent_name,
+                    error=error_msg,
+                    iterations=self.state.iteration,
+                    duration_ms=0.0,
+                )
+            # ─────────────────────────────────────────────────────────────
             return {"success": False, "error": error_msg}
 
         self.state.enter_waiting_state(llm_failed=True)
