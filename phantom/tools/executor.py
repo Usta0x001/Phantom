@@ -1,3 +1,4 @@
+import html
 import inspect
 import os
 from typing import Any
@@ -281,8 +282,8 @@ def _format_tool_result(tool_name: str, result: Any) -> tuple[str, list[dict[str
             final_result_str = start_part + "\n\n... [middle content truncated] ...\n\n" + end_part
 
     observation_xml = (
-        f"<tool_result>\n<tool_name>{tool_name}</tool_name>\n"
-        f"<result>{final_result_str}</result>\n</tool_result>"
+        f"<tool_result>\n<tool_name>{html.escape(tool_name)}</tool_name>\n"
+        f"<result>{html.escape(final_result_str)}</result>\n</tool_result>"
     )
 
     return observation_xml, images

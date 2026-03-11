@@ -1,6 +1,7 @@
 import asyncio
 import contextlib
 import logging
+import random
 from typing import TYPE_CHECKING, Any, Optional
 
 
@@ -158,6 +159,7 @@ class BaseAgent(metaclass=AgentMeta):
         except SandboxInitializationError as e:
             return self._handle_sandbox_error(e, tracer)
 
+        _rl_consecutive = 0  # consecutive rate-limit hits for exponential backoff
         while True:
             if self._force_stop:
                 self._force_stop = False
@@ -214,6 +216,7 @@ class BaseAgent(metaclass=AgentMeta):
                 self._current_task = iteration_task
                 should_finish = await iteration_task
                 self._current_task = None
+                _rl_consecutive = 0  # successful iteration — reset rate-limit backoff counter
 
                 # Periodic checkpoint save ─────────────────────────────────
                 self._maybe_save_checkpoint(tracer)
@@ -246,11 +249,17 @@ class BaseAgent(metaclass=AgentMeta):
                 # rather than aborting (applies in both interactive and non-interactive modes).
                 error_lower = str(e).lower()
                 if "rate limit" in error_lower or "ratelimit" in error_lower or "rate_limit" in error_lower:
+                    _rl_consecutive += 1
+                    _backoff = min(300.0, 30.0 * (2.0 ** (_rl_consecutive - 1)))
+                    _jitter = _backoff * random.uniform(0.0, 0.2)
+                    _sleep = _backoff + _jitter
                     logger.warning(
-                        "LLM rate limit exhausted after all retries; "
-                        "pausing 60s before resuming agent loop..."
+                        "LLM rate limit exhausted after all retries (hit #%d); "
+                        "backing off %.0fs before resuming agent loop...",
+                        _rl_consecutive,
+                        _sleep,
                     )
-                    await asyncio.sleep(60)
+                    await asyncio.sleep(_sleep)
                     continue
                 result = self._handle_llm_error(e, tracer)
                 if result is not None:
