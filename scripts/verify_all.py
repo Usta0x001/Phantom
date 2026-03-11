@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Phantom 0.9.64 — Comprehensive feature verification script.
+"""Phantom 0.9.65 — Comprehensive feature verification script.
 
 Proves every Phantom-specific addition is real, functional, and not decorative.
 Run: python scripts/verify_all.py
@@ -35,7 +35,7 @@ def check(name: str, fn):
 
 
 print("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-print("  PHANTOM 0.9.64 — FULL FEATURE VERIFICATION")
+print("  PHANTOM 0.9.65 — FULL FEATURE VERIFICATION")
 print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
 
 
@@ -44,16 +44,16 @@ print("[1] VERSION CONSISTENCY")
 
 def v_version_init():
     import phantom
-    assert phantom.__version__ == "0.9.64", f"Got {phantom.__version__}"
+    assert phantom.__version__ == "0.9.65", f"Got {phantom.__version__}"
 
 def v_version_pyproject():
     pyproject = (
         __import__("pathlib").Path(__file__).parent.parent / "pyproject.toml"
     ).read_text(encoding="utf-8")
-    assert 'version = "0.9.64"' in pyproject
+    assert 'version = "0.9.65"' in pyproject
 
-check("phantom.__version__ == '0.9.64'", v_version_init)
-check("pyproject.toml version == '0.9.64'", v_version_pyproject)
+check("phantom.__version__ == '0.9.65'", v_version_init)
+check("pyproject.toml version == '0.9.65'", v_version_pyproject)
 
 
 # ── 2. COST CONTROLS ───────────────────────────────────────────────────────────
@@ -915,6 +915,128 @@ check("TUI quit (Ctrl+Q) saves interrupted checkpoint", v_tui_quit_saves_checkpo
 check("terminal_manager default_timeout == 60s (was 30s)", v_terminal_manager_default_timeout)
 check("LLM._should_retry: no private litellm API, retries 5xx", v_should_retry_no_private_litellm)
 check("LLM.generate: longer backoff for 429 rate-limit", v_llm_retry_backoff_429)
+
+
+# ── [18] STARTUP / TUI-RESUME / SCAN_MODE FIXES (0.9.65) ─────────────────────
+print("\n[18] STARTUP / TUI-RESUME / SCAN_MODE FIXES (0.9.65)")
+
+def v_interface_init_lazy_import():
+    """phantom.interface.__init__ must use a lazy __getattr__ — NOT an eager import."""
+    import re
+    src = open("phantom/interface/__init__.py", encoding="utf-8").read()
+    # Ensure there is NO top-level (col 0) eager import of .main
+    assert not re.search(r"^from \.main import main", src, re.MULTILINE), (
+        "__init__.py must NOT have a top-level 'from .main import main' (causes 17s startup)"
+    )
+    assert "__getattr__" in src, (
+        "__init__.py must use __getattr__ for lazy import of main"
+    )
+
+def v_startup_time_fast():
+    """Importing phantom.interface.cli_app must complete in under 5 seconds."""
+    import subprocess, sys, time
+    result = subprocess.run(
+        [sys.executable, "-c",
+         "import time, sys; t=time.time(); import phantom.interface.cli_app; "
+         "elapsed=time.time()-t; sys.exit(0 if elapsed < 5 else 1)"],
+        capture_output=True,
+    )
+    assert result.returncode == 0, (
+        "phantom.interface.cli_app import took >= 5s (startup too slow)"
+    )
+
+def v_tui_resume_restores_state():
+    """TUI _build_agent_config must inject restored AgentState when resuming."""
+    import inspect
+    from phantom.interface import tui
+    src = inspect.getsource(tui.PhantomTUIApp._build_agent_config)
+    assert "_restored_checkpoint" in src, (
+        "_build_agent_config must check _restored_checkpoint"
+    )
+    assert "AgentState.model_validate" in src, (
+        "_build_agent_config must restore state via AgentState.model_validate"
+    )
+    assert "clear_sandbox" in src, (
+        "_build_agent_config must call clear_sandbox() on restored state"
+    )
+    assert "SCAN RESUMED" in src, (
+        "_build_agent_config must inject SCAN RESUMED message"
+    )
+
+def v_tui_resume_extends_iterations():
+    """TUI resume must extend max_iterations so agent isn't immediately at its limit."""
+    import inspect
+    from phantom.interface import tui
+    src = inspect.getsource(tui.PhantomTUIApp._build_agent_config)
+    assert "restored_state.iteration + base_max_iter" in src, (
+        "_build_agent_config must extend max_iterations = iteration + base_max_iter"
+    )
+
+def v_tui_resume_seeds_tracer_vulns():
+    """TUI __init__ must seed the tracer with previously found vulnerabilities on resume."""
+    import inspect
+    from phantom.interface import tui
+    src = inspect.getsource(tui.PhantomTUIApp.__init__)
+    assert "_saved_vuln_ids" in src, (
+        "TUI __init__ must seed tracer._saved_vuln_ids from checkpoint vulns"
+    )
+    assert "vulnerability_reports.extend" in src, (
+        "TUI __init__ must extend tracer.vulnerability_reports from checkpoint"
+    )
+
+def v_cli_resume_extends_iterations():
+    """CLI run_cli must extend max_iterations on resume."""
+    import inspect
+    from phantom.interface import cli
+    src = inspect.getsource(cli.run_cli)
+    assert "restored_state.iteration + base_max_iter" in src, (
+        "run_cli must extend max_iterations = iteration + base_max_iter on resume"
+    )
+
+def v_scan_mode_stored_in_checkpoint():
+    """scan_config must include scan_mode so it survives checkpoint → resume."""
+    import inspect
+    from phantom.interface import cli, tui
+    cli_src = inspect.getsource(cli.run_cli)
+    tui_src = inspect.getsource(tui.PhantomTUIApp._build_scan_config)
+    assert '"scan_mode"' in cli_src, "run_cli scan_config must include scan_mode"
+    assert '"scan_mode"' in tui_src, "_build_scan_config must include scan_mode"
+
+def v_cli_resume_restores_scan_mode():
+    """CLI resume must restore scan_mode from checkpoint scan_config."""
+    import inspect
+    from phantom.interface import cli
+    src = inspect.getsource(cli.run_cli)
+    assert 'cp.scan_config.get("scan_mode")' in src, (
+        "run_cli must restore scan_mode from cp.scan_config on resume"
+    )
+
+def v_posthog_in_cli_app_scan():
+    """cli_app scan command must call posthog.start and posthog.end."""
+    import inspect
+    from phantom.interface import cli_app
+    src = inspect.getsource(cli_app.scan)
+    assert "posthog.start" in src, "scan() must call posthog.start"
+    assert "posthog.end" in src, "scan() must call posthog.end"
+
+def v_posthog_in_cli_app_resume():
+    """cli_app resume command must call posthog.start and posthog.end."""
+    import inspect
+    from phantom.interface import cli_app
+    src = inspect.getsource(cli_app.resume)
+    assert "posthog.start" in src, "resume() must call posthog.start"
+    assert "posthog.end" in src, "resume() must call posthog.end"
+
+check("interface/__init__.py uses lazy __getattr__ (no eager litellm import)", v_interface_init_lazy_import)
+check("phantom CLI startup import < 5 seconds", v_startup_time_fast)
+check("TUI _build_agent_config restores checkpoint state on resume", v_tui_resume_restores_state)
+check("TUI _build_agent_config extends max_iterations on resume", v_tui_resume_extends_iterations)
+check("TUI __init__ seeds tracer with prior vulnerabilities on resume", v_tui_resume_seeds_tracer_vulns)
+check("CLI run_cli extends max_iterations on resume", v_cli_resume_extends_iterations)
+check("scan_mode stored in checkpoint scan_config (cli + tui)", v_scan_mode_stored_in_checkpoint)
+check("CLI run_cli restores scan_mode from checkpoint", v_cli_resume_restores_scan_mode)
+check("posthog tracking in cli_app scan command", v_posthog_in_cli_app_scan)
+check("posthog tracking in cli_app resume command", v_posthog_in_cli_app_resume)
 
 
 # ── SUMMARY ────────────────────────────────────────────────────────────────────

@@ -712,6 +712,20 @@ class PhantomTUIApp(App):  # type: ignore[misc]
         _run_dir = _Path("phantom_runs") / self.scan_config["run_name"]
         self._checkpoint_mgr: CheckpointManager = CheckpointManager(_run_dir, interval=_interval)
         self._phantom_agent: Any = None  # set when scan thread creates the agent
+
+        # ── Resume: load prior checkpoint if this is a resumed scan ────────
+        # Must happen before agent_config is built so restored_state can be
+        # injected into the config and sandbox fields can be cleared.
+        self._restored_checkpoint: Any = None
+        resume_run = getattr(args, "resume_run", None)
+        if resume_run:
+            cp = self._checkpoint_mgr.load()
+            if cp is not None and cp.status != "completed":
+                self._restored_checkpoint = cp
+                # Restore scan_mode from checkpoint so LLMConfig is correct.
+                stored_mode = cp.scan_config.get("scan_mode")
+                if stored_mode and not getattr(args, "scan_mode_overridden", False):
+                    args.scan_mode = stored_mode  # type: ignore[attr-defined]
         # ──────────────────────────────────────────────────────────────────
 
         self.agent_config = self._build_agent_config(args)
@@ -719,6 +733,14 @@ class PhantomTUIApp(App):  # type: ignore[misc]
         self.tracer = Tracer(self.scan_config["run_name"])
         self.tracer.set_scan_config(self.scan_config)
         set_global_tracer(self.tracer)
+
+        # Seed tracer with previously found vulnerabilities so they render in
+        # the TUI immediately without waiting for the agent to re-discover them.
+        if self._restored_checkpoint is not None:
+            cp = self._restored_checkpoint
+            self.tracer.vulnerability_reports.extend(cp.vulnerability_reports)
+            for v in cp.vulnerability_reports:
+                self.tracer._saved_vuln_ids.add(v["id"])
 
         self.agent_nodes: dict[str, TreeNode] = {}
 
@@ -754,15 +776,19 @@ class PhantomTUIApp(App):  # type: ignore[misc]
             "targets": args.targets_info,
             "user_instructions": args.instruction or "",
             "run_name": args.run_name,
+            "scan_mode": getattr(args, "scan_mode", "deep"),  # preserved for resume
         }
 
     def _build_agent_config(self, args: argparse.Namespace) -> dict[str, Any]:
         scan_mode = getattr(args, "scan_mode", "deep")
         llm_config = LLMConfig(scan_mode=scan_mode)
 
+        # Base max_iterations; extended below if resuming from a checkpoint.
+        base_max_iter = 300
+
         config: dict[str, Any] = {
             "llm_config": llm_config,
-            "max_iterations": 300,
+            "max_iterations": base_max_iter,
             # Wire checkpoint manager so the agent loop saves periodically
             "_checkpoint_manager": self._checkpoint_mgr,
             "_run_name": self.scan_config["run_name"],
@@ -770,6 +796,34 @@ class PhantomTUIApp(App):  # type: ignore[misc]
 
         if getattr(args, "local_sources", None):
             config["local_sources"] = args.local_sources
+
+        # ── Resume: restore prior agent state from checkpoint ──────────────
+        cp = self._restored_checkpoint
+        if cp is not None:
+            from phantom.agents.state import AgentState
+
+            restored_state = AgentState.model_validate(cp.root_agent_state)
+            # Clear stale sandbox — the old Docker container is gone.
+            restored_state.clear_sandbox()
+            # Extend max_iterations so the agent isn't immediately near its
+            # limit: it gets a full fresh budget on top of what it already used.
+            restored_state.max_iterations = restored_state.iteration + base_max_iter
+            # Tell the agent it's resuming so it doesn't repeat finished work.
+            restored_state.add_message(
+                "user",
+                f"[SCAN RESUMED] Your previous execution was interrupted at iteration "
+                f"{cp.iteration}. You have already found {len(cp.vulnerability_reports)} "
+                f"vulnerability report(s). Continue the penetration test from where you "
+                f"left off. Do NOT repeat scans you have already completed.",
+            )
+            # Also un-set waiting/stop flags so the loop doesn't stall immediately.
+            restored_state.waiting_for_input = False
+            restored_state.stop_requested = False
+            restored_state.completed = False
+
+            config["state"] = restored_state
+            config["max_iterations"] = restored_state.max_iterations
+        # ──────────────────────────────────────────────────────────────────
 
         return config
 

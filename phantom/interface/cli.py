@@ -91,6 +91,14 @@ async def run_cli(args: Any) -> None:  # noqa: PLR0912, PLR0915
         )
         # Override run_name from checkpoint (already set in cli_app.py but being safe)
         args.run_name = cp.run_name  # type: ignore[attr-defined]
+        # Restore scan_mode from checkpoint so LLMConfig uses the original mode.
+        stored_mode = cp.scan_config.get("scan_mode")
+        if stored_mode and not getattr(args, "scan_mode_overridden", False):
+            args.scan_mode = stored_mode  # type: ignore[attr-defined]
+        # Un-set waiting/stop flags so the resumed loop doesn't stall.
+        restored_state.waiting_for_input = False
+        restored_state.stop_requested = False
+        restored_state.completed = False
     else:
         from phantom.checkpoint.checkpoint import CheckpointManager, CHECKPOINT_INTERVAL
         from phantom.config import Config
@@ -148,12 +156,14 @@ async def run_cli(args: Any) -> None:  # noqa: PLR0912, PLR0915
         "targets": args.targets_info,
         "user_instructions": args.instruction or "",
         "run_name": args.run_name,
+        "scan_mode": scan_mode,  # stored so resume can use the original mode
     }
 
     llm_config = LLMConfig(scan_mode=scan_mode)
+    base_max_iter = 300
     agent_config: dict[str, Any] = {
         "llm_config": llm_config,
-        "max_iterations": 300,
+        "max_iterations": base_max_iter,
         "non_interactive": True,
     }
 
@@ -169,6 +179,9 @@ async def run_cli(args: Any) -> None:  # noqa: PLR0912, PLR0915
 
     # Restore prior agent state if resuming
     if restored_state is not None:
+        # Extend iterations: give a full fresh budget on top of what was used.
+        restored_state.max_iterations = restored_state.iteration + base_max_iter
+        agent_config["max_iterations"] = restored_state.max_iterations
         agent_config["state"] = restored_state
 
     tracer = Tracer(args.run_name)
