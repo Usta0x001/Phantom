@@ -181,8 +181,9 @@ async def run_cli(args: Any) -> None:  # noqa: PLR0912, PLR0915
     if restored_state is not None:
         # Extend iterations: give a full fresh budget on top of what was used.
         restored_state.max_iterations = restored_state.iteration + base_max_iter
-        agent_config["max_iterations"] = restored_state.max_iterations
-        agent_config["state"] = restored_state
+        # Reset the warning flag so the agent gets a new approaching-limit warning
+        # at 85% of the extended budget, not never (flag was True from prior run).
+        restored_state.max_iterations_warning_sent = False
 
     tracer = Tracer(args.run_name)
     tracer.set_scan_config(scan_config)

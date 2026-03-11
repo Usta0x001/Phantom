@@ -245,5 +245,6 @@ class TestForceCompressCallCounting:
         messages += [{"role": "assistant", "content": f"assistant msg {i}"} for i in range(20)]
 
         initial = llm.memory_compressor.compression_calls
-        llm._force_compress_messages(messages)
+        import asyncio
+        asyncio.run(llm._force_compress_messages(messages))
         assert llm.memory_compressor.compression_calls == initial + 1

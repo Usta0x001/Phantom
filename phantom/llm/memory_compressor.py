@@ -151,15 +151,31 @@ def _summarize_messages(
         response = litellm.completion(**completion_args)
         summary = response.choices[0].message.content or ""
         if not summary.strip():
-            return messages[0]
+            # LLM returned empty content — fall through to the best-effort text fallback.
+            raise ValueError("LLM returned empty summary")
         summary_msg = "<context_summary message_count='{count}'>{text}</context_summary>"
         return {
             "role": "user",
             "content": summary_msg.format(count=len(messages), text=summary),
         }
     except Exception:
-        logger.exception("Failed to summarize messages")
-        return messages[0]
+        logger.exception("Failed to summarize messages — returning best-effort text summary")
+        # Return a compact text summary rather than discarding all but the first message.
+        # Returning messages[0] would silently drop all other messages in the chunk.
+        snippets = []
+        for m in messages:
+            text = _extract_message_text(m)[:120]
+            if text:
+                snippets.append(f"[{m.get('role', 'unknown')}] {text}")
+        fallback_text = " | ".join(snippets) if snippets else "no content"
+        return {
+            "role": "user",
+            "content": (
+                f"<context_summary message_count='{len(messages)}' compressed='fallback'>"
+                f"{fallback_text[:800]}"
+                f"</context_summary>"
+            ),
+        }
 
 
 def _handle_images(messages: list[dict[str, Any]], max_images: int) -> None:

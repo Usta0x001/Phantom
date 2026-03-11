@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Phantom 0.9.65 — Comprehensive feature verification script.
+"""Phantom 0.9.67 — Comprehensive feature verification script.
 
 Proves every Phantom-specific addition is real, functional, and not decorative.
 Run: python scripts/verify_all.py
@@ -35,7 +35,7 @@ def check(name: str, fn):
 
 
 print("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-print("  PHANTOM 0.9.65 — FULL FEATURE VERIFICATION")
+print("  PHANTOM 0.9.67 — FULL FEATURE VERIFICATION")
 print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
 
 
@@ -44,16 +44,16 @@ print("[1] VERSION CONSISTENCY")
 
 def v_version_init():
     import phantom
-    assert phantom.__version__ == "0.9.66", f"Got {phantom.__version__}"
+    assert phantom.__version__ == "0.9.67", f"Got {phantom.__version__}"
 
 def v_version_pyproject():
     pyproject = (
         __import__("pathlib").Path(__file__).parent.parent / "pyproject.toml"
     ).read_text(encoding="utf-8")
-    assert 'version = "0.9.66"' in pyproject
+    assert 'version = "0.9.67"' in pyproject
 
-check("phantom.__version__ == '0.9.66'", v_version_init)
-check("pyproject.toml version == '0.9.66'", v_version_pyproject)
+check("phantom.__version__ == '0.9.67'", v_version_init)
+check("pyproject.toml version == '0.9.67'", v_version_pyproject)
 
 
 # ── 2. COST CONTROLS ───────────────────────────────────────────────────────────
@@ -1039,6 +1039,123 @@ check("scan_mode stored in checkpoint scan_config (cli + tui)", v_scan_mode_stor
 check("CLI run_cli restores scan_mode from checkpoint", v_cli_resume_restores_scan_mode)
 check("no posthog calls in cli_app scan command", v_no_posthog_in_cli_app_scan)
 check("no posthog calls in cli_app resume command", v_no_posthog_in_cli_app_resume)
+
+
+# ── 19. TELEMETRY HYGIENE + BUG-FIX VERIFICATION (0.9.67) ────────────────────
+print("\n[19] TELEMETRY HYGIENE + BUG-FIX VERIFICATION (0.9.67)")
+
+def v_posthog_file_is_gone():
+    """phantom/telemetry/posthog.py must not exist (stub deleted in 0.9.66, removed in 0.9.67)."""
+    p = Path(__file__).resolve().parent.parent / "phantom" / "telemetry" / "posthog.py"
+    assert not p.exists(), f"posthog.py still exists at {p}"
+
+def v_flags_no_dead_code():
+    """flags.py must not contain _is_enabled or _DISABLED_VALUES dead code."""
+    import inspect, phantom.telemetry.flags as fl
+    src = inspect.getsource(fl)
+    assert "_is_enabled" not in src, "Dead helper _is_enabled still present in flags.py"
+    assert "_DISABLED_VALUES" not in src, "Dead _DISABLED_VALUES still present in flags.py"
+
+def v_no_posthog_import_in_telemetry_init():
+    """telemetry/__init__.py must not import posthog."""
+    import inspect, phantom.telemetry as tel
+    src = inspect.getsource(tel)
+    assert "posthog" not in src, "posthog still imported in telemetry/__init__.py"
+
+def v_memory_compressor_fallback_no_data_loss():
+    """_summarize_messages fallback must not return messages[0] (data loss bug)."""
+    import inspect
+    from phantom.llm.memory_compressor import _summarize_messages
+    src = inspect.getsource(_summarize_messages)
+    assert "return messages[0]" not in src, "_summarize_messages still returns messages[0] on failure"
+    assert "context_summary" in src, "_summarize_messages fallback must include context_summary tag"
+
+def v_prepare_messages_is_async():
+    """LLM._prepare_messages must be async (compression must not block the event loop)."""
+    import inspect
+    from phantom.llm.llm import LLM
+    assert inspect.iscoroutinefunction(LLM._prepare_messages), \
+        "LLM._prepare_messages must be async (blocking compression fix)"
+
+def v_force_compress_is_async():
+    """LLM._force_compress_messages must be async."""
+    import inspect
+    from phantom.llm.llm import LLM
+    assert inspect.iscoroutinefunction(LLM._force_compress_messages), \
+        "LLM._force_compress_messages must be async"
+
+def v_budget_check_uses_global_tracer():
+    """LLM._check_budget must query global Tracer cost, not just local agent stats."""
+    import inspect
+    from phantom.llm.llm import LLM
+    src = inspect.getsource(LLM._check_budget)
+    assert "get_global_tracer" in src, "_check_budget must use get_global_tracer() for global cost"
+    assert "get_total_llm_stats" in src, "_check_budget must call get_total_llm_stats()"
+
+def v_adaptive_uses_global_tracer():
+    """LLM._check_adaptive_scan_mode must use global Tracer cost."""
+    import inspect
+    from phantom.llm.llm import LLM
+    src = inspect.getsource(LLM._check_adaptive_scan_mode)
+    assert "get_global_tracer" in src, "_check_adaptive_scan_mode must use global tracer cost"
+
+def v_adaptive_called_after_fallback():
+    """LLM.generate must call _check_adaptive_scan_mode() after fallback model succeeds."""
+    import inspect
+    from phantom.llm.llm import LLM
+    src = inspect.getsource(LLM.generate)
+    # find the fallback block
+    fallback_idx = src.find("_fallback_llm_name")
+    adaptive_after = src.find("_check_adaptive_scan_mode", fallback_idx)
+    assert adaptive_after != -1, "_check_adaptive_scan_mode not called after fallback in generate()"
+
+def v_extract_thinking_no_double_rebuild():
+    """LLM._extract_thinking must accept a pre-built response to avoid double stream_chunk_builder."""
+    import inspect
+    from phantom.llm.llm import LLM
+    src = inspect.getsource(LLM._extract_thinking)
+    # Must accept 'rebuilt' parameter
+    assert "rebuilt" in src, "_extract_thinking must accept 'rebuilt' parameter"
+
+def v_final_warning_uses_gte():
+    """base_agent loop final warning must use >= not == to avoid being skipped."""
+    import inspect
+    from phantom.agents.base_agent import BaseAgent
+    src = inspect.getsource(BaseAgent.agent_loop)
+    assert "iteration >= self.state.max_iterations - 3" in src, \
+        "Final warning must use >= (not ==) to prevent being silently skipped"
+
+def v_resume_resets_warning_flag():
+    """cli.py and tui.py must reset max_iterations_warning_sent=False on resume."""
+    import inspect
+    import phantom.interface.cli as cli_mod
+    import phantom.interface.tui as tui_mod
+    for mod_name, mod in [("cli.py", cli_mod), ("tui.py", tui_mod)]:
+        src = inspect.getsource(mod)
+        assert "max_iterations_warning_sent = False" in src, \
+            f"{mod_name} must reset max_iterations_warning_sent=False on resume"
+
+def v_context_too_large_extended_phrases():
+    """_is_context_too_large must detect additional provider-specific error strings."""
+    import inspect
+    from phantom.llm.llm import LLM
+    src = inspect.getsource(LLM._is_context_too_large)
+    for phrase in ("string too long", "payload too large", "context window", "prompt is too long"):
+        assert phrase in src, f"_is_context_too_large missing phrase: '{phrase}'"
+
+check("posthog.py stub deleted entirely", v_posthog_file_is_gone)
+check("flags.py has no dead _is_enabled/_DISABLED_VALUES code", v_flags_no_dead_code)
+check("telemetry/__init__.py does not import posthog", v_no_posthog_import_in_telemetry_init)
+check("_summarize_messages fallback has no data-loss messages[0] return", v_memory_compressor_fallback_no_data_loss)
+check("LLM._prepare_messages is async (no event-loop blocking)", v_prepare_messages_is_async)
+check("LLM._force_compress_messages is async", v_force_compress_is_async)
+check("LLM._check_budget uses global Tracer cost (multi-agent budget)", v_budget_check_uses_global_tracer)
+check("LLM._check_adaptive_scan_mode uses global Tracer cost", v_adaptive_uses_global_tracer)
+check("LLM.generate calls _check_adaptive_scan_mode after fallback", v_adaptive_called_after_fallback)
+check("LLM._extract_thinking accepts pre-built response (no double stream_chunk_builder)", v_extract_thinking_no_double_rebuild)
+check("base_agent final warning uses >= (not ==)", v_final_warning_uses_gte)
+check("resume resets max_iterations_warning_sent=False in cli.py and tui.py", v_resume_resets_warning_flag)
+check("_is_context_too_large covers extended provider error phrases", v_context_too_large_extended_phrases)
 
 
 # ── SUMMARY ────────────────────────────────────────────────────────────────────

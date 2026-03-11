@@ -143,7 +143,7 @@ class LLM:
     ) -> AsyncIterator[LLMResponse]:
         self._check_budget()
         self._agent_calls += 1
-        messages = self._prepare_messages(conversation_history)
+        messages = await self._prepare_messages(conversation_history)
         max_retries = int(Config.get("phantom_llm_max_retries") or "5")
 
         # Optionally switch model based on routing config
@@ -176,7 +176,7 @@ class LLM:
                         attempt + 1,
                         max_retries,
                     )
-                    messages = self._force_compress_messages(messages)
+                    messages = await self._force_compress_messages(messages)
                     continue
                 if attempt >= max_retries or not self._should_retry(e):
                     primary_exhausted = True
@@ -203,6 +203,7 @@ class LLM:
                 async for response in self._stream(messages):
                     yield response
                 self.config.litellm_model = original_model
+                self._check_adaptive_scan_mode()  # honour cost budget after fallback too
                 return  # noqa: TRY300
             except Exception as e:  # noqa: BLE001
                 self.config.litellm_model = original_model
@@ -263,10 +264,12 @@ class LLM:
         yield LLMResponse(
             content=accumulated,
             tool_invocations=parse_tool_invocations(accumulated),
-            thinking_blocks=self._extract_thinking(chunks),
+            thinking_blocks=self._extract_thinking(chunks, rebuilt),
         )
 
-    def _prepare_messages(self, conversation_history: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    async def _prepare_messages(
+        self, conversation_history: list[dict[str, Any]]
+    ) -> list[dict[str, Any]]:
         messages = [{"role": "system", "content": self.system_prompt}]
 
         if self.agent_name:
@@ -283,7 +286,11 @@ class LLM:
                 }
             )
 
-        compressed = list(self.memory_compressor.compress_history(conversation_history))
+        # Run compression in a thread to avoid blocking the async event loop.
+        # The sync compress_history call can take 30s+ per chunk when LLM summarisation fires.
+        compressed = list(
+            await asyncio.to_thread(self.memory_compressor.compress_history, conversation_history)
+        )
         conversation_history.clear()
         conversation_history.extend(compressed)
         messages.extend(compressed)
@@ -308,7 +315,12 @@ class LLM:
         return 8000  # standard / deep
 
     def _check_budget(self) -> None:
-        """Hard-stop if PHANTOM_MAX_COST is set and exceeded."""
+        """Hard-stop if PHANTOM_MAX_COST is set and exceeded.
+
+        Uses the *global* scan cost aggregated across all agent instances via the
+        Tracer, so sub-agents cannot each individually spend up to max_cost.
+        Falls back to this agent's local stats when the Tracer is unavailable.
+        """
         max_cost_str = Config.get("phantom_max_cost")
         if not max_cost_str:
             return
@@ -316,9 +328,18 @@ class LLM:
             max_cost = float(max_cost_str)
         except ValueError:
             return
-        if self._total_stats.cost >= max_cost:
+        # Lazy import to avoid circular dependency at module load time.
+        try:
+            from phantom.telemetry.tracer import get_global_tracer
+            tracer = get_global_tracer()
+            current_cost = (
+                tracer.get_total_llm_stats()["total"]["cost"] if tracer else self._total_stats.cost
+            )
+        except Exception:  # noqa: BLE001
+            current_cost = self._total_stats.cost
+        if current_cost >= max_cost:
             raise LLMRequestFailedError(
-                f"Budget exceeded: ${self._total_stats.cost:.4f} >= max ${max_cost:.4f}"
+                f"Budget exceeded: ${current_cost:.4f} >= max ${max_cost:.4f}"
             )
 
     def _check_per_request_budget(self, cost_before: float) -> None:
@@ -362,11 +383,15 @@ class LLM:
             return getattr(chunk.choices[0].delta, "content", "") or ""
         return ""
 
-    def _extract_thinking(self, chunks: list[Any]) -> list[dict[str, Any]] | None:
+    def _extract_thinking(
+        self, chunks: list[Any], rebuilt: Any | None = None
+    ) -> list[dict[str, Any]] | None:
         if not chunks or not self._supports_reasoning():
             return None
         try:
-            resp = stream_chunk_builder(chunks)
+            # Reuse the already-rebuilt response when available to avoid a second
+            # stream_chunk_builder() call (which is CPU-heavy on large streams).
+            resp = rebuilt if rebuilt is not None else stream_chunk_builder(chunks)
             if resp.choices and hasattr(resp.choices[0].message, "thinking_blocks"):
                 blocks: list[dict[str, Any]] = resp.choices[0].message.thinking_blocks
                 return blocks
@@ -419,7 +444,7 @@ class LLM:
         return None
 
     def _check_adaptive_scan_mode(self) -> None:
-        """Downgrade scan mode if cost has exceeded the adaptive threshold."""
+        """Downgrade scan mode if *global* cost has exceeded the adaptive threshold."""
         if not self._adaptive_scan_enabled:
             return
         max_cost_str = Config.get("phantom_max_cost")
@@ -431,7 +456,16 @@ class LLM:
             return
         if max_cost <= 0:
             return
-        fraction = self._total_stats.cost / max_cost
+        # Use global cost (all agents) so the threshold is applied consistently.
+        try:
+            from phantom.telemetry.tracer import get_global_tracer
+            tracer = get_global_tracer()
+            current_cost = (
+                tracer.get_total_llm_stats()["total"]["cost"] if tracer else self._total_stats.cost
+            )
+        except Exception:  # noqa: BLE001
+            current_cost = self._total_stats.cost
+        fraction = current_cost / max_cost
         if fraction >= self._adaptive_threshold:
             new_mode = self._SCAN_MODE_DOWNGRADE.get(self.config.scan_mode)
             if new_mode:
@@ -497,10 +531,16 @@ class LLM:
                 "too many tokens",
                 "reduce the length",
                 "input is too long",
+                "string too long",
+                "payload too large",
+                "context window",
+                "tokens in your prompt",
+                "prompt is too long",
+                "exceeds the model",
             )
         )
 
-    def _force_compress_messages(
+    async def _force_compress_messages(
         self, messages: list[dict[str, Any]]
     ) -> list[dict[str, Any]]:
         """Aggressively halve the non-system messages to recover from a context overflow."""
@@ -519,10 +559,11 @@ class LLM:
         recent = non_system[-keep_count:]
 
         if to_compress:
-            summary = _summarize_messages(
+            summary = await asyncio.to_thread(
+                _summarize_messages,
                 to_compress,
                 self.config.litellm_model,
-                timeout=30,
+                30,
             )
             self.memory_compressor.compression_calls += 1
             return system_msgs + [summary] + recent

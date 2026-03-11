@@ -546,8 +546,6 @@ def main() -> None:
 
     args.local_sources = collect_local_sources(args.targets_info)
 
-    is_whitebox = bool(args.local_sources)
-
     try:
         if args.non_interactive:
             asyncio.run(run_cli(args))

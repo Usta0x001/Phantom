@@ -154,6 +154,7 @@ class TestForceCompressMessages:
         return LLM(cfg, "PhantomAgent")
 
     def test_shrinks_message_list(self):
+        import asyncio
         llm = self.make_llm()
         messages = [
             {"role": "system", "content": "sys"},
@@ -163,28 +164,30 @@ class TestForceCompressMessages:
         ]
         with patch("phantom.llm.memory_compressor._summarize_messages",
                    return_value={"role": "user", "content": "<context_summary>summary</context_summary>"}):
-            result = llm._force_compress_messages(messages)
+            result = asyncio.run(llm._force_compress_messages(messages))
         # Must end up shorter than original
         assert len(result) < len(messages)
 
     def test_preserves_system_messages(self):
+        import asyncio
         llm = self.make_llm()
         messages = [{"role": "system", "content": "SYSTEM"}] + [
             {"role": "user", "content": f"msg {i}"} for i in range(20)
         ]
         with patch("phantom.llm.memory_compressor._summarize_messages",
                    return_value={"role": "user", "content": "summary"}):
-            result = llm._force_compress_messages(messages)
+            result = asyncio.run(llm._force_compress_messages(messages))
         assert result[0]["role"] == "system"
         assert result[0]["content"] == "SYSTEM"
 
     def test_keeps_minimum_recent_messages(self):
+        import asyncio
         llm = self.make_llm()
         # Only MIN_RECENT_MESSAGES messages — nothing to compress
         messages = [
             {"role": "user" if i % 2 == 0 else "assistant", "content": f"msg {i}"}
             for i in range(MIN_RECENT_MESSAGES)
         ]
-        result = llm._force_compress_messages(messages)
+        result = asyncio.run(llm._force_compress_messages(messages))
         # Should not crash and should return at least the minimum tail
         assert len(result) >= 1

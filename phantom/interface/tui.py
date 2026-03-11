@@ -808,6 +808,9 @@ class PhantomTUIApp(App):  # type: ignore[misc]
             # Extend max_iterations so the agent isn't immediately near its
             # limit: it gets a full fresh budget on top of what it already used.
             restored_state.max_iterations = restored_state.iteration + base_max_iter
+            # Reset the warning flag so the agent gets a new approaching-limit warning
+            # at 85% of the extended budget, not never (flag was True from prior run).
+            restored_state.max_iterations_warning_sent = False
             # Tell the agent it's resuming so it doesn't repeat finished work.
             restored_state.add_message(
                 "user",

@@ -196,7 +196,7 @@ class BaseAgent(metaclass=AgentMeta):
                 )
                 self.state.add_message("user", warning_msg)
 
-            if self.state.iteration == self.state.max_iterations - 3:
+            if self.state.iteration >= self.state.max_iterations - 3:
                 final_warning_msg = (
                     "CRITICAL: You have only 3 iterations left! "
                     "Your next message MUST be the tool call to the appropriate "
