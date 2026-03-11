@@ -23,6 +23,30 @@ CHECKPOINT_HMAC_FILE = "checkpoint.json.hmac"
 CHECKPOINT_INTERVAL = 5   # persist every N agent iterations
 
 
+def _sanitize_run_dir(run_dir: Path) -> Path:
+    """Strip path-traversal ``..`` components from a CheckpointManager run_dir.
+
+    This prevents an attacker who controls ``run_name`` / ``resume_run`` from
+    writing checkpoint files outside the ``phantom_runs/`` directory.  Absolute
+    paths (e.g., pytest tmp_path) are preserved; only ``..`` segments are dropped.
+
+    Examples::
+
+        Path("phantom_runs") / "../../evil"  ->  Path("phantom_runs/evil")
+        Path("/tmp/pytest-0/test_x")         ->  unchanged
+        Path("phantom_runs") / "myScan-01"   ->  unchanged
+    """
+    parts = run_dir.parts
+    safe_parts = [p for p in parts if p != ".."]
+    if not safe_parts:
+        return Path("phantom_runs") / "unnamed"
+    # Reconstruct: first part may be a root component (/, \, C:\) — keep it.
+    result = Path(safe_parts[0])
+    for part in safe_parts[1:]:
+        result = result / part
+    return result
+
+
 def _get_hmac_key() -> bytes:
     """Derive an HMAC key from a machine-local secret or a stable fallback."""
     key = os.getenv("PHANTOM_CHECKPOINT_KEY", "")
@@ -48,6 +72,7 @@ class CheckpointManager:
     """
 
     def __init__(self, run_dir: Path, interval: int = CHECKPOINT_INTERVAL) -> None:
+        run_dir = _sanitize_run_dir(run_dir)  # H-11: strip path traversal
         self.run_dir = run_dir
         self.checkpoint_file = run_dir / CHECKPOINT_FILE
         self._hmac_file = run_dir / CHECKPOINT_HMAC_FILE

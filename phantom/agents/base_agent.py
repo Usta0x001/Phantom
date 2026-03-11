@@ -16,6 +16,7 @@ from jinja2 import (
 
 from phantom.llm import LLM, LLMConfig, LLMRequestFailedError
 from phantom.llm.utils import clean_content
+from phantom.config import Config
 from phantom.runtime import SandboxInitializationError
 from phantom.tools import process_tool_invocations
 from phantom.utils.resource_paths import get_phantom_resource_path
@@ -250,13 +251,28 @@ class BaseAgent(metaclass=AgentMeta):
                 error_lower = str(e).lower()
                 if "rate limit" in error_lower or "ratelimit" in error_lower or "rate_limit" in error_lower:
                     _rl_consecutive += 1
+                    # H-03 follow-up: hard cap — abort if API key appears revoked/exhausted
+                    _rl_max = int(Config.get("phantom_llm_ratelimit_max_agent_retries") or "10")
+                    if _rl_consecutive > _rl_max:
+                        _abort_msg = (
+                            f"LLM rate limit hit {_rl_consecutive} consecutive times "
+                            f"(limit={_rl_max}). API key may be revoked, quota permanently "
+                            f"exhausted, or provider down. Aborting agent to prevent "
+                            f"infinite loop."
+                        )
+                        logger.error(_abort_msg)
+                        self.state.set_completed({"success": False, "error": _abort_msg})
+                        if tracer:
+                            tracer.update_agent_status(self.state.agent_id, "failed")
+                        return self.state.final_result or {"success": False, "error": _abort_msg}
                     _backoff = min(300.0, 30.0 * (2.0 ** (_rl_consecutive - 1)))
                     _jitter = _backoff * random.uniform(0.0, 0.2)
                     _sleep = _backoff + _jitter
                     logger.warning(
-                        "LLM rate limit exhausted after all retries (hit #%d); "
+                        "LLM rate limit exhausted after all retries (hit #%d/%d); "
                         "backing off %.0fs before resuming agent loop...",
                         _rl_consecutive,
+                        _rl_max,
                         _sleep,
                     )
                     await asyncio.sleep(_sleep)

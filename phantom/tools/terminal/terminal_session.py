@@ -28,11 +28,16 @@ class TerminalSession:
     HISTORY_LIMIT = 10_000
     PS1_END = "]$ "
 
-    def __init__(self, session_id: str, work_dir: str = "/workspace") -> None:
+    # C-04: shell metacharacters that enable injection/chaining.
+    # Blocked when quarantine=True to prevent untrusted data from pivoting.
+    _QUARANTINE_METACHARACTERS: frozenset[str] = frozenset(";|&$`")
+
+    def __init__(self, session_id: str, work_dir: str = "/workspace", quarantine: bool = False) -> None:
         self.session_id = session_id
         self.work_dir = str(Path(work_dir).resolve())
         self._closed = False
         self._cwd = self.work_dir
+        self.quarantine = quarantine  # C-04: if True, block shell injection metacharacters
 
         self.server: libtmux.Server | None = None
         self.session: libtmux.Session | None = None
@@ -398,6 +403,22 @@ class TerminalSession:
 
         if is_input:
             return self._handle_input_command(command, no_enter, is_command_running)
+
+        # C-04: quarantine mode — block shell metacharacters that enable injection
+        # when the command originates from untrusted/high-risk-target data.
+        if self.quarantine and not is_special_key:
+            blocked = [c for c in self._QUARANTINE_METACHARACTERS if c in command]
+            if blocked:
+                return {
+                    "content": (
+                        f"[QUARANTINE] Command blocked: contains shell metacharacter(s) "
+                        f"{blocked!r} which may enable injection. "
+                        f"Set PHANTOM_TERMINAL_QUARANTINE=false to allow complex shell commands."
+                    ),
+                    "status": "error",
+                    "exit_code": 1,
+                    "working_dir": self._cwd,
+                }
 
         if is_special_key and is_command_running:
             return self._handle_input_command(command, no_enter, is_command_running)

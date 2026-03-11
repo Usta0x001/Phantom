@@ -85,6 +85,8 @@ class AgentState(BaseModel):
         self.last_updated = datetime.now(UTC).isoformat()
 
     def set_completed(self, final_result: dict[str, Any] | None = None) -> None:
+        if self.completed:
+            return  # idempotent — first result wins; ignore duplicate calls
         self.completed = True
         self.final_result = final_result
         self.last_updated = datetime.now(UTC).isoformat()

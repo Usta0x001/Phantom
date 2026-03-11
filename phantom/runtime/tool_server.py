@@ -19,7 +19,13 @@ if not SANDBOX_MODE:
     raise RuntimeError("Tool server should only run in sandbox mode (PHANTOM_SANDBOX_MODE=true)")
 
 parser = argparse.ArgumentParser(description="Start Phantom tool server")
-parser.add_argument("--token", required=True, help="Authentication token")
+parser.add_argument("--token", default=None, help="Authentication token (prefer --token-file)")
+parser.add_argument(
+    "--token-file",
+    dest="token_file",
+    default=None,
+    help="Path to file containing the authentication token (more secure than --token)",
+)
 parser.add_argument("--host", default="0.0.0.0", help="Host to bind to")  # nosec
 parser.add_argument("--port", type=int, required=True, help="Port to bind to")
 parser.add_argument(
@@ -30,7 +36,26 @@ parser.add_argument(
 )
 
 args = parser.parse_args()
-EXPECTED_TOKEN = args.token
+
+# H-06: prefer token-file over plaintext token to keep secret off cmdline/env
+if args.token_file:
+    try:
+        with open(args.token_file) as _tf:
+            EXPECTED_TOKEN = _tf.read().strip()
+    except OSError as _e:
+        raise RuntimeError(f"Cannot read token file {args.token_file!r}: {_e}") from _e
+    # Shred the token file immediately so it doesn't persist on disk
+    try:
+        # Overwrite with zeros before unlinking (best-effort on all platforms)
+        with open(args.token_file, "w") as _tf:
+            _tf.write("\x00" * len(EXPECTED_TOKEN))
+        os.unlink(args.token_file)
+    except OSError:
+        pass  # non-fatal; file may already be gone or read-only
+elif args.token:
+    EXPECTED_TOKEN = args.token
+else:
+    raise RuntimeError("Either --token or --token-file must be provided")
 REQUEST_TIMEOUT = args.timeout
 
 app = FastAPI()

@@ -35,6 +35,8 @@ class Config:
     phantom_fallback_llm = None            # PHANTOM_FALLBACK_LLM — secondary litellm model string
     # Extra retry budget specifically for 429 rate-limit errors (separate from max_retries)
     phantom_llm_ratelimit_max_retries = None  # PHANTOM_LLM_RATELIMIT_MAX_RETRIES (default: 10)
+    # Hard cap on consecutive rate-limit hits in the agent loop before aborting
+    phantom_llm_ratelimit_max_agent_retries = "10"  # PHANTOM_LLM_RATELIMIT_MAX_AGENT_RETRIES
     # Adaptive scan mode (auto-downgrade deep→standard→quick when budget is near)
     phantom_adaptive_scan = "false"        # PHANTOM_ADAPTIVE_SCAN=true to enable
     phantom_adaptive_scan_threshold = "0.8"  # fraction of PHANTOM_MAX_COST that triggers downgrade

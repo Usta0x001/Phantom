@@ -160,11 +160,12 @@ export POETRY_VIRTUALENVS_CREATE=false
 export TOOL_SERVER_TIMEOUT="${PHANTOM_SANDBOX_EXECUTION_TIMEOUT:-600}"
 TOOL_SERVER_LOG="/tmp/tool_server.log"
 
-# PHT-018 FIX: Write token to tmpfs file instead of CLI arg to prevent
-# token leaking via /proc/PID/cmdline
+# PHT-018 / H-06 FIX: Write token to tmpfs file; unset env var to prevent
+# token leaking via /proc/self/environ and /proc/PID/cmdline.
 TOKEN_FILE="/tmp/.tool_server_token"
 echo -n "$TOOL_SERVER_TOKEN" > "$TOKEN_FILE"
 chmod 600 "$TOKEN_FILE"
+unset TOOL_SERVER_TOKEN  # remove from all child-process environments
 
 # Prefer venv python directly (compatible with phantom sandbox images)
 # Falls back to poetry run if venv not found
@@ -181,7 +182,7 @@ echo "Using Python: $PYTHON_BIN"
 # Security is handled at the Docker level: host binds to 127.0.0.1.
 sudo -E -u pentester env PATH="$PATH:/app/venv/bin" PYTHONPATH=/app PHANTOM_SANDBOX_MODE=true \
   $PYTHON_BIN -m phantom.runtime.tool_server \
-  --token="$TOOL_SERVER_TOKEN" \
+  --token-file="$TOKEN_FILE" \
   --host=0.0.0.0 \
   --port="$TOOL_SERVER_PORT" \
   --timeout="$TOOL_SERVER_TIMEOUT" > "$TOOL_SERVER_LOG" 2>&1 &
