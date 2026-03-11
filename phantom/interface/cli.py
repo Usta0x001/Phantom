@@ -78,15 +78,9 @@ async def run_cli(args: Any) -> None:  # noqa: PLR0912, PLR0915
 
         # Restore agent state
         restored_state = AgentState.model_validate(cp.root_agent_state)
-        # ── BUG FIX 1: clear stale sandbox fields ─────────────────────────
-        # The previous sandbox container is dead after a crash/SIGINT.
-        # _initialize_sandbox_and_state() checks `sandbox_id is None` to
-        # decide whether to create a new sandbox.  Without this clear,
-        # resume always skips sandbox creation and every tool call fails.
-        restored_state.sandbox_id = None
-        restored_state.sandbox_token = None
-        restored_state.sandbox_info = None
-        # ──────────────────────────────────────────────────────────────────
+        # BUG FIX 1: clear stale sandbox container fields so the resumed scan
+        # creates a fresh container instead of trying to connect to a dead one.
+        restored_state.clear_sandbox()
         # Inject resume notice so agent knows context was restored
         restored_state.add_message(
             "user",
@@ -104,6 +98,8 @@ async def run_cli(args: Any) -> None:  # noqa: PLR0912, PLR0915
         interval = int(Config.get("phantom_checkpoint_interval") or str(CHECKPOINT_INTERVAL))
 
     # ── Build startup panel ────────────────────────────────────────────────
+    # BUG FIX A: start_text was accidentally dropped in a prior patch; restored.
+    start_text = Text()
     start_text.append("Penetration test initiated", style="bold #dc2626")
 
     target_text = Text()

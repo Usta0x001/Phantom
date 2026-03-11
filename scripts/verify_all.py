@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Phantom 0.9.59 — Comprehensive feature verification script.
+"""Phantom 0.9.62 — Comprehensive feature verification script.
 
 Proves every Phantom-specific addition is real, functional, and not decorative.
 Run: python scripts/verify_all.py
@@ -35,7 +35,7 @@ def check(name: str, fn):
 
 
 print("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-print("  PHANTOM 0.9.61 — FULL FEATURE VERIFICATION")
+print("  PHANTOM 0.9.62 — FULL FEATURE VERIFICATION")
 print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
 
 
@@ -44,16 +44,16 @@ print("[1] VERSION CONSISTENCY")
 
 def v_version_init():
     import phantom
-    assert phantom.__version__ == "0.9.61", f"Got {phantom.__version__}"
+    assert phantom.__version__ == "0.9.62", f"Got {phantom.__version__}"
 
 def v_version_pyproject():
     pyproject = (
         __import__("pathlib").Path(__file__).parent.parent / "pyproject.toml"
     ).read_text(encoding="utf-8")
-    assert 'version = "0.9.61"' in pyproject
+    assert 'version = "0.9.62"' in pyproject
 
-check("phantom.__version__ == '0.9.61'", v_version_init)
-check("pyproject.toml version == '0.9.61'", v_version_pyproject)
+check("phantom.__version__ == '0.9.62'", v_version_init)
+check("pyproject.toml version == '0.9.62'", v_version_pyproject)
 
 
 # ── 2. COST CONTROLS ───────────────────────────────────────────────────────────
@@ -557,8 +557,8 @@ check("get_tools_prompt(): section header uses <!-- comment -->", v_tools_prompt
 check("get_tools_prompt(): tool name= attributes intact", v_tools_prompt_tool_names_intact)
 
 
-# ── [13] CHECKPOINT MODULE (0.9.60) ───────────────────────────────────────────
-print("\n[13] CHECKPOINT MODULE (0.9.60)")
+# ── [13] CHECKPOINT MODULE (0.9.62) ───────────────────────────────────────────
+print("\n[13] CHECKPOINT MODULE (0.9.62)")
 
 def v_checkpoint_models_importable():
     from phantom.checkpoint.models import CheckpointData
@@ -599,10 +599,45 @@ def v_checkpoint_mark_completed():
         mgr.mark_completed()
         assert mgr.load().status == "completed"
 
+def v_checkpoint_interval_param_accepted():
+    """CheckpointManager(interval=10) must store _interval=10."""
+    from phantom.checkpoint.checkpoint import CheckpointManager
+    import tempfile, pathlib
+    with tempfile.TemporaryDirectory() as td:
+        mgr = CheckpointManager(pathlib.Path(td), interval=10)
+        assert mgr._interval == 10
+
+def v_checkpoint_custom_interval_schedule():
+    """Configurable interval must change when should_save() fires."""
+    from phantom.checkpoint.checkpoint import CheckpointManager, CHECKPOINT_INTERVAL
+    import tempfile, pathlib
+    with tempfile.TemporaryDirectory() as td:
+        default_mgr = CheckpointManager(pathlib.Path(td), interval=CHECKPOINT_INTERVAL)
+        custom_mgr  = CheckpointManager(pathlib.Path(td), interval=10)
+        assert default_mgr.should_save(5) is True
+        assert custom_mgr.should_save(5) is False
+        assert custom_mgr.should_save(10) is True
+
+def v_agentstate_clear_sandbox_method():
+    """AgentState.clear_sandbox() must zero the three sandbox fields."""
+    from phantom.agents.state import AgentState
+    state = AgentState(
+        sandbox_id="ws_dead",
+        sandbox_token="tok_dead",
+        sandbox_info={"url": "http://localhost:8080"},
+    )
+    state.clear_sandbox()
+    assert state.sandbox_id is None
+    assert state.sandbox_token is None
+    assert state.sandbox_info is None
+
 check("checkpoint.models: CheckpointData importable with defaults", v_checkpoint_models_importable)
 check("checkpoint.checkpoint: CheckpointManager importable, should_save(0)=False", v_checkpoint_manager_importable)
 check("CheckpointManager: save/load round-trip preserves all fields", v_checkpoint_save_load_roundtrip)
 check("CheckpointManager.mark_completed() sets status='completed'", v_checkpoint_mark_completed)
+check("CheckpointManager(interval=10) stores _interval=10", v_checkpoint_interval_param_accepted)
+check("CheckpointManager configurable interval: should_save fires at custom boundary", v_checkpoint_custom_interval_schedule)
+check("AgentState.clear_sandbox() zeroes all three sandbox fields", v_agentstate_clear_sandbox_method)
 
 
 # ── [14] PER-MODEL ANALYTICS + CALL COUNTERS (0.9.60) ────────────────────────

@@ -34,6 +34,7 @@ class CheckpointManager:
         self.checkpoint_file = run_dir / CHECKPOINT_FILE
         self._lock = threading.Lock()
         self._interval = interval
+        logger.info("Checkpoint interval: %d iterations (run_dir=%s)", self._interval, self.run_dir)
 
     # ── Public API ────────────────────────────────────────────────────────────
 

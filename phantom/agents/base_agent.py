@@ -479,6 +479,10 @@ class BaseAgent(metaclass=AgentMeta):
                             sender_name = "User"
                             state.add_message("user", message.get("content", ""))
                         else:
+                            # BUG FIX B: initialise sender_name with a safe fallback
+                            # so the f-string below never raises NameError when
+                            # sender_id is absent from the agent graph.
+                            sender_name = sender_id or "unknown-agent"
                             if sender_id and sender_id in _agent_graph.get("nodes", {}):
                                 sender_name = _agent_graph["nodes"][sender_id]["name"]
 
@@ -518,11 +522,7 @@ class BaseAgent(metaclass=AgentMeta):
                         tracer.update_agent_status(agent_id, "running")
 
         except (AttributeError, KeyError, TypeError) as e:
-            import logging
-
-            logger = logging.getLogger(__name__)
-            logger.warning(f"Error checking agent messages: {e}")
-            return
+            logger.warning("Error checking agent messages: %s", e)
 
     def _maybe_save_checkpoint(self, tracer: Optional["Tracer"]) -> None:
         """Save a checkpoint if the checkpoint manager is configured and it's time to do so."""
