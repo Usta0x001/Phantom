@@ -242,6 +242,16 @@ class BaseAgent(metaclass=AgentMeta):
                 continue
 
             except LLMRequestFailedError as e:
+                # Rate-limit errors are transient — pause and retry the agent loop
+                # rather than aborting (applies in both interactive and non-interactive modes).
+                error_lower = str(e).lower()
+                if "rate limit" in error_lower or "ratelimit" in error_lower or "rate_limit" in error_lower:
+                    logger.warning(
+                        "LLM rate limit exhausted after all retries; "
+                        "pausing 60s before resuming agent loop..."
+                    )
+                    await asyncio.sleep(60)
+                    continue
                 result = self._handle_llm_error(e, tracer)
                 if result is not None:
                     return result

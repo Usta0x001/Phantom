@@ -161,7 +161,9 @@ class LLM:
         primary_exhausted = False
         _last_error: Exception | None = None
         _compress_attempted = False  # last-chance compress flag for undetected 400 overflow
-        for attempt in range(max_retries + 1):
+        # 429 errors get a separate, higher retry budget to survive long rate-limit windows
+        ratelimit_max_retries = int(Config.get("phantom_llm_ratelimit_max_retries") or "10")
+        for attempt in range(max(max_retries, ratelimit_max_retries) + 1):
             try:
                 async for response in self._stream(messages):
                     yield response
@@ -184,13 +186,16 @@ class LLM:
                     )
                     messages = await self._force_compress_messages(messages)
                     continue
-                if attempt >= max_retries or not self._should_retry(e):
+                # Extract error code once — used for exhaustion check and backoff
+                code = getattr(e, "status_code", None) or getattr(
+                    getattr(e, "response", None), "status_code", None
+                )
+                # Rate-limit errors use the larger ratelimit_max_retries budget
+                effective_max = ratelimit_max_retries if code == 429 else max_retries
+                if attempt >= effective_max or not self._should_retry(e):
                     # Last-chance: a 400 that wasn't recognised as context-too-large
                     # (provider phrased it differently) — compress once and retry.
                     # This is the primary cause of "All retries exhausted" in SQL agents.
-                    code = getattr(e, "status_code", None) or getattr(
-                        getattr(e, "response", None), "status_code", None
-                    )
                     if code == 400 and not _compress_attempted:
                         _compress_attempted = True
                         logger.warning(
@@ -204,12 +209,13 @@ class LLM:
                     _last_error = e
                     primary_exhausted = True
                     break
-                # Longer backoff for rate limits (429) — up to 60 s; others up to 10 s
-                code = getattr(e, "status_code", None) or getattr(
-                    getattr(e, "response", None), "status_code", None
-                )
+                # Longer backoff for rate limits (429) — up to 120 s; others up to 10 s
                 if code == 429:
-                    wait = min(60, 4 * (2**attempt))
+                    wait = min(120, 4 * (2**attempt))
+                    logger.warning(
+                        "Rate limit hit (attempt %d/%d); backing off %.0fs...",
+                        attempt + 1, ratelimit_max_retries, wait,
+                    )
                 else:
                     wait = min(10, 2 * (2**attempt))
                 await asyncio.sleep(wait)

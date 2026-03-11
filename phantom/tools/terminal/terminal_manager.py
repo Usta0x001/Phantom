@@ -1,5 +1,6 @@
 import atexit
 import contextlib
+import os
 import threading
 from typing import Any
 
@@ -13,7 +14,11 @@ class TerminalManager:
         self._sessions_by_agent: dict[str, dict[str, TerminalSession]] = {}
         self._lock = threading.Lock()
         self.default_terminal_id = "default"
-        self.default_timeout = 60.0
+        # Derive default_timeout from the server-side execution timeout so the
+        # terminal session always returns *before* asyncio.wait_for cancels the
+        # thread.  A 15-second buffer leaves time for result serialisation.
+        _env_timeout = float(os.getenv("PHANTOM_SANDBOX_EXECUTION_TIMEOUT", "600"))
+        self.default_timeout = max(30.0, _env_timeout - 15.0)
 
         self._register_cleanup_handlers()
 

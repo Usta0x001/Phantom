@@ -33,6 +33,8 @@ class Config:
     phantom_checkpoint_interval = "5"      # save checkpoint every N agent iterations
     # LLM fallback on persistent failure
     phantom_fallback_llm = None            # PHANTOM_FALLBACK_LLM — secondary litellm model string
+    # Extra retry budget specifically for 429 rate-limit errors (separate from max_retries)
+    phantom_llm_ratelimit_max_retries = None  # PHANTOM_LLM_RATELIMIT_MAX_RETRIES (default: 10)
     # Adaptive scan mode (auto-downgrade deep→standard→quick when budget is near)
     phantom_adaptive_scan = "false"        # PHANTOM_ADAPTIVE_SCAN=true to enable
     phantom_adaptive_scan_threshold = "0.8"  # fraction of PHANTOM_MAX_COST that triggers downgrade
@@ -49,6 +51,7 @@ class Config:
         "ollama_api_base",
         "phantom_reasoning_effort",
         "phantom_llm_max_retries",
+        "phantom_llm_ratelimit_max_retries",
         "phantom_memory_compressor_timeout",
         "llm_timeout",
         "llm_max_tokens",
@@ -66,7 +69,7 @@ class Config:
     # Runtime Configuration
     phantom_image = "ghcr.io/usta0x001/phantom-sandbox:latest"
     phantom_runtime_backend = "docker"
-    phantom_sandbox_execution_timeout = "120"
+    phantom_sandbox_execution_timeout = "600"
     phantom_sandbox_connect_timeout = "10"
 
     # Telemetry
