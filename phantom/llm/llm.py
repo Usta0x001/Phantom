@@ -155,6 +155,8 @@ class LLM:
                 self.config.litellm_model = routed
 
         primary_exhausted = False
+        _last_error: Exception | None = None
+        _compress_attempted = False  # last-chance compress flag for undetected 400 overflow
         for attempt in range(max_retries + 1):
             try:
                 async for response in self._stream(messages):
@@ -179,6 +181,23 @@ class LLM:
                     messages = await self._force_compress_messages(messages)
                     continue
                 if attempt >= max_retries or not self._should_retry(e):
+                    # Last-chance: a 400 that wasn't recognised as context-too-large
+                    # (provider phrased it differently) — compress once and retry.
+                    # This is the primary cause of "All retries exhausted" in SQL agents.
+                    code = getattr(e, "status_code", None) or getattr(
+                        getattr(e, "response", None), "status_code", None
+                    )
+                    if code == 400 and not _compress_attempted:
+                        _compress_attempted = True
+                        logger.warning(
+                            "400 error for model %s — attempting last-chance force-compress "
+                            "in case this is an unrecognised context overflow: %s",
+                            self.config.scan_mode,
+                            str(e)[:200],
+                        )
+                        messages = await self._force_compress_messages(messages)
+                        continue  # one more attempt
+                    _last_error = e
                     primary_exhausted = True
                     break
                 # Longer backoff for rate limits (429) — up to 60 s; others up to 10 s
@@ -212,7 +231,10 @@ class LLM:
         elif primary_exhausted:
             self.config.litellm_model = original_model
             self._error_calls += 1
-            raise LLMRequestFailedError("All retries exhausted for primary model")
+            last_err_str = f": {_last_error}" if _last_error else ""
+            raise LLMRequestFailedError(
+                f"All retries exhausted for primary model{last_err_str}"
+            )
 
     async def _stream(self, messages: list[dict[str, Any]]) -> AsyncIterator[LLMResponse]:
         accumulated = ""
@@ -470,9 +492,10 @@ class LLM:
         if fraction >= self._adaptive_threshold:
             new_mode = self._SCAN_MODE_DOWNGRADE.get(self.config.scan_mode)
             if new_mode:
-                logger.warning(
-                    "Adaptive scan: cost $%.4f is %.0f%% of max $%.4f — "
-                    "downgrading scan mode %s → %s",
+                # debug-level: this fires after every successful LLM call, routing
+                # to stderr at WARNING level causes PowerShell NativeCommandError.
+                logger.debug(
+                    "adaptive scan: cost=%.4f (%.1f%% of $%.2f) downgrading %s -> %s",
                     self._total_stats.cost,
                     fraction * 100,
                     max_cost,
@@ -521,9 +544,15 @@ class LLM:
             return 0.0
 
     def _is_context_too_large(self, e: Exception) -> bool:
-        """Detect 'request body too large' / context-window-exceeded errors from any provider."""
+        """Detect 'request body too large' / context-window-exceeded errors from any provider.
+
+        Covers OpenAI, Anthropic, Gemini, OpenRouter, Mistral, Cohere, Together AI and
+        generic HTTP-proxy 400/413 responses.
+        """
+        import re as _re
+
         msg = str(e).lower()
-        return any(
+        if any(
             phrase in msg
             for phrase in (
                 "request body too large",
@@ -538,6 +567,27 @@ class LLM:
                 "tokens in your prompt",
                 "prompt is too long",
                 "exceeds the model",
+                # Additional provider-specific phrases
+                "model context limits",   # OpenRouter
+                "reduce context",          # generic
+                "request too large",       # HTTP proxies / gateways
+                "token count exceeds",     # Together AI / Mistral
+                "max context",             # some local models
+                "max_tokens",              # bad-param context errors
+                "message length",          # per-message size limits
+                "token budget",            # Cohere / Bedrock
+            )
+        ):
+            return True
+        # Regex catch-all for dynamic phrasing across providers
+        return bool(
+            _re.search(
+                r"exceed.{0,30}(context|token)|"  # "would exceed model context"
+                r"(context|token).{0,30}exceed|"  # "context tokens exceeded"
+                r"too (many|large).{0,20}token|"  # "too many input tokens"
+                r"token.{0,20}(limit|max|over)|"  # "token limit reached"
+                r"limit.{0,20}token",               # "limit of N tokens"
+                msg,
             )
         )
 

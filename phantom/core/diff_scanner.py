@@ -131,6 +131,14 @@ class DiffScanner:
     """Compare two Phantom scan run directories."""
 
     def compare(self, run_dir1: str, run_dir2: str) -> DiffReport:
+        p1 = Path(run_dir1)
+        p2 = Path(run_dir2)
+
+        if not p1.exists():
+            raise FileNotFoundError(f"Run directory not found: {run_dir1}")
+        if not p2.exists():
+            raise FileNotFoundError(f"Run directory not found: {run_dir2}")
+
         vulns1 = _load_vulns(run_dir1)
         vulns2 = _load_vulns(run_dir2)
 

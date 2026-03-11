@@ -41,7 +41,12 @@ class DockerRuntime(AbstractRuntime):
         self._caido_port: int | None = None
 
     def _find_available_port(self) -> int:
+        # Bind to port 0 to let the OS pick a free port, then record it.
+        # There is an inherent TOCTOU window between releasing the socket and
+        # Docker binding the same port, but retries in _create_container handle
+        # the rare collision case.
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             s.bind(("", 0))
             return cast("int", s.getsockname()[1])
 

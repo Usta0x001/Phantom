@@ -143,8 +143,10 @@ class BaseAgent(metaclass=AgentMeta):
         if self.state.agent_id not in agents_graph_actions._agent_messages:
             agents_graph_actions._agent_messages[self.state.agent_id] = []
 
-        if self.state.parent_id is None and agents_graph_actions._root_agent_id is None:
-            agents_graph_actions._root_agent_id = self.state.agent_id
+        if self.state.parent_id is None:
+            with agents_graph_actions._ROOT_AGENT_LOCK:
+                if agents_graph_actions._root_agent_id is None:
+                    agents_graph_actions._root_agent_id = self.state.agent_id
 
     async def agent_loop(self, task: str) -> dict[str, Any]:  # noqa: PLR0912, PLR0915
         from phantom.telemetry.tracer import get_global_tracer

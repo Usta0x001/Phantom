@@ -1,3 +1,4 @@
+import html
 import threading
 from datetime import UTC, datetime
 from typing import Any, Literal
@@ -11,6 +12,8 @@ _agent_graph: dict[str, Any] = {
 }
 
 _root_agent_id: str | None = None
+# Lock to prevent race condition when multiple root agents attempt to register simultaneously.
+_ROOT_AGENT_LOCK = threading.Lock()
 
 _agent_messages: dict[str, list[dict[str, Any]]] = {}
 
@@ -107,7 +110,13 @@ def view_agent_graph(agent_state: Any) -> dict[str, Any]:
     try:
         structure_lines = ["=== AGENT GRAPH STRUCTURE ==="]
 
-        def _build_tree(agent_id: str, depth: int = 0) -> None:
+        def _build_tree(agent_id: str, depth: int = 0, visited: set[str] | None = None) -> None:
+            if visited is None:
+                visited = set()
+            if agent_id in visited:
+                structure_lines.append(f"{'  ' * depth}* [CYCLE DETECTED: {agent_id}]")
+                return
+            visited.add(agent_id)
             node = _agent_graph["nodes"][agent_id]
             indent = "  " * depth
 
@@ -126,7 +135,7 @@ def view_agent_graph(agent_state: Any) -> dict[str, Any]:
             if children:
                 structure_lines.append(f"{indent}   Children:")
                 for child_id in children:
-                    _build_tree(child_id, depth + 2)
+                    _build_tree(child_id, depth + 2, visited)
 
         root_agent_id = _root_agent_id
         if not root_agent_id and _agent_graph["nodes"]:
@@ -227,9 +236,15 @@ def create_agent(
         from phantom.agents.state import AgentState
         from phantom.llm.config import LLMConfig
 
-        state = AgentState(task=task, agent_name=name, parent_id=parent_id, max_iterations=300)
-
         parent_agent = _agent_instances.get(parent_id)
+
+        # Inherit max_iterations from parent so scan profiles propagate to sub-agents
+        parent_max_iters = 300
+        parent_state = getattr(parent_agent, "state", None) if parent_agent else None
+        if parent_state and hasattr(parent_state, "max_iterations"):
+            parent_max_iters = parent_state.max_iterations
+
+        state = AgentState(task=task, agent_name=name, parent_id=parent_id, max_iterations=parent_max_iters)
 
         timeout = None
         scan_mode = "deep"
@@ -395,23 +410,23 @@ def agent_finish(
 
             if parent_id in _agent_graph["nodes"]:
                 findings_xml = "\n".join(
-                    f"        <finding>{finding}</finding>" for finding in (findings or [])
+                    f"        <finding>{html.escape(str(finding))}</finding>" for finding in (findings or [])
                 )
                 recommendations_xml = "\n".join(
-                    f"        <recommendation>{rec}</recommendation>"
+                    f"        <recommendation>{html.escape(str(rec))}</recommendation>"
                     for rec in (final_recommendations or [])
                 )
 
                 report_message = f"""<agent_completion_report>
     <agent_info>
-        <agent_name>{agent_node["name"]}</agent_name>
+        <agent_name>{html.escape(agent_node["name"])}</agent_name>
         <agent_id>{agent_id}</agent_id>
-        <task>{agent_node["task"]}</task>
+        <task>{html.escape(agent_node["task"])}</task>
         <status>{"SUCCESS" if success else "FAILED"}</status>
         <completion_time>{agent_node["finished_at"]}</completion_time>
     </agent_info>
     <results>
-        <summary>{result_summary}</summary>
+        <summary>{html.escape(result_summary)}</summary>
         <findings>
 {findings_xml}
         </findings>

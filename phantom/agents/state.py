@@ -17,6 +17,12 @@ class AgentState(BaseModel):
     sandbox_token: str | None = None
     sandbox_info: dict[str, Any] | None = None
 
+    def clear_sandbox(self) -> None:
+        """Zero all sandbox-related fields (called after restoring a checkpoint)."""
+        self.sandbox_id = None
+        self.sandbox_token = None
+        self.sandbox_info = None
+
     task: str = ""
     iteration: int = 0
     max_iterations: int = 300
@@ -73,17 +79,6 @@ class AgentState(BaseModel):
     def add_error(self, error: str) -> None:
         self.errors.append(f"Iteration {self.iteration}: {error}")
         self.last_updated = datetime.now(UTC).isoformat()
-
-    def clear_sandbox(self) -> None:
-        """Clear stale sandbox fields before resuming from a checkpoint.
-
-        The previous sandbox container is gone after a crash or SIGINT.  Calling
-        this method ensures _initialize_sandbox_and_state() creates a fresh one
-        rather than trying to connect to a dead container.
-        """
-        self.sandbox_id = None
-        self.sandbox_token = None
-        self.sandbox_info = None
 
     def update_context(self, key: str, value: Any) -> None:
         self.context[key] = value

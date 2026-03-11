@@ -22,7 +22,12 @@ class TerminalManager:
         with self._lock:
             if agent_id not in self._sessions_by_agent:
                 self._sessions_by_agent[agent_id] = {}
+            # Return reference to the live dict; callers that modify it must
+            # re-acquire _lock to prevent concurrent cleanup races.
             return self._sessions_by_agent[agent_id]
+
+    def _get_agent_id(self) -> str:
+        return get_current_agent_id()
 
     def execute_command(
         self,
@@ -71,8 +76,13 @@ class TerminalManager:
             }
 
     def _get_or_create_session(self, terminal_id: str) -> TerminalSession:
-        sessions = self._get_agent_sessions()
+        agent_id = self._get_agent_id()
         with self._lock:
+            # Re-fetch from the master dict inside the lock to avoid a stale
+            # reference that could have been removed by cleanup_agent().
+            if agent_id not in self._sessions_by_agent:
+                self._sessions_by_agent[agent_id] = {}
+            sessions = self._sessions_by_agent[agent_id]
             if terminal_id not in sessions:
                 sessions[terminal_id] = TerminalSession(terminal_id)
             return sessions[terminal_id]

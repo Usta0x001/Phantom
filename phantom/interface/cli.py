@@ -160,7 +160,10 @@ async def run_cli(args: Any) -> None:  # noqa: PLR0912, PLR0915
     }
 
     llm_config = LLMConfig(scan_mode=scan_mode)
-    base_max_iter = 300
+    base_max_iter = getattr(args, "profile_max_iterations", None) or 300
+    # Hard absolute cap: at most 5× base across all resume cycles so a scan
+    # that gets interrupted and resumed repeatedly cannot grow unboundedly.
+    _abs_iter_cap = base_max_iter * 5
     agent_config: dict[str, Any] = {
         "llm_config": llm_config,
         "max_iterations": base_max_iter,
@@ -179,8 +182,10 @@ async def run_cli(args: Any) -> None:  # noqa: PLR0912, PLR0915
 
     # Restore prior agent state if resuming
     if restored_state is not None:
-        # Extend iterations: give a full fresh budget on top of what was used.
-        restored_state.max_iterations = restored_state.iteration + base_max_iter
+        # Extend iterations: give a full fresh budget on top of what was used,
+        # but never exceed the absolute cap (5× base_max_iter).
+        extended = restored_state.iteration + base_max_iter
+        restored_state.max_iterations = min(extended, _abs_iter_cap)
         # Reset the warning flag so the agent gets a new approaching-limit warning
         # at 85% of the extended budget, not never (flag was True from prior run).
         restored_state.max_iterations_warning_sent = False

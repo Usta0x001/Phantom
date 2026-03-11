@@ -11,6 +11,9 @@ logger = logging.getLogger(__name__)
 
 MAX_TOTAL_TOKENS = 20_000
 MIN_RECENT_MESSAGES = 8
+# Hard ceiling on compression threshold regardless of model context window size.
+# Prevents runaway context growth on models with very large windows (e.g. 200k+).
+MAX_CONTEXT_CEILING = 120_000
 
 # Max tokens for the compressor's own summarization call (cheap, non-thinking)
 COMPRESSOR_MAX_TOKENS = 1500
@@ -218,10 +221,15 @@ class MemoryCompressor:
             self._max_total_tokens = int(env_override)
         else:
             ctx_window = _get_model_context_window(self.model_name)
-            # Use configured ratio to leave room for system prompt + output tokens
-            self._max_total_tokens = max(
-                MIN_RECENT_MESSAGES * 200,  # absolute minimum to not compress into nothing
-                int(ctx_window * _CONTEXT_FILL_RATIO),
+            # Use configured ratio to leave room for system prompt + output tokens.
+            # Capped by MAX_CONTEXT_CEILING to prevent excessive memory growth on
+            # models with very large context windows (200k+ tokens).
+            self._max_total_tokens = min(
+                MAX_CONTEXT_CEILING,
+                max(
+                    MIN_RECENT_MESSAGES * 200,  # absolute minimum to not compress into nothing
+                    int(ctx_window * _CONTEXT_FILL_RATIO),
+                ),
             )
         logger.debug(
             "MemoryCompressor: model=%s context_window=%d -> max_total_tokens=%d",

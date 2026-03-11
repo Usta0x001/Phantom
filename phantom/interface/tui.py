@@ -198,8 +198,13 @@ class HelpScreen(ModalScreen):  # type: ignore[misc]
         yield Grid(
             Label("Phantom Help", id="help_title"),
             Label(
-                "F1        Help\nCtrl+Q/C  Quit\nESC       Stop Agent\n"
-                "Enter     Send message to agent\nTab       Switch panels\n↑/↓       Navigate tree",
+                "F1          Help\n"
+                "Ctrl+Q/C    Quit\n"
+                "ESC         Stop current agent\n"
+                "Ctrl+P      Pause ALL running agents\n"
+                "Enter       Send message to agent\n"
+                "Tab         Switch panels\n"
+                "↑/↓         Navigate tree",
                 id="help_content",
             ),
             id="dialog",
@@ -254,6 +259,53 @@ class StopAgentScreen(ModalScreen):  # type: ignore[misc]
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "stop_agent":
             self.app.action_confirm_stop_agent(self.agent_id)
+        else:
+            self.app.pop_screen()
+
+
+class PauseAllScreen(ModalScreen):  # type: ignore[misc]
+    """Confirmation modal for stopping ALL running agents at once."""
+
+    def compose(self) -> ComposeResult:
+        yield Grid(
+            Label("⏸  Pause ALL running agents?", id="pause_all_title"),
+            Label(
+                "This will stop every active agent and save a checkpoint.\n"
+                "Resume later with: [bold]phantom resume <run-name>[/]",
+                id="pause_all_info",
+            ),
+            Grid(
+                Button("Pause All", variant="error", id="confirm_pause_all"),
+                Button("Cancel", variant="default", id="cancel_pause_all"),
+                id="pause_all_buttons",
+            ),
+            id="pause_all_dialog",
+        )
+
+    def on_mount(self) -> None:
+        cancel_button = self.query_one("#cancel_pause_all", Button)
+        cancel_button.focus()
+
+    def on_key(self, event: events.Key) -> None:
+        if event.key in ("left", "right", "up", "down"):
+            focused = self.focused
+            if focused and focused.id == "confirm_pause_all":
+                self.query_one("#cancel_pause_all", Button).focus()
+            else:
+                self.query_one("#confirm_pause_all", Button).focus()
+            event.prevent_default()
+        elif event.key == "enter":
+            focused = self.focused
+            if focused and isinstance(focused, Button):
+                focused.press()
+            event.prevent_default()
+        elif event.key == "escape":
+            self.app.pop_screen()
+            event.prevent_default()
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "confirm_pause_all":
+            self.app.action_confirm_pause_all()
         else:
             self.app.pop_screen()
 
@@ -697,6 +749,7 @@ class PhantomTUIApp(App):  # type: ignore[misc]
         Binding("ctrl+q", "request_quit", "Quit", priority=True),
         Binding("ctrl+c", "request_quit", "Quit", priority=True),
         Binding("escape", "stop_selected_agent", "Stop Agent", priority=True),
+        Binding("ctrl+p", "pause_all_agents", "Pause All", priority=True),
     ]
 
     def __init__(self, args: argparse.Namespace):
@@ -784,7 +837,9 @@ class PhantomTUIApp(App):  # type: ignore[misc]
         llm_config = LLMConfig(scan_mode=scan_mode)
 
         # Base max_iterations; extended below if resuming from a checkpoint.
-        base_max_iter = 300
+        base_max_iter = getattr(args, "profile_max_iterations", None) or 300
+        # Hard absolute cap across all resume cycles (5× base).
+        _abs_iter_cap = base_max_iter * 5
 
         config: dict[str, Any] = {
             "llm_config": llm_config,
@@ -806,8 +861,11 @@ class PhantomTUIApp(App):  # type: ignore[misc]
             # Clear stale sandbox — the old Docker container is gone.
             restored_state.clear_sandbox()
             # Extend max_iterations so the agent isn't immediately near its
-            # limit: it gets a full fresh budget on top of what it already used.
-            restored_state.max_iterations = restored_state.iteration + base_max_iter
+            # limit: it gets a full fresh budget on top of what it already used,
+            # but never exceeds the absolute cap (5× base).
+            restored_state.max_iterations = min(
+                restored_state.iteration + base_max_iter, _abs_iter_cap
+            )
             # Reset the warning flag so the agent gets a new approaching-limit warning
             # at 85% of the extended budget, not never (flag was True from prior run).
             restored_state.max_iterations_warning_sent = False
@@ -2031,6 +2089,63 @@ class PhantomTUIApp(App):  # type: ignore[misc]
 
         except Exception:
             logger.exception("Failed to stop agent %s", agent_id)
+
+    def action_pause_all_agents(self) -> None:
+        """Show the Pause-All confirmation modal (Ctrl+P)."""
+        if self.show_splash or not self.is_mounted:
+            return
+
+        if len(self.screen_stack) > 1:
+            # Close any open modal first
+            self.pop_screen()
+            return
+
+        try:
+            self.query_one("#main_container")
+        except (ValueError, Exception):
+            return
+
+        self.push_screen(PauseAllScreen())
+
+    def action_confirm_pause_all(self) -> None:
+        """Stop every running agent and save checkpoint."""
+        self.pop_screen()
+
+        try:
+            from phantom.tools.agents_graph.agents_graph_actions import (
+                _agent_graph,
+                stop_agent,
+            )
+
+            stopped: list[str] = []
+            for agent_id, node in list(_agent_graph.get("nodes", {}).items()):
+                if node.get("status") == "running":
+                    result = stop_agent(agent_id)
+                    if result.get("success"):
+                        stopped.append(node.get("name", agent_id))
+
+            self._save_interrupted_checkpoint("pause_all")
+            run_name = self.scan_config.get("run_name", "")
+
+            if stopped:
+                agents_str = ", ".join(stopped[:3])
+                if len(stopped) > 3:
+                    agents_str += f" and {len(stopped) - 3} more"
+                msg = f"Paused {len(stopped)} agent(s): {agents_str}"
+            else:
+                msg = "No running agents found to pause."
+
+            if run_name:
+                msg += f"\nResume with: phantom resume {run_name}"
+
+            self.notify(
+                msg,
+                title="⏸  All Agents Paused",
+                timeout=20,
+                severity="warning",
+            )
+        except Exception:
+            logger.exception("Failed to pause all agents")
 
     def action_custom_quit(self) -> None:
         if self._scan_thread and self._scan_thread.is_alive():

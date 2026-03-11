@@ -210,6 +210,15 @@ def scan(
             help="Resume a previously interrupted scan by run name (e.g. 'example-com_a1b2').",
         ),
     ] = None,
+    profile: Annotated[
+        Optional[str],
+        typer.Option(
+            "--profile",
+            "-p",
+            help="Scan profile preset: quick, standard, deep, stealth, api_only. "
+                 "Applies scan-mode, max-iterations, timeout and other tuning knobs in one flag.",
+        ),
+    ] = None,
 ) -> None:
     """
     Run a penetration test against one or more targets.
@@ -219,8 +228,27 @@ def scan(
         phantom scan -t https://example.com -t 192.168.1.1 -m quick
         phantom scan -t ./my-project --non-interactive --output-format sarif
         phantom scan -t example.com --model groq/llama-3.3-70b-versatile --timeout 3600
+        phantom scan -t example.com --profile deep
+        phantom scan -t example.com --profile quick -n
     """
     import argparse
+
+    # ── Apply profile preset (before any explicit overrides) ─────────────
+    if profile is not None:
+        try:
+            from phantom.core.scan_profiles import get_profile as _get_profile
+            _p = _get_profile(profile)
+            # Only override scan_mode if the user didn't supply --scan-mode explicitly.
+            # Typer doesn't expose "was this set by user?", so we check via the param.
+            # Profile wins unless user also passed -m / --scan-mode (use profile default).
+            scan_mode = ScanMode(_p.scan_mode)
+            if timeout is None and _p.sandbox_timeout_s:
+                timeout = _p.sandbox_timeout_s
+        except KeyError:
+            available = "quick, standard, deep, stealth, api_only"
+            console.print(f"[red]Unknown profile '{profile}'. Available: {available}[/]")
+            raise typer.Exit(1)
+    # ─────────────────────────────────────────────────────────────────────
 
     if instruction and instruction_file:
         console.print("[red]Cannot specify both --instruction and --instruction-file[/]")
@@ -244,6 +272,16 @@ def scan(
 
         os.environ["PHANTOM_SANDBOX_EXECUTION_TIMEOUT"] = str(timeout)
 
+    # If a profile was specified, also carry its max_iterations into the Namespace
+    # so cli.py / tui.py can pick it up.
+    _profile_max_iter: int | None = None
+    if profile is not None:
+        try:
+            from phantom.core.scan_profiles import get_profile as _get_profile2
+            _profile_max_iter = _get_profile2(profile).max_iterations
+        except Exception:  # noqa: BLE001
+            pass
+
     # Build a legacy argparse.Namespace for backward compatibility
     args = argparse.Namespace(
         target=target,
@@ -256,6 +294,7 @@ def scan(
         timeout=timeout,
         auth_headers=auth_header or [],
         resume_run=resume,
+        profile_max_iterations=_profile_max_iter,  # None if no profile
     )
 
     # Delegate to existing main logic
@@ -367,6 +406,66 @@ async def _async_scan(args: object) -> None:
         await run_tui(args)
 
 
+# ──────────────────────────── resume helpers ────────────────────────────
+
+
+def _list_resumable_runs() -> list:
+    """Return resumable run dirs sorted by mtime descending (newest first).
+
+    This is the single source of truth for numeric ID assignment so that
+    ``phantom resume 2`` and ``phantom resumes-delete 2`` always refer to
+    the same run as row #2 in ``phantom resumes``.
+    """
+    import datetime
+    from pathlib import Path
+    from phantom.checkpoint.checkpoint import CheckpointManager
+
+    runs_dir = Path("phantom_runs")
+    if not runs_dir.exists():
+        return []
+
+    rows: list[tuple[float, Path]] = []
+    for run_dir in runs_dir.iterdir():
+        if not run_dir.is_dir():
+            continue
+        cp_file = run_dir / "checkpoint.json"
+        if not cp_file.exists():
+            continue
+        try:
+            cp_mgr = CheckpointManager(run_dir)
+            cp = cp_mgr.load()
+            if cp is None or cp.status == "completed":
+                continue
+            rows.append((cp_file.stat().st_mtime, run_dir))
+        except Exception:  # noqa: BLE001
+            continue
+
+    rows.sort(key=lambda r: r[0], reverse=True)  # newest first
+    return [run_dir for _ts, run_dir in rows]
+
+
+def _resolve_run_name(target: str) -> "Path | None":
+    """Resolve a numeric ID or exact run name to a run directory.
+
+    Returns the ``Path`` for the run directory, or ``None`` if not found.
+    """
+    from pathlib import Path
+
+    resumable = _list_resumable_runs()
+
+    if target.isdigit():
+        idx = int(target) - 1  # 1-based → 0-based
+        if 0 <= idx < len(resumable):
+            return resumable[idx]
+        return None
+
+    runs_dir = Path("phantom_runs")
+    candidate = runs_dir / target
+    if candidate.is_dir() and (candidate / "checkpoint.json").exists():
+        return candidate
+    return None
+
+
 # ──────────────────────────── resume ────────────────────────────
 
 
@@ -375,7 +474,7 @@ def resume(
     run_name: Annotated[
         str,
         typer.Argument(
-            help="Run name to resume (e.g. 'example-com_a1b2'). List all with: phantom resumes"
+            help="Run name or #ID (from 'phantom resumes') to resume. E.g. 'example-com_a1b2' or '2'."
         ),
     ],
     non_interactive: Annotated[
@@ -414,7 +513,26 @@ def resume(
     from pathlib import Path
     from phantom.checkpoint.checkpoint import CheckpointManager, CHECKPOINT_INTERVAL
 
-    run_dir = Path("phantom_runs") / run_name
+    # Resolve numeric ID (e.g. "2") to an actual run name.
+    resolved = _resolve_run_name(run_name)
+    if resolved is None:
+        if run_name.isdigit():
+            console.print(
+                f"[bold red]Cannot resume:[/] no resumable run with ID [cyan]{run_name}[/]."
+            )
+        else:
+            console.print(
+                f"[bold red]Cannot resume:[/] no checkpoint found for run [cyan]{run_name}[/]."
+            )
+        console.print("[dim]Use [bold]phantom resumes[/] to list all available runs.[/]")
+        raise typer.Exit(1)
+
+    # If the user passed a numeric ID, tell them which run it resolved to.
+    if run_name.isdigit():
+        console.print(f"[dim]Resolved #{run_name} → [cyan]{resolved.name}[/][/]")
+
+    run_name = resolved.name
+    run_dir = resolved
     cp_mgr = CheckpointManager(run_dir)
     cp = cp_mgr.load()
 
@@ -506,15 +624,24 @@ def resume(
 
 
 @app.command()
-def resumes() -> None:
+def resumes(
+    sort: Annotated[
+        str,
+        typer.Option(
+            "--sort",
+            help="Sort order: 'newest' (default), 'oldest', 'vulns' (most vulns first), 'target'.",
+        ),
+    ] = "newest",
+) -> None:
     """
     List all scan runs that can be resumed (interrupted or in-progress).
 
     Examples:
         phantom resumes
+        phantom resumes --sort vulns
+        phantom resumes --sort target
         phantom resume <run-name>
-        phantom resumes delete <id>      # remove a checkpoint by number
-        phantom resumes delete <run-name>
+        phantom resumes-delete <id>      # remove a checkpoint by number
     """
     import datetime
     from pathlib import Path
@@ -547,9 +674,9 @@ def resumes() -> None:
         "crashed": "[bold red]crashed[/]",
     }
 
-    found_any = False
-    row_num = 1
-    for run_dir in sorted(runs_dir.iterdir(), reverse=True):
+    # Collect all resumable runs first so we can apply --sort.
+    _rows: list[tuple] = []
+    for run_dir in runs_dir.iterdir():
         if not run_dir.is_dir():
             continue
         cp_file = run_dir / "checkpoint.json"
@@ -567,25 +694,43 @@ def resumes() -> None:
             if len(targets) > 2:
                 target_display += f" (+{len(targets) - 2} more)"
 
+            mtime_ts = cp_file.stat().st_mtime
             mtime = datetime.datetime.fromtimestamp(
-                cp_file.stat().st_mtime, tz=datetime.timezone.utc
+                mtime_ts, tz=datetime.timezone.utc
             ).strftime("%Y-%m-%d %H:%M")
 
             status_display = _STATUS_STYLE.get(cp.status, cp.status)
+            vuln_count = len(cp.vulnerability_reports)
 
-            table.add_row(
-                str(row_num),
-                run_dir.name,
-                status_display,
-                target_display or "[dim]unknown[/]",
-                str(cp.iteration),
-                str(len(cp.vulnerability_reports)),
-                mtime,
-            )
-            found_any = True
-            row_num += 1
+            _rows.append((run_dir.name, status_display, target_display or "?", cp.iteration, vuln_count, mtime, mtime_ts))
         except Exception:  # noqa: BLE001
             continue
+
+    # Apply sort.
+    sort_key = sort.lower()
+    if sort_key == "oldest":
+        _rows.sort(key=lambda r: r[6])  # mtime_ts ascending
+    elif sort_key == "vulns":
+        _rows.sort(key=lambda r: r[4], reverse=True)  # vuln_count descending
+    elif sort_key == "target":
+        _rows.sort(key=lambda r: r[2].lower())  # target_display alphabetical
+    else:  # "newest" default
+        _rows.sort(key=lambda r: r[6], reverse=True)
+
+    found_any = False
+    row_num = 1
+    for (run_name_r, status_display, target_display, iteration, vuln_count, mtime, _ts) in _rows:
+        table.add_row(
+            str(row_num),
+            run_name_r,
+            status_display,
+            target_display,
+            str(iteration),
+            str(vuln_count),
+            mtime,
+        )
+        found_any = True
+        row_num += 1
 
     if not found_any:
         console.print("[dim]No resumable scans found (all scans are completed or no checkpoints).[/]")
@@ -623,50 +768,23 @@ def resumes_delete(
         phantom resumes-delete example-com_a1b2
         phantom resumes-delete 3 --yes
     """
-    import datetime
     import shutil
     from pathlib import Path
-
-    from phantom.checkpoint.checkpoint import CheckpointManager
 
     runs_dir = Path("phantom_runs")
     if not runs_dir.exists():
         console.print("[dim]No scan runs found.[/]")
         raise typer.Exit(0)
 
-    # Build ordered list of resumable runs (same sort as resumes())
-    resumable: list[Path] = []
-    for run_dir in sorted(runs_dir.iterdir(), reverse=True):
-        if not run_dir.is_dir():
-            continue
-        cp_file = run_dir / "checkpoint.json"
-        if not cp_file.exists():
-            continue
-        try:
-            cp_mgr = CheckpointManager(run_dir)
-            cp = cp_mgr.load()
-            if cp is None or cp.status == "completed":
-                continue
-            resumable.append(run_dir)
-        except Exception:  # noqa: BLE001
-            continue
-
-    # Resolve target → run directory
-    run_dir_to_delete: Path | None = None
-    if target.isdigit():
-        idx = int(target) - 1  # 1-based → 0-based
-        if 0 <= idx < len(resumable):
-            run_dir_to_delete = resumable[idx]
-        else:
+    # Resolve target → run directory (shared logic, mtime-sorted to match 'phantom resumes').
+    run_dir_to_delete = _resolve_run_name(target)
+    if run_dir_to_delete is None:
+        if target.isdigit():
             console.print(f"[red]No resumable run with ID {target}. Run 'phantom resumes' to see IDs.[/]")
-            raise typer.Exit(1)
-    else:
-        candidate = runs_dir / target
-        if candidate.is_dir() and (candidate / "checkpoint.json").exists():
-            run_dir_to_delete = candidate
         else:
             console.print(f"[red]Run '{target}' not found or has no checkpoint.[/]")
-            raise typer.Exit(1)
+        raise typer.Exit(1)
+
 
     # Confirm before deleting
     if not yes:
@@ -1204,6 +1322,13 @@ def diff(
         Optional[Path],
         typer.Option("--output", "-o", help="Output file for diff report"),
     ] = None,
+    open_browser: Annotated[
+        bool,
+        typer.Option(
+            "--open",
+            help="Auto-open the output file in the default browser / viewer after writing.",
+        ),
+    ] = False,
 ) -> None:
     """Compare two scan runs and show new, fixed, and persistent vulnerabilities."""
     from phantom.core.diff_scanner import DiffScanner
@@ -1230,6 +1355,10 @@ def diff(
     if output:
         output.write_text(diff_content, encoding="utf-8")
         console.print(f"[green]Diff report written to {output}[/]")
+        if open_browser:
+            import webbrowser
+            webbrowser.open(output.resolve().as_uri())
+            console.print(f"[dim]Opened {output.resolve()} in browser.[/]")
     else:
         console.print(diff_content)
 

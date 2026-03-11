@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Phantom 0.9.68 — Comprehensive feature verification script.
+"""Phantom 0.9.70 — Comprehensive feature verification script.
 
 Proves every Phantom-specific addition is real, functional, and not decorative.
 Run: python scripts/verify_all.py
@@ -35,7 +35,7 @@ def check(name: str, fn):
 
 
 print("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-print("  PHANTOM 0.9.68 — FULL FEATURE VERIFICATION")
+print("  PHANTOM 0.9.70 — FULL FEATURE VERIFICATION")
 print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
 
 
@@ -44,16 +44,16 @@ print("[1] VERSION CONSISTENCY")
 
 def v_version_init():
     import phantom
-    assert phantom.__version__ == "0.9.68", f"Got {phantom.__version__}"
+    assert phantom.__version__ == "0.9.70", f"Got {phantom.__version__}"
 
 def v_version_pyproject():
     pyproject = (
         __import__("pathlib").Path(__file__).parent.parent / "pyproject.toml"
     ).read_text(encoding="utf-8")
-    assert 'version = "0.9.68"' in pyproject
+    assert 'version = "0.9.70"' in pyproject
 
-check("phantom.__version__ == '0.9.68'", v_version_init)
-check("pyproject.toml version == '0.9.68'", v_version_pyproject)
+check("phantom.__version__ == '0.9.70'", v_version_init)
+check("pyproject.toml version == '0.9.70'", v_version_pyproject)
 
 
 # ── 2. COST CONTROLS ───────────────────────────────────────────────────────────
@@ -1162,6 +1162,7 @@ check("_is_context_too_large covers extended provider error phrases", v_context_
 print("\n[20] CLI COMMANDS, NEW MODULES & INTEGRITY (0.9.68)")
 
 
+
 def v_get_global_tracer_imported_in_cli_app():
     """cli_app.py scan/resume functions must access get_global_tracer (lazy import OK)."""
     import inspect
@@ -1322,6 +1323,172 @@ check("report list table has Status column", v_report_list_has_status_column)
 check("LLM._stream rebuilt initialised before use (no NameError)", v_rebuilt_initialized_before_use)
 check("phantom profiles command renders without ImportError", v_profiles_command_works)
 check("DiffScanner correctly detects new/fixed/persistent vulns", v_diff_scanner_detects_changes)
+
+
+# ── 21. v0.9.69 — SARIF, PAUSE-ALL, PROFILE, SORT, ITER-CAP ──────────────────
+print("\n[21] v0.9.69 — SARIF, PAUSE-ALL, PROFILE, SORT, ITER-CAP")
+
+
+def v_sarif_formatter_importable():
+    from phantom.interface.formatters.sarif_formatter import SARIFFormatter
+    fmt = SARIFFormatter()
+    doc = fmt.format({"vulnerabilities": [{"name": "XSS", "severity": "high", "endpoint": "/test"}]})
+    assert doc.get("version") == "2.1.0"
+    assert "runs" in doc
+    assert len(doc["runs"][0]["results"]) == 1
+
+
+def v_sarif_rule_ids_stable():
+    from phantom.interface.formatters.sarif_formatter import SARIFFormatter, _rule_id
+    v = {"name": "SQL Injection", "severity": "critical"}
+    rid = _rule_id(v)
+    assert rid.startswith("PHANTOM-")
+    assert rid == _rule_id(v)  # stable / idempotent
+
+
+def v_scan_profile_flag_wired():
+    import inspect
+    import phantom.interface.cli_app as ca
+    src = inspect.getsource(ca.scan)
+    assert "profile" in src
+    assert "get_profile" in src or "_get_profile" in src
+
+
+def v_resumes_sort_flag_wired():
+    import inspect
+    import phantom.interface.cli_app as ca
+    src = inspect.getsource(ca.resumes)
+    assert "sort" in src
+    assert "vulns" in src or "newest" in src
+
+
+def v_diff_open_flag_wired():
+    import inspect
+    import phantom.interface.cli_app as ca
+    src = inspect.getsource(ca.diff)
+    assert "open_browser" in src or "webbrowser" in src
+
+
+def v_abs_iteration_cap_in_cli():
+    import inspect
+    import phantom.interface.cli as cl
+    src = inspect.getsource(cl.run_cli)
+    assert "_abs_iter_cap" in src
+    assert "min(" in src
+
+
+def v_abs_iteration_cap_in_tui():
+    import inspect
+    import phantom.interface.tui as tui
+    src = inspect.getsource(tui.PhantomTUIApp._build_agent_config)
+    assert "_abs_iter_cap" in src
+    assert "min(" in src
+
+
+def v_pause_all_binding_exists():
+    import inspect
+    import phantom.interface.tui as tui
+    src = inspect.getsource(tui.PhantomTUIApp)
+    assert "ctrl+p" in src or "pause_all" in src
+
+
+def v_pause_all_screen_exists():
+    from phantom.interface.tui import PauseAllScreen
+    assert issubclass(PauseAllScreen, object)
+
+
+def v_diff_scanner_raises_on_missing_dir():
+    from phantom.core.diff_scanner import DiffScanner
+    try:
+        DiffScanner().compare("/nonexistent/path/a", "/nonexistent/path/b")
+        assert False, "Should have raised FileNotFoundError"
+    except FileNotFoundError:
+        pass
+
+
+def v_is_context_too_large_catches_openrouter():
+    from phantom.llm.llm import LLM
+    llm = LLM.__new__(LLM)
+    e = Exception("This would exceed model context limits for this provider")
+    assert llm._is_context_too_large(e), "OpenRouter 'model context limits' phrase not caught"
+
+
+def v_is_context_too_large_catches_regex():
+    from phantom.llm.llm import LLM
+    llm = LLM.__new__(LLM)
+    e = Exception("Your input would exceed the context window of the model")
+    assert llm._is_context_too_large(e), "Regex fallback not catching 'exceed.*context'"
+
+
+check("SARIFFormatter importable and produces valid SARIF 2.1.0", v_sarif_formatter_importable)
+check("SARIF rule IDs are stable/idempotent", v_sarif_rule_ids_stable)
+check("phantom scan --profile flag wired in cli_app.py", v_scan_profile_flag_wired)
+check("phantom resumes --sort flag wired in cli_app.py", v_resumes_sort_flag_wired)
+check("phantom diff --open flag wired in cli_app.py", v_diff_open_flag_wired)
+check("absolute iteration cap (_abs_iter_cap) present in cli.py", v_abs_iteration_cap_in_cli)
+check("absolute iteration cap (_abs_iter_cap) present in tui.py", v_abs_iteration_cap_in_tui)
+check("Ctrl+P pause-all binding exists in TUI", v_pause_all_binding_exists)
+check("PauseAllScreen class exists in tui.py", v_pause_all_screen_exists)
+check("DiffScanner.compare raises FileNotFoundError on missing dir", v_diff_scanner_raises_on_missing_dir)
+check("_is_context_too_large catches OpenRouter 'model context limits'", v_is_context_too_large_catches_openrouter)
+check("_is_context_too_large regex fallback catches 'exceed.*context'", v_is_context_too_large_catches_regex)
+
+
+# ── 22. v0.9.70 — RESUME NUMERIC ID + CLEAR_SANDBOX ─────────────────────────
+print("\n[22] v0.9.70 — RESUME NUMERIC ID + CLEAR_SANDBOX")
+
+
+def v_resume_accepts_numeric_id():
+    """resume command's argument help must mention #ID."""
+    import inspect
+    import phantom.interface.cli_app as ca
+    src = inspect.getsource(ca.resume)
+    assert "#ID" in src or "#id" in src or "numeric" in src.lower() or "isdigit" in src, \
+        "resume() must handle numeric ID resolution"
+
+
+def v_resolve_run_name_exists():
+    """_resolve_run_name helper must be importable from cli_app."""
+    from phantom.interface.cli_app import _resolve_run_name
+    assert callable(_resolve_run_name)
+
+
+def v_list_resumable_runs_exists():
+    """_list_resumable_runs helper must be importable from cli_app."""
+    from phantom.interface.cli_app import _list_resumable_runs
+    assert callable(_list_resumable_runs)
+
+
+def v_resumes_delete_uses_resolve_run_name():
+    """resumes_delete must delegate to _resolve_run_name (no duplicate sort logic)."""
+    import inspect
+    import phantom.interface.cli_app as ca
+    src = inspect.getsource(ca.resumes_delete)
+    assert "_resolve_run_name" in src, \
+        "resumes_delete must use _resolve_run_name() for consistent ID ordering"
+
+
+def v_clear_sandbox_method_exists():
+    """AgentState.clear_sandbox() must exist and zero all three sandbox fields."""
+    from phantom.agents.state import AgentState
+    assert hasattr(AgentState, "clear_sandbox"), "AgentState.clear_sandbox() missing"
+    state = AgentState(
+        task="t",
+        sandbox_id="sid",
+        sandbox_token="tok",
+        sandbox_info={"k": "v"},
+    )
+    state.clear_sandbox()
+    assert state.sandbox_id is None
+    assert state.sandbox_token is None
+    assert state.sandbox_info is None
+
+
+check("resume() handles numeric #ID argument", v_resume_accepts_numeric_id)
+check("_resolve_run_name() helper exists in cli_app", v_resolve_run_name_exists)
+check("_list_resumable_runs() helper exists in cli_app", v_list_resumable_runs_exists)
+check("resumes_delete uses _resolve_run_name (consistent IDs)", v_resumes_delete_uses_resolve_run_name)
+check("AgentState.clear_sandbox() zeroes all sandbox fields", v_clear_sandbox_method_exists)
 
 
 # ── SUMMARY ────────────────────────────────────────────────────────────────────

@@ -23,14 +23,20 @@ class PythonSessionManager:
                 self._sessions_by_agent[agent_id] = {}
             return self._sessions_by_agent[agent_id]
 
+    def _get_agent_id(self) -> str:
+        return get_current_agent_id()
+
     def create_session(
         self, session_id: str | None = None, initial_code: str | None = None, timeout: int = 30
     ) -> dict[str, Any]:
         if session_id is None:
             session_id = self.default_session_id
 
-        sessions = self._get_agent_sessions()
+        agent_id = self._get_agent_id()
         with self._lock:
+            if agent_id not in self._sessions_by_agent:
+                self._sessions_by_agent[agent_id] = {}
+            sessions = self._sessions_by_agent[agent_id]
             if session_id in sessions:
                 raise ValueError(f"Python session '{session_id}' already exists")
 
@@ -59,11 +65,11 @@ class PythonSessionManager:
         if not code:
             raise ValueError("No code provided for execution")
 
-        sessions = self._get_agent_sessions()
+        agent_id = self._get_agent_id()
         with self._lock:
+            sessions = self._sessions_by_agent.get(agent_id, {})
             if session_id not in sessions:
                 raise ValueError(f"Python session '{session_id}' not found")
-
             session = sessions[session_id]
 
         result = session.execute_code(code, timeout)
@@ -74,11 +80,11 @@ class PythonSessionManager:
         if session_id is None:
             session_id = self.default_session_id
 
-        sessions = self._get_agent_sessions()
+        agent_id = self._get_agent_id()
         with self._lock:
+            sessions = self._sessions_by_agent.get(agent_id, {})
             if session_id not in sessions:
                 raise ValueError(f"Python session '{session_id}' not found")
-
             session = sessions.pop(session_id)
 
         session.close()
