@@ -327,6 +327,7 @@ def scan(
     display_completion_message(args, results_path)
 
     if non_interactive:
+        from phantom.telemetry.tracer import get_global_tracer
         tracer = get_global_tracer()
         if tracer and tracer.vulnerability_reports:
             raise typer.Exit(2)
@@ -495,6 +496,7 @@ def resume(
     display_completion_message(args, results_path)
 
     if non_interactive:
+        from phantom.telemetry.tracer import get_global_tracer
         tracer = get_global_tracer()
         if tracer and tracer.vulnerability_reports:
             raise typer.Exit(2)
@@ -506,11 +508,13 @@ def resume(
 @app.command()
 def resumes() -> None:
     """
-    List all scan runs that can be resumed (have an interrupted or in-progress checkpoint).
+    List all scan runs that can be resumed (interrupted or in-progress).
 
-    Example:
+    Examples:
         phantom resumes
         phantom resume <run-name>
+        phantom resumes delete <id>      # remove a checkpoint by number
+        phantom resumes delete <run-name>
     """
     import datetime
     from pathlib import Path
@@ -529,6 +533,7 @@ def resumes() -> None:
         show_lines=False,
         header_style="bold dim",
     )
+    table.add_column("#", style="bold dim", justify="right", no_wrap=True)
     table.add_column("Run Name", style="cyan")
     table.add_column("Status", no_wrap=True)
     table.add_column("Target")
@@ -543,6 +548,7 @@ def resumes() -> None:
     }
 
     found_any = False
+    row_num = 1
     for run_dir in sorted(runs_dir.iterdir(), reverse=True):
         if not run_dir.is_dir():
             continue
@@ -568,6 +574,7 @@ def resumes() -> None:
             status_display = _STATUS_STYLE.get(cp.status, cp.status)
 
             table.add_row(
+                str(row_num),
                 run_dir.name,
                 status_display,
                 target_display or "[dim]unknown[/]",
@@ -576,6 +583,7 @@ def resumes() -> None:
                 mtime,
             )
             found_any = True
+            row_num += 1
         except Exception:  # noqa: BLE001
             continue
 
@@ -587,6 +595,91 @@ def resumes() -> None:
     console.print(
         "\n[dim]Resume a scan with:[/] [bold]phantom resume [cyan]<run-name>[/][/]"
     )
+    console.print(
+        "[dim]Delete a checkpoint with:[/] [bold]phantom resumes-delete [cyan]<#id or run-name>[/][/]"
+    )
+
+
+@app.command("resumes-delete")
+def resumes_delete(
+    target: Annotated[
+        str,
+        typer.Argument(
+            help="ID number (from 'phantom resumes') or exact run name to delete."
+        ),
+    ],
+    yes: Annotated[
+        bool,
+        typer.Option("--yes", "-y", help="Skip confirmation prompt."),
+    ] = False,
+) -> None:
+    """
+    Delete a checkpoint / resume entry.
+
+    Use the # ID shown by 'phantom resumes', or the exact run name.
+
+    Examples:
+        phantom resumes-delete 1
+        phantom resumes-delete example-com_a1b2
+        phantom resumes-delete 3 --yes
+    """
+    import datetime
+    import shutil
+    from pathlib import Path
+
+    from phantom.checkpoint.checkpoint import CheckpointManager
+
+    runs_dir = Path("phantom_runs")
+    if not runs_dir.exists():
+        console.print("[dim]No scan runs found.[/]")
+        raise typer.Exit(0)
+
+    # Build ordered list of resumable runs (same sort as resumes())
+    resumable: list[Path] = []
+    for run_dir in sorted(runs_dir.iterdir(), reverse=True):
+        if not run_dir.is_dir():
+            continue
+        cp_file = run_dir / "checkpoint.json"
+        if not cp_file.exists():
+            continue
+        try:
+            cp_mgr = CheckpointManager(run_dir)
+            cp = cp_mgr.load()
+            if cp is None or cp.status == "completed":
+                continue
+            resumable.append(run_dir)
+        except Exception:  # noqa: BLE001
+            continue
+
+    # Resolve target → run directory
+    run_dir_to_delete: Path | None = None
+    if target.isdigit():
+        idx = int(target) - 1  # 1-based → 0-based
+        if 0 <= idx < len(resumable):
+            run_dir_to_delete = resumable[idx]
+        else:
+            console.print(f"[red]No resumable run with ID {target}. Run 'phantom resumes' to see IDs.[/]")
+            raise typer.Exit(1)
+    else:
+        candidate = runs_dir / target
+        if candidate.is_dir() and (candidate / "checkpoint.json").exists():
+            run_dir_to_delete = candidate
+        else:
+            console.print(f"[red]Run '{target}' not found or has no checkpoint.[/]")
+            raise typer.Exit(1)
+
+    # Confirm before deleting
+    if not yes:
+        confirm = typer.confirm(
+            f"Delete checkpoint for run '[cyan]{run_dir_to_delete.name}[/]'? "
+            "This cannot be undone."
+        )
+        if not confirm:
+            console.print("[dim]Aborted.[/]")
+            raise typer.Exit(0)
+
+    shutil.rmtree(run_dir_to_delete)
+    console.print(f"[green]Deleted checkpoint:[/] {run_dir_to_delete.name}")
 
 
 # ──────────────────────────── Report Renderers ────────────────────────────
@@ -814,29 +907,154 @@ app.add_typer(report_app, name="report")
 
 @report_app.command("list")
 def report_list() -> None:
-    """List all scan reports."""
+    """List all scan reports (completed and in-progress)."""
+    import datetime
+    from pathlib import Path
+
+    from rich.table import Table
+
+    from phantom.checkpoint.checkpoint import CheckpointManager
+
     runs_dir = Path("phantom_runs")
     if not runs_dir.exists():
         console.print("[dim]No scan reports found. Run 'phantom scan' first.[/]")
         return
 
-    from rich.table import Table
+    run_dirs = [d for d in sorted(runs_dir.iterdir(), reverse=True) if d.is_dir()]
+    if not run_dirs:
+        console.print("[dim]No scan reports found.[/]")
+        return
 
-    table = Table(title="Scan Reports")
+    _STATUS_STYLE: dict[str, str] = {
+        "completed": "[bold green]completed[/]",
+        "in_progress": "[bold yellow]in_progress[/]",
+        "interrupted": "[bold red]interrupted[/]",
+        "crashed": "[bold red]crashed[/]",
+    }
+
+    table = Table(
+        title="[bold]Phantom Scan Reports",
+        show_lines=False,
+        header_style="bold dim",
+    )
+    table.add_column("#", style="bold dim", justify="right", no_wrap=True)
     table.add_column("Run Name", style="cyan")
+    table.add_column("Status", no_wrap=True)
+    table.add_column("Target")
+    table.add_column("Vulns", style="green", justify="right")
+    table.add_column("Iters", style="dim", justify="right")
     table.add_column("Created", style="dim")
 
-    import datetime
+    for idx, run_dir in enumerate(run_dirs, 1):
+        cp_file = run_dir / "checkpoint.json"
+        stat = run_dir.stat()
+        created = datetime.datetime.fromtimestamp(
+            stat.st_mtime, tz=datetime.timezone.utc
+        ).strftime("%Y-%m-%d %H:%M")
 
-    for run_dir in sorted(runs_dir.iterdir(), reverse=True):
-        if run_dir.is_dir():
-            stat = run_dir.stat()
-            created = datetime.datetime.fromtimestamp(
-                stat.st_mtime, tz=datetime.timezone.utc
-            ).strftime("%Y-%m-%d %H:%M")
-            table.add_row(run_dir.name, created)
+        status_str = "[dim]no checkpoint[/]"
+        target_str = "[dim]unknown[/]"
+        vuln_str = "-"
+        iter_str = "-"
+
+        if cp_file.exists():
+            try:
+                cp_mgr = CheckpointManager(run_dir)
+                cp = cp_mgr.load()
+                if cp is not None:
+                    status_str = _STATUS_STYLE.get(cp.status, cp.status)
+                    targets = cp.scan_config.get("targets", [])
+                    target_strs = [t.get("original", "?") for t in targets[:2]]
+                    target_str = ", ".join(target_strs)
+                    if len(targets) > 2:
+                        target_str += f" (+{len(targets) - 2})"
+                    vuln_str = str(len(cp.vulnerability_reports))
+                    iter_str = str(cp.iteration)
+            except Exception:  # noqa: BLE001
+                pass
+
+        table.add_row(
+            str(idx),
+            run_dir.name,
+            status_str,
+            target_str,
+            vuln_str,
+            iter_str,
+            created,
+        )
 
     console.print(table)
+    console.print(
+        "\n[dim]Export a report:[/] [bold]phantom report export [cyan]<run-name>[/] --format markdown[/]"
+    )
+    console.print(
+        "[dim]Delete a report:[/] [bold]phantom report delete [cyan]<#id or run-name>[/][/]"
+    )
+
+
+@report_app.command("delete")
+def report_delete(
+    target: Annotated[
+        str,
+        typer.Argument(
+            help="ID number (from 'phantom report list') or exact run name to delete."
+        ),
+    ],
+    yes: Annotated[
+        bool,
+        typer.Option("--yes", "-y", help="Skip confirmation prompt."),
+    ] = False,
+) -> None:
+    """
+    Permanently delete a scan run directory (checkpoint + all reports).
+
+    Use the # ID shown by 'phantom report list', or the exact run name.
+
+    Examples:
+        phantom report delete 1
+        phantom report delete example-com_a1b2
+        phantom report delete 3 --yes
+    """
+    import shutil
+    from pathlib import Path
+
+    runs_dir = Path("phantom_runs")
+    if not runs_dir.exists():
+        console.print("[dim]No scan reports found.[/]")
+        raise typer.Exit(0)
+
+    run_dirs = [d for d in sorted(runs_dir.iterdir(), reverse=True) if d.is_dir()]
+
+    run_dir_to_delete: Path | None = None
+    if target.isdigit():
+        idx = int(target) - 1  # 1-based → 0-based
+        if 0 <= idx < len(run_dirs):
+            run_dir_to_delete = run_dirs[idx]
+        else:
+            console.print(
+                f"[red]No report with ID {target}. "
+                "Run 'phantom report list' to see IDs.[/]"
+            )
+            raise typer.Exit(1)
+    else:
+        candidate = runs_dir / target
+        if candidate.is_dir():
+            run_dir_to_delete = candidate
+        else:
+            console.print(f"[red]Run '{target}' not found in phantom_runs/.[/]")
+            raise typer.Exit(1)
+
+    if not yes:
+        confirm = typer.confirm(
+            f"Permanently delete ALL data for run '{run_dir_to_delete.name}'? "
+            "This cannot be undone."
+        )
+        if not confirm:
+            console.print("[dim]Aborted.[/]")
+            raise typer.Exit(0)
+
+    shutil.rmtree(run_dir_to_delete)
+    console.print(f"[green]Deleted:[/] {run_dir_to_delete.name}")
 
 
 @report_app.command("export")

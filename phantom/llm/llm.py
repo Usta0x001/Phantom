@@ -218,6 +218,7 @@ class LLM:
         accumulated = ""
         chunks: list[Any] = []
         done_streaming = 0
+        rebuilt: Any | None = None  # holds stream_chunk_builder result to avoid double call
 
         cost_before = self._total_stats.cost
         self._total_stats.requests += 1

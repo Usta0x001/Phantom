@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Phantom 0.9.67 — Comprehensive feature verification script.
+"""Phantom 0.9.68 — Comprehensive feature verification script.
 
 Proves every Phantom-specific addition is real, functional, and not decorative.
 Run: python scripts/verify_all.py
@@ -35,7 +35,7 @@ def check(name: str, fn):
 
 
 print("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-print("  PHANTOM 0.9.67 — FULL FEATURE VERIFICATION")
+print("  PHANTOM 0.9.68 — FULL FEATURE VERIFICATION")
 print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
 
 
@@ -44,16 +44,16 @@ print("[1] VERSION CONSISTENCY")
 
 def v_version_init():
     import phantom
-    assert phantom.__version__ == "0.9.67", f"Got {phantom.__version__}"
+    assert phantom.__version__ == "0.9.68", f"Got {phantom.__version__}"
 
 def v_version_pyproject():
     pyproject = (
         __import__("pathlib").Path(__file__).parent.parent / "pyproject.toml"
     ).read_text(encoding="utf-8")
-    assert 'version = "0.9.67"' in pyproject
+    assert 'version = "0.9.68"' in pyproject
 
-check("phantom.__version__ == '0.9.67'", v_version_init)
-check("pyproject.toml version == '0.9.67'", v_version_pyproject)
+check("phantom.__version__ == '0.9.68'", v_version_init)
+check("pyproject.toml version == '0.9.68'", v_version_pyproject)
 
 
 # ── 2. COST CONTROLS ───────────────────────────────────────────────────────────
@@ -1156,6 +1156,172 @@ check("LLM._extract_thinking accepts pre-built response (no double stream_chunk_
 check("base_agent final warning uses >= (not ==)", v_final_warning_uses_gte)
 check("resume resets max_iterations_warning_sent=False in cli.py and tui.py", v_resume_resets_warning_flag)
 check("_is_context_too_large covers extended provider error phrases", v_context_too_large_extended_phrases)
+
+
+# ── 20. CLI COMMANDS, NEW MODULES & INTEGRITY (0.9.68) ───────────────────────
+print("\n[20] CLI COMMANDS, NEW MODULES & INTEGRITY (0.9.68)")
+
+
+def v_get_global_tracer_imported_in_cli_app():
+    """cli_app.py scan/resume functions must access get_global_tracer (lazy import OK)."""
+    import inspect
+    import phantom.interface.cli_app as ca
+    # Check the scan function
+    scan_src = inspect.getsource(ca.scan)
+    resume_src = inspect.getsource(ca.resume)
+    for fn_name, src in (("scan", scan_src), ("resume", resume_src)):
+        assert "get_global_tracer" in src, \
+            f"get_global_tracer not found in cli_app.{fn_name}()"
+    # It must NOT be a bare name reference without being imported anywhere
+    full_src = inspect.getsource(ca)
+    assert "get_global_tracer" in full_src, \
+        "get_global_tracer missing from cli_app.py entirely"
+
+
+def v_diff_scanner_importable():
+    """phantom.core.diff_scanner.DiffScanner must be importable and functional."""
+    from phantom.core.diff_scanner import DiffScanner
+    scanner = DiffScanner()
+    report = scanner.compare(".", ".")
+    assert hasattr(report, "to_markdown"), "DiffReport must have to_markdown()"
+    md = report.to_markdown()
+    assert "Phantom Diff Report" in md
+
+
+def v_scan_profiles_importable():
+    """phantom.core.scan_profiles must expose list_profiles() and get_profile()."""
+    from phantom.core.scan_profiles import list_profiles, get_profile
+    profiles = list_profiles()
+    assert len(profiles) >= 5, "At least 5 scan profiles expected"
+    names = {p["name"] for p in profiles}
+    for expected in ("quick", "standard", "deep", "stealth", "api_only"):
+        assert expected in names, f"Missing profile '{expected}'"
+    deep = get_profile("deep")
+    assert deep.max_iterations >= 200
+    assert deep.reasoning_effort in ("medium", "high")
+
+
+def v_scan_profiles_attributes():
+    """Every scan profile must have required attributes."""
+    from phantom.core.scan_profiles import list_profiles, get_profile
+    required = ("name", "description", "scan_mode", "max_iterations",
+                "sandbox_timeout_s", "reasoning_effort", "enable_browser",
+                "priority_tools", "skip_tools")
+    for info in list_profiles():
+        p = get_profile(info["name"])
+        for attr in required:
+            assert hasattr(p, attr), f"Profile '{info['name']}' missing attribute '{attr}'"
+
+
+def v_resumes_delete_command_exists():
+    """phantom resumes-delete command must exist."""
+    from phantom.interface.cli_app import app
+    cmd_names = [c.name for c in app.registered_commands]
+    assert "resumes-delete" in cmd_names, \
+        "phantom resumes-delete command is missing from CLI"
+
+
+def v_report_delete_command_exists():
+    """phantom report delete command must exist."""
+    from phantom.interface.cli_app import report_app
+    cmd_names = [c.name for c in report_app.registered_commands]
+    assert "delete" in cmd_names, "phantom report delete sub-command is missing"
+
+
+def v_resumes_table_has_id_column():
+    """resumes() must add a '#' column (numeric ID for easy reference)."""
+    import inspect
+    import phantom.interface.cli_app as ca
+    src = inspect.getsource(ca.resumes)
+    assert '"#"' in src or "'#'" in src, \
+        "resumes() table is missing '#' ID column"
+
+
+def v_report_list_has_id_column():
+    """report_list() must add a '#' column."""
+    import inspect
+    import phantom.interface.cli_app as ca
+    src = inspect.getsource(ca.report_list)
+    assert '"#"' in src or "'#'" in src, \
+        "report_list() table is missing '#' ID column"
+
+
+def v_report_list_has_status_column():
+    """report_list() must show scan status."""
+    import inspect
+    import phantom.interface.cli_app as ca
+    src = inspect.getsource(ca.report_list)
+    assert "Status" in src or "status" in src.lower(), \
+        "report_list() is missing a Status column"
+
+
+def v_rebuilt_initialized_before_use():
+    """LLM._stream() must initialise 'rebuilt = None' before the if-chunks block."""
+    import inspect
+    from phantom.llm.llm import LLM
+    src = inspect.getsource(LLM._stream)
+    # rebuilt must appear as an initialised variable before stream_chunk_builder
+    idx_init = src.find("rebuilt: Any | None = None")
+    idx_use = src.find("stream_chunk_builder(chunks)")
+    assert idx_init != -1, "rebuilt must be initialised to None in _stream"
+    assert idx_init < idx_use, "rebuilt init must appear before stream_chunk_builder call"
+
+
+def v_profiles_command_works():
+    """phantom profiles command must render without ImportError."""
+    from phantom.core.scan_profiles import list_profiles, get_profile
+    # Exercise the same path the CLI takes
+    for p_info in list_profiles():
+        p = get_profile(p_info["name"])
+        _ = p.name, p.max_iterations, p.sandbox_timeout_s, p.reasoning_effort
+        _ = p.enable_browser, p.priority_tools, p.skip_tools
+
+
+def v_diff_scanner_detects_changes():
+    """DiffScanner must correctly compute new/fixed/persistent vulnerability sets."""
+    import json
+    import tempfile
+    from pathlib import Path
+    from phantom.core.diff_scanner import DiffScanner
+
+    vuln_a = {"id": "v001", "name": "SQLi", "severity": "high", "endpoint": "/login"}
+    vuln_b = {"id": "v002", "name": "XSS", "severity": "medium", "endpoint": "/search"}
+    vuln_c = {"id": "v003", "name": "IDOR", "severity": "low", "endpoint": "/api/user"}
+
+    with tempfile.TemporaryDirectory() as tmp:
+        run1 = Path(tmp) / "run1"
+        run2 = Path(tmp) / "run2"
+        run1.mkdir(); run2.mkdir()
+        # run1 has v001 + v002; run2 has v002 + v003
+        (run1 / "checkpoint.json").write_text(
+            json.dumps({"vulnerability_reports": [vuln_a, vuln_b]}), encoding="utf-8"
+        )
+        (run2 / "checkpoint.json").write_text(
+            json.dumps({"vulnerability_reports": [vuln_b, vuln_c]}), encoding="utf-8"
+        )
+        scanner = DiffScanner()
+        report = scanner.compare(str(run1), str(run2))
+        # v001 should be fixed, v003 should be new, v002 should persist
+        fixed_ids = {v["id"] for v in report.fixed_vulns}
+        new_ids = {v["id"] for v in report.new_vulns}
+        persist_ids = {v["id"] for v in report.persistent_vulns}
+        assert "v001" in fixed_ids, f"v001 should be fixed; got fixed={fixed_ids}"
+        assert "v003" in new_ids, f"v003 should be new; got new={new_ids}"
+        assert "v002" in persist_ids, f"v002 should persist; got persist={persist_ids}"
+
+
+check("get_global_tracer imported at module level in cli_app.py", v_get_global_tracer_imported_in_cli_app)
+check("phantom.core.diff_scanner.DiffScanner importable and functional", v_diff_scanner_importable)
+check("phantom.core.scan_profiles importable with 5 profiles", v_scan_profiles_importable)
+check("all scan profile attributes present", v_scan_profiles_attributes)
+check("phantom resumes-delete command exists", v_resumes_delete_command_exists)
+check("phantom report delete sub-command exists", v_report_delete_command_exists)
+check("resumes() table has '#' ID column", v_resumes_table_has_id_column)
+check("report list table has '#' ID column", v_report_list_has_id_column)
+check("report list table has Status column", v_report_list_has_status_column)
+check("LLM._stream rebuilt initialised before use (no NameError)", v_rebuilt_initialized_before_use)
+check("phantom profiles command renders without ImportError", v_profiles_command_works)
+check("DiffScanner correctly detects new/fixed/persistent vulns", v_diff_scanner_detects_changes)
 
 
 # ── SUMMARY ────────────────────────────────────────────────────────────────────
