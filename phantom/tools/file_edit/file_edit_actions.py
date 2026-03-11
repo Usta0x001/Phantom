@@ -1,9 +1,40 @@
 import json
 import re
-from pathlib import Path
+import shlex
+from pathlib import Path, PurePosixPath
 from typing import Any, cast
 
 from phantom.tools.registry import register_tool
+
+
+WORKSPACE_ROOT = PurePosixPath("/workspace")
+
+
+def _validate_workspace_path(path: str) -> str:
+    """Resolve and validate that a path stays within /workspace.
+
+    Rejects symlinks that escape the workspace boundary, '..' traversal,
+    and absolute paths outside /workspace.
+    """
+    path_obj = Path(path)
+    if not path_obj.is_absolute():
+        path_obj = Path("/workspace") / path_obj
+
+    # Resolve symlinks to get canonical path
+    try:
+        resolved = path_obj.resolve(strict=False)
+    except (OSError, ValueError) as e:
+        raise ValueError(f"Cannot resolve path: {e}") from e
+
+    # Verify the resolved path is under /workspace
+    try:
+        resolved.relative_to("/workspace")
+    except ValueError:
+        raise ValueError(
+            f"Path traversal blocked: resolved path '{resolved}' is outside /workspace"
+        )
+
+    return str(path_obj)
 
 
 def _parse_file_editor_output(output: str) -> dict[str, Any]:
@@ -33,9 +64,7 @@ def str_replace_editor(
     from openhands_aci import file_editor
 
     try:
-        path_obj = Path(path)
-        if not path_obj.is_absolute():
-            path = str(Path("/workspace") / path_obj)
+        path = _validate_workspace_path(path)
 
         result = file_editor(
             command=command,
@@ -66,10 +95,8 @@ def list_files(
     from openhands_aci.utils.shell import run_shell_cmd
 
     try:
+        path = _validate_workspace_path(path)
         path_obj = Path(path)
-        if not path_obj.is_absolute():
-            path = str(Path("/workspace") / path_obj)
-            path_obj = Path(path)
 
         if not path_obj.exists():
             return {"error": f"Directory not found: {path}"}
@@ -77,7 +104,8 @@ def list_files(
         if not path_obj.is_dir():
             return {"error": f"Path is not a directory: {path}"}
 
-        cmd = f"find '{path}' -type f -o -type d | head -500" if recursive else f"ls -1a '{path}'"
+        safe_path = shlex.quote(path)
+        cmd = f"find {safe_path} -type f -o -type d | head -500" if recursive else f"ls -1a {safe_path}"
 
         exit_code, stdout, stderr = run_shell_cmd(cmd)
 
@@ -120,16 +148,16 @@ def search_files(
     from openhands_aci.utils.shell import run_shell_cmd
 
     try:
-        path_obj = Path(path)
-        if not path_obj.is_absolute():
-            path = str(Path("/workspace") / path_obj)
+        path = _validate_workspace_path(path)
 
         if not Path(path).exists():
             return {"error": f"Directory not found: {path}"}
 
-        escaped_regex = regex.replace("'", "'\"'\"'")
+        safe_path = shlex.quote(path)
+        safe_regex = shlex.quote(regex)
+        safe_pattern = shlex.quote(file_pattern)
 
-        cmd = f"rg --line-number --glob '{file_pattern}' '{escaped_regex}' '{path}'"
+        cmd = f"rg --line-number --glob {safe_pattern} {safe_regex} {safe_path}"
 
         exit_code, stdout, stderr = run_shell_cmd(cmd)
 

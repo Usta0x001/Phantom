@@ -6,6 +6,10 @@ from collections.abc import Callable
 from typing import Any, Union, get_args, get_origin
 
 
+# Maximum size of a JSON string value to attempt parsing (prevents DoS)
+_MAX_JSON_PARSE_LENGTH = 100_000
+
+
 class ArgumentConversionError(Exception):
     def __init__(self, message: str, param_name: str | None = None) -> None:
         self.param_name = param_name
@@ -85,7 +89,8 @@ def _convert_basic_types(value: str, param_type: Any, origin: Any = None) -> Any
         return _convert_to_dict(value)
 
     with contextlib.suppress(json.JSONDecodeError):
-        return json.loads(value)
+        if len(value) <= _MAX_JSON_PARSE_LENGTH:
+            return json.loads(value)
     return value
 
 
@@ -98,6 +103,10 @@ def _convert_to_bool(value: str) -> bool:
 
 
 def _convert_to_list(value: str) -> list[Any]:
+    if len(value) > _MAX_JSON_PARSE_LENGTH:
+        if "," in value:
+            return [item.strip() for item in value.split(",")]
+        return [value]
     try:
         parsed = json.loads(value)
         if isinstance(parsed, list):
@@ -111,6 +120,8 @@ def _convert_to_list(value: str) -> list[Any]:
 
 
 def _convert_to_dict(value: str) -> dict[str, Any]:
+    if len(value) > _MAX_JSON_PARSE_LENGTH:
+        return {}
     try:
         parsed = json.loads(value)
         if isinstance(parsed, dict):

@@ -328,27 +328,24 @@ class BaseAgent(metaclass=AgentMeta):
         if not sandbox_mode and self.state.sandbox_id is None:
             from phantom.runtime import get_runtime
 
-            try:
-                runtime = get_runtime()
-                sandbox_info = await runtime.create_sandbox(
-                    self.state.agent_id, self.state.sandbox_token, self.local_sources
-                )
-                self.state.sandbox_id = sandbox_info["workspace_id"]
-                self.state.sandbox_token = sandbox_info["auth_token"]
-                self.state.sandbox_info = sandbox_info
+            runtime = get_runtime()
+            sandbox_info = await runtime.create_sandbox(
+                self.state.agent_id, self.state.sandbox_token, self.local_sources
+            )
+            self.state.sandbox_id = sandbox_info["workspace_id"]
+            self.state.sandbox_token = sandbox_info["auth_token"]
+            self.state.sandbox_info = sandbox_info
 
-                if "agent_id" in sandbox_info:
-                    self.state.sandbox_info["agent_id"] = sandbox_info["agent_id"]
+            if "agent_id" in sandbox_info:
+                self.state.sandbox_info["agent_id"] = sandbox_info["agent_id"]
 
-                caido_port = sandbox_info.get("caido_port")
-                if caido_port:
-                    from phantom.telemetry.tracer import get_global_tracer
+            caido_port = sandbox_info.get("caido_port")
+            if caido_port:
+                from phantom.telemetry.tracer import get_global_tracer
 
-                    tracer = get_global_tracer()
-                    if tracer:
-                        tracer.caido_url = f"localhost:{caido_port}"
-            except Exception as e:
-                raise
+                tracer = get_global_tracer()
+                if tracer:
+                    tracer.caido_url = f"localhost:{caido_port}"
 
         if not self.state.task:
             self.state.task = task
@@ -485,6 +482,20 @@ class BaseAgent(metaclass=AgentMeta):
                             if sender_id and sender_id in _agent_graph.get("nodes", {}):
                                 sender_name = _agent_graph["nodes"][sender_id]["name"]
 
+                            # Escape all dynamic values before embedding into XML to
+                            # prevent XML/prompt injection via crafted agent names,
+                            # message types, or content.
+                            import html as _html
+
+                            safe_sender_name = _html.escape(str(sender_name))
+                            safe_sender_id = _html.escape(str(sender_id or ""))
+                            safe_msg_type = _html.escape(
+                                str(message.get("message_type", "information"))
+                            )
+                            safe_priority = _html.escape(str(message.get("priority", "normal")))
+                            safe_timestamp = _html.escape(str(message.get("timestamp", "")))
+                            safe_content = _html.escape(str(message.get("content", "")))
+
                             message_content = f"""<inter_agent_message>
     <delivery_notice>
         <important>You have received a message from another agent. You should acknowledge
@@ -493,16 +504,16 @@ class BaseAgent(metaclass=AgentMeta):
         content and respond naturally as/if needed.</important>
     </delivery_notice>
     <sender>
-        <agent_name>{sender_name}</agent_name>
-        <agent_id>{sender_id}</agent_id>
+        <agent_name>{safe_sender_name}</agent_name>
+        <agent_id>{safe_sender_id}</agent_id>
     </sender>
     <message_metadata>
-        <type>{message.get("message_type", "information")}</type>
-        <priority>{message.get("priority", "normal")}</priority>
-        <timestamp>{message.get("timestamp", "")}</timestamp>
+        <type>{safe_msg_type}</type>
+        <priority>{safe_priority}</priority>
+        <timestamp>{safe_timestamp}</timestamp>
     </message_metadata>
     <content>
-{message.get("content", "")}
+{safe_content}
     </content>
     <delivery_info>
         <note>This message was delivered during your task execution.

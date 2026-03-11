@@ -128,8 +128,12 @@ class LLM:
                 loaded_skill_names=list(skill_content.keys()),
                 **skill_content,
             )
-            return str(result)
+            prompt = str(result)
+            if not prompt.strip():
+                logger.error("System prompt rendered empty for agent %s", agent_name)
+            return prompt
         except Exception:  # noqa: BLE001
+            logger.error("Failed to load system prompt for agent %s", agent_name, exc_info=True)
             return ""
 
     def set_agent_identity(self, agent_name: str | None, agent_id: str | None) -> None:
@@ -221,13 +225,14 @@ class LLM:
                 self.config.litellm_model = self._fallback_llm_name
                 async for response in self._stream(messages):
                     yield response
-                self.config.litellm_model = original_model
                 self._check_adaptive_scan_mode()  # honour cost budget after fallback too
                 return  # noqa: TRY300
             except Exception as e:  # noqa: BLE001
-                self.config.litellm_model = original_model
                 self._error_calls += 1
                 self._raise_error(e)
+            finally:
+                # Always restore the original model, even if fallback raises.
+                self.config.litellm_model = original_model
         elif primary_exhausted:
             self.config.litellm_model = original_model
             self._error_calls += 1

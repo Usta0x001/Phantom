@@ -190,6 +190,15 @@ def register_tool(
         tools.append(func_dict)
         _tools_by_name[str(func_dict["name"])] = f
 
+        # Preserve coroutine-function identity so inspect.iscoroutinefunction()
+        # returns True for async tools — needed by tool_server._run_tool and
+        # by _execute_tool_locally to correctly await results.
+        if inspect.iscoroutinefunction(f):
+            @wraps(f)
+            async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
+                return await f(*args, **kwargs)
+            return async_wrapper
+
         @wraps(f)
         def wrapper(*args: Any, **kwargs: Any) -> Any:
             return f(*args, **kwargs)

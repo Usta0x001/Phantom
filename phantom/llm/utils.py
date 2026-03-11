@@ -89,14 +89,24 @@ def parse_tool_invocations(content: str) -> list[dict[str, Any]] | None:
     fn_matches = re.finditer(fn_regex_pattern, content, re.DOTALL)
 
     for fn_match in fn_matches:
-        fn_name = fn_match.group(1)
+        fn_name = fn_match.group(1).strip()
+
+        # Validate tool name: must be alphanumeric/underscore only
+        if not re.fullmatch(r"[a-zA-Z_][a-zA-Z0-9_]*", fn_name):
+            continue
+
         fn_body = fn_match.group(2)
 
         param_matches = re.finditer(fn_param_regex_pattern, fn_body, re.DOTALL)
 
         args = {}
         for param_match in param_matches:
-            param_name = param_match.group(1)
+            param_name = param_match.group(1).strip()
+
+            # Validate param name: must be alphanumeric/underscore only
+            if not re.fullmatch(r"[a-zA-Z_][a-zA-Z0-9_]*", param_name):
+                continue
+
             param_value = param_match.group(2).strip()
 
             param_value = html.unescape(param_value)

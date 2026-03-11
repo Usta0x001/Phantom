@@ -267,7 +267,10 @@ def create_agent(
 
         inherited_messages = []
         if inherit_context:
-            inherited_messages = agent_state.get_conversation_history()
+            # Take a deep copy so mutations to the parent's message list while the
+            # child thread iterates over the snapshot don't cause a data race.
+            import copy as _copy
+            inherited_messages = _copy.deepcopy(agent_state.get_conversation_history())
 
         _agent_instances[state.agent_id] = agent
 

@@ -9,6 +9,11 @@ from IPython.core.interactiveshell import InteractiveShell
 MAX_STDOUT_LENGTH = 10_000
 MAX_STDERR_LENGTH = 5_000
 
+# Module-level lock to serialize stdout/stderr redirection across ALL Python
+# instances.  IPython writes to the global sys.stdout/sys.stderr, so concurrent
+# redirects from different sessions would corrupt each other's captured output.
+_STDOUT_REDIRECT_LOCK = threading.Lock()
+
 
 class PythonInstance:
     def __init__(self, session_id: str) -> None:
@@ -124,24 +129,26 @@ class PythonInstance:
             stderr_capture = io.StringIO()
             cancelled = threading.Event()
 
-            old_stdout, old_stderr = sys.stdout, sys.stderr
-
             def _run_code() -> None:
-                try:
-                    sys.stdout = stdout_capture
-                    sys.stderr = stderr_capture
-                    execution_result = self.shell.run_cell(code, silent=False, store_history=True)
-                    result_container["execution_result"] = execution_result
-                    result_container["stdout"] = stdout_capture.getvalue()
-                    result_container["stderr"] = stderr_capture.getvalue()
-                except (KeyboardInterrupt, SystemExit) as e:
-                    result_container["error"] = e
-                except Exception as e:  # noqa: BLE001
-                    result_container["error"] = e
-                finally:
-                    if not cancelled.is_set():
+                # Acquire the module-level lock inside the thread so that only
+                # one Python instance redirects sys.stdout/stderr at a time.
+                with _STDOUT_REDIRECT_LOCK:
+                    old_stdout, old_stderr = sys.stdout, sys.stderr
+                    try:
+                        sys.stdout = stdout_capture
+                        sys.stderr = stderr_capture
+                        execution_result = self.shell.run_cell(code, silent=False, store_history=True)
+                        result_container["execution_result"] = execution_result
+                        result_container["stdout"] = stdout_capture.getvalue()
+                        result_container["stderr"] = stderr_capture.getvalue()
+                    except (KeyboardInterrupt, SystemExit) as e:
+                        result_container["error"] = e
+                    except Exception as e:  # noqa: BLE001
+                        result_container["error"] = e
+                    finally:
                         sys.stdout = old_stdout
                         sys.stderr = old_stderr
+                cancelled.set()
 
             exec_thread = threading.Thread(target=_run_code, daemon=True)
             exec_thread.start()
@@ -149,7 +156,9 @@ class PythonInstance:
 
             if exec_thread.is_alive():
                 cancelled.set()
-                sys.stdout, sys.stderr = old_stdout, old_stderr
+                # The thread still holds _STDOUT_REDIRECT_LOCK; wait a moment
+                # so it can release and restore sys.stdout/sys.stderr cleanly.
+                exec_thread.join(timeout=1)
                 return self._handle_execution_error(
                     TimeoutError(f"Code execution timed out after {timeout} seconds")
                 )

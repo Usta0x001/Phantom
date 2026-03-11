@@ -1,6 +1,7 @@
 import contextlib
 import os
 import random
+import re
 import secrets
 import socket
 import time
@@ -24,6 +25,9 @@ HOST_GATEWAY_HOSTNAME = "host.docker.internal"
 DOCKER_TIMEOUT = 60
 CONTAINER_TOOL_SERVER_PORT = 48081
 CONTAINER_CAIDO_PORT = 48080
+
+# Container names must match this pattern (prevents command injection via names)
+_CONTAINER_NAME_RE = re.compile(r"^phantom-scan-[a-zA-Z0-9_-]+$")
 
 
 class DockerRuntime(AbstractRuntime):
@@ -268,8 +272,12 @@ class DockerRuntime(AbstractRuntime):
                 "chown -R pentester:pentester /workspace && chmod -R 755 /workspace",
                 user="root",
             )
-        except (OSError, DockerException):
-            pass
+        except (OSError, DockerException) as copy_err:
+            logger.warning(
+                "Failed to copy local directory '%s' to container workspace: %s",
+                local_path,
+                copy_err,
+            )
 
     async def create_sandbox(
         self,
@@ -364,6 +372,10 @@ class DockerRuntime(AbstractRuntime):
             self._caido_port = None
 
             if container_name is None:
+                return
+
+            # Validate container name before passing to subprocess
+            if not _CONTAINER_NAME_RE.match(container_name):
                 return
 
             import subprocess

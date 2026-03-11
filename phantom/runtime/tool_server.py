@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import hmac
 import os
 import signal
 import sys
@@ -38,6 +39,23 @@ security_dependency = Depends(security)
 
 agent_tasks: dict[str, asyncio.Task[Any]] = {}
 
+# Simple per-agent rate limiter: track last request time per agent
+_agent_last_request: dict[str, float] = {}
+_MIN_REQUEST_INTERVAL = 0.1  # minimum 100ms between requests per agent
+
+
+def _check_rate_limit(agent_id: str) -> None:
+    """Enforce a minimum interval between requests from the same agent."""
+    import time
+    now = time.monotonic()
+    last = _agent_last_request.get(agent_id, 0.0)
+    if now - last < _MIN_REQUEST_INTERVAL:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Rate limit exceeded",
+        )
+    _agent_last_request[agent_id] = now
+
 
 def verify_token(credentials: HTTPAuthorizationCredentials) -> str:
     if not credentials or credentials.scheme != "Bearer":
@@ -47,7 +65,8 @@ def verify_token(credentials: HTTPAuthorizationCredentials) -> str:
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-    if credentials.credentials != EXPECTED_TOKEN:
+    # Use constant-time comparison to prevent timing attacks
+    if not hmac.compare_digest(credentials.credentials, EXPECTED_TOKEN):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid authentication token",
@@ -69,6 +88,8 @@ class ToolExecutionResponse(BaseModel):
 
 
 async def _run_tool(agent_id: str, tool_name: str, kwargs: dict[str, Any]) -> Any:
+    import inspect
+
     from phantom.tools.argument_parser import convert_arguments
     from phantom.tools.context import set_current_agent_id
     from phantom.tools.registry import get_tool_by_name
@@ -80,6 +101,11 @@ async def _run_tool(agent_id: str, tool_name: str, kwargs: dict[str, Any]) -> An
         raise ValueError(f"Tool '{tool_name}' not found")
 
     converted_kwargs = convert_arguments(tool_func, kwargs)
+
+    # Async tool functions must be awaited directly; asyncio.to_thread would
+    # only get the coroutine object back without executing it.
+    if inspect.iscoroutinefunction(tool_func):
+        return await tool_func(**converted_kwargs)
     return await asyncio.to_thread(tool_func, **converted_kwargs)
 
 
@@ -88,6 +114,7 @@ async def execute_tool(
     request: ToolExecutionRequest, credentials: HTTPAuthorizationCredentials = security_dependency
 ) -> ToolExecutionResponse:
     verify_token(credentials)
+    _check_rate_limit(request.agent_id)
 
     agent_id = request.agent_id
 
@@ -139,11 +166,6 @@ async def register_agent(
 async def health_check() -> dict[str, Any]:
     return {
         "status": "healthy",
-        "sandbox_mode": str(SANDBOX_MODE),
-        "environment": "sandbox" if SANDBOX_MODE else "main",
-        "auth_configured": "true" if EXPECTED_TOKEN else "false",
-        "active_agents": len(agent_tasks),
-        "agents": list(agent_tasks.keys()),
     }
 
 

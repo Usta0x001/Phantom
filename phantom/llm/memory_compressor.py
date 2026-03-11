@@ -43,7 +43,6 @@ ALL operationally critical information for continuing the security assessment.
 CRITICAL ELEMENTS TO PRESERVE:
 - Discovered vulnerabilities and potential attack vectors
 - Scan results and tool outputs (compressed but maintaining key findings)
-- Access credentials, tokens, or authentication details found
 - System architecture insights and potential weak points
 - Progress made in the assessment
 - Failed attempts and dead ends (to avoid duplication)

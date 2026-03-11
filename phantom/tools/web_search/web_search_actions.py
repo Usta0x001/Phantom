@@ -1,7 +1,8 @@
+import asyncio
 import os
 from typing import Any
 
-import requests
+import httpx
 
 from phantom.tools.registry import register_tool
 
@@ -32,7 +33,7 @@ security implications and details."""
 
 
 @register_tool(sandbox_execution=False)
-def web_search(query: str) -> dict[str, Any]:
+async def web_search(query: str) -> dict[str, Any]:
     try:
         api_key = os.getenv("PERPLEXITY_API_KEY")
         if not api_key:
@@ -53,15 +54,17 @@ def web_search(query: str) -> dict[str, Any]:
             ],
         }
 
-        response = requests.post(url, headers=headers, json=payload, timeout=300)
-        response.raise_for_status()
+        async with httpx.AsyncClient(trust_env=False, timeout=300) as client:
+            response = await client.post(url, headers=headers, json=payload)
+            response.raise_for_status()
+            response_data = response.json()
+            content = response_data["choices"][0]["message"]["content"]
 
-        response_data = response.json()
-        content = response_data["choices"][0]["message"]["content"]
-
-    except requests.exceptions.Timeout:
+    except httpx.TimeoutException:
         return {"success": False, "message": "Request timed out", "results": []}
-    except requests.exceptions.RequestException as e:
+    except httpx.HTTPStatusError as e:
+        return {"success": False, "message": f"API request failed: {e!s}", "results": []}
+    except httpx.RequestError as e:
         return {"success": False, "message": f"API request failed: {e!s}", "results": []}
     except KeyError as e:
         return {

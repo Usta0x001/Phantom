@@ -1,12 +1,15 @@
 import contextlib
 import json
+import logging
 import os
+import stat
 from pathlib import Path
 from typing import Any
 
 
 PHANTOM_API_BASE = "https://models.phantom.ai/api/v1"
 
+logger = logging.getLogger(__name__)
 
 class Config:
     """Configuration Manager for Phantom."""
@@ -18,7 +21,7 @@ class Config:
     openai_api_base = None
     litellm_base_url = None
     ollama_api_base = None
-    phantom_reasoning_effort = "medium"
+    phantom_reasoning_effort = None
     phantom_memory_compressor_timeout = "30"
     llm_timeout = "300"
     llm_max_tokens = None
@@ -123,6 +126,20 @@ class Config:
         path = cls.config_file()
         if not path.exists():
             return {}
+        # Warn if config file is world-readable (contains API keys)
+        try:
+            if os.name != "nt":
+                file_mode = path.stat().st_mode
+                if file_mode & (stat.S_IRGRP | stat.S_IROTH):
+                    logger.warning(
+                        "Config file %s is readable by group/others (mode %o). "
+                        "Run: chmod 600 %s",
+                        path,
+                        file_mode & 0o777,
+                        path,
+                    )
+        except OSError:
+            pass
         try:
             with path.open("r", encoding="utf-8") as f:
                 data: dict[str, Any] = json.load(f)
