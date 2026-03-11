@@ -560,10 +560,6 @@ check("get_tools_prompt(): section header uses <!-- comment -->", v_tools_prompt
 check("get_tools_prompt(): tool name= attributes intact", v_tools_prompt_tool_names_intact)
 
 
-check("get_tools_prompt(): section header uses <!-- comment -->", v_tools_prompt_uses_comment_headers)
-check("get_tools_prompt(): tool name= attributes intact", v_tools_prompt_tool_names_intact)
-
-
 # ── [13] CHECKPOINT MODULE (0.9.62) ───────────────────────────────────────────
 print("\n[13] CHECKPOINT MODULE (0.9.62)")
 
@@ -773,8 +769,8 @@ check("routing: tool_result message → tool model selected", v_routing_tool_mod
 check("Config: all 0.9.60 env vars present as class attributes", v_config_new_vars_present)
 
 
-# ── [15] BUG-FIX VERIFICATION (0.9.63) ───────────────────────────────────────
-print("\n[15] BUG-FIX VERIFICATION (0.9.63)")
+# ── [16] BUG-FIX VERIFICATION (0.9.63) ───────────────────────────────────────
+print("\n[16] BUG-FIX VERIFICATION (0.9.63)")
 
 def v_bug_c_check_error_result_exec_prefix():
     """BUG FIX C: _check_error_result must detect 'Error executing X: ...' as error."""
