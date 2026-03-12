@@ -85,8 +85,9 @@ class TestCheckBudget:
         llm._total_stats.cost = 0.99
         llm._check_budget()  # must not raise
 
-    def test_noop_when_env_not_set(self):
-        assert "PHANTOM_MAX_COST" not in os.environ
+    def test_noop_when_env_not_set(self, monkeypatch):
+        # Use monkeypatch to ensure PHANTOM_MAX_COST is absent regardless of shell env
+        monkeypatch.delenv("PHANTOM_MAX_COST", raising=False)
         llm = make_llm()
         llm._total_stats.cost = 9999.0
         llm._check_budget()  # must not raise

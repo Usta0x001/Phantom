@@ -957,31 +957,62 @@ app.add_typer(config_app, name="config")
 @config_app.command("show")
 def config_show() -> None:
     """Display current configuration."""
+    import os
     from phantom.config import Config, apply_saved_config
 
     apply_saved_config()
     saved = Config.load()
-    env_vars = saved.get("env", {})
+    saved_vars: dict[str, str] = saved.get("env", {}) or {}
 
-    if not env_vars:
-        console.print("[dim]No saved configuration found.[/]")
-        console.print("[dim]Use 'phantom config set KEY VALUE' to configure.[/]")
-        return
-
+    # Build the full active configuration:
+    # 1. Start with all tracked variables that have non-None values (env or default)
+    # 2. Mark each row with its source: [env] set in environment, [saved] from config
+    #    file, [default] from built-in defaults
     from rich.table import Table
 
     table = Table(title="Phantom Configuration", show_lines=True)
     table.add_column("Variable", style="cyan")
     table.add_column("Value", style="green")
+    table.add_column("Source", style="dim")
 
-    for key, value in sorted(env_vars.items()):
-        # Mask API keys
+    rows: dict[str, tuple[str, str]] = {}  # key → (value, source)
+
+    # Walk every tracked var in the Config class
+    for attr_name in Config._tracked_names():
+        key = attr_name.upper()
+        default = getattr(Config, attr_name, None)
+        env_val = os.environ.get(key)
+        saved_val = saved_vars.get(key)
+
+        if env_val is not None:
+            source = "saved" if key in saved_vars else "env"
+            rows[key] = (env_val, source)
+        elif saved_val is not None:
+            rows[key] = (saved_val, "saved")
+        elif default is not None:
+            rows[key] = (default, "default")
+        # else: skip — completely unset with no default
+
+    if not rows:
+        console.print("[dim]No configuration found. Use 'phantom config set KEY VALUE' to configure.[/]")
+        return
+
+    _source_style = {"env": "bold green", "saved": "yellow", "default": "dim"}
+    for key, (value, source) in sorted(rows.items()):
+        # Mask secrets
         display_value = value
-        if "key" in key.lower() or "token" in key.lower():
+        if any(s in key.lower() for s in ("key", "token", "secret", "password")):
             display_value = value[:8] + "..." + value[-4:] if len(value) > 12 else "***"
-        table.add_row(key, display_value)
+        style = _source_style.get(source, "")
+        table.add_row(key, display_value, f"[{style}]{source}[/]")
 
     console.print(table)
+    console.print(
+        f"[dim]Showing {len(rows)} variables  "
+        "[bold green]env[/][dim]=active in env  "
+        "[yellow]saved[/][dim]=saved config  "
+        "default=built-in default[/]"
+    )
 
 
 @config_app.command("set")

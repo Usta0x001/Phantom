@@ -258,24 +258,51 @@ def _update_tracer_with_result(
 def _get_truncation_limit(tool_name: str) -> int:
     """Return the char truncation limit for *tool_name*.
 
-    Default is 6000.  Override per-tool via the env var::
+    Priority: env-var override > per-tool built-in default > global default (6000).
+
+    Per-tool built-in defaults are tuned to the signal/noise ratio of each tool:
+    - Port-scan tools (naabu, nmap) produce repetitive output → small limit
+    - Nuclei and sqlmap produce high-value findings → medium limit
+    - Browser/terminal output is often padded with boilerplate → medium limit
+
+    Override all built-ins via env var::
 
         PHANTOM_TOOL_TRUNCATION_OVERRIDES=nuclei=10000,grep=3000
     """
+    # ── Built-in per-tool defaults ────────────────────────────────────────────
+    _BUILT_IN_TOOL_LIMITS: dict[str, int] = {
+        "naabu":                    1500,   # port scan: repetitive IP:port lines
+        "nmap":                     3000,   # nmap: structured, compact enough at 3K
+        "grep":                     2000,   # grep: line matches, keep tight
+        "curl":                     2000,   # curl: HTTP response headers/body snippets
+        "ffuf":                     3000,   # directory fuzzer: many short lines
+        "nikto":                    4000,   # nikto: medium-density findings
+        "terminal_execute":         4000,   # generic terminal: down from 6K
+        "browser_action":           3000,   # browser HTML dumps are verbose/boilerplate
+        "nuclei":                   5000,   # vuln scanner: high-value, keep more
+        "sqlmap":                   5000,   # SQL injection: detailed payloads matter
+        "create_vulnerability_report": 12000,  # reports: need full detail
+    }
+    # ─────────────────────────────────────────────────────────────────────────
+
     default = 6000
+    # 1. Env-var overrides take highest priority
     raw = Config.get("phantom_tool_truncation_overrides")
-    if not raw:
-        return default
-    for entry in raw.split(","):
-        entry = entry.strip()
-        if "=" not in entry:
-            continue
-        name, _, value = entry.partition("=")
-        if name.strip() == tool_name:
-            try:
-                return int(value.strip())
-            except ValueError:
-                return default
+    if raw:
+        for entry in raw.split(","):
+            entry = entry.strip()
+            if "=" not in entry:
+                continue
+            name, _, value = entry.partition("=")
+            if name.strip() == tool_name:
+                try:
+                    return int(value.strip())
+                except ValueError:
+                    return default
+    # 2. Built-in per-tool default
+    if tool_name in _BUILT_IN_TOOL_LIMITS:
+        return _BUILT_IN_TOOL_LIMITS[tool_name]
+    # 3. Global default
     return default
 
 

@@ -9,8 +9,12 @@ from phantom.config.config import Config, resolve_llm_config
 logger = logging.getLogger(__name__)
 
 
-MAX_TOTAL_TOKENS = 20_000
-MIN_RECENT_MESSAGES = 8
+# Default fallback for unknown models — matches the 128K context window shared
+# by most modern frontier LLMs (Kimi-K2.5, GPT-4o, Claude 3.x, etc.).
+# The old value was 20_000 which caused compression to fire every ~4 iterations
+# for any model not mapped in litellm's model registry.
+MAX_TOTAL_TOKENS = 128_000
+MIN_RECENT_MESSAGES = 12
 # Hard ceiling on compression threshold regardless of model context window size.
 # Prevents runaway context growth on models with very large windows (e.g. 200k+).
 MAX_CONTEXT_CEILING = 120_000
@@ -122,6 +126,10 @@ def _summarize_messages(
             "content": empty_summary.format(text="No messages to summarize"),
         }
 
+    # Allow a dedicated cheaper/faster model for compression summarization.
+    # Falls back to the main scan model if PHANTOM_COMPRESSOR_LLM is not set.
+    compressor_model = Config.get("phantom_compressor_llm") or model
+
     formatted = []
     for msg in messages:
         role = msg.get("role", "unknown")
@@ -135,7 +143,7 @@ def _summarize_messages(
 
     try:
         completion_args: dict[str, Any] = {
-            "model": model,
+            "model": compressor_model,
             "messages": [{"role": "user", "content": prompt}],
             "timeout": timeout,
             "max_tokens": COMPRESSOR_MAX_TOKENS,
@@ -143,13 +151,18 @@ def _summarize_messages(
         # BUG FIX D: only disable extended thinking for native Anthropic models.
         # Passing `thinking=None` to OpenAI-compatible (or Groq/Gemini) endpoints
         # is an unknown parameter that may trigger a 400 Bad Request on strict APIs.
-        if model and model.startswith("anthropic/"):
+        if compressor_model and compressor_model.startswith("anthropic/"):
             completion_args["thinking"] = None
         if api_key:
             completion_args["api_key"] = api_key
         if api_base:
             completion_args["api_base"] = api_base
 
+        logger.debug(
+            "MemoryCompressor: summarizing %d messages with model=%s",
+            len(messages),
+            compressor_model,
+        )
         response = litellm.completion(**completion_args)
         summary = response.choices[0].message.content or ""
         if not summary.strip():
@@ -284,8 +297,16 @@ class MemoryCompressor:
         if total_tokens <= self._max_total_tokens * 0.9:
             return messages
 
+        # Configurable chunk size — larger chunks = fewer compression LLM calls = less latency.
+        # PHANTOM_COMPRESSOR_CHUNK_SIZE default is 10 (was hardcoded 5).
+        chunk_size = int(Config.get("phantom_compressor_chunk_size") or "10")
+        logger.info(
+            "MemoryCompressor: firing compression total_tokens=%d threshold=%d "
+            "old_msgs=%d chunk_size=%d",
+            total_tokens, int(self._max_total_tokens * 0.9), len(old_msgs), chunk_size,
+        )
+        _t0 = __import__("time").monotonic()
         compressed = []
-        chunk_size = 5
         for i in range(0, len(old_msgs), chunk_size):
             chunk = old_msgs[i : i + chunk_size]
             summary = _summarize_messages(chunk, model_name, self.timeout)
@@ -293,4 +314,23 @@ class MemoryCompressor:
                 compressed.append(summary)
                 self.compression_calls += 1
 
-        return system_msgs + compressed + recent_msgs
+        result = system_msgs + compressed + recent_msgs
+
+        # Emit an audit event so the watch layer can track compression overhead.
+        try:
+            from phantom.logging.audit import get_audit_logger as _get_audit
+            _audit = _get_audit()
+            if _audit:
+                _audit.log_compression(
+                    agent_id="compressor",
+                    model=Config.get("phantom_compressor_llm") or model_name,
+                    messages_in=len(messages),
+                    messages_out=len(result),
+                    tokens_before=total_tokens,
+                    chunk_size=chunk_size,
+                    duration_ms=(__import__("time").monotonic() - _t0) * 1000,
+                )
+        except Exception:  # noqa: BLE001
+            pass
+
+        return result

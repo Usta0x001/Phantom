@@ -19,6 +19,31 @@ class TestGetTruncationLimit:
     def test_default_is_6000(self):
         assert _get_truncation_limit("unknown_tool") == 6000
 
+    def test_built_in_terminal_execute(self):
+        """terminal_execute has a built-in default of 4000."""
+        assert _get_truncation_limit("terminal_execute") == 4000
+
+    def test_built_in_browser_action(self):
+        """browser_action has a built-in default of 3000."""
+        assert _get_truncation_limit("browser_action") == 3000
+
+    def test_built_in_naabu(self):
+        """naabu (port scanner) has a tight built-in default of 1500."""
+        assert _get_truncation_limit("naabu") == 1500
+
+    def test_built_in_nmap(self):
+        """nmap has a built-in default of 3000."""
+        assert _get_truncation_limit("nmap") == 3000
+
+    def test_built_in_nuclei(self):
+        """nuclei (vuln scanner) has a built-in default of 5000."""
+        assert _get_truncation_limit("nuclei") == 5000
+
+    def test_env_override_beats_builtin(self, monkeypatch):
+        """Env-var overrides take priority over built-in defaults."""
+        monkeypatch.setenv("PHANTOM_TOOL_TRUNCATION_OVERRIDES", "nuclei=10000")
+        assert _get_truncation_limit("nuclei") == 10000
+
     def test_override_single_tool(self, monkeypatch):
         monkeypatch.setenv("PHANTOM_TOOL_TRUNCATION_OVERRIDES", "nuclei=10000")
         assert _get_truncation_limit("nuclei") == 10000
@@ -29,12 +54,14 @@ class TestGetTruncationLimit:
         assert _get_truncation_limit("grep") == 3000
 
     def test_unspecified_tool_falls_back_to_default(self, monkeypatch):
+        """Tools not in built-in table and not in env fall back to global default 6000."""
         monkeypatch.setenv("PHANTOM_TOOL_TRUNCATION_OVERRIDES", "nuclei=10000")
-        assert _get_truncation_limit("nmap") == 6000
+        assert _get_truncation_limit("whatevs_unknown_tool") == 6000
 
-    def test_env_not_set_returns_default(self):
+    def test_builtin_without_env_override(self):
+        """nuclei built-in default is 5000 when no env override is set."""
         assert "PHANTOM_TOOL_TRUNCATION_OVERRIDES" not in os.environ
-        assert _get_truncation_limit("nuclei") == 6000
+        assert _get_truncation_limit("nuclei") == 5000
 
     def test_invalid_value_returns_default(self, monkeypatch):
         monkeypatch.setenv("PHANTOM_TOOL_TRUNCATION_OVERRIDES", "nuclei=not-a-number")
@@ -87,13 +114,18 @@ class TestFormatToolResultDefaultTruncation:
 class TestFormatToolResultWithOverride:
     def test_nuclei_uses_10000_limit(self, monkeypatch):
         monkeypatch.setenv("PHANTOM_TOOL_TRUNCATION_OVERRIDES", "nuclei=10000")
-        # 9000 chars — should NOT be truncated under nuclei's 10k limit
+        # 9000 chars — should NOT be truncated under nuclei's 10k override
         result, _ = _format_tool_result("nuclei", "N" * 9000)
         assert "truncated" not in result.lower()
 
     def test_nuclei_truncates_above_override(self, monkeypatch):
         monkeypatch.setenv("PHANTOM_TOOL_TRUNCATION_OVERRIDES", "nuclei=10000")
         result, _ = _format_tool_result("nuclei", "N" * 10001)
+        assert "truncated" in result.lower()
+
+    def test_nuclei_uses_builtin_5000_without_override(self):
+        # nuclei built-in = 5000; 5001 chars → truncated
+        result, _ = _format_tool_result("nuclei", "N" * 5001)
         assert "truncated" in result.lower()
 
     def test_grep_uses_smaller_limit(self, monkeypatch):
@@ -107,8 +139,16 @@ class TestFormatToolResultWithOverride:
         result, _ = _format_tool_result("grep", "G" * 2999)
         assert "truncated" not in result.lower()
 
-    def test_other_tools_unaffected_by_nuclei_override(self, monkeypatch):
-        monkeypatch.setenv("PHANTOM_TOOL_TRUNCATION_OVERRIDES", "nuclei=10000")
-        # nmap uses default 6000
+    def test_other_tools_use_builtin_limits(self):
+        # nmap built-in = 3000; 6001 chars → truncated
         result, _ = _format_tool_result("nmap", "M" * 6001)
         assert "truncated" in result.lower()
+
+    def test_terminal_execute_builtin_limit(self):
+        # terminal_execute built-in = 4000; 4001 → truncated
+        result, _ = _format_tool_result("terminal_execute", "T" * 4001)
+        assert "truncated" in result.lower()
+
+    def test_terminal_execute_not_truncated_under_limit(self):
+        result, _ = _format_tool_result("terminal_execute", "T" * 3999)
+        assert "truncated" not in result.lower()

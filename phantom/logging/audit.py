@@ -270,6 +270,30 @@ class AuditLogger:
             "status": "error",
         })
 
+    def log_compression(
+        self,
+        agent_id: str,
+        model: str,
+        messages_in: int,
+        messages_out: int,
+        tokens_before: int,
+        chunk_size: int,
+        duration_ms: float,
+    ) -> None:
+        """Log a memory-compression cycle so the watch layer can detect idle overhead."""
+        self._write({
+            "event_type": "llm.compression",
+            "actor": {"agent_id": agent_id},
+            "payload": {
+                "model": model,
+                "messages_in": messages_in,
+                "messages_out": messages_out,
+                "tokens_before": tokens_before,
+                "chunk_size": chunk_size,
+                "duration_ms": round(duration_ms, 1),
+            },
+        })
+
     # ─── Tools ───────────────────────────────────────────────────────────────
 
     def log_tool_start(

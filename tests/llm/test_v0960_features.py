@@ -219,9 +219,9 @@ class TestCompressionCallCounting:
         # Force threshold to be very low so compression triggers
         mc._max_total_tokens = 1  # everything exceeds 1 token
 
-        # 23 messages → MIN_RECENT_MESSAGES(8) kept recent → 15 old msgs
-        # 15 / chunk_size(5) = 3 compression calls
-        msgs = [{"role": "user", "content": f"msg {i}"} for i in range(23)]
+        # 35 messages → MIN_RECENT_MESSAGES(12) kept recent → 23 old msgs
+        # 23 / chunk_size(10) = 3 compression calls (chunks of 10, 10, 3)
+        msgs = [{"role": "user", "content": f"msg {i}"} for i in range(35)]
         mc.compress_history(msgs)
         assert mc.compression_calls == 3
 

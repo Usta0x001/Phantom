@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import os
 import time
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
@@ -127,6 +128,7 @@ class LLM:
             result = env.get_template("system_prompt.jinja").render(
                 get_tools_prompt=get_tools_prompt,
                 loaded_skill_names=list(skill_content.keys()),
+                phantom_port_range=os.environ.get("PHANTOM_PORT_RANGE", ""),
                 **skill_content,
             )
             prompt = str(result)
@@ -210,6 +212,18 @@ class LLM:
                     _last_error = e
                     primary_exhausted = True
                     break
+                # Emit audit event so retries are visible in the audit log
+                _retry_audit = (
+                    __import__("phantom.logging.audit", fromlist=["get_audit_logger"])
+                    .get_audit_logger()
+                )
+                if _retry_audit:
+                    _retry_audit.log_llm_error(
+                        agent_id=self.agent_id or "unknown",
+                        model=self.config.litellm_model,
+                        error=str(e)[:500],
+                        attempt=attempt + 1,
+                    )
                 # Longer backoff for rate limits (429) — up to 120 s; others up to 10 s
                 if code == 429:
                     wait = min(120, 4 * (2**attempt))
@@ -255,6 +269,8 @@ class LLM:
         rebuilt: Any | None = None  # holds stream_chunk_builder result to avoid double call
 
         cost_before = self._total_stats.cost
+        tokens_in_before = self._total_stats.input_tokens
+        tokens_out_before = self._total_stats.output_tokens
         self._total_stats.requests += 1
 
         # ── Audit: log the outgoing request ───────────────────────────────────
@@ -321,8 +337,8 @@ class LLM:
                 model=self.config.litellm_model,
                 response_text=accumulated,
                 tool_invocations=_parsed_tools,
-                tokens_in=self._total_stats.input_tokens,
-                tokens_out=self._total_stats.output_tokens,
+                tokens_in=self._total_stats.input_tokens - tokens_in_before,
+                tokens_out=self._total_stats.output_tokens - tokens_out_before,
                 cost_usd=self._total_stats.cost - cost_before,
                 duration_ms=(time.monotonic() - _audit_t0) * 1000,
             )
@@ -583,9 +599,24 @@ class LLM:
         try:
             if hasattr(response, "_hidden_params"):
                 response._hidden_params.pop("custom_llm_provider", None)
-            return completion_cost(response, model=self.config.canonical_model) or 0.0
+            cost = completion_cost(response, model=self.config.canonical_model) or 0.0
+            if cost > 0:
+                return cost
         except Exception:  # noqa: BLE001
-            return 0.0
+            pass
+        # Cost unknown (Azure / custom endpoints don't return pricing metadata).
+        # Fall back to environment-variable-configurable rates so budget checks remain useful.
+        try:
+            rate_in = float(Config.get("phantom_cost_per_1m_input") or "0")
+            rate_out = float(Config.get("phantom_cost_per_1m_output") or "0")
+            if rate_in or rate_out:
+                usage = getattr(response, "usage", None) or {}
+                tok_in = getattr(usage, "prompt_tokens", 0) or 0
+                tok_out = getattr(usage, "completion_tokens", 0) or 0
+                return (tok_in * rate_in + tok_out * rate_out) / 1_000_000
+        except Exception:  # noqa: BLE001
+            pass
+        return 0.0
 
     def _is_context_too_large(self, e: Exception) -> bool:
         """Detect 'request body too large' / context-window-exceeded errors from any provider.

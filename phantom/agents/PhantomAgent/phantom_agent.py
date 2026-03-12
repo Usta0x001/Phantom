@@ -1,4 +1,5 @@
 from typing import Any
+from urllib.parse import urlparse
 
 from phantom.agents.base_agent import BaseAgent
 from phantom.llm.config import LLMConfig
@@ -53,7 +54,16 @@ class PhantomAgent(BaseAgent):
                 )
 
             elif target_type == "web_application":
-                urls.append(details["target_url"])
+                target_url = details["target_url"]
+                urls.append(target_url)
+                # Register hostname so SSRF check allows requests to the scan target.
+                try:
+                    from phantom.tools.proxy.proxy_manager import allow_ssrf_host
+                    hostname = urlparse(target_url).hostname or ""
+                    if hostname:
+                        allow_ssrf_host(hostname)
+                except Exception:  # noqa: BLE001
+                    pass
             elif target_type == "ip_address":
                 ip_addresses.append(details["target_ip"])
 

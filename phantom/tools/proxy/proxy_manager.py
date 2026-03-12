@@ -1,22 +1,88 @@
 import base64
+import ipaddress
 import os
 import re
+import socket
 import time
 from typing import TYPE_CHECKING, Any
 from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
 import requests
-from gql import Client, gql
-from gql.transport.exceptions import TransportQueryError
-from gql.transport.requests import RequestsHTTPTransport
 from requests.exceptions import ProxyError, RequestException, Timeout
 
+try:
+    from gql import Client, gql
+    from gql.transport.exceptions import TransportQueryError
+    from gql.transport.requests import RequestsHTTPTransport
+
+    _GQL_AVAILABLE = True
+except ImportError:
+    Client = None  # type: ignore[assignment]
+    gql = None  # type: ignore[assignment,misc]
+    TransportQueryError = Exception  # type: ignore[assignment,misc]
+    RequestsHTTPTransport = None  # type: ignore[assignment]
+    _GQL_AVAILABLE = False
 
 if TYPE_CHECKING:
     from collections.abc import Callable
 
 
 CAIDO_PORT = 48080  # Fixed port inside container
+
+# ── SSRF protection ──────────────────────────────────────────────────────────
+# Scan targets must be registered here via allow_ssrf_host() before requests
+# are sent so that private-network addresses used as targets are permitted.
+_ALLOWED_SSRF_HOSTS: set[str] = set()
+
+# These literals are always blocked regardless of registration.
+_ALWAYS_BLOCKED = frozenset({"localhost", "0.0.0.0", "[::]", "::1"})
+
+
+def allow_ssrf_host(hostname: str) -> None:
+    """Register a hostname as an allowed SSRF destination (the scan target)."""
+    _ALLOWED_SSRF_HOSTS.add(hostname.strip().lower())
+
+
+def _is_ssrf_safe(url: str) -> bool:
+    """Return True if *url* is safe to forward; False if it targets a private/internal address."""
+    try:
+        host = urlparse(url).hostname or ""
+        if not host:
+            return False
+
+        host_lower = host.lower()
+
+        # Hard-blocked literals (never allowed even if registered).
+        if host_lower in _ALWAYS_BLOCKED:
+            return False
+
+        # Explicitly registered scan targets bypass further checks.
+        if host_lower in _ALLOWED_SSRF_HOSTS:
+            return True
+
+        # Direct IP address check.
+        try:
+            addr = ipaddress.ip_address(host)
+            # Only allow globally routable unicast addresses.
+            return addr.is_global and not addr.is_private and not addr.is_loopback and not addr.is_link_local
+        except ValueError:
+            pass  # hostname, not an IP literal
+
+        # Resolve hostname and block if any resolved address is non-public.
+        try:
+            infos = socket.getaddrinfo(host, None, socket.AF_UNSPEC, socket.SOCK_STREAM)
+            for _family, _type, _proto, _canon, sockaddr in infos:
+                ip_str = sockaddr[0]
+                addr = ipaddress.ip_address(ip_str)
+                if addr.is_private or addr.is_loopback or addr.is_link_local or addr.is_reserved:
+                    return False
+        except (socket.gaierror, OSError):
+            # Unable to resolve — allow and let the proxy decide.
+            return True
+
+        return True
+    except Exception:  # noqa: BLE001
+        return False
 
 
 class ProxyManager:
@@ -108,7 +174,7 @@ class ProxyManager:
                 "sort_by": sort_by,
                 "sort_order": sort_order,
             }
-        except (TransportQueryError, ValueError, KeyError) as e:
+        except Exception as e:  # noqa: BLE001
             return {"requests": [], "total_count": 0, "error": f"Error fetching requests: {e}"}
 
     def view_request(
@@ -169,7 +235,7 @@ class ProxyManager:
                 else self._paginate_content(request_data, content, page, page_size)
             )
 
-        except (TransportQueryError, ValueError, KeyError, UnicodeDecodeError) as e:
+        except Exception as e:  # noqa: BLE001
             return {"error": f"Failed to view request: {e}"}
 
     def _search_content(
@@ -246,6 +312,8 @@ class ProxyManager:
     ) -> dict[str, Any]:
         if headers is None:
             headers = {}
+        if not _is_ssrf_safe(url):
+            return {"error": f"Blocked: URL targets a private/internal address: {url}"}
         try:
             start_time = time.time()
             response = requests.request(
@@ -383,6 +451,12 @@ class ProxyManager:
     def _send_modified_request(
         self, request_data: dict[str, Any], request_id: str, modifications: dict[str, Any]
     ) -> dict[str, Any]:
+        target_url = request_data.get("url", "")
+        if not _is_ssrf_safe(target_url):
+            return {
+                "error": f"Blocked: URL targets a private/internal address: {target_url}",
+                "original_request_id": request_id,
+            }
         try:
             start_time = time.time()
             response = requests.request(
@@ -588,7 +662,7 @@ class ProxyManager:
 
         try:
             result = handler()
-        except (TransportQueryError, ValueError, KeyError) as e:
+        except Exception as e:  # noqa: BLE001
             return {"error": f"Scope operation failed: {e}"}
         else:
             return result
@@ -687,7 +761,7 @@ class ProxyManager:
                 ),
             }
 
-        except (TransportQueryError, ValueError, KeyError) as e:
+        except Exception as e:  # noqa: BLE001
             return {"error": f"Failed to fetch sitemap: {e}"}
 
     def _process_sitemap_metadata(self, node: dict[str, Any]) -> dict[str, Any]:
@@ -780,7 +854,7 @@ class ProxyManager:
 
             return {"entry": cleaned} if cleaned else {"error": "Failed to process sitemap entry"}  # noqa: TRY300
 
-        except (TransportQueryError, ValueError, KeyError) as e:
+        except Exception as e:  # noqa: BLE001
             return {"error": f"Failed to fetch sitemap entry: {e}"}
 
     def close(self) -> None:
