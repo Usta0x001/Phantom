@@ -94,6 +94,11 @@ class PhantomAgent(BaseAgent):
         task_description = " ".join(task_parts)
 
         if user_instructions:
-            task_description += f"\n\nSpecial instructions: {user_instructions}"
+            task_description += (
+                "\n\nUser-supplied mission constraints (highest priority):\n"
+                f"{user_instructions}\n"
+                "\nYou must explicitly incorporate these constraints while planning "
+                "and executing the scan."
+            )
 
         return await self.agent_loop(task=task_description)

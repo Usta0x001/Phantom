@@ -260,18 +260,6 @@ def scan(
             console.print(f"[red]Instruction file '{instruction_file}' is empty[/]")
             raise typer.Exit(1)
 
-    # Override model if specified
-    if model:
-        import os
-
-        os.environ["PHANTOM_LLM"] = model
-
-    # Override timeout if specified
-    if timeout is not None:
-        import os
-
-        os.environ["PHANTOM_SANDBOX_EXECUTION_TIMEOUT"] = str(timeout)
-
     # If a profile was specified, also carry its max_iterations into the Namespace
     # so cli.py / tui.py can pick it up.
     _profile_max_iter: int | None = None
@@ -328,7 +316,20 @@ def scan(
 
     threading.Thread(target=_auto_install_completion, daemon=True).start()
 
-    apply_saved_config()
+    # Force-apply saved config so `phantom config set ...` reliably affects scans
+    # even if the current shell inherited stale env values.
+    apply_saved_config(force=True)
+
+    # Explicit CLI overrides must win over saved config for this run.
+    if model:
+        import os
+
+        os.environ["PHANTOM_LLM"] = model
+
+    if timeout is not None:
+        import os
+
+        os.environ["PHANTOM_SANDBOX_EXECUTION_TIMEOUT"] = str(timeout)
 
     if args.config:
         apply_config_override(args.config)
@@ -555,10 +556,6 @@ def resume(
         )
         raise typer.Exit(1)
 
-    if model:
-        import os
-        os.environ["PHANTOM_LLM"] = model
-
     if sys.platform == "win32":
         asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
         if hasattr(sys.stdout, "reconfigure"):
@@ -579,7 +576,11 @@ def resume(
     from phantom.interface.utils import collect_local_sources, rewrite_localhost_targets
     from phantom.runtime.docker_runtime import HOST_GATEWAY_HOSTNAME
 
-    apply_saved_config()
+    # Same precedence policy as `scan`: saved config first, explicit --model after.
+    apply_saved_config(force=True)
+    if model:
+        import os
+        os.environ["PHANTOM_LLM"] = model
     check_docker_installed()
     pull_docker_image()
     validate_environment()

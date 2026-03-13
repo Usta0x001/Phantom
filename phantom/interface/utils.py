@@ -1,11 +1,13 @@
 import ipaddress
 import json
+import os
 import re
 import secrets
 import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError, URLError
@@ -816,15 +818,51 @@ def clone_repository(repo_url: str, run_name: str, dest_name: str | None = None)
 
 
 # Docker utilities
+def _start_docker_desktop_windows() -> bool:
+    if os.name != "nt":
+        return False
+
+    candidates = [
+        Path(os.environ.get("ProgramFiles", r"C:\Program Files")) / "Docker" / "Docker" / "Docker Desktop.exe",
+        Path(os.environ.get("LocalAppData", "")) / "Docker" / "Docker Desktop.exe",
+    ]
+
+    for exe in candidates:
+        if exe.exists():
+            try:
+                subprocess.Popen([str(exe)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)  # noqa: S603
+                return True
+            except OSError:
+                continue
+    return False
+
+
 def check_docker_connection() -> Any:
     try:
-        return docker.from_env()
+        client = docker.from_env()
+        client.ping()
+        return client
     except DockerException:
+        if os.name == "nt" and _start_docker_desktop_windows():
+            deadline = time.time() + 120
+            while time.time() < deadline:
+                try:
+                    client = docker.from_env()
+                    client.ping()
+                    return client
+                except DockerException:
+                    time.sleep(3)
+
         console = Console()
         error_text = Text()
         error_text.append("DOCKER NOT AVAILABLE", style="bold red")
         error_text.append("\n\n", style="white")
         error_text.append("Cannot connect to Docker daemon.\n", style="white")
+        if os.name == "nt":
+            error_text.append(
+                "Phantom attempted to auto-start Docker Desktop but it did not become ready in time.\n",
+                style="white",
+            )
         error_text.append(
             "Please ensure Docker Desktop is installed and running, and try running phantom again.\n",
             style="white",

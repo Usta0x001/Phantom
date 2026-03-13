@@ -1,9 +1,11 @@
 import contextlib
+import logging
 import os
 import random
 import re
 import secrets
 import socket
+import subprocess
 import time
 from pathlib import Path
 from typing import cast
@@ -28,22 +30,64 @@ CONTAINER_CAIDO_PORT = 48080
 
 # Container names must match this pattern (prevents command injection via names)
 _CONTAINER_NAME_RE = re.compile(r"^phantom-scan-[a-zA-Z0-9_-]+$")
+logger = logging.getLogger(__name__)
 
 
 class DockerRuntime(AbstractRuntime):
     def __init__(self) -> None:
         try:
-            self.client = docker.from_env(timeout=DOCKER_TIMEOUT)
+            self.client = self._connect_or_start_docker_client()
         except (DockerException, RequestsConnectionError, RequestsTimeout) as e:
             raise SandboxInitializationError(
                 "Docker is not available",
-                "Please ensure Docker Desktop is installed and running.",
+                str(e),
             ) from e
 
         self._scan_container: Container | None = None
         self._tool_server_port: int | None = None
         self._tool_server_token: str | None = None
         self._caido_port: int | None = None
+
+    def _start_docker_desktop_windows(self) -> bool:
+        if os.name != "nt":
+            return False
+
+        candidates = [
+            Path(os.environ.get("ProgramFiles", r"C:\Program Files")) / "Docker" / "Docker" / "Docker Desktop.exe",
+            Path(os.environ.get("LocalAppData", "")) / "Docker" / "Docker Desktop.exe",
+        ]
+        for exe in candidates:
+            if exe.exists():
+                with contextlib.suppress(OSError):
+                    subprocess.Popen([str(exe)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)  # noqa: S603
+                    return True
+        return False
+
+    def _connect_docker_client(self) -> docker.DockerClient:
+        client = docker.from_env(timeout=DOCKER_TIMEOUT)
+        client.ping()
+        return client
+
+    def _connect_or_start_docker_client(self) -> docker.DockerClient:
+        try:
+            return self._connect_docker_client()
+        except (DockerException, RequestsConnectionError, RequestsTimeout) as e:
+            if os.name == "nt" and self._start_docker_desktop_windows():
+                deadline = time.time() + 120
+                while time.time() < deadline:
+                    try:
+                        return self._connect_docker_client()
+                    except (DockerException, RequestsConnectionError, RequestsTimeout):
+                        time.sleep(3)
+                raise SandboxInitializationError(
+                    "Docker is not available",
+                    "Phantom attempted to auto-start Docker Desktop but it did not become ready in time.",
+                ) from e
+
+            raise SandboxInitializationError(
+                "Docker is not available",
+                "Please ensure Docker Desktop is installed and running.",
+            ) from e
 
     def _find_available_port(self, max_attempts: int = 5) -> int:
         """Find a free TCP port with jittered exponential back-off.
@@ -94,16 +138,18 @@ class DockerRuntime(AbstractRuntime):
                 if attempt == max_retries - 1:
                     raise
                 time.sleep(2**attempt)
+
             else:
                 return
 
     def _recover_container_state(self, container: Container) -> None:
+        self.client = self._connect_or_start_docker_client()
+        port_bindings = container.attrs.get("NetworkSettings", {}).get("Ports", {})
         for env_var in container.attrs["Config"]["Env"]:
             if env_var.startswith("TOOL_SERVER_TOKEN="):
                 self._tool_server_token = env_var.split("=", 1)[1]
                 break
 
-        port_bindings = container.attrs.get("NetworkSettings", {}).get("Ports", {})
         port_key = f"{CONTAINER_TOOL_SERVER_PORT}/tcp"
         if port_bindings.get(port_key):
             self._tool_server_port = int(port_bindings[port_key][0]["HostPort"])
