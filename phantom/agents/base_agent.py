@@ -325,6 +325,8 @@ class BaseAgent(metaclass=AgentMeta):
                         self.state.set_completed({"success": False, "error": _abort_msg})
                         if tracer:
                             tracer.update_agent_status(self.state.agent_id, "failed")
+                        # S-03: Emergency checkpoint save before abort so work is not lost.
+                        self._maybe_save_checkpoint(tracer, force=True)
                         # ── Audit: log agent failed (RL abort) ───────────────────
                         from phantom.logging.audit import get_audit_logger as _get_audit_rla
                         _audit_rla = _get_audit_rla()
@@ -503,6 +505,38 @@ class BaseAgent(metaclass=AgentMeta):
             if ledger_summary:
                 self.state.add_message("user", ledger_summary)
 
+        # S-07: Phase-gate reporting reminders at 33%, 66%, and 90% of max iterations.
+        # Forces the agent to transition from recon → exploit → report
+        # instead of endlessly looping in reconnaissance.
+        _max_iter = self.state.max_iterations
+        _cur_iter = self.state.iteration
+        if _max_iter and _max_iter > 0 and _cur_iter > 1:
+            _pct = _cur_iter / _max_iter
+            _gate_msg = None
+            if _cur_iter == max(2, int(_max_iter * 0.33)):
+                _gate_msg = (
+                    "[PHASE GATE — RECON → EXPLOIT] You have used 33% of your iterations. "
+                    "If you have identified ANY potential vulnerability targets, you MUST now "
+                    "transition to active exploitation. Stop mapping and start testing payloads. "
+                    "Report findings via create_vulnerability_report as you go."
+                )
+            elif _cur_iter == max(3, int(_max_iter * 0.66)):
+                _gate_msg = (
+                    "[PHASE GATE — EXPLOIT → REPORT] You have used 66% of your iterations. "
+                    "URGENT: If you have found ANY vulnerabilities and have NOT yet called "
+                    "create_vulnerability_report, you MUST do so NOW. Every unreported finding "
+                    "is LOST. Even SUSPECTED findings must be reported with confidence=SUSPECTED."
+                )
+            elif _cur_iter == max(4, int(_max_iter * 0.90)):
+                _gate_msg = (
+                    "[FINAL WARNING — REPORT NOW] You have used 90% of your iterations. "
+                    "You are about to run out of time. If you have ANY unreported findings, "
+                    "call create_vulnerability_report IMMEDIATELY in your next action. "
+                    "A scan with 0 reports is a FAILURE."
+                )
+            if _gate_msg:
+                self.state.add_message("user", _gate_msg)
+
         async for response in self.llm.generate(self.state.get_conversation_history()):
             final_response = response
             if tracer and response.content:
@@ -679,7 +713,7 @@ class BaseAgent(metaclass=AgentMeta):
         except (AttributeError, KeyError, TypeError) as e:
             logger.warning("Error checking agent messages: %s", e)
 
-    def _maybe_save_checkpoint(self, tracer: Optional["Tracer"]) -> None:
+    def _maybe_save_checkpoint(self, tracer: Optional["Tracer"], force: bool = False) -> None:
         """Save a checkpoint if the checkpoint manager is configured and it's time to do so."""
         # Only the root agent (no parent) saves checkpoint state
         if self.state.parent_id is not None:
@@ -687,7 +721,7 @@ class BaseAgent(metaclass=AgentMeta):
         checkpoint_mgr = self.config.get("_checkpoint_manager")
         if checkpoint_mgr is None:
             return
-        if not checkpoint_mgr.should_save(self.state.iteration):
+        if not force and not checkpoint_mgr.should_save(self.state.iteration):
             return
         try:
             from phantom.checkpoint.checkpoint import CheckpointManager

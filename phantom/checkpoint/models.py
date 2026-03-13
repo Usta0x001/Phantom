@@ -41,3 +41,11 @@ class CheckpointData(BaseModel):
     compression_calls: int = 0
     agent_calls: int = 0
     error_calls: int = 0
+
+    # S-05: Conversation summary for post-mortem debugging.
+    # Stores last N messages (role + truncated content) to allow trace analysis
+    # without bloating the checkpoint with full conversation history.
+    conversation_summary: list[dict[str, str]] = Field(default_factory=list)
+
+    # ISO timestamp of when this checkpoint was saved.
+    saved_at: str | None = None

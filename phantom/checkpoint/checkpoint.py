@@ -212,6 +212,23 @@ class CheckpointManager:
         raw_state["sandbox_id"] = None
         raw_state["sandbox_info"] = None
 
+        # S-05: Build conversation summary for post-mortem debugging.
+        # Store last 20 messages with role + truncated content (max 200 chars each).
+        _conv_summary: list[dict[str, str]] = []
+        _messages = raw_state.get("messages", [])
+        for msg in _messages[-20:]:
+            role = msg.get("role", "?")
+            content = str(msg.get("content", ""))[:200]
+            tool_calls = msg.get("tool_calls")
+            entry: dict[str, str] = {"role": role, "content": content}
+            if tool_calls:
+                fn_names = [tc.get("function", {}).get("name", "?") for tc in tool_calls[:5]]
+                entry["tool_calls"] = ", ".join(fn_names)
+            _conv_summary.append(entry)
+
+        import datetime
+        _saved_at = datetime.datetime.now(tz=datetime.timezone.utc).isoformat()
+
         return CheckpointData(
             run_name=run_name,
             status=status,
@@ -227,4 +244,6 @@ class CheckpointManager:
             compression_calls=compression_calls,
             agent_calls=agent_calls,
             error_calls=error_calls,
+            conversation_summary=_conv_summary,
+            saved_at=_saved_at,
         )

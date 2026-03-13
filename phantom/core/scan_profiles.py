@@ -20,6 +20,7 @@ class ScanProfile:
     max_iterations: int
     sandbox_timeout_s: int
     reasoning_effort: str                    # "low" | "medium" | "high"
+    max_agents: int = 10                     # S-04: cap concurrent agents per mode
     enable_browser: bool = False
     priority_tools: list[str] = field(default_factory=list)
     skip_tools: list[str] = field(default_factory=list)
@@ -30,9 +31,10 @@ _PROFILES: dict[str, ScanProfile] = {
         name="quick",
         description="Fast CI/CD gate — surface-level checks only, no deep crawl.",
         scan_mode="quick",
-        max_iterations=50,
+        max_iterations=15,
         sandbox_timeout_s=300,
         reasoning_effort="low",
+        max_agents=3,
         enable_browser=False,
         priority_tools=["nmap", "httpx", "nikto"],
         skip_tools=["sqlmap", "ffuf", "feroxbuster"],
@@ -44,6 +46,7 @@ _PROFILES: dict[str, ScanProfile] = {
         max_iterations=150,
         sandbox_timeout_s=600,
         reasoning_effort="medium",
+        max_agents=8,
         enable_browser=True,
         priority_tools=["nmap", "httpx", "nuclei", "sqlmap"],
         skip_tools=[],
@@ -55,6 +58,7 @@ _PROFILES: dict[str, ScanProfile] = {
         max_iterations=300,
         sandbox_timeout_s=1200,
         reasoning_effort="high",
+        max_agents=15,
         enable_browser=True,
         priority_tools=["nmap", "httpx", "nuclei", "sqlmap", "ffuf", "nikto"],
         skip_tools=[],
