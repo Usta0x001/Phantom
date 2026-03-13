@@ -44,6 +44,30 @@ _PHANTOM_EXTRA_MODELS: dict[str, dict] = {
         "supports_function_calling": True,
         "supports_vision": False,
     },
+    # DeepSeek-V3.2 — served via Azure AI Foundry same endpoint
+    # Rates match azure_ai/deepseek-v3.2 from litellm registry ($0.58/$1.68 per 1M)
+    "openai/DeepSeek-V3.2": {
+        "max_tokens": 131072,
+        "max_input_tokens": 131072,
+        "max_output_tokens": 16384,
+        "input_cost_per_token": 0.00000058,   # $0.58 / 1M input  (azure_ai/deepseek-v3.2)
+        "output_cost_per_token": 0.0000016800, # $1.68 / 1M output (azure_ai/deepseek-v3.2)
+        "litellm_provider": "openai",
+        "mode": "chat",
+        "supports_function_calling": True,
+        "supports_vision": False,
+    },
+    "DeepSeek-V3.2": {
+        "max_tokens": 131072,
+        "max_input_tokens": 131072,
+        "max_output_tokens": 16384,
+        "input_cost_per_token": 0.00000058,
+        "output_cost_per_token": 0.0000016800,
+        "litellm_provider": "openai",
+        "mode": "chat",
+        "supports_function_calling": True,
+        "supports_vision": False,
+    },
 }
 for _model_name, _model_info in _PHANTOM_EXTRA_MODELS.items():
     if _model_name not in litellm.model_cost:

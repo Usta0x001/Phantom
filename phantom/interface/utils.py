@@ -243,18 +243,27 @@ def _build_vulnerability_stats(stats_text: Text, tracer: Any) -> None:
 
 def _build_llm_stats(stats_text: Text, total_stats: dict[str, Any]) -> None:
     """Build LLM usage section of stats text."""
-    if total_stats["requests"] > 0:
+    calls = total_stats["requests"]
+    completed = total_stats.get("completed_requests", calls)
+    if calls > 0:
         stats_text.append("\n")
-        stats_text.append("Input Tokens ", style="dim")
+        stats_text.append("LLM Calls ", style="dim")
+        if completed < calls:
+            stats_text.append(f"{completed}/{calls}", style="bold white")
+            stats_text.append(" done/tried", style="dim white")
+        else:
+            stats_text.append(str(calls), style="bold white")
+        stats_text.append("  ·  ", style="dim white")
+        stats_text.append("Input ", style="dim")
         stats_text.append(format_token_count(total_stats["input_tokens"]), style="white")
 
         if total_stats["cached_tokens"] > 0:
-            stats_text.append("  ·  ", style="dim white")
-            stats_text.append("Cached Tokens ", style="dim")
-            stats_text.append(format_token_count(total_stats["cached_tokens"]), style="white")
+            stats_text.append("  (cached: ", style="dim white")
+            stats_text.append(format_token_count(total_stats["cached_tokens"]), style="dim #86efac")
+            stats_text.append(")", style="dim white")
 
         stats_text.append("  ·  ", style="dim white")
-        stats_text.append("Output Tokens ", style="dim")
+        stats_text.append("Output ", style="dim")
         stats_text.append(format_token_count(total_stats["output_tokens"]), style="white")
 
         if total_stats["cost"] > 0:
@@ -263,11 +272,11 @@ def _build_llm_stats(stats_text: Text, total_stats: dict[str, Any]) -> None:
             stats_text.append(f"${total_stats['cost']:.4f}", style="bold #fbbf24")
     else:
         stats_text.append("\n")
-        stats_text.append("Cost ", style="dim")
-        stats_text.append("$0.0000 ", style="#fbbf24")
+        stats_text.append("LLM Calls ", style="dim")
+        stats_text.append("0  ", style="white")
         stats_text.append("· ", style="dim white")
-        stats_text.append("Tokens ", style="dim")
-        stats_text.append("0", style="white")
+        stats_text.append("Cost ", style="dim")
+        stats_text.append("$0.0000", style="#fbbf24")
 
 
 def build_final_stats_text(tracer: Any) -> Text:
@@ -338,27 +347,36 @@ def build_live_stats_text(tracer: Any, agent_config: dict[str, Any] | None = Non
 
         stats_text.append("\n")
 
+    llm_stats = tracer.get_total_llm_stats()
+    total_stats = llm_stats["total"]
+
     stats_text.append("Agents ", style="dim")
     stats_text.append(str(agent_count), style="white")
     stats_text.append("  ·  ", style="dim white")
     stats_text.append("Tools ", style="dim")
     stats_text.append(str(tool_count), style="white")
-
-    llm_stats = tracer.get_total_llm_stats()
-    total_stats = llm_stats["total"]
+    stats_text.append("  ·  ", style="dim white")
+    stats_text.append("LLM Calls ", style="dim")
+    calls_total = total_stats["requests"]
+    calls_done = total_stats.get("completed_requests", calls_total)
+    if calls_done < calls_total:
+        stats_text.append(f"{calls_done}/{calls_total}", style="bold #fbbf24")
+        stats_text.append(" done/tried", style="dim")
+    else:
+        stats_text.append(str(calls_total), style="bold #fbbf24")
 
     stats_text.append("\n")
 
-    stats_text.append("Input Tokens ", style="dim")
+    stats_text.append("Input ", style="dim")
     stats_text.append(format_token_count(total_stats["input_tokens"]), style="white")
 
+    if total_stats["cached_tokens"] > 0:
+        stats_text.append("  (cached: ", style="dim white")
+        stats_text.append(format_token_count(total_stats["cached_tokens"]), style="dim #86efac")
+        stats_text.append(")", style="dim white")
+
     stats_text.append("  ·  ", style="dim white")
-    stats_text.append("Cached Tokens ", style="dim")
-    stats_text.append(format_token_count(total_stats["cached_tokens"]), style="white")
-
-    stats_text.append("\n")
-
-    stats_text.append("Output Tokens ", style="dim")
+    stats_text.append("Output ", style="dim")
     stats_text.append(format_token_count(total_stats["output_tokens"]), style="white")
 
     stats_text.append("  ·  ", style="dim white")
@@ -373,22 +391,80 @@ def build_tui_stats_text(tracer: Any, agent_config: dict[str, Any] | None = None
     if not tracer:
         return stats_text
 
-    if agent_config:
-        llm_config = agent_config["llm_config"]
-        model = getattr(llm_config, "model_name", "Unknown")
-        stats_text.append(model, style="white")
-
     llm_stats = tracer.get_total_llm_stats()
     total_stats = llm_stats["total"]
 
-    total_tokens = total_stats["input_tokens"] + total_stats["output_tokens"]
-    if total_tokens > 0:
+    # ── Model + LLM params ────────────────────────────────────────────────────
+    if agent_config:
+        llm_config = agent_config["llm_config"]
+        model = getattr(llm_config, "model_name", "Unknown")
+        stats_text.append(model, style="bold white")
+        timeout = getattr(llm_config, "timeout", None)
+        if timeout:
+            stats_text.append(f"  timeout:{timeout}s", style="dim")
         stats_text.append("\n")
-        stats_text.append(f"{format_token_count(total_tokens)} tokens", style="white")
 
+    # ── LLM call count ────────────────────────────────────────────────────────
+    calls = total_stats["requests"]
+    completed = total_stats.get("completed_requests", calls)
+    stats_text.append("Calls ", style="dim")
+    if completed < calls:
+        stats_text.append(f"{completed}/{calls}", style="bold #fbbf24")
+        stats_text.append(" done/tried", style="dim")
+    else:
+        stats_text.append(str(calls), style="bold #fbbf24")
+
+    # ── Tokens ────────────────────────────────────────────────────────────────
+    if calls > 0:
+        stats_text.append("  ·  ", style="dim white")
+        stats_text.append("In ", style="dim")
+        stats_text.append(format_token_count(total_stats["input_tokens"]), style="white")
+        if total_stats["cached_tokens"] > 0:
+            stats_text.append(" (", style="dim white")
+            stats_text.append(format_token_count(total_stats["cached_tokens"]), style="dim #86efac")
+            stats_text.append(" cached)", style="dim white")
+        stats_text.append("  Out ", style="dim")
+        stats_text.append(format_token_count(total_stats["output_tokens"]), style="white")
+
+    # ── Cost ──────────────────────────────────────────────────────────────────
     if total_stats["cost"] > 0:
-        stats_text.append(" · ", style="white")
-        stats_text.append(f"${total_stats['cost']:.2f}", style="white")
+        stats_text.append("  ·  ", style="dim white")
+        stats_text.append("$", style="dim")
+        stats_text.append(f"{total_stats['cost']:.4f}", style="bold #fbbf24")
+
+    stats_text.append("\n")
+
+    # ── Agents · Tools ────────────────────────────────────────────────────────
+    agent_count = len(tracer.agents)
+    tool_count = tracer.get_real_tool_count()
+    stats_text.append("Agents ", style="dim")
+    stats_text.append(str(agent_count), style="white")
+    stats_text.append("  ·  ", style="dim white")
+    stats_text.append("Tools ", style="dim")
+    stats_text.append(str(tool_count), style="white")
+
+    # ── Vulnerabilities ───────────────────────────────────────────────────────
+    vuln_count = len(tracer.vulnerability_reports)
+    stats_text.append("  ·  ", style="dim white")
+    stats_text.append("Vulns ", style="dim")
+    if vuln_count > 0:
+        stats_text.append(str(vuln_count), style="bold #ef4444")
+        # severity breakdown
+        severity_counts = {"critical": 0, "high": 0, "medium": 0, "low": 0, "info": 0}
+        for report in tracer.vulnerability_reports:
+            sev = report.get("severity", "").lower()
+            if sev in severity_counts:
+                severity_counts[sev] += 1
+        parts = []
+        for sev in ["critical", "high", "medium", "low"]:
+            if severity_counts[sev] > 0:
+                parts.append(f"{sev[0].upper()}:{severity_counts[sev]}")
+        if parts:
+            stats_text.append(" (", style="dim white")
+            stats_text.append(" ".join(parts), style="dim #fbbf24")
+            stats_text.append(")", style="dim white")
+    else:
+        stats_text.append("0", style="dim #22c55e")
 
     caido_url = getattr(tracer, "caido_url", None)
     if caido_url:

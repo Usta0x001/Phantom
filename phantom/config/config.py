@@ -79,6 +79,19 @@ class Config:
     phantom_runtime_backend = "docker"
     phantom_sandbox_execution_timeout = "600"
     phantom_sandbox_connect_timeout = "10"
+    # Rec 3 (SF-003): Docker container resource limits
+    phantom_container_mem_limit = "4g"       # PHANTOM_CONTAINER_MEM_LIMIT
+    phantom_container_cpu_quota = "200000"   # PHANTOM_CONTAINER_CPU_QUOTA (100000 = 1 CPU)
+    phantom_container_pids_limit = "512"     # PHANTOM_CONTAINER_PIDS_LIMIT
+    # Rec 7 (AI-SEC-008): Network-level scope enforcement — set to hostname or IP/CIDR of target
+    phantom_scope_enforcement = "false"      # PHANTOM_SCOPE_ENFORCEMENT=true to enable iptables rules
+    # Rec 9 (SF-004): Agent concurrency and tree depth limits
+    phantom_max_concurrent_agents = "20"     # PHANTOM_MAX_CONCURRENT_AGENTS
+    phantom_max_total_agents = "100"         # PHANTOM_MAX_TOTAL_AGENTS
+    phantom_max_agent_depth = "5"            # PHANTOM_MAX_AGENT_DEPTH
+    # Rec 2 (SF-001): Cost circuit breaker — phantom_max_cost already exists, this
+    # controls whether hitting the limit aborts the scan (hard) or just warns (soft)
+    phantom_cost_abort_on_limit = "true"     # PHANTOM_COST_ABORT_ON_LIMIT
 
     # Telemetry
     phantom_telemetry = "1"
@@ -188,10 +201,13 @@ class Config:
             if cls._config_file_override is None:
                 cls.save({"env": env_vars})
         if cls._llm_env_changed(env_vars):
+            # Current env has LLM vars that differ from saved config — env wins.
+            # Remove them from what we apply THIS SESSION so the current-session
+            # env takes priority.  Do NOT re-save the file; that would silently
+            # destroy an explicit  `phantom config set PHANTOM_LLM …`  the user
+            # ran earlier and expects to persist across fresh sessions.
             for var_name in cls._llm_env_vars():
                 env_vars.pop(var_name, None)
-            if cls._config_file_override is None:
-                cls.save({"env": env_vars})
         applied = {}
 
         for var_name, var_value in env_vars.items():

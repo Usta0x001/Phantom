@@ -14,6 +14,7 @@ from jinja2 import (
     select_autoescape,
 )
 
+from phantom.agents.hypothesis_ledger import HypothesisLedger  # Rec 6 (SF-005)
 from phantom.llm import LLM, LLMConfig, LLMRequestFailedError
 from phantom.llm.utils import clean_content
 from phantom.config import Config
@@ -82,6 +83,14 @@ class BaseAgent(metaclass=AgentMeta):
             self.llm.set_agent_identity(self.state.agent_name, self.state.agent_id)
         self._current_task: asyncio.Task[Any] | None = None
         self._force_stop = False
+
+        # Rec 6 (SF-005): Hypothesis Ledger — structured external memory that
+        # survives context compression and prevents redundant payload testing.
+        # Root agents get a fresh ledger; sub-agents share the ledger if one is
+        # passed via config (enabling cross-agent deduplication).
+        self.hypothesis_ledger: HypothesisLedger = config.get(
+            "hypothesis_ledger"
+        ) or HypothesisLedger()
 
         from phantom.telemetry.tracer import get_global_tracer
 
@@ -165,9 +174,13 @@ class BaseAgent(metaclass=AgentMeta):
                     agents_graph_actions._root_agent_id = self.state.agent_id
 
     async def agent_loop(self, task: str) -> dict[str, Any]:  # noqa: PLR0912, PLR0915
+        import time as _time_mod
         from phantom.telemetry.tracer import get_global_tracer
 
         tracer = get_global_tracer()
+        # P1.4: Capture start time for accurate duration_ms in audit logs.
+        # Previously all audit-log callsites passed a placeholder zero.
+        self._agent_start_time: float = _time_mod.monotonic()
 
         try:
             await self._initialize_sandbox_and_state(task)
@@ -261,7 +274,7 @@ class BaseAgent(metaclass=AgentMeta):
                                 task=self.state.task,
                                 result=self.state.final_result,
                                 iterations=self.state.iteration,
-                                duration_ms=0.0,
+                                duration_ms=(_time_mod.monotonic() - self._agent_start_time) * 1000,
                             )
                         # ─────────────────────────────────────────────────────────
                         return self.state.final_result or {}
@@ -321,7 +334,7 @@ class BaseAgent(metaclass=AgentMeta):
                                 name=self.state.agent_name,
                                 error=_abort_msg,
                                 iterations=_rl_consecutive,
-                                duration_ms=0.0,
+                                duration_ms=(_time_mod.monotonic() - self._agent_start_time) * 1000,
                             )
                         # ────────────────────────────────────────────────────────
                         return self.state.final_result or {"success": False, "error": _abort_msg}
@@ -369,7 +382,7 @@ class BaseAgent(metaclass=AgentMeta):
                                 name=self.state.agent_name,
                                 error=str(e),
                                 iterations=self.state.iteration,
-                                duration_ms=0.0,
+                                duration_ms=(_time_mod.monotonic() - self._agent_start_time) * 1000,
                             )
                         # ────────────────────────────────────────────────────────
                         raise
@@ -476,6 +489,19 @@ class BaseAgent(metaclass=AgentMeta):
 
     async def _process_iteration(self, tracer: Optional["Tracer"]) -> bool:
         final_response = None
+
+        # Rec 6 (SF-005): Inject Hypothesis Ledger summary every 10 iterations.
+        # Keeps the LLM aware of the scan's coverage state without bloating every
+        # message with the full ledger (which would waste tokens massively).
+        _LEDGER_INJECT_EVERY = int(Config.get("phantom_ledger_inject_interval") or "10")
+        if (
+            len(self.hypothesis_ledger) > 0
+            and self.state.iteration > 0
+            and self.state.iteration % _LEDGER_INJECT_EVERY == 0
+        ):
+            ledger_summary = self.hypothesis_ledger.to_prompt_summary(top_n=10)
+            if ledger_summary:
+                self.state.add_message("user", ledger_summary)
 
         async for response in self.llm.generate(self.state.get_conversation_history()):
             final_response = response
@@ -715,7 +741,7 @@ class BaseAgent(metaclass=AgentMeta):
                     name=self.state.agent_name,
                     error=error_msg,
                     iterations=self.state.iteration,
-                    duration_ms=0.0,
+                    duration_ms=(__import__('time').monotonic() - getattr(self, '_agent_start_time', __import__('time').monotonic())) * 1000,
                 )
             # ─────────────────────────────────────────────────────────────
             return {"success": False, "error": error_msg, "details": error_details}
@@ -762,7 +788,7 @@ class BaseAgent(metaclass=AgentMeta):
                     name=self.state.agent_name,
                     error=error_msg,
                     iterations=self.state.iteration,
-                    duration_ms=0.0,
+                    duration_ms=(__import__('time').monotonic() - getattr(self, '_agent_start_time', __import__('time').monotonic())) * 1000,
                 )
             # ─────────────────────────────────────────────────────────────
             return {"success": False, "error": error_msg}

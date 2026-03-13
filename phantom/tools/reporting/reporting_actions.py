@@ -214,6 +214,12 @@ def create_vulnerability_report(  # noqa: PLR0912
     cve: str | None = None,
     cwe: str | None = None,
     code_locations: str | None = None,
+    # Rec 10 (ER-001): Confidence tier — distinguishes verified findings from
+    # suspected ones so consumers can triage reports accurately.
+    # VERIFIED  = PoC auto-replayed and confirmed.
+    # LIKELY    = Validated by agent reasoning, not replayed (default).
+    # SUSPECTED = Discovery signal only, not yet validated.
+    confidence: str = "LIKELY",
 ) -> dict[str, Any]:
     validation_errors = _validate_required_fields(
         title=title,
@@ -249,6 +255,67 @@ def create_vulnerability_report(  # noqa: PLR0912
 
     if validation_errors:
         return {"success": False, "message": "Validation failed", "errors": validation_errors}
+
+    # Rec 10 (ER-001): Validate and normalise confidence tier.
+    _VALID_CONFIDENCE = ("VERIFIED", "LIKELY", "SUSPECTED")
+    confidence = (confidence or "LIKELY").upper().strip()
+    if confidence not in _VALID_CONFIDENCE:
+        confidence = "LIKELY"  # safe fallback
+
+    # Rec 5 (ER-005): PoC auto-replay — execute poc_script_code in the sandbox
+    # before writing the report.  If replay succeeds, upgrade confidence to
+    # VERIFIED.  If it fails, keep user-supplied confidence but tag the report.
+    # Rec 5 / P1.2: PoC auto-replay — schedule as a background async task.
+    # The reporting tool is ALWAYS called from within the agent's running event
+    # loop, so run_until_complete() can never work.  Instead we schedule a
+    # background coroutine that updates replay_status on the tracer once done.
+    replay_status = "PENDING"
+    if poc_script_code and poc_script_code.strip():
+        import asyncio
+
+        async def _background_replay(
+            _poc_code: str, _report_title: str, _confidence: str
+        ) -> None:
+            """Run PoC in sandbox and update the tracer with the result."""
+            _replay = "SKIPPED"
+            try:
+                from phantom.tools.executor import execute_tool
+
+                replay_result = await execute_tool(
+                    "terminal_execute", command=_poc_code, timeout=60,
+                )
+                replay_out = str(replay_result or "")
+                if any(err in replay_out.lower() for err in (
+                    "error", "exception", "traceback", "fail",
+                )):
+                    _replay = "FAILED"
+                else:
+                    _replay = "PASSED"
+            except Exception:  # noqa: BLE001
+                _replay = "FAILED"
+
+            # Update the vulnerability report telemetry with replay outcome
+            try:
+                from phantom.telemetry.tracer import get_global_tracer
+                _tracer = get_global_tracer()
+                if _tracer and hasattr(_tracer, "update_vulnerability_replay"):
+                    _tracer.update_vulnerability_replay(
+                        title=_report_title,
+                        replay_status=_replay,
+                        confidence="VERIFIED" if _replay == "PASSED" else _confidence,
+                    )
+            except Exception:  # noqa: BLE001
+                pass
+
+        try:
+            loop = asyncio.get_running_loop()
+            # Schedule non-blocking — does NOT block report creation
+            loop.create_task(_background_replay(poc_script_code, title, confidence))
+            replay_status = "PENDING"  # will be updated async
+        except RuntimeError:
+            replay_status = "SKIPPED"
+    else:
+        replay_status = "SKIPPED"
 
     assert parsed_cvss is not None
     cvss_score, severity, cvss_vector = calculate_cvss_and_severity(**parsed_cvss)
@@ -314,6 +381,9 @@ def create_vulnerability_report(  # noqa: PLR0912
                 cve=cve,
                 cwe=cwe,
                 code_locations=parsed_locations,
+                # Rec 10 (ER-001): propagate confidence and replay telemetry
+                confidence=confidence,
+                replay_status=replay_status,
             )
 
             return {
@@ -322,6 +392,9 @@ def create_vulnerability_report(  # noqa: PLR0912
                 "report_id": report_id,
                 "severity": severity,
                 "cvss_score": cvss_score,
+                # Rec 10: surface confidence and replay status to callers
+                "confidence": confidence,
+                "replay_status": replay_status,
             }
 
         import logging

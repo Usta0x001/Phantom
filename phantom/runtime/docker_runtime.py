@@ -144,6 +144,12 @@ class DockerRuntime(AbstractRuntime):
 
         self._verify_image_available(image_name)
 
+        # Rec 3 (SF-003): Docker resource limits — configurable per scan mode.
+        # Prevents container resource exhaustion and host destabilisation.
+        mem_limit: str = Config.get("phantom_container_mem_limit") or "4g"
+        cpu_quota: int = int(Config.get("phantom_container_cpu_quota") or "200000")  # 2 CPUs
+        pids_limit: int = int(Config.get("phantom_container_pids_limit") or "512")
+
         last_error: Exception | None = None
         for attempt in range(max_retries + 1):
             try:
@@ -174,15 +180,43 @@ class DockerRuntime(AbstractRuntime):
                     environment={
                         "PYTHONUNBUFFERED": "1",
                         "TOOL_SERVER_PORT": str(CONTAINER_TOOL_SERVER_PORT),
+                        # Rec 8 (B-13): Token also injected via env for backward-compat.
+                        # Primary path is the secret file written below.
                         "TOOL_SERVER_TOKEN": self._tool_server_token,
                         "PHANTOM_SANDBOX_EXECUTION_TIMEOUT": str(execution_timeout),
                         "HOST_GATEWAY": HOST_GATEWAY_HOSTNAME,
                     },
                     extra_hosts={HOST_GATEWAY_HOSTNAME: "host-gateway"},
                     tty=True,
+                    # Rec 3 (SF-003): Resource limits
+                    mem_limit=mem_limit,
+                    memswap_limit=mem_limit,  # disable swap
+                    cpu_period=100_000,
+                    cpu_quota=cpu_quota,
+                    pids_limit=pids_limit,
                 )
 
                 self._scan_container = container
+
+                # Rec 8 (B-13): Write token to /run/secrets so it's NOT readable
+                # via /proc/self/environ (which is world-readable by default in
+                # many Linux distros).  chmod 600 ensures only root can read it.
+                try:
+                    container.exec_run(
+                        [
+                            "bash", "-c",
+                            f"mkdir -p /run/secrets && "
+                            f"printf '%s' '{self._tool_server_token}' "
+                            f"> /run/secrets/tool_server_token && "
+                            f"chmod 600 /run/secrets/tool_server_token",
+                        ],
+                        user="root",
+                    )
+                except Exception:  # noqa: BLE001
+                    # Non-fatal: env-var fallback is still present.
+                    logger.warning("Could not write tool_server_token to /run/secrets — "
+                                   "falling back to environment variable.")
+
                 self._wait_for_tool_server()
 
             except (DockerException, RequestsConnectionError, RequestsTimeout) as e:
@@ -247,6 +281,69 @@ class DockerRuntime(AbstractRuntime):
 
         return self._create_container(scan_id)
 
+    def _configure_scope_firewall(self, container: Container, scan_target: str) -> None:
+        """
+        Rec 7 (AI-SEC-008): Enforce scan scope at the network level via iptables.
+
+        Inserts ACCEPT rules for the authorised target IP/CIDR so that the
+        container cannot be redirected to scan unintended hosts by a prompt
+        injection.  DNS-based targets are resolved before inserting rules.
+
+        The container must already have NET_ADMIN capability (set in
+        _create_container).  Failures are logged but non-fatal — the scan
+        continues without the firewall if the container cannot be configured.
+        """
+        if not scan_target:
+            return
+        try:
+            import ipaddress
+            import socket
+
+            # Resolve hostname → IP if needed
+            try:
+                ipaddress.ip_network(scan_target, strict=False)
+                allowed_cidr = scan_target  # already an IP/CIDR
+            except ValueError:
+                # Treat as hostname — resolve to IP
+                try:
+                    resolved_ip = socket.gethostbyname(scan_target)
+                    allowed_cidr = resolved_ip
+                except OSError:
+                    logger.warning(
+                        "Scope firewall: could not resolve '%s' — skipping iptables rules",
+                        scan_target,
+                    )
+                    return
+
+            # Apply iptables: allow TCP to scan target, drop all other external output
+            rules = [
+                # Allow DNS (needed to resolve target sub-domains during scan)
+                f"iptables -A OUTPUT -p udp --dport 53 -j ACCEPT",
+                f"iptables -A OUTPUT -p tcp --dport 53 -j ACCEPT",
+                # Allow traffic to the authorised target
+                f"iptables -A OUTPUT -d {allowed_cidr} -j ACCEPT",
+                # Allow loopback and host gateway (tool server communication)
+                f"iptables -A OUTPUT -o lo -j ACCEPT",
+                f"iptables -A OUTPUT -d 172.0.0.0/8 -j ACCEPT",   # Docker bridge range
+                f"iptables -A OUTPUT -d 10.0.0.0/8 -j ACCEPT",    # Docker bridge range
+                # Log then drop everything else
+                f"iptables -A OUTPUT -j LOG --log-prefix 'PHANTOM-OOB: ' --log-level 4",
+                f"iptables -A OUTPUT -j DROP",
+            ]
+            for rule in rules:
+                result = container.exec_run(
+                    ["bash", "-c", rule],
+                    user="root",
+                )
+                if result.exit_code != 0:
+                    logger.warning(
+                        "Scope firewall rule failed (exit %d): %s",
+                        result.exit_code,
+                        rule,
+                    )
+        except Exception as e:  # noqa: BLE001
+            logger.warning("Scope firewall configuration failed: %s", e)
+
     def _copy_local_directory_to_container(
         self, container: Container, local_path: str, target_name: str | None = None
     ) -> None:
@@ -299,6 +396,16 @@ class DockerRuntime(AbstractRuntime):
                 )
                 self._copy_local_directory_to_container(container, source_path, target_name)
             setattr(self, source_copied_key, True)
+
+        # Rec 7 / FIX: Actually invoke the scope firewall after container boot.
+        # Previously _configure_scope_firewall was defined but never called.
+        scope_key = f"_scope_configured_{scan_id}"
+        if not hasattr(self, scope_key):
+            scope_enforcement = Config.get("phantom_scope_enforcement") or "false"
+            if scope_enforcement.lower() not in ("false", "0", "no", ""):
+                # scope_enforcement contains the scan target (IP, CIDR, or hostname)
+                self._configure_scope_firewall(container, scope_enforcement)
+            setattr(self, scope_key, True)
 
         if container.id is None:
             raise RuntimeError("Docker container ID is unexpectedly None")

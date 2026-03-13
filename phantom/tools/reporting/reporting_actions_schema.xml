@@ -176,6 +176,14 @@ const result = await db.query(query, [id]);</fix_after>
           </location>
         </format>
       </parameter>
+      <parameter name="confidence" type="string" required="false">
+        <description>Confidence tier for this finding. Must be one of:
+- SUSPECTED: Detection signal only, not independently verified (DEFAULT — use this if unsure)
+- LIKELY: You personally tested with a crafted payload and observed a confirming response
+- VERIFIED: Reserved for automatic PoC replay — do NOT set this manually
+
+If omitted, defaults to LIKELY. See CONFIDENCE TIERS in execution guidelines for rules.</description>
+      </parameter>
     </parameters>
     <returns type="Dict[str, Any]">
       <description>Response containing:

@@ -15,6 +15,11 @@ _root_agent_id: str | None = None
 # Lock to prevent race condition when multiple root agents attempt to register simultaneously.
 _ROOT_AGENT_LOCK = threading.Lock()
 
+# Rec 1 (B-01): Single RLock protecting ALL shared mutable state.
+# Previously all six globals were mutated from concurrent daemon threads without
+# any synchronisation, leading to data races on dict/list operations.
+_GRAPH_LOCK = threading.RLock()
+
 _agent_messages: dict[str, list[dict[str, Any]]] = {}
 
 _running_agents: dict[str, threading.Thread] = {}
@@ -22,6 +27,14 @@ _running_agents: dict[str, threading.Thread] = {}
 _agent_instances: dict[str, Any] = {}
 
 _agent_states: dict[str, Any] = {}
+
+# Rec 9 (SF-004): Total-agent counter for cascade-bomb prevention.
+_total_agents_created: int = 0
+
+# Rec 9 — sentinel names that mark a validation agent (case-insensitive).
+_VALIDATION_AGENT_KEYWORDS = frozenset({
+    "validation", "validator", "verif", "verify", "verifier",
+})
 
 
 def _run_agent_in_thread(
@@ -72,9 +85,9 @@ def _run_agent_in_thread(
 
         state.add_message("user", task_xml)
 
-        _agent_states[state.agent_id] = state
-
-        _agent_graph["nodes"][state.agent_id]["state"] = state.model_dump()
+        with _GRAPH_LOCK:
+            _agent_states[state.agent_id] = state
+            _agent_graph["nodes"][state.agent_id]["state"] = state.model_dump()
 
         import asyncio
 
@@ -86,21 +99,24 @@ def _run_agent_in_thread(
             loop.close()
 
     except Exception as e:
-        _agent_graph["nodes"][state.agent_id]["status"] = "error"
-        _agent_graph["nodes"][state.agent_id]["finished_at"] = datetime.now(UTC).isoformat()
-        _agent_graph["nodes"][state.agent_id]["result"] = {"error": str(e)}
-        _running_agents.pop(state.agent_id, None)
-        _agent_instances.pop(state.agent_id, None)
+        with _GRAPH_LOCK:  # Rec 1 (B-01)
+            if state.agent_id in _agent_graph["nodes"]:
+                _agent_graph["nodes"][state.agent_id]["status"] = "error"
+                _agent_graph["nodes"][state.agent_id]["finished_at"] = datetime.now(UTC).isoformat()
+                _agent_graph["nodes"][state.agent_id]["result"] = {"error": str(e)}
+            _running_agents.pop(state.agent_id, None)
+            _agent_instances.pop(state.agent_id, None)
         raise
     else:
-        if state.stop_requested:
-            _agent_graph["nodes"][state.agent_id]["status"] = "stopped"
-        else:
-            _agent_graph["nodes"][state.agent_id]["status"] = "completed"
-        _agent_graph["nodes"][state.agent_id]["finished_at"] = datetime.now(UTC).isoformat()
-        _agent_graph["nodes"][state.agent_id]["result"] = result
-        _running_agents.pop(state.agent_id, None)
-        _agent_instances.pop(state.agent_id, None)
+        with _GRAPH_LOCK:  # Rec 1 (B-01)
+            if state.agent_id in _agent_graph["nodes"]:
+                _agent_graph["nodes"][state.agent_id]["status"] = (
+                    "stopped" if state.stop_requested else "completed"
+                )
+                _agent_graph["nodes"][state.agent_id]["finished_at"] = datetime.now(UTC).isoformat()
+                _agent_graph["nodes"][state.agent_id]["result"] = result
+            _running_agents.pop(state.agent_id, None)
+            _agent_instances.pop(state.agent_id, None)
 
         return {"result": result}
 
@@ -202,6 +218,8 @@ def create_agent(
     skills: str | None = None,
 ) -> dict[str, Any]:
     try:
+        global _total_agents_created  # Rec 9 (SF-004)
+
         parent_id = agent_state.agent_id
 
         skill_list = []
@@ -216,6 +234,69 @@ def create_agent(
                 ),
                 "agent_id": None,
             }
+
+        # ── Rec 9 (SF-004): Agent count and depth limits ──────────────────────
+        from phantom.config import Config as _Cfg
+        _max_concurrent = int(_Cfg.get("phantom_max_concurrent_agents") or "20")
+        _max_total = int(_Cfg.get("phantom_max_total_agents") or "100")
+        _max_depth = int(_Cfg.get("phantom_max_agent_depth") or "5")
+
+        with _GRAPH_LOCK:
+            _running_now = sum(
+                1 for n in _agent_graph["nodes"].values()
+                if n.get("status") in {"running", "waiting"}
+            )
+            _current_total = _total_agents_created
+
+        if _running_now >= _max_concurrent:
+            return {
+                "success": False,
+                "error": (
+                    f"Agent limit reached: {_running_now} agents currently running "
+                    f"(PHANTOM_MAX_CONCURRENT_AGENTS={_max_concurrent}). "
+                    "Wait for running agents to complete before creating more."
+                ),
+                "agent_id": None,
+            }
+        if _current_total >= _max_total:
+            return {
+                "success": False,
+                "error": (
+                    f"Total agent limit reached: {_current_total} agents created "
+                    f"(PHANTOM_MAX_TOTAL_AGENTS={_max_total})."
+                ),
+                "agent_id": None,
+            }
+
+        # Depth check: walk from parent to root counting hops
+        _depth = 0
+        _cursor = parent_id
+        with _GRAPH_LOCK:
+            while _cursor:
+                node = _agent_graph["nodes"].get(_cursor, {})
+                _cursor = node.get("parent_id")
+                _depth += 1
+                if _depth > _max_depth:
+                    break
+        if _depth > _max_depth:
+            return {
+                "success": False,
+                "error": (
+                    f"Agent tree depth limit reached: current depth {_depth} exceeds "
+                    f"PHANTOM_MAX_AGENT_DEPTH={_max_depth}."
+                ),
+                "agent_id": None,
+            }
+        # ─────────────────────────────────────────────────────────────────────
+
+        # ── Rec 4 (ER-004): Auto-disable context inheritance for validation ──
+        # Validation agents that inherit parent context exhibit confirmation bias
+        # (they already "know" the parent found a vulnerability). Forcing a fresh
+        # context ensures independent verification.
+        name_lower = name.lower()
+        if inherit_context and any(kw in name_lower for kw in _VALIDATION_AGENT_KEYWORDS):
+            inherit_context = False
+        # ─────────────────────────────────────────────────────────────────────
 
         if skill_list:
             from phantom.skills import get_all_skill_names, validate_skill_names
@@ -262,6 +343,10 @@ def create_agent(
         }
         if parent_agent and hasattr(parent_agent, "non_interactive"):
             agent_config["non_interactive"] = parent_agent.non_interactive
+        # P1.1: Share parent's HypothesisLedger with sub-agent so tested
+        # payloads and surfaces are deduplicated across the entire agent tree.
+        if parent_agent and hasattr(parent_agent, "hypothesis_ledger"):
+            agent_config["hypothesis_ledger"] = parent_agent.hypothesis_ledger
 
         agent = PhantomAgent(agent_config)
 
@@ -272,7 +357,9 @@ def create_agent(
             import copy as _copy
             inherited_messages = _copy.deepcopy(agent_state.get_conversation_history())
 
-        _agent_instances[state.agent_id] = agent
+        with _GRAPH_LOCK:  # Rec 1 (B-01)
+            _agent_instances[state.agent_id] = agent
+            _total_agents_created += 1  # Rec 9 (SF-004)
 
         thread = threading.Thread(
             target=_run_agent_in_thread,
@@ -281,7 +368,8 @@ def create_agent(
             name=f"Agent-{name}-{state.agent_id}",
         )
         thread.start()
-        _running_agents[state.agent_id] = thread
+        with _GRAPH_LOCK:  # Rec 1 (B-01)
+            _running_agents[state.agent_id] = thread
 
     except Exception as e:  # noqa: BLE001
         return {"success": False, "error": f"Failed to create agent: {e}", "agent_id": None}
@@ -308,51 +396,52 @@ def send_message_to_agent(
     priority: Literal["low", "normal", "high", "urgent"] = "normal",
 ) -> dict[str, Any]:
     try:
-        if target_agent_id not in _agent_graph["nodes"]:
-            return {
-                "success": False,
-                "error": f"Target agent '{target_agent_id}' not found in graph",
-                "message_id": None,
-            }
+        with _GRAPH_LOCK:  # Rec 1 (B-01)
+            if target_agent_id not in _agent_graph["nodes"]:
+                return {
+                    "success": False,
+                    "error": f"Target agent '{target_agent_id}' not found in graph",
+                    "message_id": None,
+                }
 
-        sender_id = agent_state.agent_id
+            sender_id = agent_state.agent_id
 
-        from uuid import uuid4
+            from uuid import uuid4
 
-        message_id = f"msg_{uuid4().hex[:8]}"
-        message_data = {
-            "id": message_id,
-            "from": sender_id,
-            "to": target_agent_id,
-            "content": message,
-            "message_type": message_type,
-            "priority": priority,
-            "timestamp": datetime.now(UTC).isoformat(),
-            "delivered": False,
-            "read": False,
-        }
-
-        if target_agent_id not in _agent_messages:
-            _agent_messages[target_agent_id] = []
-
-        _agent_messages[target_agent_id].append(message_data)
-
-        _agent_graph["edges"].append(
-            {
+            message_id = f"msg_{uuid4().hex[:8]}"
+            message_data = {
+                "id": message_id,
                 "from": sender_id,
                 "to": target_agent_id,
-                "type": "message",
-                "message_id": message_id,
+                "content": message,
                 "message_type": message_type,
                 "priority": priority,
-                "created_at": datetime.now(UTC).isoformat(),
+                "timestamp": datetime.now(UTC).isoformat(),
+                "delivered": False,
+                "read": False,
             }
-        )
 
-        message_data["delivered"] = True
+            if target_agent_id not in _agent_messages:
+                _agent_messages[target_agent_id] = []
 
-        target_name = _agent_graph["nodes"][target_agent_id]["name"]
-        sender_name = _agent_graph["nodes"][sender_id]["name"]
+            _agent_messages[target_agent_id].append(message_data)
+
+            _agent_graph["edges"].append(
+                {
+                    "from": sender_id,
+                    "to": target_agent_id,
+                    "type": "message",
+                    "message_id": message_id,
+                    "message_type": message_type,
+                    "priority": priority,
+                    "created_at": datetime.now(UTC).isoformat(),
+                }
+            )
+
+            message_data["delivered"] = True
+
+            target_name = _agent_graph["nodes"][target_agent_id]["name"]
+            sender_name = _agent_graph["nodes"][sender_id]["name"]
 
         return {
             "success": True,
@@ -392,35 +481,38 @@ def agent_finish(
 
         agent_id = agent_state.agent_id
 
-        if agent_id not in _agent_graph["nodes"]:
-            return {"agent_completed": False, "error": "Current agent not found in graph"}
+        with _GRAPH_LOCK:  # Rec 1 (B-01)
+            if agent_id not in _agent_graph["nodes"]:
+                return {"agent_completed": False, "error": "Current agent not found in graph"}
 
-        agent_node = _agent_graph["nodes"][agent_id]
+            agent_node = _agent_graph["nodes"][agent_id]
 
-        agent_node["status"] = "finished" if success else "failed"
-        agent_node["finished_at"] = datetime.now(UTC).isoformat()
-        agent_node["result"] = {
-            "summary": result_summary,
-            "findings": findings or [],
-            "success": success,
-            "recommendations": final_recommendations or [],
-        }
+            agent_node["status"] = "finished" if success else "failed"
+            agent_node["finished_at"] = datetime.now(UTC).isoformat()
+            agent_node["result"] = {
+                "summary": result_summary,
+                "findings": findings or [],
+                "success": success,
+                "recommendations": final_recommendations or [],
+            }
 
         parent_notified = False
 
         if report_to_parent and agent_node["parent_id"]:
             parent_id = agent_node["parent_id"]
 
-            if parent_id in _agent_graph["nodes"]:
-                findings_xml = "\n".join(
-                    f"        <finding>{html.escape(str(finding))}</finding>" for finding in (findings or [])
-                )
-                recommendations_xml = "\n".join(
-                    f"        <recommendation>{html.escape(str(rec))}</recommendation>"
-                    for rec in (final_recommendations or [])
-                )
+            with _GRAPH_LOCK:  # Rec 1 (B-01)
+                if parent_id in _agent_graph["nodes"]:
+                    findings_xml = "\n".join(
+                        f"        <finding>{html.escape(str(finding))}</finding>"
+                        for finding in (findings or [])
+                    )
+                    recommendations_xml = "\n".join(
+                        f"        <recommendation>{html.escape(str(rec))}</recommendation>"
+                        for rec in (final_recommendations or [])
+                    )
 
-                report_message = f"""<agent_completion_report>
+                    report_message = f"""<agent_completion_report>
     <agent_info>
         <agent_name>{html.escape(agent_node["name"])}</agent_name>
         <agent_id>{agent_id}</agent_id>
@@ -439,28 +531,30 @@ def agent_finish(
     </results>
 </agent_completion_report>"""
 
-                if parent_id not in _agent_messages:
-                    _agent_messages[parent_id] = []
+                with _GRAPH_LOCK:  # Rec 1 (B-01) — append message + remove from running set
+                    if parent_id not in _agent_messages:
+                        _agent_messages[parent_id] = []
 
-                from uuid import uuid4
+                    from uuid import uuid4
 
-                _agent_messages[parent_id].append(
-                    {
-                        "id": f"report_{uuid4().hex[:8]}",
-                        "from": agent_id,
-                        "to": parent_id,
-                        "content": report_message,
-                        "message_type": "information",
-                        "priority": "high",
-                        "timestamp": datetime.now(UTC).isoformat(),
-                        "delivered": True,
-                        "read": False,
-                    }
-                )
+                    _agent_messages[parent_id].append(
+                        {
+                            "id": f"report_{uuid4().hex[:8]}",
+                            "from": agent_id,
+                            "to": parent_id,
+                            "content": report_message,
+                            "message_type": "information",
+                            "priority": "high",
+                            "timestamp": datetime.now(UTC).isoformat(),
+                            "delivered": True,
+                            "read": False,
+                        }
+                    )
 
                 parent_notified = True
 
-        _running_agents.pop(agent_id, None)
+        with _GRAPH_LOCK:  # Rec 1 (B-01) — remove from running set
+            _running_agents.pop(agent_id, None)
 
         return {
             "agent_completed": True,

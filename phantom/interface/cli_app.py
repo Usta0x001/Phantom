@@ -985,7 +985,12 @@ def config_show() -> None:
         saved_val = saved_vars.get(key)
 
         if env_val is not None:
-            source = "saved" if key in saved_vars else "env"
+            # Source is "saved" only when the active env value equals what was saved
+            # (meaning apply_saved() loaded it). If they differ, env overrides saved.
+            if saved_val is not None and saved_val == env_val:
+                source = "saved"
+            else:
+                source = "env"
             rows[key] = (env_val, source)
         elif saved_val is not None:
             rows[key] = (saved_val, "saved")
@@ -1036,7 +1041,25 @@ def config_set(
     existing = Config.load().get("env", {})
     existing[key_upper] = value
     Config.save({"env": existing})
-    console.print(f"[green]Set {key_upper}[/]")
+
+    # On Windows, also write to the User-level persistent environment so the
+    # value survives new terminal sessions (overrides any previous setx value).
+    import sys
+    import subprocess as _subprocess
+    if sys.platform == "win32":
+        try:
+            result = _subprocess.run(
+                ["setx", key_upper, value],
+                capture_output=True, text=True, timeout=10,
+            )
+            if result.returncode == 0:
+                console.print(f"[green]Set {key_upper}[/] [dim](persisted to Windows User environment)[/]")
+            else:
+                console.print(f"[green]Set {key_upper}[/] [dim](JSON only; setx failed: {result.stderr.strip()})[/]")
+        except Exception as _e:
+            console.print(f"[green]Set {key_upper}[/] [dim](JSON only; could not run setx: {_e})[/]")
+    else:
+        console.print(f"[green]Set {key_upper}[/]")
 
 
 @config_app.command("reset")

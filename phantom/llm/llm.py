@@ -51,7 +51,8 @@ class RequestStats:
     output_tokens: int = 0
     cached_tokens: int = 0
     cost: float = 0.0
-    requests: int = 0
+    requests: int = 0           # all attempted calls (including timed-out)
+    completed_requests: int = 0  # calls that returned a response with usage data
 
     def to_dict(self) -> dict[str, int | float]:
         return {
@@ -60,6 +61,7 @@ class RequestStats:
             "cached_tokens": self.cached_tokens,
             "cost": round(self.cost, 4),
             "requests": self.requests,
+            "completed_requests": self.completed_requests,
         }
 
 
@@ -403,6 +405,9 @@ class LLM:
         Uses the *global* scan cost aggregated across all agent instances via the
         Tracer, so sub-agents cannot each individually spend up to max_cost.
         Falls back to this agent's local stats when the Tracer is unavailable.
+
+        Rec 2 (SF-001): If PHANTOM_COST_ABORT_ON_LIMIT is "false", log a
+        warning instead of raising — making the budget advisory, not fatal.
         """
         max_cost_str = Config.get("phantom_max_cost")
         if not max_cost_str:
@@ -421,6 +426,14 @@ class LLM:
         except Exception:  # noqa: BLE001
             current_cost = self._total_stats.cost
         if current_cost >= max_cost:
+            # Rec 2 (SF-001): Respect abort-on-limit flag.
+            abort_on_limit = (Config.get("phantom_cost_abort_on_limit") or "true").lower()
+            if abort_on_limit in ("false", "0", "no"):
+                logger.warning(
+                    "Budget exceeded: $%.4f >= max $%.4f — advisory mode, continuing.",
+                    current_cost, max_cost,
+                )
+                return
             raise LLMRequestFailedError(
                 f"Budget exceeded: ${current_cost:.4f} >= max ${max_cost:.4f}"
             )
@@ -587,6 +600,8 @@ class LLM:
             self._total_stats.output_tokens += output_tokens
             self._total_stats.cached_tokens += cached_tokens
             self._total_stats.cost += cost
+            if input_tokens or output_tokens:
+                self._total_stats.completed_requests += 1
 
         except Exception:  # noqa: BLE001, S110  # nosec B110
             pass
@@ -604,8 +619,34 @@ class LLM:
                 return cost
         except Exception:  # noqa: BLE001
             pass
-        # Cost unknown (Azure / custom endpoints don't return pricing metadata).
-        # Fall back to environment-variable-configurable rates so budget checks remain useful.
+        # Fallback: smart model-name lookup in litellm.model_cost registry.
+        # Handles Azure AI Foundry models like "openai/DeepSeek-V3.2" by stripping
+        # the provider prefix and trying case-insensitive name variants.
+        try:
+            import litellm as _litellm
+            usage = getattr(response, "usage", None)
+            tok_in = getattr(usage, "prompt_tokens", 0) or 0
+            tok_out = getattr(usage, "completion_tokens", 0) or 0
+            if tok_in or tok_out:
+                model_key = self.config.litellm_model or ""
+                bare = model_key.split("/", 1)[-1] if "/" in model_key else model_key
+                # Build candidate names: full, bare, lowercase variants
+                candidates = [model_key, bare, bare.lower(), model_key.lower()]
+                model_cost_lower = {
+                    k.lower(): v for k, v in _litellm.model_cost.items()
+                }
+                for candidate in candidates:
+                    info = _litellm.model_cost.get(candidate) or model_cost_lower.get(
+                        candidate.lower()
+                    )
+                    if info:
+                        r_in = info.get("input_cost_per_token", 0) or 0
+                        r_out = info.get("output_cost_per_token", 0) or 0
+                        if r_in or r_out:
+                            return (tok_in * r_in) + (tok_out * r_out)
+        except Exception:  # noqa: BLE001
+            pass
+        # Last resort: environment-variable-configurable rates.
         try:
             rate_in = float(Config.get("phantom_cost_per_1m_input") or "0")
             rate_out = float(Config.get("phantom_cost_per_1m_output") or "0")
