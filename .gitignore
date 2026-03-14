@@ -133,6 +133,8 @@ scan_*.log
 scan_*.txt
 windows_user_env_backup*.json
 *env_backup*.json
+temp_helpers.txt
+test_results.txt
 *.spec
 !phantom.spec
 dist/
