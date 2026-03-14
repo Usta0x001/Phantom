@@ -54,7 +54,6 @@ Toast.-information .toast--title {
 #content_container {
     height: 1fr;
     padding: 0;
-    gutter: 1;
     background: transparent;
 }
 
