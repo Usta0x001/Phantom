@@ -1,11 +1,11 @@
 Screen {
-    background: #000000;
-    color: #d4d4d4;
+    background: #0b1020;
+    color: #dbe7ff;
 }
 
 .screen--selection {
-    background: #0a0000;
-    color: #e5e5e5;
+    background: #1a2645;
+    color: #eef4ff;
 }
 
 ToastRack {
@@ -16,20 +16,20 @@ ToastRack {
 }
 
 Toast {
-    width: 25;
-    background: #000000;
-    border-left: outer #dc2626;
+    width: 32;
+    background: #101a33;
+    border-left: outer #4f7cff;
 }
 
 Toast.-information .toast--title {
-    color: #dc2626;
+    color: #7aa2ff;
 }
 
 #splash_screen {
     height: 100%;
     width: 100%;
-    background: #000000;
-    color: #dc2626;
+    background: #0b1020;
+    color: #7aa2ff;
     align: center middle;
     content-align: center middle;
     text-align: center;
@@ -46,21 +46,22 @@ Toast.-information .toast--title {
 
 #main_container {
     height: 100%;
-    padding: 0;
+    padding: 1;
     margin: 0;
-    background: #000000;
+    background: #0b1020;
 }
 
 #content_container {
     height: 1fr;
     padding: 0;
+    gutter: 1;
     background: transparent;
 }
 
 #sidebar {
-    width: 20%;
+    width: 28%;
     background: transparent;
-    margin-left: 1;
+    margin-left: 0;
 }
 
 #sidebar.-hidden {
@@ -69,21 +70,21 @@ Toast.-information .toast--title {
 
 #agents_tree {
     height: 1fr;
-    background: transparent;
-    border: round #333333;
-    border-title-color: #a8a29e;
+    background: #101a33;
+    border: round #2e416f;
+    border-title-color: #8fb0ff;
     border-title-style: bold;
     padding: 1;
-    margin-bottom: 0;
+    margin-bottom: 1;
 }
 
 #stats_scroll {
     height: auto;
     max-height: 15;
-    background: transparent;
+    background: #101a33;
     padding: 0;
     margin: 0;
-    border: round #333333;
+    border: round #2e416f;
     scrollbar-size: 0 0;
 }
 
@@ -97,14 +98,14 @@ Toast.-information .toast--title {
 #vulnerabilities_panel {
     height: auto;
     max-height: 12;
-    background: transparent;
+    background: #101a33;
     padding: 0;
     margin: 0;
-    border: round #333333;
+    border: round #2e416f;
     overflow-y: auto;
-    scrollbar-background: #000000;
-    scrollbar-color: #333333;
-    scrollbar-corner-color: #000000;
+    scrollbar-background: #101a33;
+    scrollbar-color: #39558f;
+    scrollbar-corner-color: #101a33;
     scrollbar-size-vertical: 1;
 }
 
@@ -117,17 +118,17 @@ Toast.-information .toast--title {
     width: 100%;
     padding: 0 1;
     background: transparent;
-    color: #d4d4d4;
+    color: #dbe7ff;
 }
 
 .vuln-item:hover {
-    background: #1a1a1a;
-    color: #fafaf9;
+    background: #1c2b50;
+    color: #ffffff;
 }
 
 VulnerabilityDetailScreen {
     align: center middle;
-    background: #000000 80%;
+    background: #0b1020 80%;
 }
 
 #vuln_detail_dialog {
@@ -139,16 +140,16 @@ VulnerabilityDetailScreen {
     max-width: 110;
     height: 85%;
     max-height: 45;
-    border: solid #262626;
-    background: #0a0a0a;
+    border: solid #2e416f;
+    background: #101a33;
 }
 
 #vuln_detail_scroll {
     height: 1fr;
     background: transparent;
-    scrollbar-background: #0a0a0a;
-    scrollbar-color: #404040;
-    scrollbar-corner-color: #0a0a0a;
+    scrollbar-background: #101a33;
+    scrollbar-color: #39558f;
+    scrollbar-corner-color: #101a33;
     scrollbar-size: 1 1;
     padding-right: 1;
 }
@@ -173,7 +174,7 @@ VulnerabilityDetailScreen {
     min-width: 12;
     height: auto;
     background: transparent;
-    color: #525252;
+    color: #8fb0ff;
     border: none;
     text-style: none;
     margin: 0 1;
@@ -185,7 +186,7 @@ VulnerabilityDetailScreen {
     min-width: 10;
     height: auto;
     background: transparent;
-    color: #a3a3a3;
+    color: #dbe7ff;
     border: none;
     text-style: none;
     margin: 0;
@@ -194,7 +195,7 @@ VulnerabilityDetailScreen {
 
 #copy_vuln_detail:hover, #copy_vuln_detail:focus {
     background: transparent;
-    color: #dc2626;
+    color: #7aa2ff;
     border: none;
 }
 
@@ -205,7 +206,7 @@ VulnerabilityDetailScreen {
 }
 
 #chat_area_container {
-    width: 80%;
+    width: 72%;
     background: transparent;
 }
 
@@ -215,20 +216,20 @@ VulnerabilityDetailScreen {
 
 #chat_history {
     height: 1fr;
-    background: transparent;
-    border: round #0a0a0a;
+    background: #101a33;
+    border: round #2e416f;
     padding: 0;
     margin-bottom: 0;
     margin-right: 0;
-    scrollbar-background: #000000;
-    scrollbar-color: #1a1a1a;
-    scrollbar-corner-color: #000000;
+    scrollbar-background: #101a33;
+    scrollbar-color: #39558f;
+    scrollbar-corner-color: #101a33;
     scrollbar-size: 1 1;
 }
 
 #agent_status_display {
     height: 1;
-    background: transparent;
+    background: #101a33;
     margin: 0;
     padding: 0 1;
 }
@@ -241,7 +242,7 @@ VulnerabilityDetailScreen {
     width: 1fr;
     height: 100%;
     background: transparent;
-    color: #a3a3a3;
+    color: #b9d1ff;
     text-align: left;
     content-align: left middle;
     text-style: none;
@@ -253,7 +254,7 @@ VulnerabilityDetailScreen {
     width: auto;
     height: 100%;
     background: transparent;
-    color: #737373;
+    color: #8fb0ff;
     text-align: right;
     content-align: right middle;
     text-style: none;
@@ -263,8 +264,8 @@ VulnerabilityDetailScreen {
 
 #chat_input_container {
     height: 3;
-    background: transparent;
-    border: round #333333;
+    background: #101a33;
+    border: round #2e416f;
     margin-right: 0;
     padding: 0;
     layout: horizontal;
@@ -272,11 +273,11 @@ VulnerabilityDetailScreen {
 }
 
 #chat_input_container:focus-within {
-    border: round #dc2626;
+    border: round #4f7cff;
 }
 
 #chat_input_container:focus-within #chat_prompt {
-    color: #dc2626;
+    color: #7aa2ff;
     text-style: bold;
 }
 
@@ -284,12 +285,12 @@ VulnerabilityDetailScreen {
     width: auto;
     height: 100%;
     padding: 0 0 0 1;
-    color: #737373;
+    color: #8fb0ff;
     content-align-vertical: top;
 }
 
 #chat_history:focus {
-    border: round #dc2626;
+    border: round #4f7cff;
 }
 
 #chat_input {
@@ -297,7 +298,7 @@ VulnerabilityDetailScreen {
     height: 100%;
     background: transparent;
     border: none;
-    color: #d4d4d4;
+    color: #eaf1ff;
     padding: 0;
     margin: 0;
 }
@@ -315,13 +316,13 @@ VulnerabilityDetailScreen {
 }
 
 #chat_input > .text-area--placeholder {
-    color: #525252;
+    color: #6f8fcc;
     text-style: italic;
 }
 
 #chat_input > .text-area--cursor {
-    color: #dc2626;
-    background: #dc2626;
+    color: #7aa2ff;
+    background: #7aa2ff;
 }
 
 .chat-placeholder {
@@ -329,7 +330,7 @@ VulnerabilityDetailScreen {
     height: 100%;
     content-align: center middle;
     text-align: center;
-    color: #737373;
+    color: #8fb0ff;
     text-style: italic;
 }
 
@@ -338,7 +339,7 @@ VulnerabilityDetailScreen {
     margin-top: 0 !important;
     margin-bottom: 0 !important;
     padding: 0 1;
-    background: transparent;
+    background: #101a33;
     width: 100%;
 }
 
@@ -350,8 +351,8 @@ VulnerabilityDetailScreen {
 }
 
 .user-message {
-    color: #e5e5e5;
-    border-left: thick #f59e0b;
+    color: #eef4ff;
+    border-left: thick #4f7cff;
     padding-left: 1;
     margin-bottom: 1;
 }
@@ -360,26 +361,26 @@ VulnerabilityDetailScreen {
     margin-top: 1;
     margin-bottom: 0;
     padding: 0 1;
-    background: transparent;
+    background: #0f1a34;
     border: none;
     width: 100%;
 }
 
 .tool-call.status-completed {
-    background: transparent;
+    background: #10243f;
     margin-top: 1;
     margin-bottom: 0;
 }
 
 .tool-call.status-running {
-    background: transparent;
+    background: #1d2b4f;
     margin-top: 1;
     margin-bottom: 0;
 }
 
 .tool-call.status-failed,
 .tool-call.status-error {
-    background: transparent;
+    background: #3b1d2b;
     margin-top: 1;
     margin-bottom: 0;
 }
@@ -397,14 +398,14 @@ VulnerabilityDetailScreen {
 .subagent-info-tool {
     margin-top: 1;
     margin-bottom: 0;
-    background: transparent;
+    background: #0f1a34;
 }
 
 .finish-tool,
 .reporting-tool {
     margin-top: 1;
     margin-bottom: 0;
-    background: transparent;
+    background: #0f1a34;
 }
 
 .browser-tool.status-completed,
@@ -429,7 +430,7 @@ VulnerabilityDetailScreen {
 .scan-info-tool.status-running,
 .subagent-info-tool.status-completed,
 .subagent-info-tool.status-running {
-    background: transparent;
+    background: #10243f;
     margin-top: 1;
     margin-bottom: 0;
 }
@@ -438,27 +439,27 @@ VulnerabilityDetailScreen {
 .finish-tool.status-running,
 .reporting-tool.status-completed,
 .reporting-tool.status-running {
-    background: transparent;
+    background: #10243f;
     margin-top: 1;
     margin-bottom: 0;
 }
 
 Tree {
-    background: transparent;
-    color: #e7e5e4;
-    scrollbar-background: transparent;
-    scrollbar-color: #404040;
-    scrollbar-corner-color: transparent;
+    background: #101a33;
+    color: #dbe7ff;
+    scrollbar-background: #101a33;
+    scrollbar-color: #39558f;
+    scrollbar-corner-color: #101a33;
     scrollbar-size: 1 1;
 }
 
 Tree > .tree--label {
     text-style: bold;
-    color: #a8a29e;
-    background: transparent;
+    color: #8fb0ff;
+    background: #0f1a34;
     padding: 0 1;
     margin-bottom: 1;
-    border-bottom: solid #1a1a1a;
+    border-bottom: solid #2e416f;
     text-align: center;
 }
 
@@ -469,7 +470,7 @@ Tree > .tree--label {
 }
 
 .tree--node-label {
-    color: #d6d3d1;
+    color: #dbe7ff;
     background: transparent;
     text-style: none;
     padding: 0 1;
@@ -478,37 +479,37 @@ Tree > .tree--label {
 
 .tree--node:hover .tree--node-label {
     background: transparent;
-    color: #fafaf9;
+    color: #ffffff;
     text-style: bold;
-    border-left: solid #a8a29e;
+    border-left: solid #8fb0ff;
 }
 
 .tree--node.-selected .tree--node-label {
     background: transparent;
-    color: #fafaf9;
+    color: #ffffff;
     text-style: bold;
-    border-left: heavy #d6d3d1;
+    border-left: heavy #4f7cff;
 }
 
 .tree--node.-expanded .tree--node-label {
     text-style: bold;
-    color: #fafaf9;
+    color: #ffffff;
     background: transparent;
-    border-left: solid #78716c;
+    border-left: solid #5673b8;
 }
 
 Tree:focus {
-    border: round #1a1a1a;
+    border: round #4f7cff;
 }
 
 Tree:focus > .tree--label {
-    color: #fafaf9;
+    color: #ffffff;
     text-style: bold;
     background: transparent;
 }
 
 .tree--node .tree--node .tree--node-label {
-    color: #a8a29e;
+    color: #aac2f7;
     padding-left: 2;
     border: none;
     background: transparent;
@@ -517,11 +518,11 @@ Tree:focus > .tree--label {
 
 .tree--node .tree--node:hover .tree--node-label {
     background: transparent;
-    color: #e7e5e4;
+    color: #ffffff;
 }
 
 .tree--node .tree--node .tree--node .tree--node-label {
-    color: #78716c;
+    color: #90a7dc;
     padding-left: 3;
     text-style: none;
     border: none;
@@ -541,12 +542,12 @@ StopAgentScreen {
     padding: 1;
     width: 30;
     height: auto;
-    border: round #a3a3a3;
-    background: #000000 98%;
+    border: round #2e416f;
+    background: #101a33 98%;
 }
 
 #stop_agent_title {
-    color: #a3a3a3;
+    color: #dbe7ff;
     text-style: bold;
     text-align: center;
     width: 100%;
@@ -582,12 +583,12 @@ StopAgentScreen {
 
 #cancel_stop {
     background: transparent;
-    color: #737373;
+    color: #8fb0ff;
     border: none;
 }
 
 #cancel_stop:hover, #cancel_stop:focus {
-    background:rgb(54, 54, 54);
+    background:#253a6b;
     color: #ffffff;
     border: none;
 }
@@ -606,12 +607,12 @@ PauseAllScreen {
     padding: 1 2;
     width: 50;
     height: auto;
-    border: round #f59e0b;
-    background: #000000 98%;
+    border: round #4f7cff;
+    background: #101a33 98%;
 }
 
 #pause_all_title {
-    color: #f59e0b;
+    color: #7aa2ff;
     text-style: bold;
     text-align: center;
     width: 100%;
@@ -619,7 +620,7 @@ PauseAllScreen {
 }
 
 #pause_all_info {
-    color: #737373;
+    color: #b9d1ff;
     text-align: center;
     width: 100%;
     margin-bottom: 1;
@@ -642,24 +643,24 @@ PauseAllScreen {
 
 #confirm_pause_all {
     background: transparent;
-    color: #f59e0b;
+    color: #7aa2ff;
     border: none;
 }
 
 #confirm_pause_all:hover, #confirm_pause_all:focus {
-    background: #f59e0b;
-    color: #000000;
+    background: #4f7cff;
+    color: #ffffff;
     border: none;
 }
 
 #cancel_pause_all {
     background: transparent;
-    color: #737373;
+    color: #8fb0ff;
     border: none;
 }
 
 #cancel_pause_all:hover, #cancel_pause_all:focus {
-    background: rgb(54, 54, 54);
+    background: #253a6b;
     color: #ffffff;
     border: none;
 }
@@ -676,12 +677,12 @@ QuitScreen {
     padding: 1;
     width: 24;
     height: auto;
-    border: round #333333;
-    background: #000000 98%;
+    border: round #2e416f;
+    background: #101a33 98%;
 }
 
 #quit_title {
-    color: #d4d4d4;
+    color: #dbe7ff;
     text-style: bold;
     text-align: center;
     width: 100%;
@@ -717,12 +718,12 @@ QuitScreen {
 
 #cancel {
     background: transparent;
-    color: #737373;
+    color: #8fb0ff;
     border: none;
 }
 
 #cancel:hover, #cancel:focus {
-    background:rgb(54, 54, 54);
+    background:#253a6b;
     color: #ffffff;
     border: none;
 }
@@ -739,12 +740,12 @@ HelpScreen {
     padding: 1 2;
     width: 40;
     height: auto;
-    border: round #dc2626;
-    background: #000000 98%;
+    border: round #4f7cff;
+    background: #101a33 98%;
 }
 
 #help_title {
-    color: #dc2626;
+    color: #7aa2ff;
     text-style: bold;
     text-align: center;
     width: 100%;
@@ -752,7 +753,7 @@ HelpScreen {
 }
 
 #help_content {
-    color: #d4d4d4;
+    color: #dbe7ff;
     text-align: left;
     width: 100%;
     margin-bottom: 1;

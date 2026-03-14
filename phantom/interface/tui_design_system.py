@@ -63,8 +63,8 @@ SEVERITY_COLORS: Final[dict[str, str]] = {
     "critical": "#dc2626",
     "high": "#ea580c",
     "medium": "#d97706",
-    "low": "#dc2626",
-    "info": "#f59e0b",
+    "low": "#65a30d",
+    "info": "#2563eb",
 }
 
 SEVERITY_SEMANTICS: Final[dict[str, str]] = {
