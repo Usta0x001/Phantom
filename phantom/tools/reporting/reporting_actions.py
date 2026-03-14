@@ -198,6 +198,33 @@ def _validate_cvss_parameters(**kwargs: str) -> list[str]:
     return validation_errors
 
 
+def _normalize_variant_field(value: str | None) -> str:
+    return (value or "").strip().lower()
+
+
+def _same_variant_surface(candidate: dict[str, Any], existing: dict[str, Any]) -> bool:
+    endpoint_a = _normalize_variant_field(candidate.get("endpoint"))
+    endpoint_b = _normalize_variant_field(existing.get("endpoint"))
+    method_a = _normalize_variant_field(candidate.get("method"))
+    method_b = _normalize_variant_field(existing.get("method"))
+    target_a = _normalize_variant_field(candidate.get("target"))
+    target_b = _normalize_variant_field(existing.get("target"))
+
+    # Endpoint+method is the strongest surface key when available.
+    if endpoint_a and endpoint_b and method_a and method_b:
+        return endpoint_a == endpoint_b and method_a == method_b
+
+    # Fallback: if only endpoint exists, use endpoint equality.
+    if endpoint_a and endpoint_b:
+        return endpoint_a == endpoint_b
+
+    # Last fallback: target equality if endpoints are absent.
+    if target_a and target_b:
+        return target_a == target_b
+
+    return False
+
+
 @register_tool(sandbox_execution=False)
 def create_vulnerability_report(  # noqa: PLR0912
     title: str,
@@ -262,6 +289,8 @@ def create_vulnerability_report(  # noqa: PLR0912
     if confidence not in _VALID_CONFIDENCE:
         confidence = "LIKELY"  # safe fallback
 
+    _VALID_REPLAY_STATUS = {"PENDING", "SKIPPED", "PASSED", "FAILED"}
+
     # Rec 5 (ER-005): PoC auto-replay — execute poc_script_code in the sandbox
     # before writing the report.  If replay succeeds, upgrade confidence to
     # VERIFIED.  If it fails, keep user-supplied confidence but tag the report.
@@ -317,6 +346,9 @@ def create_vulnerability_report(  # noqa: PLR0912
     else:
         replay_status = "SKIPPED"
 
+    if replay_status not in _VALID_REPLAY_STATUS:
+        replay_status = "SKIPPED"
+
     assert parsed_cvss is not None
     cvss_score, severity, cvss_vector = calculate_cvss_and_severity(**parsed_cvss)
 
@@ -324,33 +356,51 @@ def create_vulnerability_report(  # noqa: PLR0912
         from phantom.telemetry.tracer import get_global_tracer
 
         tracer = get_global_tracer()
-        if tracer:
-            from phantom.llm.dedupe import check_duplicate
-
-            existing_reports = tracer.get_existing_vulnerabilities()
-
-            candidate = {
-                "title": title,
-                "description": description,
-                "impact": impact,
-                "target": target,
-                "technical_analysis": technical_analysis,
-                "poc_description": poc_description,
-                "poc_script_code": poc_script_code,
-                "endpoint": endpoint,
-                "method": method,
+        if not tracer:
+            return {
+                "success": False,
+                "message": f"Vulnerability report '{title}' was not persisted",
+                "error": "Tracer unavailable - report storage failed",
             }
 
-            dedupe_result = check_duplicate(candidate, existing_reports)
+        from phantom.llm.dedupe import check_duplicate
 
-            if dedupe_result.get("is_duplicate"):
-                duplicate_id = dedupe_result.get("duplicate_id", "")
+        existing_reports = tracer.get_existing_vulnerabilities()
 
-                duplicate_title = ""
-                for report in existing_reports:
-                    if report.get("id") == duplicate_id:
-                        duplicate_title = report.get("title", "Unknown")
-                        break
+        candidate = {
+            "title": title,
+            "description": description,
+            "impact": impact,
+            "target": target,
+            "technical_analysis": technical_analysis,
+            "poc_description": poc_description,
+            "poc_script_code": poc_script_code,
+            "endpoint": endpoint,
+            "method": method,
+        }
+
+        dedupe_result = check_duplicate(candidate, existing_reports)
+
+        if dedupe_result.get("is_duplicate"):
+            duplicate_id = dedupe_result.get("duplicate_id", "")
+            dedupe_confidence = float(dedupe_result.get("confidence") or 0.0)
+
+            # Keep high precision: only hard-block if the model is confident
+            # and the duplicate is on the same concrete surface.
+            duplicate_report = None
+            for report in existing_reports:
+                if report.get("id") == duplicate_id:
+                    duplicate_report = report
+                    break
+
+            same_surface = bool(duplicate_report) and _same_variant_surface(
+                candidate, duplicate_report or {}
+            )
+
+            if not duplicate_id or dedupe_confidence < 0.90 or not same_surface:
+                duplicate_id = ""
+            else:
+                duplicate_title = (duplicate_report or {}).get("title", "Unknown")
 
                 return {
                     "success": False,
@@ -360,52 +410,48 @@ def create_vulnerability_report(  # noqa: PLR0912
                     ),
                     "duplicate_of": duplicate_id,
                     "duplicate_title": duplicate_title,
-                    "confidence": dedupe_result.get("confidence", 0.0),
+                    "confidence": dedupe_confidence,
                     "reason": dedupe_result.get("reason", ""),
                 }
 
-            report_id = tracer.add_vulnerability_report(
-                title=title,
-                description=description,
-                severity=severity,
-                impact=impact,
-                target=target,
-                technical_analysis=technical_analysis,
-                poc_description=poc_description,
-                poc_script_code=poc_script_code,
-                remediation_steps=remediation_steps,
-                cvss=cvss_score,
-                cvss_breakdown=parsed_cvss,
-                endpoint=endpoint,
-                method=method,
-                cve=cve,
-                cwe=cwe,
-                code_locations=parsed_locations,
-                # Rec 10 (ER-001): propagate confidence and replay telemetry
-                confidence=confidence,
-                replay_status=replay_status,
-            )
+        report_id = tracer.add_vulnerability_report(
+            title=title,
+            description=description,
+            severity=severity,
+            impact=impact,
+            target=target,
+            technical_analysis=technical_analysis,
+            poc_description=poc_description,
+            poc_script_code=poc_script_code,
+            remediation_steps=remediation_steps,
+            cvss=cvss_score,
+            cvss_breakdown=parsed_cvss,
+            endpoint=endpoint,
+            method=method,
+            cve=cve,
+            cwe=cwe,
+            code_locations=parsed_locations,
+            # Rec 10 (ER-001): propagate confidence and replay telemetry
+            confidence=confidence,
+            replay_status=replay_status,
+        )
 
+        if not report_id:
             return {
-                "success": True,
-                "message": f"Vulnerability report '{title}' created successfully",
-                "report_id": report_id,
-                "severity": severity,
-                "cvss_score": cvss_score,
-                # Rec 10: surface confidence and replay status to callers
-                "confidence": confidence,
-                "replay_status": replay_status,
+                "success": False,
+                "message": "Failed to persist vulnerability report: tracer returned empty report_id",
             }
 
-        import logging
-
-        logging.warning("Current tracer not available - vulnerability report not stored")
+        return {
+            "success": True,
+            "message": f"Vulnerability report '{title}' created successfully",
+            "report_id": report_id,
+            "severity": severity,
+            "cvss_score": cvss_score,
+            # Rec 10: surface confidence and replay status to callers
+            "confidence": confidence,
+            "replay_status": replay_status,
+        }
 
     except (ImportError, AttributeError) as e:
         return {"success": False, "message": f"Failed to create vulnerability report: {e!s}"}
-    else:
-        return {
-            "success": True,
-            "message": f"Vulnerability report '{title}' created (not persisted)",
-            "warning": "Report could not be persisted - tracer unavailable",
-        }

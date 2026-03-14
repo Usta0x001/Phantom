@@ -407,6 +407,58 @@ class TestSandboxTokenFile:
             cmd = str(call_args)
             assert "/run/secrets" in cmd, "Token secret file path not in exec_run call"
 
+    def test_recover_container_state_prefers_secret_file_token(self):
+        from phantom.runtime.docker_runtime import DockerRuntime
+
+        rt = DockerRuntime.__new__(DockerRuntime)
+        rt.client = MagicMock()
+        rt._tool_server_token = None
+        rt._tool_server_port = None
+        rt._caido_port = None
+
+        mock_container = MagicMock()
+        mock_container.attrs = {
+            "NetworkSettings": {
+                "Ports": {
+                    "48081/tcp": [{"HostPort": "18081"}],
+                    "48080/tcp": [{"HostPort": "18080"}],
+                }
+            },
+            "Config": {"Env": ["TOOL_SERVER_TOKEN=env_fallback_token"]},
+        }
+        mock_container.exec_run.return_value = MagicMock(
+            exit_code=0,
+            output=b"secret_file_token\n",
+        )
+
+        with patch.object(rt, "_connect_or_start_docker_client", return_value=rt.client):
+            rt._recover_container_state(mock_container)
+
+        assert rt._tool_server_token == "secret_file_token"
+        assert rt._tool_server_port == 18081
+        assert rt._caido_port == 18080
+
+    def test_recover_container_state_falls_back_to_env_token(self):
+        from phantom.runtime.docker_runtime import DockerRuntime
+
+        rt = DockerRuntime.__new__(DockerRuntime)
+        rt.client = MagicMock()
+        rt._tool_server_token = None
+        rt._tool_server_port = None
+        rt._caido_port = None
+
+        mock_container = MagicMock()
+        mock_container.attrs = {
+            "NetworkSettings": {"Ports": {}},
+            "Config": {"Env": ["TOOL_SERVER_TOKEN=env_only_token"]},
+        }
+        mock_container.exec_run.return_value = MagicMock(exit_code=1, output=b"")
+
+        with patch.object(rt, "_connect_or_start_docker_client", return_value=rt.client):
+            rt._recover_container_state(mock_container)
+
+        assert rt._tool_server_token == "env_only_token"
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Rec 7: Scope firewall method exists

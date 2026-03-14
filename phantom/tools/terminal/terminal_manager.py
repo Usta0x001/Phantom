@@ -20,7 +20,7 @@ class TerminalManager:
         _env_timeout = float(os.getenv("PHANTOM_SANDBOX_EXECUTION_TIMEOUT", "600"))
         self.default_timeout = max(30.0, _env_timeout - 15.0)
         # C-04: quarantine mode — when enabled, block shell metacharacters in commands
-        self.quarantine = os.getenv("PHANTOM_TERMINAL_QUARANTINE", "false").lower() == "true"
+        self.quarantine = os.getenv("PHANTOM_TERMINAL_QUARANTINE", "true").lower() == "true"
 
         self._register_cleanup_handlers()
 

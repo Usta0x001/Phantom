@@ -62,6 +62,11 @@ class PhantomAgent(BaseAgent):
                     hostname = urlparse(target_url).hostname or ""
                     if hostname:
                         allow_ssrf_host(hostname)
+                        _h = hostname.lower()
+                        if _h in {"localhost", "127.0.0.1", "::1"}:
+                            allow_ssrf_host("host.docker.internal")
+                        elif _h == "host.docker.internal":
+                            allow_ssrf_host("localhost")
                 except Exception:  # noqa: BLE001
                     pass
             elif target_type == "ip_address":

@@ -126,6 +126,26 @@ class TestConfigSetPersistence:
             "Config was corrupted by apply_saved during env-differs scenario"
         )
 
+    def test_apply_saved_force_overrides_stale_llm_env(self, tmp_path, monkeypatch):
+        """force=True must apply saved config even when session env differs."""
+        from phantom.config.config import Config
+
+        cfg_file = tmp_path / "cli-config.json"
+        cfg_file.write_text(
+            json.dumps({"env": {"PHANTOM_LLM": "openai/DeepSeek-V3.2"}}),
+            encoding="utf-8",
+        )
+
+        monkeypatch.setattr(Config, "_config_file_override", cfg_file)
+        monkeypatch.setenv("PHANTOM_LLM", "openai/Kimi-K2.5")
+
+        applied = Config.apply_saved(force=True)
+
+        import os
+
+        assert applied.get("PHANTOM_LLM") == "openai/DeepSeek-V3.2"
+        assert os.environ.get("PHANTOM_LLM") == "openai/DeepSeek-V3.2"
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 #   Fix 2 — TUI stats text completeness

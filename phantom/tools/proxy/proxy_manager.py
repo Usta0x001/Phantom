@@ -38,9 +38,37 @@ _ALLOWED_SSRF_HOSTS: set[str] = set()
 _ALWAYS_BLOCKED = frozenset({"localhost", "0.0.0.0", "[::]", "::1"})
 
 
+def _normalize_ssrf_host(hostname: str) -> str:
+    host = (hostname or "").strip().lower()
+    if not host:
+        return ""
+    if host.startswith("[") and host.endswith("]"):
+        host = host[1:-1]
+    if ":" in host and not host.count(":") > 1:
+        host = host.split(":", 1)[0]
+    return host
+
+
+def _ssrf_host_aliases(hostname: str) -> set[str]:
+    host = _normalize_ssrf_host(hostname)
+    if not host:
+        return set()
+
+    aliases = {host}
+    if host in {"localhost", "127.0.0.1", "::1", "host.docker.internal"}:
+        aliases.update({"localhost", "127.0.0.1", "::1", "host.docker.internal"})
+    return aliases
+
+
 def allow_ssrf_host(hostname: str) -> None:
     """Register a hostname as an allowed SSRF destination (the scan target)."""
-    _ALLOWED_SSRF_HOSTS.add(hostname.strip().lower())
+    _ALLOWED_SSRF_HOSTS.update(_ssrf_host_aliases(hostname))
+
+
+def _is_registered_ssrf_host(hostname: str) -> bool:
+    if not _ALLOWED_SSRF_HOSTS:
+        return False
+    return bool(_ssrf_host_aliases(hostname) & _ALLOWED_SSRF_HOSTS)
 
 
 def _is_ssrf_safe(url: str) -> bool:
@@ -50,19 +78,19 @@ def _is_ssrf_safe(url: str) -> bool:
         if not host:
             return False
 
-        host_lower = host.lower()
+        host_lower = _normalize_ssrf_host(host)
 
-        # Hard-blocked literals (never allowed even if registered).
+        # Explicitly registered scan targets bypass further checks.
+        if _is_registered_ssrf_host(host_lower):
+            return True
+
+        # Hard-blocked literals (unless explicitly registered scan targets).
         if host_lower in _ALWAYS_BLOCKED:
             return False
 
-        # Explicitly registered scan targets bypass further checks.
-        if host_lower in _ALLOWED_SSRF_HOSTS:
-            return True
-
         # Direct IP address check.
         try:
-            addr = ipaddress.ip_address(host)
+            addr = ipaddress.ip_address(host_lower)
             # Only allow globally routable unicast addresses.
             return addr.is_global and not addr.is_private and not addr.is_loopback and not addr.is_link_local
         except ValueError:
@@ -70,7 +98,7 @@ def _is_ssrf_safe(url: str) -> bool:
 
         # Resolve hostname and block if any resolved address is non-public.
         try:
-            infos = socket.getaddrinfo(host, None, socket.AF_UNSPEC, socket.SOCK_STREAM)
+            infos = socket.getaddrinfo(host_lower, None, socket.AF_UNSPEC, socket.SOCK_STREAM)
             for _family, _type, _proto, _canon, sockaddr in infos:
                 ip_str = sockaddr[0]
                 addr = ipaddress.ip_address(ip_str)
@@ -96,6 +124,10 @@ class ProxyManager:
         self.auth_token = auth_token or os.getenv("CAIDO_API_TOKEN")
 
     def _get_client(self) -> Client:
+        if not _GQL_AVAILABLE or RequestsHTTPTransport is None or Client is None:
+            raise RuntimeError(
+                "Proxy GraphQL client requires the gql package (available in Docker sandbox)"
+            )
         transport = RequestsHTTPTransport(
             url=self.base_url, headers={"Authorization": f"Bearer {self.auth_token}"}
         )
@@ -111,6 +143,10 @@ class ProxyManager:
         sort_order: str = "desc",
         scope_id: str | None = None,
     ) -> dict[str, Any]:
+        if not _GQL_AVAILABLE or gql is None:
+            return {
+                "error": "Proxy request listing requires the gql package (only available in Docker sandbox)"
+            }
         offset = (start_page - 1) * page_size
         limit = (end_page - start_page + 1) * page_size
 
@@ -633,6 +669,11 @@ class ProxyManager:
         scope_id: str | None = None,
         scope_name: str | None = None,
     ) -> dict[str, Any]:
+        if not _GQL_AVAILABLE or gql is None:
+            return {
+                "error": "Scope management requires the gql package (only available in Docker sandbox)",
+                "error_type": "dependency_unavailable",
+            }
         handlers: dict[str, Callable[[], dict[str, Any]]] = {
             "list": self._handle_scope_list,
             "get": lambda: self._handle_scope_get(scope_id),
@@ -662,8 +703,16 @@ class ProxyManager:
 
         try:
             result = handler()
+        except RuntimeError as e:
+            return {
+                "error": str(e),
+                "error_type": "dependency_unavailable",
+            }
         except Exception as e:  # noqa: BLE001
-            return {"error": f"Scope operation failed: {e}"}
+            return {
+                "error": f"Scope operation failed: {e}",
+                "error_type": "scope_operation_failed",
+            }
         else:
             return result
 

@@ -1,5 +1,6 @@
 import asyncio
 import contextlib
+import json
 import logging
 import random
 from typing import TYPE_CHECKING, Any, Optional
@@ -83,6 +84,8 @@ class BaseAgent(metaclass=AgentMeta):
             self.llm.set_agent_identity(self.state.agent_name, self.state.agent_id)
         self._current_task: asyncio.Task[Any] | None = None
         self._force_stop = False
+        self._recent_action_batches: list[str] = []
+        self._last_iteration_action_count: int = 0
 
         # Rec 6 (SF-005): Hypothesis Ledger — structured external memory that
         # survives context compression and prevents redundant payload testing.
@@ -177,6 +180,11 @@ class BaseAgent(metaclass=AgentMeta):
         import time as _time_mod
         from phantom.telemetry.tracer import get_global_tracer
 
+        if not hasattr(self, "_recent_action_batches"):
+            self._recent_action_batches = []
+        if not hasattr(self, "_last_iteration_action_count"):
+            self._last_iteration_action_count = 0
+
         tracer = get_global_tracer()
         # P1.4: Capture start time for accurate duration_ms in audit logs.
         # Previously all audit-log callsites passed a placeholder zero.
@@ -188,6 +196,7 @@ class BaseAgent(metaclass=AgentMeta):
             return self._handle_sandbox_error(e, tracer)
 
         _rl_consecutive = 0  # consecutive rate-limit hits for exponential backoff
+        _no_action_streak = 0
         while True:
             if self._force_stop:
                 self._force_stop = False
@@ -255,6 +264,28 @@ class BaseAgent(metaclass=AgentMeta):
                 self._current_task = None
                 _rl_consecutive = 0  # successful iteration — reset rate-limit backoff counter
 
+                if self._last_iteration_action_count <= 0:
+                    _no_action_streak += 1
+                else:
+                    _no_action_streak = 0
+
+                if _no_action_streak >= 3:
+                    self.state.add_message(
+                        "user",
+                        "No actionable progress detected for multiple iterations. "
+                        "Stop repeating prior reconnaissance and pivot to a new exploit path "
+                        "or report validated findings now.",
+                    )
+                if _no_action_streak >= 8 and self.non_interactive:
+                    _stall_msg = (
+                        "Aborting non-interactive run due to sustained no-action loop "
+                        "(8 consecutive iterations)."
+                    )
+                    self.state.set_completed({"success": False, "error": _stall_msg})
+                    if tracer:
+                        tracer.update_agent_status(self.state.agent_id, "failed")
+                    return self.state.final_result or {"success": False, "error": _stall_msg}
+
                 # Periodic checkpoint save ─────────────────────────────────
                 self._maybe_save_checkpoint(tracer)
                 # ──────────────────────────────────────────────────────────
@@ -313,10 +344,11 @@ class BaseAgent(metaclass=AgentMeta):
                         # ── Audit: log RL abort ──────────────────────────────
                         from phantom.logging.audit import get_audit_logger as _get_audit_rl
                         _audit_rl = _get_audit_rl()
+                        _model_name = getattr(getattr(self, "llm_config", None), "litellm_model", "?") or "?"
                         if _audit_rl:
                             _audit_rl.log_rate_limit_abort(
                                 agent_id=self.state.agent_id,
-                                model=getattr(self.llm_config, "litellm_model", "?") or "?",
+                                model=_model_name,
                                 consecutive=_rl_consecutive,
                                 max_consecutive=_rl_max,
                                 abort_message=_abort_msg,
@@ -353,10 +385,11 @@ class BaseAgent(metaclass=AgentMeta):
                     # ── Audit: log RL backoff hit ────────────────────────────
                     from phantom.logging.audit import get_audit_logger as _get_audit_rlh
                     _audit_rlh = _get_audit_rlh()
+                    _model_name = getattr(getattr(self, "llm_config", None), "litellm_model", "?") or "?"
                     if _audit_rlh:
                         _audit_rlh.log_rate_limit_hit(
                             agent_id=self.state.agent_id,
-                            model=getattr(self.llm_config, "litellm_model", "?") or "?",
+                            model=_model_name,
                             consecutive=_rl_consecutive,
                             max_consecutive=_rl_max,
                             backoff_s=_sleep,
@@ -491,6 +524,7 @@ class BaseAgent(metaclass=AgentMeta):
 
     async def _process_iteration(self, tracer: Optional["Tracer"]) -> bool:
         final_response = None
+        self._last_iteration_action_count = 0
 
         # Rec 6 (SF-005): Inject Hypothesis Ledger summary every 10 iterations.
         # Keeps the LLM aware of the scan's coverage state without bloating every
@@ -543,11 +577,13 @@ class BaseAgent(metaclass=AgentMeta):
                 tracer.update_streaming_content(self.state.agent_id, response.content)
 
         if final_response is None:
+            self._last_iteration_action_count = 0
             return False
 
         content_stripped = (final_response.content or "").strip()
 
         if not content_stripped:
+            self._last_iteration_action_count = 0
             corrective_message = (
                 "You MUST NOT respond with empty messages. "
                 "If you currently have nothing to do or say, use an appropriate tool instead:\n"
@@ -578,12 +614,44 @@ class BaseAgent(metaclass=AgentMeta):
         )
 
         if actions:
+            self._last_iteration_action_count = len(actions)
             return await self._execute_actions(actions, tracer)
 
+        self._last_iteration_action_count = 0
         return False
 
     async def _execute_actions(self, actions: list[Any], tracer: Optional["Tracer"]) -> bool:
         """Execute actions and return True if agent should finish."""
+        # Avoid blind repetition of identical action batches across consecutive iterations.
+        # This reduces dead-end payload retries without changing tool semantics.
+        try:
+            batch_signature = json.dumps(
+                [
+                    {
+                        "toolName": action.get("toolName"),
+                        "args": action.get("args", {}),
+                    }
+                    for action in actions
+                ],
+                sort_keys=True,
+            )
+        except Exception:  # noqa: BLE001
+            batch_signature = ""
+
+        if batch_signature:
+            if len(self._recent_action_batches) >= 2 and all(
+                sig == batch_signature for sig in self._recent_action_batches[-2:]
+            ):
+                self.state.add_message(
+                    "user",
+                    "You repeated the exact same tool action batch multiple times with no new "
+                    "signal. Change payload/target/vector before retrying.",
+                )
+                return False
+            self._recent_action_batches.append(batch_signature)
+            if len(self._recent_action_batches) > 8:
+                self._recent_action_batches = self._recent_action_batches[-8:]
+
         for action in actions:
             self.state.add_action(action)
 

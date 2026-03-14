@@ -34,7 +34,7 @@ class TerminalSession:
     # Blocked when quarantine=True to prevent untrusted data from pivoting.
     _QUARANTINE_METACHARACTERS: frozenset[str] = frozenset(";|&$`\n\r")
 
-    def __init__(self, session_id: str, work_dir: str = "/workspace", quarantine: bool = False) -> None:
+    def __init__(self, session_id: str, work_dir: str = "/workspace", quarantine: bool = True) -> None:
         self.session_id = session_id
         self.work_dir = str(Path(work_dir).resolve())
         self._closed = False

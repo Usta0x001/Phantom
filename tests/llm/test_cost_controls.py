@@ -35,17 +35,18 @@ def make_llm(mode: str = "standard") -> LLM:
 # ── _get_max_tokens ────────────────────────────────────────────────────────────
 
 class TestGetMaxTokens:
-    def test_quick_mode_returns_4000(self):
-        assert make_llm("quick")._get_max_tokens() == 4000
+    def test_quick_mode_returns_none_without_env(self):
+        """R-01 fix: without LLM_MAX_TOKENS, _get_max_tokens returns None (no cap, Strix behaviour)."""
+        assert make_llm("quick")._get_max_tokens() is None
 
-    def test_stealth_mode_returns_6000(self):
-        assert make_llm("stealth")._get_max_tokens() == 6000
+    def test_stealth_mode_returns_none_without_env(self):
+        assert make_llm("stealth")._get_max_tokens() is None
 
-    def test_standard_mode_returns_8000(self):
-        assert make_llm("standard")._get_max_tokens() == 8000
+    def test_standard_mode_returns_none_without_env(self):
+        assert make_llm("standard")._get_max_tokens() is None
 
-    def test_deep_mode_returns_8000(self):
-        assert make_llm("deep")._get_max_tokens() == 8000
+    def test_deep_mode_returns_none_without_env(self):
+        assert make_llm("deep")._get_max_tokens() is None
 
     def test_env_override_wins_over_scan_mode(self, monkeypatch):
         monkeypatch.setenv("LLM_MAX_TOKENS", "2048")
@@ -59,7 +60,7 @@ class TestGetMaxTokens:
     def test_env_override_cleared_after_test(self):
         # Confirm previous monkeypatches are torn down correctly.
         assert "LLM_MAX_TOKENS" not in os.environ
-        assert make_llm("quick")._get_max_tokens() == 4000
+        assert make_llm("quick")._get_max_tokens() is None
 
 
 # ── _check_budget ──────────────────────────────────────────────────────────────

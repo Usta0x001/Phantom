@@ -64,3 +64,35 @@ def test_cli_app_force_applies_saved_config() -> None:
         "scan/resume must force-apply saved config so `phantom config set` is effective "
         "even when shell env is stale"
     )
+
+
+def test_localhost_target_registers_host_gateway_alias(monkeypatch) -> None:
+    from phantom.agents.PhantomAgent.phantom_agent import PhantomAgent
+    from phantom.tools.proxy import proxy_manager
+
+    captured: list[str] = []
+
+    def _capture(hostname: str) -> None:
+        captured.append(hostname)
+
+    monkeypatch.setattr(proxy_manager, "allow_ssrf_host", _capture)
+
+    agent = object.__new__(PhantomAgent)
+    agent.agent_loop = AsyncMock(return_value={"ok": True})
+
+    scan_config = {
+        "targets": [
+            {
+                "type": "web_application",
+                "details": {"target_url": "http://localhost:3000"},
+            }
+        ],
+        "user_instructions": "",
+    }
+
+    import asyncio
+
+    asyncio.run(PhantomAgent.execute_scan(agent, scan_config))
+
+    assert "localhost" in captured
+    assert "host.docker.internal" in captured

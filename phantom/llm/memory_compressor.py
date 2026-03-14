@@ -14,7 +14,9 @@ logger = logging.getLogger(__name__)
 # The old value was 20_000 which caused compression to fire every ~4 iterations
 # for any model not mapped in litellm's model registry.
 MAX_TOTAL_TOKENS = 128_000
-MIN_RECENT_MESSAGES = 12
+# R-02 regression fix: Strix kept 15 recent messages; Phantom reduced to 12,
+# causing the agent to lose context about its most recent findings.
+MIN_RECENT_MESSAGES = 15
 # Hard ceiling on compression threshold regardless of model context window size.
 # Prevents runaway context growth on models with very large windows (e.g. 200k+).
 MAX_CONTEXT_CEILING = 120_000
@@ -182,12 +184,18 @@ def _summarize_messages(
             text = _extract_message_text(m)[:120]
             if text:
                 snippets.append(f"[{m.get('role', 'unknown')}] {text}")
+        recent_tail = ""
+        for m in reversed(messages[-3:]):
+            tail_text = _extract_message_text(m).strip()
+            if tail_text:
+                recent_tail += f"\n[recent:{m.get('role', 'unknown')}] {tail_text[:300]}"
+
         fallback_text = " | ".join(snippets) if snippets else "no content"
         return {
             "role": "user",
             "content": (
                 f"<context_summary message_count='{len(messages)}' compressed='fallback'>"
-                f"{fallback_text[:800]}"
+                f"{(fallback_text[:800] + recent_tail)[:1600]}"
                 f"</context_summary>"
             ),
         }
@@ -220,7 +228,9 @@ class MemoryCompressor:
     ):
         self.max_images = max_images
         self.model_name = model_name or Config.get("phantom_llm")
-        self.timeout = timeout or int(Config.get("phantom_memory_compressor_timeout") or "30")
+        # R-04 regression fix: Strix used 120s timeout; Phantom reduced to 30s,
+        # causing compression failures on slow models.
+        self.timeout = timeout or int(Config.get("phantom_memory_compressor_timeout") or "120")
 
         if not self.model_name:
             raise ValueError("PHANTOM_LLM environment variable must be set and not empty")
@@ -299,7 +309,11 @@ class MemoryCompressor:
 
         # Configurable chunk size — larger chunks = fewer compression LLM calls = less latency.
         # PHANTOM_COMPRESSOR_CHUNK_SIZE default is 10 (was hardcoded 5).
-        chunk_size = int(Config.get("phantom_compressor_chunk_size") or "10")
+        try:
+            chunk_size = int(Config.get("phantom_compressor_chunk_size") or "10")
+        except ValueError:
+            chunk_size = 10
+        chunk_size = max(1, chunk_size)
         logger.info(
             "MemoryCompressor: firing compression total_tokens=%d threshold=%d "
             "old_msgs=%d chunk_size=%d",

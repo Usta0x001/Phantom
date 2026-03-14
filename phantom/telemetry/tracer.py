@@ -334,6 +334,8 @@ class Tracer:
         cve: str | None = None,
         cwe: str | None = None,
         code_locations: list[dict[str, Any]] | None = None,
+        confidence: str | None = None,
+        replay_status: str | None = None,
     ) -> str:
         report_id = f"vuln-{len(self.vulnerability_reports) + 1:04d}"
 
@@ -372,6 +374,10 @@ class Tracer:
             report["cwe"] = cwe.strip()
         if code_locations:
             report["code_locations"] = code_locations
+        if confidence:
+            report["confidence"] = confidence.strip()
+        if replay_status:
+            report["replay_status"] = replay_status.strip()
 
         self.vulnerability_reports.append(report)
         logger.info(f"Added vulnerability report: {report_id} - {title}")

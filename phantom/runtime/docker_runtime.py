@@ -145,10 +145,26 @@ class DockerRuntime(AbstractRuntime):
     def _recover_container_state(self, container: Container) -> None:
         self.client = self._connect_or_start_docker_client()
         port_bindings = container.attrs.get("NetworkSettings", {}).get("Ports", {})
-        for env_var in container.attrs["Config"]["Env"]:
-            if env_var.startswith("TOOL_SERVER_TOKEN="):
-                self._tool_server_token = env_var.split("=", 1)[1]
-                break
+
+        self._tool_server_token = None
+        try:
+            token_res = container.exec_run(["cat", "/run/secrets/tool_server_token"], user="root")
+            if getattr(token_res, "exit_code", 1) == 0:
+                token_bytes = getattr(token_res, "output", b"") or b""
+                if isinstance(token_bytes, bytes):
+                    token = token_bytes.decode("utf-8", errors="ignore").strip()
+                else:
+                    token = str(token_bytes).strip()
+                if token:
+                    self._tool_server_token = token
+        except Exception:  # noqa: BLE001
+            self._tool_server_token = None
+
+        if not self._tool_server_token:
+            for env_var in container.attrs["Config"]["Env"]:
+                if env_var.startswith("TOOL_SERVER_TOKEN="):
+                    self._tool_server_token = env_var.split("=", 1)[1]
+                    break
 
         port_key = f"{CONTAINER_TOOL_SERVER_PORT}/tcp"
         if port_bindings.get(port_key):

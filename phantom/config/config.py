@@ -22,7 +22,7 @@ class Config:
     litellm_base_url = None
     ollama_api_base = None
     phantom_reasoning_effort = None
-    phantom_memory_compressor_timeout = "30"
+    phantom_memory_compressor_timeout = "120"
     llm_timeout = "300"
     llm_max_tokens = None
     phantom_max_cost = None
@@ -200,7 +200,7 @@ class Config:
                 env_vars.pop(var_name, None)
             if cls._config_file_override is None:
                 cls.save({"env": env_vars})
-        if cls._llm_env_changed(env_vars):
+        if not force and cls._llm_env_changed(env_vars):
             # Current env has LLM vars that differ from saved config — env wins.
             # Remove them from what we apply THIS SESSION so the current-session
             # env takes priority.  Do NOT re-save the file; that would silently
@@ -269,11 +269,21 @@ def resolve_llm_config() -> tuple[str | None, str | None, str | None]:
     if model.startswith("phantom/"):
         api_base: str | None = PHANTOM_API_BASE
     else:
-        api_base = (
-            Config.get("llm_api_base")
-            or Config.get("openai_api_base")
-            or Config.get("litellm_base_url")
-            or Config.get("ollama_api_base")
-        )
+        api_base_candidates = [
+            ("LLM_API_BASE", Config.get("llm_api_base")),
+            ("OPENAI_API_BASE", Config.get("openai_api_base")),
+            ("LITELLM_BASE_URL", Config.get("litellm_base_url")),
+            ("OLLAMA_API_BASE", Config.get("ollama_api_base")),
+        ]
+        non_empty = [(name, value) for name, value in api_base_candidates if value]
+        api_base = non_empty[0][1] if non_empty else None
+        if len(non_empty) > 1:
+            chosen = non_empty[0][0]
+            ignored = ", ".join(name for name, _ in non_empty[1:])
+            logger.warning(
+                "Multiple API base env vars set; using %s and ignoring %s",
+                chosen,
+                ignored,
+            )
 
     return model, api_key, api_base

@@ -206,7 +206,7 @@ class TestCompressionCallCounting:
         assert mc.compression_calls == 0
 
     def test_compression_calls_increments_per_chunk(self, monkeypatch):
-        from phantom.llm.memory_compressor import MemoryCompressor
+        from phantom.llm.memory_compressor import MIN_RECENT_MESSAGES, MemoryCompressor
 
         # Patch out the actual LLM summarization call
         def fake_summarize(messages, model, timeout=30):
@@ -219,11 +219,12 @@ class TestCompressionCallCounting:
         # Force threshold to be very low so compression triggers
         mc._max_total_tokens = 1  # everything exceeds 1 token
 
-        # 35 messages → MIN_RECENT_MESSAGES(12) kept recent → 23 old msgs
-        # 23 / chunk_size(10) = 3 compression calls (chunks of 10, 10, 3)
+        # Dynamic expectation based on current MIN_RECENT_MESSAGES.
         msgs = [{"role": "user", "content": f"msg {i}"} for i in range(35)]
         mc.compress_history(msgs)
-        assert mc.compression_calls == 3
+        old_msgs = max(0, len(msgs) - MIN_RECENT_MESSAGES)
+        expected_calls = (old_msgs + 10 - 1) // 10
+        assert mc.compression_calls == expected_calls
 
 
 # ── force compress increments compression_calls ───────────────────────────────

@@ -1,3 +1,4 @@
+import ast
 import io
 import sys
 import threading
@@ -118,10 +119,75 @@ class PythonInstance:
             "result": None,
         }
 
+    def _validate_code_safety(self, code: str) -> str | None:
+        blocked_import_roots = {
+            "os",
+            "subprocess",
+            "socket",
+            "ctypes",
+            "multiprocessing",
+            "importlib",
+            "shutil",
+        }
+        blocked_calls = {
+            "eval",
+            "exec",
+            "compile",
+            "__import__",
+            "open",
+            "input",
+        }
+        blocked_attrs = {
+            "system",
+            "popen",
+            "spawn",
+            "run",
+            "call",
+            "check_call",
+            "check_output",
+            "startfile",
+            "remove",
+            "unlink",
+            "rmtree",
+            "rmdir",
+        }
+
+        try:
+            tree = ast.parse(code)
+        except SyntaxError:
+            return None
+
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    root = alias.name.split(".", 1)[0]
+                    if root in blocked_import_roots:
+                        return f"Blocked unsafe import: {root}"
+
+            if isinstance(node, ast.ImportFrom):
+                if node.module:
+                    root = node.module.split(".", 1)[0]
+                    if root in blocked_import_roots:
+                        return f"Blocked unsafe import: {root}"
+
+            if isinstance(node, ast.Call):
+                if isinstance(node.func, ast.Name) and node.func.id in blocked_calls:
+                    return f"Blocked unsafe call: {node.func.id}"
+                if isinstance(node.func, ast.Attribute):
+                    attr = node.func.attr
+                    if attr in blocked_attrs:
+                        return f"Blocked unsafe call: {attr}"
+
+        return None
+
     def execute_code(self, code: str, timeout: int = 30) -> dict[str, Any]:
         session_error = self._validate_session()
         if session_error:
             return session_error
+
+        safety_error = self._validate_code_safety(code)
+        if safety_error:
+            return self._handle_execution_error(PermissionError(safety_error))
 
         with self._execution_lock:
             result_container: dict[str, Any] = {}

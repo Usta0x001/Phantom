@@ -74,11 +74,17 @@ def _check_active_agents(agent_state: Any = None) -> dict[str, Any] | None:
             return response
 
     except ImportError:
-        pass
-    except Exception:
-        import logging
-
-        logging.exception("Error checking active agents")
+        return {
+            "success": False,
+            "error": "agent_graph_unavailable",
+            "message": "Cannot verify active agents: agents graph module unavailable",
+        }
+    except Exception as e:  # noqa: BLE001
+        return {
+            "success": False,
+            "error": "agent_graph_check_failed",
+            "message": f"Failed to verify active agents: {e}",
+        }
 
     return None
 
@@ -117,33 +123,34 @@ def finish_scan(
         from phantom.telemetry.tracer import get_global_tracer
 
         tracer = get_global_tracer()
-        if tracer:
-            tracer.update_scan_final_fields(
-                executive_summary=executive_summary.strip(),
-                methodology=methodology.strip(),
-                technical_analysis=technical_analysis.strip(),
-                recommendations=recommendations.strip(),
-            )
-
-            vulnerability_count = len(tracer.vulnerability_reports)
-
+        if not tracer:
             return {
-                "success": True,
-                "scan_completed": True,
-                "message": "Scan completed successfully",
-                "vulnerabilities_found": vulnerability_count,
+                "success": False,
+                "scan_completed": False,
+                "error": "tracer_unavailable",
+                "message": "Scan finalization failed: tracer unavailable",
             }
 
-        import logging
+        tracer.update_scan_final_fields(
+            executive_summary=executive_summary.strip(),
+            methodology=methodology.strip(),
+            technical_analysis=technical_analysis.strip(),
+            recommendations=recommendations.strip(),
+        )
 
-        logging.warning("Current tracer not available - scan results not stored")
+        vulnerability_count = len(tracer.vulnerability_reports)
 
-    except (ImportError, AttributeError) as e:
-        return {"success": False, "message": f"Failed to complete scan: {e!s}"}
-    else:
         return {
             "success": True,
             "scan_completed": True,
-            "message": "Scan completed (not persisted)",
-            "warning": "Results could not be persisted - tracer unavailable",
+            "message": "Scan completed successfully",
+            "vulnerabilities_found": vulnerability_count,
+        }
+
+    except (ImportError, AttributeError) as e:
+        return {
+            "success": False,
+            "scan_completed": False,
+            "error": "finalization_exception",
+            "message": f"Failed to complete scan: {e!s}",
         }

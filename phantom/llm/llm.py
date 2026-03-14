@@ -154,6 +154,7 @@ class LLM:
         self._agent_calls += 1
         messages = await self._prepare_messages(conversation_history)
         max_retries = int(Config.get("phantom_llm_max_retries") or "5")
+        unknown_error_max_retries = 2
 
         # Optionally switch model based on routing config
         original_model = self.config.litellm_model
@@ -162,13 +163,14 @@ class LLM:
             if routed and routed != original_model:
                 logger.debug("Routing: switching model %s → %s", original_model, routed)
                 self.config.litellm_model = routed
+        primary_model = self.config.litellm_model
 
         primary_exhausted = False
         _last_error: Exception | None = None
         _compress_attempted = False  # last-chance compress flag for undetected 400 overflow
         # 429 errors get a separate, higher retry budget to survive long rate-limit windows
         ratelimit_max_retries = int(Config.get("phantom_llm_ratelimit_max_retries") or "10")
-        for attempt in range(max(max_retries, ratelimit_max_retries) + 1):
+        for attempt in range(ratelimit_max_retries + 1):
             try:
                 async for response in self._stream(messages):
                     yield response
@@ -195,8 +197,14 @@ class LLM:
                 code = getattr(e, "status_code", None) or getattr(
                     getattr(e, "response", None), "status_code", None
                 )
-                # Rate-limit errors use the larger ratelimit_max_retries budget
-                effective_max = ratelimit_max_retries if code == 429 else max_retries
+                # Rate-limit errors use the larger ratelimit_max_retries budget.
+                # Unknown-code errors are capped to avoid long blind retry loops.
+                if code == 429:
+                    effective_max = ratelimit_max_retries
+                elif code is None:
+                    effective_max = min(max_retries, unknown_error_max_retries)
+                else:
+                    effective_max = max_retries
                 if attempt >= effective_max or not self._should_retry(e):
                     # Last-chance: a 400 that wasn't recognised as context-too-large
                     # (provider phrased it differently) — compress once and retry.
@@ -238,10 +246,14 @@ class LLM:
                 await asyncio.sleep(wait)
 
         # Primary model exhausted — try fallback if configured
-        if primary_exhausted and self._fallback_llm_name:
+        if (
+            primary_exhausted
+            and self._fallback_llm_name
+            and self._fallback_llm_name != primary_model
+        ):
             logger.warning(
                 "Primary model %s exhausted — retrying with fallback %s",
-                original_model,
+                primary_model,
                 self._fallback_llm_name,
             )
             try:
@@ -388,16 +400,21 @@ class LLM:
 
         return messages
 
-    def _get_max_tokens(self) -> int:
-        """Cap output tokens based on scan mode to control cost."""
+    def _get_max_tokens(self) -> int | None:
+        """Return an explicit output-token cap ONLY when the user has set one.
+
+        R-01 regression fix: Strix never passed max_tokens, letting the model
+        use its full output budget.  Phantom added hard caps (4k/6k/8k) which
+        truncated the model mid-thought before it could call
+        create_vulnerability_report — the #1 root cause of 0 findings.
+
+        Now we only honour an explicit env-var override; otherwise return None
+        so that _build_completion_args omits the parameter entirely.
+        """
         env_val = Config.get("llm_max_tokens")
         if env_val:
             return int(env_val)
-        if self.config.scan_mode == "quick":
-            return 4000
-        if self.config.scan_mode == "stealth":
-            return 6000
-        return 8000  # standard / deep
+        return None  # let the model use its full output budget (Strix behaviour)
 
     def _check_budget(self) -> None:
         """Hard-stop if PHANTOM_MAX_COST is set and exceeded.
@@ -420,9 +437,11 @@ class LLM:
         try:
             from phantom.telemetry.tracer import get_global_tracer
             tracer = get_global_tracer()
-            current_cost = (
-                tracer.get_total_llm_stats()["total"]["cost"] if tracer else self._total_stats.cost
-            )
+            if tracer:
+                traced_cost = tracer.get_total_llm_stats()["total"]["cost"]
+                current_cost = max(float(traced_cost or 0.0), float(self._total_stats.cost or 0.0))
+            else:
+                current_cost = self._total_stats.cost
         except Exception:  # noqa: BLE001
             current_cost = self._total_stats.cost
         if current_cost >= max_cost:
@@ -462,8 +481,13 @@ class LLM:
             "messages": messages,
             "timeout": self.config.timeout,
             "stream_options": {"include_usage": True},
-            "max_tokens": self._get_max_tokens(),
         }
+
+        # R-01: Only pass max_tokens if explicitly configured via env var.
+        # Strix never capped output; Phantom's caps caused truncated responses.
+        _max_tok = self._get_max_tokens()
+        if _max_tok is not None:
+            args["max_tokens"] = _max_tok
 
         if self.config.api_key:
             args["api_key"] = self.config.api_key
@@ -726,22 +750,38 @@ class LLM:
         recent = non_system[-keep_count:]
 
         if to_compress:
+            compress_timeout = int(Config.get("phantom_memory_compressor_timeout") or "120")
             summary = await asyncio.to_thread(
                 _summarize_messages,
                 to_compress,
                 self.config.litellm_model,
-                30,
+                compress_timeout,
             )
             self.memory_compressor.compression_calls += 1
             return system_msgs + [summary] + recent
         return system_msgs + recent
 
     def _should_retry(self, e: Exception) -> bool:
+        lower_msg = str(e).lower()
+        if any(
+            marker in lower_msg
+            for marker in (
+                "invalid api key",
+                "authentication",
+                "unauthorized",
+                "forbidden",
+                "insufficient_quota",
+                "model_not_found",
+                "unsupported parameter",
+                "invalid_request_error",
+            )
+        ):
+            return False
         code = getattr(e, "status_code", None) or getattr(
             getattr(e, "response", None), "status_code", None
         )
         if code is None:
-            return True  # Network/unknown error — always retry
+            return True
         # Retry on rate limits (429) and server errors (5xx).
         # Do NOT retry auth failures (401/403), bad requests (400/422), not found (404).
         return code == 429 or (500 <= code < 600)
