@@ -73,6 +73,20 @@ class Config:
     # Tool & Feature Configuration
     perplexity_api_key = None
     phantom_disable_browser = "false"
+    phantom_attach_browser_images = "false"
+    phantom_browser_image_mode = "off"          # off | thumb | full
+    phantom_browser_image_thumb_max_bytes = "80000"
+    phantom_browser_image_thumb_max_dim = "768"
+    phantom_browser_image_full_max_bytes = "250000"
+    phantom_browser_image_max_per_turn = "1"
+    phantom_adaptive_truncation = "true"
+    phantom_browser_truncation_burst_limit = "10000"
+    phantom_terminal_truncation_burst_limit = "8000"
+    phantom_max_total_image_bytes = "300000"
+    phantom_max_request_chars = "900000"
+    phantom_max_request_estimated_tokens = "220000"
+    # Progressive rollout flag for TUI architecture variants (v1 legacy, v2 modular)
+    phantom_tui_variant = "v2"
 
     # Runtime Configuration
     phantom_image = "ghcr.io/usta0x001/phantom-sandbox:latest"

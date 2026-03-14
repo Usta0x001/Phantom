@@ -1,5 +1,6 @@
 """Pytest tests for executor.py — truncation and per-tool overrides."""
 
+import base64
 import os
 import sys
 from pathlib import Path
@@ -152,3 +153,44 @@ class TestFormatToolResultWithOverride:
     def test_terminal_execute_not_truncated_under_limit(self):
         result, _ = _format_tool_result("terminal_execute", "T" * 3999)
         assert "truncated" not in result.lower()
+
+
+class TestAdaptiveTruncationAndVisionModes:
+    def test_browser_high_signal_gets_burst_limit(self, monkeypatch):
+        monkeypatch.setenv("PHANTOM_ADAPTIVE_TRUNCATION", "true")
+        monkeypatch.setenv("PHANTOM_BROWSER_TRUNCATION_BURST_LIMIT", "10000")
+        payload = "SQL syntax error near SELECT " + ("X" * 9000)
+        result, _ = _format_tool_result("browser_action", payload)
+        assert "truncated" not in result.lower()
+
+    def test_browser_non_signal_still_truncated(self, monkeypatch):
+        monkeypatch.setenv("PHANTOM_ADAPTIVE_TRUNCATION", "true")
+        payload = "X" * 3500
+        result, _ = _format_tool_result("browser_action", payload)
+        assert "truncated" in result.lower()
+
+    def test_browser_thumb_mode_attaches_image_url(self, monkeypatch):
+        one_px_png = (
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8"
+            "/w8AAusB9Y9Y6mQAAAAASUVORK5CYII="
+        )
+        monkeypatch.setenv("PHANTOM_ATTACH_BROWSER_IMAGES", "true")
+        monkeypatch.setenv("PHANTOM_BROWSER_IMAGE_MODE", "thumb")
+        monkeypatch.setenv("PHANTOM_BROWSER_IMAGE_MAX_PER_TURN", "1")
+
+        xml, images = _format_tool_result("browser_action", {"screenshot": one_px_png, "ok": True})
+
+        assert "data:image" not in xml
+        assert images and images[0].get("type") == "image_url"
+
+    def test_browser_full_mode_respects_byte_cap(self, monkeypatch):
+        raw = b"Z" * 2048
+        screenshot = base64.b64encode(raw).decode("ascii")
+        monkeypatch.setenv("PHANTOM_ATTACH_BROWSER_IMAGES", "true")
+        monkeypatch.setenv("PHANTOM_BROWSER_IMAGE_MODE", "full")
+        monkeypatch.setenv("PHANTOM_BROWSER_IMAGE_FULL_MAX_BYTES", "1000")
+
+        _, images = _format_tool_result("browser_action", {"screenshot": screenshot, "ok": True})
+        # Over cap, so image_url should not be attached in full mode fallback path here.
+        # In _format_tool_result compatibility wrapper, this yields no attached images.
+        assert not images or all(i.get("type") != "image_url" for i in images)

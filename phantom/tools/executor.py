@@ -2,6 +2,11 @@ import html
 import inspect
 import os
 import time
+import base64
+import hashlib
+import io
+from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -25,6 +30,26 @@ from .registry import (
 _SERVER_TIMEOUT = float(Config.get("phantom_sandbox_execution_timeout") or "120")
 SANDBOX_EXECUTION_TIMEOUT = _SERVER_TIMEOUT + 30
 SANDBOX_CONNECT_TIMEOUT = float(Config.get("phantom_sandbox_connect_timeout") or "10")
+
+_HIGH_SIGNAL_MARKERS = (
+    "<script",
+    "javascript:",
+    "onerror=",
+    "onload=",
+    "sql",
+    "syntax error",
+    "traceback",
+    "exception",
+    "jwt",
+    "bearer",
+    "set-cookie",
+    "content-security-policy",
+    "x-frame-options",
+    "strict-transport-security",
+    "authorization",
+    "csrf",
+    "redirect",
+)
 
 
 async def execute_tool(tool_name: str, agent_state: Any | None = None, **kwargs: Any) -> Any:
@@ -306,18 +331,157 @@ def _get_truncation_limit(tool_name: str) -> int:
     return default
 
 
-def _format_tool_result(tool_name: str, result: Any) -> tuple[str, list[dict[str, Any]]]:
+def _get_image_mode() -> str:
+    mode = (Config.get("phantom_browser_image_mode") or "off").strip().lower()
+    if mode in {"off", "thumb", "full"}:
+        return mode
+    return "off"
+
+
+def _parse_int(name: str, default: int) -> int:
+    raw = Config.get(name)
+    try:
+        return max(1, int(raw)) if raw is not None else default
+    except (TypeError, ValueError):
+        return default
+
+
+def _is_high_signal_output(tool_name: str, text: str) -> bool:
+    if tool_name in {"browser_action", "terminal_execute"}:
+        lowered = text.lower()
+        return any(marker in lowered for marker in _HIGH_SIGNAL_MARKERS)
+    return False
+
+
+def _build_thumb_image_bytes(raw: bytes, max_dim: int, max_bytes: int) -> bytes | None:
+    try:
+        from PIL import Image
+    except Exception:
+        return raw if len(raw) <= max_bytes else None
+
+    try:
+        with Image.open(io.BytesIO(raw)) as img:
+            if img.mode not in {"RGB", "RGBA"}:
+                img = img.convert("RGB")
+            dim = max_dim
+            for _ in range(6):
+                work = img.copy()
+                work.thumbnail((dim, dim), Image.Resampling.LANCZOS)
+                out = io.BytesIO()
+                work.save(out, format="PNG", optimize=True)
+                data = out.getvalue()
+                if len(data) <= max_bytes:
+                    return data
+                dim = max(128, int(dim * 0.75))
+            return None
+    except Exception:
+        return raw if len(raw) <= max_bytes else None
+
+
+def _build_image_attachment(
+    screenshot_b64: str,
+    mode: str,
+    thumb_max_bytes: int,
+    thumb_max_dim: int,
+    full_max_bytes: int,
+) -> dict[str, Any] | None:
+    if not screenshot_b64:
+        return None
+    try:
+        raw = base64.b64decode(screenshot_b64, validate=True)
+    except Exception:
+        return None
+    if not raw:
+        return None
+
+    if mode == "full":
+        if len(raw) > full_max_bytes:
+            return None
+        encoded = base64.b64encode(raw).decode("ascii")
+        return {
+            "type": "image_url",
+            "image_url": {"url": f"data:image/png;base64,{encoded}"},
+            "_bytes": len(raw),
+        }
+
+    if mode == "thumb":
+        thumb = _build_thumb_image_bytes(raw, thumb_max_dim, thumb_max_bytes)
+        if not thumb:
+            return None
+        encoded = base64.b64encode(thumb).decode("ascii")
+        return {
+            "type": "image_url",
+            "image_url": {"url": f"data:image/png;base64,{encoded}"},
+            "_bytes": len(thumb),
+        }
+
+    return None
+
+
+def _format_tool_result_with_meta(
+    tool_name: str,
+    result: Any,
+    image_slots_remaining: int = 0,
+) -> tuple[str, list[dict[str, Any]], dict[str, Any]]:
     images: list[dict[str, Any]] = []
+    meta: dict[str, Any] = {
+        "truncated": False,
+        "chars_before": 0,
+        "chars_after": 0,
+        "limit": 0,
+        "burst_applied": False,
+        "images_attached": 0,
+        "image_mode": "off",
+    }
 
     screenshot_data = extract_screenshot_from_result(result)
+    attach_browser_images = (Config.get("phantom_attach_browser_images") or "false").lower() in {
+        "1",
+        "true",
+        "yes",
+    }
+    image_mode = _get_image_mode()
+    thumb_max_bytes = _parse_int("phantom_browser_image_thumb_max_bytes", 80_000)
+    thumb_max_dim = _parse_int("phantom_browser_image_thumb_max_dim", 768)
+    full_max_bytes = _parse_int("phantom_browser_image_full_max_bytes", 250_000)
+    meta["image_mode"] = image_mode
+
     if screenshot_data:
-        images.append(
-            {
-                "type": "image_url",
-                "image_url": {"url": f"data:image/png;base64,{screenshot_data}"},
-            }
-        )
+        artifact_ref = _store_screenshot_artifact(screenshot_data, tool_name)
         result_str = remove_screenshot_from_result(result)
+        if isinstance(result_str, dict):
+            result_str = {
+                **result_str,
+                "screenshot_artifact": artifact_ref.get("artifact_path") if artifact_ref else None,
+                "screenshot_sha256": artifact_ref.get("sha256") if artifact_ref else None,
+                "screenshot_bytes": artifact_ref.get("bytes") if artifact_ref else None,
+                "screenshot_note": (
+                    "Screenshot persisted as run artifact; raw base64 not embedded in conversation history"
+                ),
+            }
+        if attach_browser_images and image_mode != "off" and image_slots_remaining > 0:
+            image_part = _build_image_attachment(
+                screenshot_data,
+                image_mode,
+                thumb_max_bytes,
+                thumb_max_dim,
+                full_max_bytes,
+            )
+            if image_part:
+                image_part.pop("_bytes", None)
+                images.append(image_part)
+                meta["images_attached"] = 1
+        elif attach_browser_images and artifact_ref:
+            images.append(
+                {
+                    "type": "text",
+                    "text": (
+                        "[Browser screenshot artifact] "
+                        f"path={artifact_ref['artifact_path']} "
+                        f"sha256={artifact_ref['sha256']} bytes={artifact_ref['bytes']}"
+                    ),
+                }
+            )
     else:
         result_str = result
 
@@ -326,18 +490,89 @@ def _format_tool_result(tool_name: str, result: Any) -> tuple[str, list[dict[str
     else:
         final_result_str = str(result_str)
         limit = _get_truncation_limit(tool_name)
+        adaptive_truncation = (Config.get("phantom_adaptive_truncation") or "true").lower() in {
+            "1",
+            "true",
+            "yes",
+        }
+        burst_applied = False
+        if adaptive_truncation and _is_high_signal_output(tool_name, final_result_str):
+            if tool_name == "browser_action":
+                limit = max(limit, _parse_int("phantom_browser_truncation_burst_limit", 10_000))
+                burst_applied = True
+            elif tool_name == "terminal_execute":
+                limit = max(limit, _parse_int("phantom_terminal_truncation_burst_limit", 8_000))
+                burst_applied = True
+        meta["burst_applied"] = burst_applied
+        meta["limit"] = limit
+        meta["chars_before"] = len(final_result_str)
         if len(final_result_str) > limit:
             half = limit // 2
             start_part = final_result_str[:half]
             end_part = final_result_str[-half:]
             final_result_str = start_part + "\n\n... [middle content truncated] ...\n\n" + end_part
+            meta["truncated"] = True
+        meta["chars_after"] = len(final_result_str)
 
     observation_xml = (
         f"<tool_result>\n<tool_name>{html.escape(tool_name)}</tool_name>\n"
         f"<result>{html.escape(final_result_str)}</result>\n</tool_result>"
     )
 
+    return observation_xml, images, meta
+
+
+def _format_tool_result(tool_name: str, result: Any) -> tuple[str, list[dict[str, Any]]]:
+    observation_xml, images, _ = _format_tool_result_with_meta(
+        tool_name,
+        result,
+        image_slots_remaining=_parse_int("phantom_browser_image_max_per_turn", 1),
+    )
     return observation_xml, images
+
+
+def _store_screenshot_artifact(screenshot_b64: str, tool_name: str) -> dict[str, Any] | None:
+    if not screenshot_b64:
+        return None
+
+    try:
+        raw = base64.b64decode(screenshot_b64, validate=True)
+    except Exception:
+        return None
+
+    if not raw:
+        return None
+
+    digest = hashlib.sha256(raw).hexdigest()
+    timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ")
+    filename = f"{timestamp}_{tool_name}_{digest[:12]}.png"
+
+    try:
+        from phantom.telemetry.tracer import get_global_tracer
+
+        tracer = get_global_tracer()
+        if tracer:
+            run_dir = tracer.get_run_dir()
+        else:
+            run_dir = Path.cwd() / "phantom_runs" / "unscoped"
+    except Exception:
+        run_dir = Path.cwd() / "phantom_runs" / "unscoped"
+
+    artifacts_dir = run_dir / "artifacts" / "screenshots"
+    artifacts_dir.mkdir(parents=True, exist_ok=True)
+    out_path = artifacts_dir / filename
+    out_path.write_bytes(raw)
+
+    try:
+        rel_path = str(out_path.relative_to(Path.cwd())).replace("\\", "/")
+    except Exception:
+        rel_path = str(out_path)
+
+    return {
+        "artifact_path": rel_path,
+        "sha256": digest[:16],
+        "bytes": len(raw),
+    }
 
 
 async def _execute_single_tool(
@@ -345,7 +580,8 @@ async def _execute_single_tool(
     agent_state: Any | None,
     tracer: Any | None,
     agent_id: str,
-) -> tuple[str, list[dict[str, Any]], bool]:
+    image_slots_remaining: int,
+) -> tuple[str, list[dict[str, Any]], bool, int]:
     tool_name = tool_inv.get("toolName", "unknown")
     args = tool_inv.get("args", {})
     execution_id = None
@@ -377,8 +613,28 @@ async def _execute_single_tool(
             tracer.update_tool_execution(execution_id, "error", error_msg)
         raise
 
-    observation_xml, images = _format_tool_result(tool_name, result)
-    return observation_xml, images, should_agent_finish
+    observation_xml, images, meta = _format_tool_result_with_meta(
+        tool_name,
+        result,
+        image_slots_remaining=image_slots_remaining,
+    )
+
+    if meta.get("truncated"):
+        from phantom.logging.audit import get_audit_logger as _get_audit
+
+        _audit = _get_audit()
+        if _audit:
+            _audit.log_tool_result_truncation(
+                agent_id=agent_id,
+                tool_name=tool_name,
+                chars_before=int(meta.get("chars_before") or 0),
+                chars_after=int(meta.get("chars_after") or 0),
+                limit=int(meta.get("limit") or 0),
+                burst_applied=bool(meta.get("burst_applied")),
+            )
+
+    images_used = int(meta.get("images_attached") or 0)
+    return observation_xml, images, should_agent_finish, images_used
 
 
 def _get_tracer_and_agent_id(agent_state: Any | None) -> tuple[Any | None, str]:
@@ -402,15 +658,21 @@ async def process_tool_invocations(
     observation_parts: list[str] = []
     all_images: list[dict[str, Any]] = []
     should_agent_finish = False
+    image_slots_remaining = _parse_int("phantom_browser_image_max_per_turn", 1)
 
     tracer, agent_id = _get_tracer_and_agent_id(agent_state)
 
     for tool_inv in tool_invocations:
-        observation_xml, images, tool_should_finish = await _execute_single_tool(
-            tool_inv, agent_state, tracer, agent_id
+        observation_xml, images, tool_should_finish, images_used = await _execute_single_tool(
+            tool_inv,
+            agent_state,
+            tracer,
+            agent_id,
+            image_slots_remaining,
         )
         observation_parts.append(observation_xml)
         all_images.extend(images)
+        image_slots_remaining = max(0, image_slots_remaining - images_used)
 
         if tool_should_finish:
             should_agent_finish = True

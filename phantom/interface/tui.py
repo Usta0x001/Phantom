@@ -29,9 +29,30 @@ from textual.widgets import Button, Label, Static, TextArea, Tree
 from textual.widgets.tree import TreeNode
 
 from phantom.agents.PhantomAgent import PhantomAgent
+from phantom.interface.tui_components import mount_main_layout
+from phantom.interface.tui_design_system import (
+    EMPTY_STATES,
+    ERROR_STATES,
+    KEYBOARD_MODEL,
+    LOADING_STATES,
+    SEVERITY_COLORS as DESIGN_SEVERITY_COLORS,
+    SWEEP_COLORS,
+)
+from phantom.interface.tui_presenter import (
+    build_agent_label,
+    compute_layout_view_model,
+    enrich_vulnerabilities_with_agents,
+    gather_agent_events,
+    get_status_view_model,
+    should_refresh_chat,
+)
+from phantom.interface.tui_tool_cards import (
+    render_completed_tool_card,
+    render_default_streaming_tool,
+    render_streaming_tool_card,
+)
 from phantom.interface.streaming_parser import parse_streaming_content
 from phantom.interface.tool_components.agent_message_renderer import AgentMessageRenderer
-from phantom.interface.tool_components.registry import get_tool_renderer
 from phantom.interface.tool_components.user_message_renderer import UserMessageRenderer
 from phantom.interface.utils import build_tui_stats_text
 from phantom.llm.config import LLMConfig
@@ -170,7 +191,7 @@ class SplashScreen(Static):  # type: ignore[misc]
         return Text("Open-source AI hackers for your apps", style=Style(color="white", dim=True))
 
     def _build_start_line_text(self, phase: int) -> Text:
-        full_text = "Starting Phantom Agent"
+        full_text = LOADING_STATES.app_boot
         text_len = len(full_text)
 
         shine_pos = phase % (text_len + 8)
@@ -198,13 +219,13 @@ class HelpScreen(ModalScreen):  # type: ignore[misc]
         yield Grid(
             Label("Phantom Help", id="help_title"),
             Label(
-                "F1          Help\n"
-                "Ctrl+Q/C    Quit\n"
-                "ESC         Stop current agent\n"
-                "Ctrl+P      Pause ALL running agents\n"
-                "Enter       Send message to agent\n"
-                "Tab         Switch panels\n"
-                "↑/↓         Navigate tree",
+                f"{KEYBOARD_MODEL.help:12}Help\n"
+                f"{KEYBOARD_MODEL.quit:12}Quit\n"
+                f"{KEYBOARD_MODEL.stop_selected:12}Stop current agent\n"
+                f"{KEYBOARD_MODEL.pause_all:12}Pause ALL running agents\n"
+                f"{KEYBOARD_MODEL.send_message:12}Send message to agent\n"
+                f"{KEYBOARD_MODEL.switch_panels:12}Switch panels\n"
+                f"{KEYBOARD_MODEL.navigate_tree:12}Navigate tree",
                 id="help_content",
             ),
             id="dialog",
@@ -313,13 +334,7 @@ class PauseAllScreen(ModalScreen):  # type: ignore[misc]
 class VulnerabilityDetailScreen(ModalScreen):  # type: ignore[misc]
     """Modal screen to display vulnerability details."""
 
-    SEVERITY_COLORS: ClassVar[dict[str, str]] = {
-        "critical": "#dc2626",  # Red
-        "high": "#ea580c",  # Orange
-        "medium": "#d97706",  # Amber
-        "low": "#dc2626",  # Green
-        "info": "#f59e0b",  # Blue
-    }
+    SEVERITY_COLORS: ClassVar[dict[str, str]] = DESIGN_SEVERITY_COLORS
 
     FIELD_STYLE: ClassVar[str] = "bold #4ade80"
 
@@ -647,13 +662,7 @@ class VulnerabilityItem(Static):  # type: ignore[misc]
 class VulnerabilitiesPanel(VerticalScroll):  # type: ignore[misc]
     """A scrollable panel showing found vulnerabilities with severity-colored dots."""
 
-    SEVERITY_COLORS: ClassVar[dict[str, str]] = {
-        "critical": "#dc2626",  # Red
-        "high": "#ea580c",  # Orange
-        "medium": "#d97706",  # Amber
-        "low": "#dc2626",  # Green
-        "info": "#f59e0b",  # Blue
-    }
+    SEVERITY_COLORS: ClassVar[dict[str, str]] = DESIGN_SEVERITY_COLORS
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
@@ -809,27 +818,22 @@ class PhantomTUIApp(App):  # type: ignore[misc]
 
         self._spinner_frame_index: int = 0  # Current animation frame index
         self._sweep_num_squares: int = 6  # Number of squares in sweep animation
-        self._sweep_colors: list[str] = [
-            "#000000",  # Dimmest (shows dot)
-            "#031a09",
-            "#052e16",
-            "#0d4a2a",
-            "#15803d",
-            "#dc2626",
-            "#4ade80",
-            "#86efac",  # Brightest
-        ]
+        self._sweep_colors: list[str] = SWEEP_COLORS.copy()
         self._dot_animation_timer: Any | None = None
 
         self._setup_cleanup_handlers()
 
     def _build_scan_config(self, args: argparse.Namespace) -> dict[str, Any]:
+        ui_variant = getattr(args, "ui_variant", None)
+        if not ui_variant:
+            ui_variant = "v2"
         return {
             "scan_id": args.run_name,
             "targets": args.targets_info,
             "user_instructions": args.instruction or "",
             "run_name": args.run_name,
             "scan_mode": getattr(args, "scan_mode", "deep"),  # preserved for resume
+            "ui_variant": str(ui_variant),
         }
 
     def _build_agent_config(self, args: argparse.Namespace) -> dict[str, Any]:
@@ -918,59 +922,10 @@ class PhantomTUIApp(App):  # type: ignore[misc]
             except ValueError:
                 pass
 
-            main_container = Vertical(id="main_container")
-
-            self.mount(main_container)
-
-            content_container = Horizontal(id="content_container")
-            main_container.mount(content_container)
-
-            chat_area_container = Vertical(id="chat_area_container")
-
-            chat_display = Static("", id="chat_display")
-            chat_history = VerticalScroll(chat_display, id="chat_history")
-            chat_history.can_focus = True
-
-            status_text = Static("", id="status_text")
-            status_text.ALLOW_SELECT = False
-            keymap_indicator = Static("", id="keymap_indicator")
-            keymap_indicator.ALLOW_SELECT = False
-
-            agent_status_display = Horizontal(
-                status_text, keymap_indicator, id="agent_status_display", classes="hidden"
-            )
-
-            chat_prompt = Static("> ", id="chat_prompt")
-            chat_prompt.ALLOW_SELECT = False
-            chat_input = ChatTextArea(
-                "",
-                id="chat_input",
-                show_line_numbers=False,
-            )
+            chat_input = ChatTextArea("", id="chat_input", show_line_numbers=False)
             chat_input.set_app_reference(self)
-            chat_input_container = Horizontal(chat_prompt, chat_input, id="chat_input_container")
-
-            agents_tree = Tree("Agents", id="agents_tree")
-            agents_tree.root.expand()
-            agents_tree.show_root = False
-
-            agents_tree.show_guide = True
-            agents_tree.guide_depth = 3
-            agents_tree.guide_style = "dashed"
-
-            stats_display = Static("", id="stats_display")
-            stats_scroll = VerticalScroll(stats_display, id="stats_scroll")
-
             vulnerabilities_panel = VulnerabilitiesPanel(id="vulnerabilities_panel")
-
-            sidebar = Vertical(agents_tree, vulnerabilities_panel, stats_scroll, id="sidebar")
-
-            content_container.mount(chat_area_container)
-            content_container.mount(sidebar)
-
-            chat_area_container.mount(chat_history)
-            chat_area_container.mount(agent_status_display)
-            chat_area_container.mount(chat_input_container)
+            mount_main_layout(self, chat_input, vulnerabilities_panel)
 
             self.call_after_refresh(self._focus_chat_input)
 
@@ -1063,23 +1018,8 @@ class PhantomTUIApp(App):  # type: ignore[misc]
 
         try:
             agent_node = self.agent_nodes[agent_id]
-            agent_name_raw = agent_data.get("name", "Agent")
-            status = agent_data.get("status", "running")
-
-            status_indicators = {
-                "running": "⚪",
-                "waiting": "⏸",
-                "completed": "🟢",
-                "failed": "🔴",
-                "stopped": "■",
-                "stopping": "○",
-                "llm_failed": "🔴",
-            }
-
-            status_icon = status_indicators.get(status, "○")
             vuln_count = self._agent_vulnerability_count(agent_id)
-            vuln_indicator = f" ({vuln_count})" if vuln_count > 0 else ""
-            agent_name = f"{status_icon} {agent_name_raw}{vuln_indicator}"
+            agent_name = build_agent_label(agent_data, vuln_count)
 
             if agent_node.label != agent_name:
                 agent_node.set_label(agent_name)
@@ -1097,7 +1037,7 @@ class PhantomTUIApp(App):  # type: ignore[misc]
     ) -> tuple[Any, str | None]:
         if not self.selected_agent_id:
             return self._get_chat_placeholder_content(
-                "Select an agent from the tree to see its activity.", "placeholder-no-agent"
+                EMPTY_STATES.no_agent_selected, "placeholder-no-agent"
             )
 
         events = self._gather_agent_events(self.selected_agent_id)
@@ -1105,16 +1045,18 @@ class PhantomTUIApp(App):  # type: ignore[misc]
 
         if not events and not streaming:
             return self._get_chat_placeholder_content(
-                "Starting agent...", "placeholder-no-activity"
+                EMPTY_STATES.no_agent_activity, "placeholder-no-activity"
             )
 
         current_event_ids = [e["id"] for e in events]
         current_streaming_len = len(streaming) if streaming else 0
         last_streaming_len = self._last_streaming_len.get(self.selected_agent_id, 0)
 
-        if (
-            current_event_ids == self._displayed_events
-            and current_streaming_len == last_streaming_len
+        if not should_refresh_chat(
+            current_event_ids=current_event_ids,
+            displayed_event_ids=self._displayed_events,
+            current_streaming_len=current_streaming_len,
+            last_streaming_len=last_streaming_len,
         ):
             return None, None
 
@@ -1263,42 +1205,12 @@ class PhantomTUIApp(App):  # type: ignore[misc]
     def _render_streaming_tool(
         self, tool_name: str, args: dict[str, str], is_complete: bool
     ) -> Any:
-        tool_data = {
-            "tool_name": tool_name,
-            "args": args,
-            "status": "completed" if is_complete else "running",
-            "result": None,
-        }
-
-        renderer = get_tool_renderer(tool_name)
-        if renderer:
-            widget = renderer.render(tool_data)
-            return widget.renderable
-
-        return self._render_default_streaming_tool(tool_name, args, is_complete)
+        return render_streaming_tool_card(tool_name, args, is_complete)
 
     def _render_default_streaming_tool(
         self, tool_name: str, args: dict[str, str], is_complete: bool
     ) -> Text:
-        text = Text()
-
-        if is_complete:
-            text.append("✓ ", style="green")
-        else:
-            text.append("● ", style="yellow")
-
-        text.append("Using tool ", style="dim")
-        text.append(tool_name, style="bold blue")
-
-        if args:
-            for key, value in list(args.items())[:3]:
-                text.append("\n  ")
-                text.append(key, style="dim")
-                text.append(": ")
-                display_value = value if len(value) <= 100 else value[:97] + "..."
-                text.append(display_value, style="italic" if not is_complete else None)
-
-        return text
+        return render_default_streaming_tool(tool_name, args, is_complete)
 
     def _get_status_display_content(
         self, agent_id: str, agent_data: dict[str, Any]
@@ -1315,47 +1227,46 @@ class PhantomTUIApp(App):  # type: ignore[misc]
                 t.append(action, style="dim")
             return t
 
-        simple_statuses: dict[str, tuple[str, str]] = {
-            "stopping": ("Agent stopping...", ""),
-            "stopped": ("Agent stopped", ""),
-            "completed": ("Agent completed", ""),
-        }
+        status_vm = get_status_view_model(
+            status=status,
+            has_real_activity=self._agent_has_real_activity(agent_id),
+            error_message=agent_data.get("error_message") or ERROR_STATES.llm_failed_default,
+        )
 
-        if status in simple_statuses:
-            msg, _ = simple_statuses[status]
-            text = Text()
-            text.append(msg)
-            return (text, Text(), False)
+        if status_vm.mode == "hidden":
+            return (None, Text(), False)
 
-        if status == "llm_failed":
-            error_msg = agent_data.get("error_message", "")
-            text = Text()
-            if error_msg:
-                text.append(error_msg, style="red")
-            else:
-                text.append("LLM request failed", style="red")
+        if status_vm.mode == "error":
             self._stop_dot_animation()
+            text = Text()
+            text.append(status_vm.message or ERROR_STATES.llm_failed_default, style="red")
             keymap = Text()
-            keymap.append("Send message to retry", style="dim")
-            return (text, keymap, False)
+            if status_vm.keymap_hint:
+                keymap.append(status_vm.keymap_hint, style="dim")
+            return (text, keymap, status_vm.should_animate)
 
-        if status == "waiting":
+        if status_vm.mode == "waiting":
             keymap = Text()
-            keymap.append("Send message to resume", style="dim")
-            return (Text(" "), keymap, False)
+            if status_vm.keymap_hint:
+                keymap.append(status_vm.keymap_hint, style="dim")
+            return (Text(" "), keymap, status_vm.should_animate)
 
-        if status == "running":
-            if self._agent_has_real_activity(agent_id):
-                animated_text = Text()
-                animated_text.append_text(self._get_sweep_animation(self._sweep_colors))
-                animated_text.append("esc", style="white")
-                animated_text.append(" ", style="dim")
-                animated_text.append("stop", style="dim")
-                return (animated_text, keymap_styled([("ctrl-q", "quit")]), True)
-            animated_text = self._get_animated_verb_text(agent_id, "Initializing")
-            return (animated_text, keymap_styled([("ctrl-q", "quit")]), True)
+        if status_vm.mode == "active":
+            animated_text = Text()
+            animated_text.append_text(self._get_sweep_animation(self._sweep_colors))
+            animated_text.append("esc", style="white")
+            animated_text.append(" ", style="dim")
+            animated_text.append("stop", style="dim")
+            return (animated_text, keymap_styled([("ctrl-q", "quit")]), status_vm.should_animate)
 
-        return (None, Text(), False)
+        if status_vm.mode == "initializing":
+            animated_text = self._get_animated_verb_text(agent_id, LOADING_STATES.agent_init)
+            return (animated_text, keymap_styled([("ctrl-q", "quit")]), status_vm.should_animate)
+
+        text = Text()
+        if status_vm.message:
+            text.append(status_vm.message)
+        return (text, Text(), status_vm.should_animate)
 
     def _update_agent_status_display(self) -> None:
         try:
@@ -1432,14 +1343,11 @@ class PhantomTUIApp(App):  # type: ignore[misc]
             self._safe_widget_operation(vuln_panel.add_class, "hidden")
             return
 
-        enriched_vulns = []
-        for vuln in vulnerabilities:
-            enriched = dict(vuln)
-            report_id = vuln.get("id", "")
-            agent_name = self._get_agent_name_for_vulnerability(report_id)
-            if agent_name:
-                enriched["agent_name"] = agent_name
-            enriched_vulns.append(enriched)
+        enriched_vulns = enrich_vulnerabilities_with_agents(
+            vulnerabilities=vulnerabilities,
+            tracer=self.tracer,
+            agent_name_resolver=self._get_agent_name_for_vulnerability,
+        )
 
         self._safe_widget_operation(vuln_panel.remove_class, "hidden")
         vuln_panel.update_vulnerabilities(enriched_vulns)
@@ -1557,31 +1465,7 @@ class PhantomTUIApp(App):  # type: ignore[misc]
         return count
 
     def _gather_agent_events(self, agent_id: str) -> list[dict[str, Any]]:
-        chat_events = [
-            {
-                "type": "chat",
-                "timestamp": msg["timestamp"],
-                "id": f"chat_{msg['message_id']}",
-                "data": msg,
-            }
-            for msg in self.tracer.chat_messages
-            if msg.get("agent_id") == agent_id
-        ]
-
-        tool_events = [
-            {
-                "type": "tool",
-                "timestamp": tool_data["timestamp"],
-                "id": f"tool_{exec_id}",
-                "data": tool_data,
-            }
-            for exec_id, tool_data in list(self.tracer.tool_executions.items())
-            if tool_data.get("agent_id") == agent_id
-        ]
-
-        events = chat_events + tool_events
-        events.sort(key=lambda e: (e["timestamp"], e["id"]))
-        return events
+        return gather_agent_events(self.tracer, agent_id)
 
     def watch_selected_agent_id(self, _agent_id: str | None) -> None:
         if len(self.screen_stack) > 1 or self.show_splash:
@@ -1638,29 +1522,13 @@ class PhantomTUIApp(App):  # type: ignore[misc]
 
         agent_id = agent_data["id"]
         parent_id = agent_data.get("parent_id")
-        status = agent_data.get("status", "running")
 
         try:
             agents_tree = self.query_one("#agents_tree", Tree)
         except (ValueError, Exception):
             return
-
-        agent_name_raw = agent_data.get("name", "Agent")
-
-        status_indicators = {
-            "running": "⚪",
-            "waiting": "⏸",
-            "completed": "🟢",
-            "failed": "🔴",
-            "stopped": "■",
-            "stopping": "○",
-            "llm_failed": "🔴",
-        }
-
-        status_icon = status_indicators.get(status, "○")
         vuln_count = self._agent_vulnerability_count(agent_id)
-        vuln_indicator = f" ({vuln_count})" if vuln_count > 0 else ""
-        agent_name = f"{status_icon} {agent_name_raw}{vuln_indicator}"
+        agent_name = build_agent_label(agent_data, vuln_count)
 
         try:
             if parent_id and parent_id in self.agent_nodes:
@@ -1719,23 +1587,8 @@ class PhantomTUIApp(App):  # type: ignore[misc]
     def _copy_node_under(self, node_to_copy: TreeNode, new_parent: TreeNode) -> None:
         agent_id = node_to_copy.data["agent_id"]
         agent_data = self.tracer.agents.get(agent_id, {})
-        agent_name_raw = agent_data.get("name", "Agent")
-        status = agent_data.get("status", "running")
-
-        status_indicators = {
-            "running": "⚪",
-            "waiting": "⏸",
-            "completed": "🟢",
-            "failed": "🔴",
-            "stopped": "■",
-            "stopping": "○",
-            "llm_failed": "🔴",
-        }
-
-        status_icon = status_indicators.get(status, "○")
         vuln_count = self._agent_vulnerability_count(agent_id)
-        vuln_indicator = f" ({vuln_count})" if vuln_count > 0 else ""
-        agent_name = f"{status_icon} {agent_name_raw}{vuln_indicator}"
+        agent_name = build_agent_label(agent_data, vuln_count)
 
         new_node = new_parent.add(
             agent_name,
@@ -1797,75 +1650,13 @@ class PhantomTUIApp(App):  # type: ignore[misc]
             interrupted_text = Text()
             interrupted_text.append("\n")
             interrupted_text.append("⚠ ", style="yellow")
-            interrupted_text.append("Interrupted by user", style="yellow dim")
+            interrupted_text.append(ERROR_STATES.interrupted_by_user, style="yellow dim")
             return self._merge_renderables([streaming_result, interrupted_text])
 
         return AgentMessageRenderer.render_simple(content)
 
     def _render_tool_content_simple(self, tool_data: dict[str, Any]) -> Any:
-        tool_name = tool_data.get("tool_name", "Unknown Tool")
-        args = tool_data.get("args", {})
-        status = tool_data.get("status", "unknown")
-        result = tool_data.get("result")
-
-        renderer = get_tool_renderer(tool_name)
-
-        if renderer:
-            widget = renderer.render(tool_data)
-            return widget.renderable
-
-        text = Text()
-
-        if tool_name in ("llm_error_details", "sandbox_error_details"):
-            return self._render_error_details(text, tool_name, args)
-
-        text.append("→ Using tool ")
-        text.append(tool_name, style="bold blue")
-
-        status_styles = {
-            "running": ("●", "yellow"),
-            "completed": ("✓", "green"),
-            "failed": ("✗", "red"),
-            "error": ("✗", "red"),
-        }
-        icon, style = status_styles.get(status, ("○", "dim"))
-        text.append(" ")
-        text.append(icon, style=style)
-
-        if args:
-            for k, v in list(args.items())[:5]:
-                str_v = str(v)
-                if len(str_v) > 500:
-                    str_v = str_v[:497] + "..."
-                text.append("\n  ")
-                text.append(k, style="dim")
-                text.append(": ")
-                text.append(str_v)
-
-        if status in ["completed", "failed", "error"] and result:
-            result_str = str(result)
-            if len(result_str) > 1000:
-                result_str = result_str[:997] + "..."
-            text.append("\n")
-            text.append("Result: ", style="bold")
-            text.append(result_str)
-
-        return text
-
-    def _render_error_details(self, text: Any, tool_name: str, args: dict[str, Any]) -> Any:
-        if tool_name == "llm_error_details":
-            text.append("✗ LLM Request Failed", style="red")
-        else:
-            text.append("✗ Sandbox Initialization Failed", style="red")
-            if args.get("error"):
-                text.append(f"\n{args['error']}", style="bold red")
-        if args.get("details"):
-            details = str(args["details"])
-            if len(details) > 1000:
-                details = details[:997] + "..."
-            text.append("\nDetails: ", style="dim")
-            text.append(details)
-        return text
+        return render_completed_tool_card(tool_data)
 
     @on(Tree.NodeHighlighted)  # type: ignore[misc]
     def handle_tree_highlight(self, event: Tree.NodeHighlighted) -> None:
@@ -2186,11 +1977,15 @@ class PhantomTUIApp(App):  # type: ignore[misc]
         except (ValueError, Exception):
             return
 
-        if event.size.width < self.SIDEBAR_MIN_WIDTH:
+        layout_vm = compute_layout_view_model(event.size.width, self.SIDEBAR_MIN_WIDTH)
+        if layout_vm.hide_sidebar:
             sidebar.add_class("-hidden")
-            chat_area.add_class("-full-width")
         else:
             sidebar.remove_class("-hidden")
+
+        if layout_vm.full_width_chat:
+            chat_area.add_class("-full-width")
+        else:
             chat_area.remove_class("-full-width")
 
     def on_mouse_up(self, _event: events.MouseUp) -> None:

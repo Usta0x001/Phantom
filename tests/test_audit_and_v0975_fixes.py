@@ -304,6 +304,58 @@ class TestAuditLoggerCore:
         assert err["status"] == "error"
         assert "Connection refused" in err["payload"]["error"]
 
+    def test_tool_result_truncation_written(self, tmp_path: Path):
+        """tool.result_truncated must capture before/after and limit."""
+        al = self._make_logger(tmp_path)
+        al.log_tool_result_truncation(
+            agent_id="agent-1",
+            tool_name="browser_action",
+            chars_before=12000,
+            chars_after=3012,
+            limit=3000,
+            burst_applied=False,
+        )
+        records = _read_jsonl(al._jsonl_path)
+        ev = next(r for r in records if r["event_type"] == "tool.result_truncated")
+        assert ev["payload"]["tool_name"] == "browser_action"
+        assert ev["payload"]["chars_before"] == 12000
+        assert ev["payload"]["limit"] == 3000
+
+    def test_preflight_reduction_written(self, tmp_path: Path):
+        """llm.preflight_reduction must record stage and before/after sizes."""
+        al = self._make_logger(tmp_path)
+        al.log_preflight_reduction(
+            agent_id="agent-1",
+            stage="force_compress",
+            attempt=2,
+            chars_before=1_200_000,
+            chars_after=420_000,
+            tokens_before=300_000,
+            tokens_after=105_000,
+            max_request_chars=900_000,
+            max_request_tokens=220_000,
+        )
+        records = _read_jsonl(al._jsonl_path)
+        ev = next(r for r in records if r["event_type"] == "llm.preflight_reduction")
+        assert ev["payload"]["stage"] == "force_compress"
+        assert ev["payload"]["chars_after"] == 420_000
+
+    def test_image_eviction_written(self, tmp_path: Path):
+        """llm.image_eviction must be emitted with kept/evicted counts."""
+        al = self._make_logger(tmp_path)
+        al.log_image_eviction(
+            agent_id="compressor",
+            kept_images=1,
+            evicted_images=3,
+            bytes_before=540_000,
+            bytes_after=180_000,
+            max_total_image_bytes=300_000,
+        )
+        records = _read_jsonl(al._jsonl_path)
+        ev = next(r for r in records if r["event_type"] == "llm.image_eviction")
+        assert ev["payload"]["kept_images"] == 1
+        assert ev["payload"]["evicted_images"] == 3
+
     def test_agent_created_written(self, tmp_path: Path):
         """log_agent_created must write agent.created with agent metadata."""
         al = self._make_logger(tmp_path)

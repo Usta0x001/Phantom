@@ -131,6 +131,8 @@ docker_output.txt
 docker_ps.txt
 scan_*.log
 scan_*.txt
+windows_user_env_backup*.json
+*env_backup*.json
 *.spec
 !phantom.spec
 dist/

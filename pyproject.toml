@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "phantom-agent"
-version = "0.9.83"
+version = "0.9.86"
 description = "Autonomous Offensive Security Intelligence — AI-powered penetration testing"
 authors = ["Usta0x001 <r_gadouri@estin.dz>"]
 readme = "README.md"
@@ -60,6 +60,7 @@ cvss = "^3.2"
 traceloop-sdk = "^0.53.0"
 opentelemetry-exporter-otlp-proto-http = "^1.40.0"
 scrubadub = "^2.0.1"
+pillow = "^11.3.0"
 
 # Optional LLM provider dependencies
 google-cloud-aiplatform = { version = ">=1.38", optional = true }

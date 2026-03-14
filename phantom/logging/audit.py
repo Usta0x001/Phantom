@@ -190,6 +190,22 @@ class AuditLogger:
             return f"iter={p.get('iteration',0)}/{p.get('max_iterations',0)}"
         if ev == "checkpoint.saved":
             return f"dir={p.get('run_dir','?')} iter={p.get('iteration',0)}"
+        if ev == "llm.preflight_reduction":
+            return (
+                f"stage={p.get('stage','?')} attempt={p.get('attempt','?')} "
+                f"chars={p.get('chars_before','?')}→{p.get('chars_after','?')} "
+                f"tokens={p.get('tokens_before','?')}→{p.get('tokens_after','?')}"
+            )
+        if ev == "tool.result_truncated":
+            return (
+                f"tool={p.get('tool_name','?')} chars={p.get('chars_before','?')}→"
+                f"{p.get('chars_after','?')} limit={p.get('limit','?')}"
+            )
+        if ev == "llm.image_eviction":
+            return (
+                f"kept={p.get('kept_images','?')} evicted={p.get('evicted_images','?')} "
+                f"bytes={p.get('bytes_before','?')}→{p.get('bytes_after','?')}"
+            )
         return json.dumps(p, default=str)[:120]
 
     # ─── LLM ─────────────────────────────────────────────────────────────────
@@ -294,6 +310,33 @@ class AuditLogger:
             },
         })
 
+    def log_preflight_reduction(
+        self,
+        agent_id: str,
+        stage: str,
+        attempt: int,
+        chars_before: int,
+        chars_after: int,
+        tokens_before: int,
+        tokens_after: int,
+        max_request_chars: int,
+        max_request_tokens: int,
+    ) -> None:
+        self._write({
+            "event_type": "llm.preflight_reduction",
+            "actor": {"agent_id": agent_id},
+            "payload": {
+                "stage": stage,
+                "attempt": attempt,
+                "chars_before": chars_before,
+                "chars_after": chars_after,
+                "tokens_before": tokens_before,
+                "tokens_after": tokens_after,
+                "max_request_chars": max_request_chars,
+                "max_request_tokens": max_request_tokens,
+            },
+        })
+
     # ─── Tools ───────────────────────────────────────────────────────────────
 
     def log_tool_start(
@@ -359,6 +402,48 @@ class AuditLogger:
                 "duration_ms": round(duration_ms, 1),
             },
             "status": "error",
+        })
+
+    def log_tool_result_truncation(
+        self,
+        agent_id: str,
+        tool_name: str,
+        chars_before: int,
+        chars_after: int,
+        limit: int,
+        burst_applied: bool,
+    ) -> None:
+        self._write({
+            "event_type": "tool.result_truncated",
+            "actor": {"agent_id": agent_id},
+            "payload": {
+                "tool_name": tool_name,
+                "chars_before": chars_before,
+                "chars_after": chars_after,
+                "limit": limit,
+                "burst_applied": burst_applied,
+            },
+        })
+
+    def log_image_eviction(
+        self,
+        agent_id: str,
+        kept_images: int,
+        evicted_images: int,
+        bytes_before: int,
+        bytes_after: int,
+        max_total_image_bytes: int,
+    ) -> None:
+        self._write({
+            "event_type": "llm.image_eviction",
+            "actor": {"agent_id": agent_id},
+            "payload": {
+                "kept_images": kept_images,
+                "evicted_images": evicted_images,
+                "bytes_before": bytes_before,
+                "bytes_after": bytes_after,
+                "max_total_image_bytes": max_total_image_bytes,
+            },
         })
 
     # ─── Agents ──────────────────────────────────────────────────────────────

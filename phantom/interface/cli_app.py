@@ -118,6 +118,12 @@ class OutputFormat(str, Enum):
     html = "html"
 
 
+class UiVariant(str, Enum):
+    auto = "auto"
+    v1 = "v1"
+    v2 = "v2"
+
+
 # ──────────────────────────── scan ────────────────────────────
 
 
@@ -214,11 +220,19 @@ def scan(
         Optional[str],
         typer.Option(
             "--profile",
+            "--preset",
             "-p",
             help="Scan profile preset: quick, standard, deep, stealth, api_only. "
                  "Applies scan-mode, max-iterations, timeout and other tuning knobs in one flag.",
         ),
     ] = None,
+    ui: Annotated[
+        UiVariant,
+        typer.Option(
+            "--ui",
+            help="TUI variant: auto (from config), v1 (legacy), v2 (modular).",
+        ),
+    ] = UiVariant.auto,
 ) -> None:
     """
     Run a penetration test against one or more targets.
@@ -282,6 +296,7 @@ def scan(
         timeout=timeout,
         auth_headers=auth_header or [],
         resume_run=resume,
+        ui_variant=ui.value,
         profile_max_iterations=_profile_max_iter,  # None if no profile
     )
 
@@ -320,6 +335,13 @@ def scan(
     # even if the current shell inherited stale env values.
     apply_saved_config(force=True)
 
+    if ui == UiVariant.auto:
+        args.ui_variant = (Config.get("phantom_tui_variant") or "v2").strip().lower()
+    elif ui in (UiVariant.v1, UiVariant.v2):
+        args.ui_variant = ui.value
+    else:
+        args.ui_variant = "v2"
+
     # Explicit CLI overrides must win over saved config for this run.
     if model:
         import os
@@ -330,6 +352,8 @@ def scan(
         import os
 
         os.environ["PHANTOM_SANDBOX_EXECUTION_TIMEOUT"] = str(timeout)
+    import os
+    os.environ["PHANTOM_TUI_VARIANT"] = args.ui_variant
 
     if args.config:
         apply_config_override(args.config)
@@ -956,12 +980,23 @@ app.add_typer(config_app, name="config")
 
 
 @config_app.command("show")
-def config_show() -> None:
-    """Display current configuration."""
-    import os
-    from phantom.config import Config, apply_saved_config
+def config_show(
+    include_env: Annotated[
+        bool,
+        typer.Option(
+            "--include-env",
+            help="Include current process environment variables in the output.",
+        ),
+    ] = False,
+) -> None:
+    """Display current configuration.
 
-    apply_saved_config()
+    By default, this shows Phantom's saved config file values plus built-in defaults.
+    Use --include-env to also include current environment variable overrides.
+    """
+    import os
+    from phantom.config import Config
+
     saved = Config.load()
     saved_vars: dict[str, str] = saved.get("env", {}) or {}
 
@@ -982,7 +1017,7 @@ def config_show() -> None:
     for attr_name in Config._tracked_names():
         key = attr_name.upper()
         default = getattr(Config, attr_name, None)
-        env_val = os.environ.get(key)
+        env_val = os.environ.get(key) if include_env else None
         saved_val = saved_vars.get(key)
 
         if env_val is not None:
@@ -1013,12 +1048,20 @@ def config_show() -> None:
         table.add_row(key, display_value, f"[{style}]{source}[/]")
 
     console.print(table)
-    console.print(
-        f"[dim]Showing {len(rows)} variables  "
-        "[bold green]env[/][dim]=active in env  "
-        "[yellow]saved[/][dim]=saved config  "
-        "default=built-in default[/]"
-    )
+    if include_env:
+        console.print(
+            f"[dim]Showing {len(rows)} variables  "
+            "[bold green]env[/][dim]=active in env  "
+            "[yellow]saved[/][dim]=saved config  "
+            "default=built-in default[/]"
+        )
+    else:
+        console.print(
+            f"[dim]Showing {len(rows)} variables  "
+            "[yellow]saved[/][dim]=saved config  "
+            "default=built-in default  "
+            "(use --include-env to display env overrides)[/]"
+        )
 
 
 @config_app.command("set")
@@ -1043,24 +1086,9 @@ def config_set(
     existing[key_upper] = value
     Config.save({"env": existing})
 
-    # On Windows, also write to the User-level persistent environment so the
-    # value survives new terminal sessions (overrides any previous setx value).
-    import sys
-    import subprocess as _subprocess
-    if sys.platform == "win32":
-        try:
-            result = _subprocess.run(
-                ["setx", key_upper, value],
-                capture_output=True, text=True, timeout=10,
-            )
-            if result.returncode == 0:
-                console.print(f"[green]Set {key_upper}[/] [dim](persisted to Windows User environment)[/]")
-            else:
-                console.print(f"[green]Set {key_upper}[/] [dim](JSON only; setx failed: {result.stderr.strip()})[/]")
-        except Exception as _e:
-            console.print(f"[green]Set {key_upper}[/] [dim](JSON only; could not run setx: {_e})[/]")
-    else:
-        console.print(f"[green]Set {key_upper}[/]")
+    # Keep configuration local to Phantom only.
+    # Do NOT write system/user environment variables (e.g., `setx` on Windows).
+    console.print(f"[green]Set {key_upper}[/] [dim](saved in Phantom config only)[/]")
 
 
 @config_app.command("reset")
@@ -1364,6 +1392,27 @@ def profiles() -> None:
         )
 
     console.print(table)
+
+
+@app.command("doctor")
+def doctor() -> None:
+    """Show quick diagnostics and discovery hints for the CLI experience."""
+    from phantom.config import Config
+
+    configured_model = Config.get("phantom_llm") or "(not set)"
+    ui_variant = Config.get("phantom_tui_variant") or "v2"
+    info = Text()
+    info.append("CLI Doctor\n", style="bold #dc2626")
+    info.append("Configured model: ", style="dim")
+    info.append(f"{configured_model}\n")
+    info.append("Default UI variant: ", style="dim")
+    info.append(f"{ui_variant}\n")
+    info.append("\nHelpful commands:\n", style="bold")
+    info.append("  phantom profiles\n", style="#f59e0b")
+    info.append("  phantom scan --preset deep -t https://example.com\n", style="#f59e0b")
+    info.append("  phantom scan --ui v2 -t https://example.com\n", style="#f59e0b")
+    info.append("  phantom config show --include-env\n", style="#f59e0b")
+    console.print(Panel(info, border_style="#dc2626", padding=(1, 2)))
 
 
 # ──────────────────────────── diff ────────────────────────────

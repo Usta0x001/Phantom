@@ -1,4 +1,5 @@
 import asyncio
+import json
 import logging
 import os
 import time
@@ -153,6 +154,7 @@ class LLM:
         self._check_budget()
         self._agent_calls += 1
         messages = await self._prepare_messages(conversation_history)
+        messages = await self._enforce_request_size_limits(messages)
         max_retries = int(Config.get("phantom_llm_max_retries") or "5")
         unknown_error_max_retries = 2
 
@@ -399,6 +401,133 @@ class LLM:
             messages = self._add_cache_control(messages)
 
         return messages
+
+    def _estimate_request_size(self, messages: list[dict[str, Any]]) -> tuple[int, int]:
+        serialized = json.dumps(messages, ensure_ascii=False, default=str)
+        chars = len(serialized)
+        estimated_tokens = max(chars // 4, 1)
+        return chars, estimated_tokens
+
+    def _drop_old_images_from_messages(
+        self, messages: list[dict[str, Any]], keep_recent_images: int = 1
+    ) -> list[dict[str, Any]]:
+        image_count = 0
+        transformed = [dict(m) for m in messages]
+
+        for msg in reversed(transformed):
+            content = msg.get("content")
+            if not isinstance(content, list):
+                continue
+
+            new_content: list[dict[str, Any] | Any] = []
+            for item in content:
+                if not isinstance(item, dict) or item.get("type") != "image_url":
+                    new_content.append(item)
+                    continue
+
+                if image_count >= keep_recent_images:
+                    new_content.append(
+                        {
+                            "type": "text",
+                            "text": "[Older image removed during request-size preflight]",
+                        }
+                    )
+                else:
+                    image_count += 1
+                    new_content.append(item)
+
+            msg["content"] = new_content
+
+        return transformed
+
+    async def _enforce_request_size_limits(
+        self, messages: list[dict[str, Any]]
+    ) -> list[dict[str, Any]]:
+        max_request_chars = int(Config.get("phantom_max_request_chars") or "900000")
+        max_request_tokens = int(
+            Config.get("phantom_max_request_estimated_tokens") or "220000"
+        )
+        from phantom.logging.audit import get_audit_logger as _get_audit
+
+        _audit = _get_audit()
+        _agent_id = self.agent_id or "unknown"
+
+        current = messages
+        for attempt in range(4):
+            chars, est_tokens = self._estimate_request_size(current)
+            if chars <= max_request_chars and est_tokens <= max_request_tokens:
+                return current
+
+            logger.warning(
+                "LLM preflight request too large (attempt %d): chars=%d/%d est_tokens=%d/%d",
+                attempt + 1,
+                chars,
+                max_request_chars,
+                est_tokens,
+                max_request_tokens,
+            )
+
+            if attempt == 0:
+                before_chars, before_tokens = chars, est_tokens
+                current = self._drop_old_images_from_messages(current, keep_recent_images=1)
+                after_chars, after_tokens = self._estimate_request_size(current)
+                if _audit:
+                    _audit.log_preflight_reduction(
+                        agent_id=_agent_id,
+                        stage="drop_old_images",
+                        attempt=attempt + 1,
+                        chars_before=before_chars,
+                        chars_after=after_chars,
+                        tokens_before=before_tokens,
+                        tokens_after=after_tokens,
+                        max_request_chars=max_request_chars,
+                        max_request_tokens=max_request_tokens,
+                    )
+                continue
+            if attempt == 1:
+                before_chars, before_tokens = chars, est_tokens
+                current = await self._force_compress_messages(current)
+                after_chars, after_tokens = self._estimate_request_size(current)
+                if _audit:
+                    _audit.log_preflight_reduction(
+                        agent_id=_agent_id,
+                        stage="force_compress",
+                        attempt=attempt + 1,
+                        chars_before=before_chars,
+                        chars_after=after_chars,
+                        tokens_before=before_tokens,
+                        tokens_after=after_tokens,
+                        max_request_chars=max_request_chars,
+                        max_request_tokens=max_request_tokens,
+                    )
+                continue
+            if attempt == 2:
+                before_chars, before_tokens = chars, est_tokens
+                system_msgs = [m for m in current if m.get("role") == "system"]
+                non_system = [m for m in current if m.get("role") != "system"]
+                keep = min(max(12, len(non_system) // 2), len(non_system))
+                current = system_msgs + non_system[-keep:]
+                after_chars, after_tokens = self._estimate_request_size(current)
+                if _audit:
+                    _audit.log_preflight_reduction(
+                        agent_id=_agent_id,
+                        stage="trim_history",
+                        attempt=attempt + 1,
+                        chars_before=before_chars,
+                        chars_after=after_chars,
+                        tokens_before=before_tokens,
+                        tokens_after=after_tokens,
+                        max_request_chars=max_request_chars,
+                        max_request_tokens=max_request_tokens,
+                    )
+                continue
+
+        final_chars, final_tokens = self._estimate_request_size(current)
+        raise LLMRequestFailedError(
+            "Request preflight hard cap exceeded: "
+            f"chars={final_chars} (limit={max_request_chars}), "
+            f"estimated_tokens={final_tokens} (limit={max_request_tokens})"
+        )
 
     def _get_max_tokens(self) -> int | None:
         """Return an explicit output-token cap ONLY when the user has set one.

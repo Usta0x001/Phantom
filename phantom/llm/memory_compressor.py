@@ -87,15 +87,40 @@ def _get_message_tokens(msg: dict[str, Any], model: str) -> int:
     if isinstance(content, str):
         base = _count_tokens(content, model)
     elif isinstance(content, list):
-        base = sum(
-            _count_tokens(item.get("text", ""), model)
-            for item in content
-            if isinstance(item, dict) and item.get("type") == "text"
-        )
+        for item in content:
+            if not isinstance(item, dict):
+                continue
+            if item.get("type") == "text":
+                base += _count_tokens(item.get("text", ""), model)
+            elif item.get("type") == "image_url":
+                image_url = item.get("image_url", {})
+                if isinstance(image_url, dict):
+                    url = str(image_url.get("url", ""))
+                else:
+                    url = str(image_url)
+                base += max(len(url) // 4, 256)
     # Add a fixed overhead per tool_call entry to account for JSON structure
     tool_calls = msg.get("tool_calls") or []
     base += len(tool_calls) * 30
     return base
+
+
+def _estimate_image_payload_bytes(messages: list[dict[str, Any]]) -> int:
+    total = 0
+    for msg in messages:
+        content = msg.get("content")
+        if not isinstance(content, list):
+            continue
+        for item in content:
+            if not isinstance(item, dict) or item.get("type") != "image_url":
+                continue
+            image_url = item.get("image_url", {})
+            if isinstance(image_url, dict):
+                url = str(image_url.get("url", ""))
+            else:
+                url = str(image_url)
+            total += len(url.encode("utf-8", errors="ignore"))
+    return total
 
 
 def _extract_message_text(msg: dict[str, Any]) -> str:
@@ -201,32 +226,49 @@ def _summarize_messages(
         }
 
 
-def _handle_images(messages: list[dict[str, Any]], max_images: int) -> None:
+def _handle_images(
+    messages: list[dict[str, Any]],
+    max_images: int,
+    max_total_image_bytes: int,
+) -> tuple[int, int, int]:
     image_count = 0
+    kept_image_bytes = 0
+    evicted = 0
     for msg in reversed(messages):
         content = msg.get("content", [])
         if isinstance(content, list):
-            for item in content:
+            for index, item in enumerate(content):
                 if isinstance(item, dict) and item.get("type") == "image_url":
-                    if image_count >= max_images:
-                        item.update(
-                            {
-                                "type": "text",
-                                "text": "[Previously attached image removed to preserve context]",
-                            }
-                        )
+                    image_url = item.get("image_url", {})
+                    if isinstance(image_url, dict):
+                        url = str(image_url.get("url", ""))
+                    else:
+                        url = str(image_url)
+                    image_bytes = len(url.encode("utf-8", errors="ignore"))
+                    if image_count >= max_images or (kept_image_bytes + image_bytes) > max_total_image_bytes:
+                        content[index] = {
+                            "type": "text",
+                            "text": "[Previously attached image removed to preserve context]",
+                        }
+                        evicted += 1
                     else:
                         image_count += 1
+                        kept_image_bytes += image_bytes
+    return image_count, evicted, kept_image_bytes
 
 
 class MemoryCompressor:
     def __init__(
         self,
         max_images: int = 3,
+        max_total_image_bytes: int = 300_000,
         model_name: str | None = None,
         timeout: int | None = None,
     ):
         self.max_images = max_images
+        self.max_total_image_bytes = int(
+            Config.get("phantom_max_total_image_bytes") or str(max_total_image_bytes)
+        )
         self.model_name = model_name or Config.get("phantom_llm")
         # R-04 regression fix: Strix used 120s timeout; Phantom reduced to 30s,
         # causing compression failures on slow models.
@@ -284,7 +326,12 @@ class MemoryCompressor:
         if not messages:
             return messages
 
-        _handle_images(messages, self.max_images)
+        image_payload_before = _estimate_image_payload_bytes(messages)
+        kept_images, evicted_images, image_payload_after = _handle_images(
+            messages,
+            self.max_images,
+            self.max_total_image_bytes,
+        )
 
         system_msgs = []
         regular_msgs = []
@@ -304,7 +351,9 @@ class MemoryCompressor:
             _get_message_tokens(msg, model_name) for msg in system_msgs + regular_msgs
         )
 
-        if total_tokens <= self._max_total_tokens * 0.9:
+        image_pressure = image_payload_before > self.max_total_image_bytes
+
+        if total_tokens <= self._max_total_tokens * 0.9 and not image_pressure and evicted_images == 0:
             return messages
 
         # Configurable chunk size — larger chunks = fewer compression LLM calls = less latency.
@@ -316,8 +365,13 @@ class MemoryCompressor:
         chunk_size = max(1, chunk_size)
         logger.info(
             "MemoryCompressor: firing compression total_tokens=%d threshold=%d "
-            "old_msgs=%d chunk_size=%d",
-            total_tokens, int(self._max_total_tokens * 0.9), len(old_msgs), chunk_size,
+            "old_msgs=%d chunk_size=%d image_pressure=%s evicted_images=%d",
+            total_tokens,
+            int(self._max_total_tokens * 0.9),
+            len(old_msgs),
+            chunk_size,
+            image_pressure,
+            evicted_images,
         )
         _t0 = __import__("time").monotonic()
         compressed = []
@@ -335,6 +389,15 @@ class MemoryCompressor:
             from phantom.logging.audit import get_audit_logger as _get_audit
             _audit = _get_audit()
             if _audit:
+                if evicted_images > 0 or image_payload_before > self.max_total_image_bytes:
+                    _audit.log_image_eviction(
+                        agent_id="compressor",
+                        kept_images=kept_images,
+                        evicted_images=evicted_images,
+                        bytes_before=image_payload_before,
+                        bytes_after=image_payload_after,
+                        max_total_image_bytes=self.max_total_image_bytes,
+                    )
                 _audit.log_compression(
                     agent_id="compressor",
                     model=Config.get("phantom_compressor_llm") or model_name,
