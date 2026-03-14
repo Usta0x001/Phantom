@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import hashlib
 import hmac
 import logging
@@ -9,6 +10,8 @@ import os
 import threading
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
+
+from pydantic import ValidationError
 
 from .models import CheckpointData
 
@@ -153,6 +156,9 @@ class CheckpointManager:
             return None
         try:
             raw_bytes = self.checkpoint_file.read_bytes()
+            if not raw_bytes.strip():
+                logger.debug("Empty checkpoint file — ignoring (%s)", self.checkpoint_file)
+                return None
             # Verify HMAC integrity if signature file exists
             if self._hmac_file.exists():
                 stored_sig = self._hmac_file.read_text(encoding="utf-8").strip()
@@ -163,10 +169,29 @@ class CheckpointManager:
                     )
                     return None
             raw = raw_bytes.decode("utf-8")
-            return CheckpointData.model_validate_json(raw)
-        except Exception:
-            logger.warning("Checkpoint file unreadable/corrupt — ignoring", exc_info=True)
+            try:
+                return CheckpointData.model_validate_json(raw)
+            except ValidationError:
+                payload = json.loads(raw)
+                if isinstance(payload, dict):
+                    migrated = self._migrate_legacy_payload(payload)
+                    return CheckpointData.model_validate(migrated)
+                logger.debug("Non-dict checkpoint payload — ignoring (%s)", self.checkpoint_file)
+                return None
+        except (json.JSONDecodeError, OSError, UnicodeDecodeError, ValidationError):
+            logger.debug("Checkpoint file unreadable/corrupt — ignoring (%s)", self.checkpoint_file)
             return None
+
+    def _migrate_legacy_payload(self, payload: dict[str, Any]) -> dict[str, Any]:
+        migrated = dict(payload)
+        run_name = migrated.get("run_name")
+        if not isinstance(run_name, str) or not run_name.strip():
+            scan_id = migrated.get("scan_id")
+            if isinstance(scan_id, str) and scan_id.strip():
+                migrated["run_name"] = scan_id
+            else:
+                migrated["run_name"] = self.run_dir.name
+        return migrated
 
     def exists(self) -> bool:
         return self.checkpoint_file.exists()
