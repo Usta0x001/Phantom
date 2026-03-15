@@ -148,6 +148,10 @@ class LLM:
         if agent_id:
             self.agent_id = agent_id
 
+    def set_agent_state(self, agent_state: Any) -> None:
+        """Attach the agent state so compress_history and anchor injection can use it."""
+        self._agent_state = agent_state
+
     async def generate(
         self, conversation_history: list[dict[str, Any]]
     ) -> AsyncIterator[LLMResponse]:
@@ -387,11 +391,43 @@ class LLM:
 
         # Run compression in a thread to avoid blocking the async event loop.
         # The sync compress_history call can take 30s+ per chunk when LLM summarisation fires.
+        _state = getattr(self, "_agent_state", None)
         compressed = list(
-            await asyncio.to_thread(self.memory_compressor.compress_history, conversation_history)
+            await asyncio.to_thread(
+                self.memory_compressor.compress_history, conversation_history, _state
+            )
         )
         conversation_history.clear()
         conversation_history.extend(compressed)
+
+        # ── Finding anchors injection ─────────────────────────────────────────
+        # When approaching the iteration limit, re-inject high-signal findings
+        # that were extracted from previously compressed messages.  This ensures
+        # the agent still "knows" about confirmed vulnerabilities even when the
+        # full history has been summarised away.
+        if (
+            _state is not None
+            and hasattr(_state, "is_approaching_max_iterations")
+            and _state.is_approaching_max_iterations(threshold=0.75)
+            and hasattr(_state, "finding_anchors")
+            and _state.finding_anchors
+        ):
+            anchor_lines = []
+            for anchor in _state.finding_anchors[:20]:  # cap at 20 to avoid bloat
+                text = anchor.get("text", "").strip()
+                if text:
+                    anchor_lines.append(f"- {text[:300]}")
+            if anchor_lines:
+                anchor_reminder = (
+                    "<finding_anchors>\n"
+                    "The following high-signal findings were extracted from earlier in this scan "
+                    "and must be included in your final report:\n"
+                    + "\n".join(anchor_lines)
+                    + "\n</finding_anchors>"
+                )
+                messages.append({"role": "user", "content": anchor_reminder})
+        # ─────────────────────────────────────────────────────────────────────
+
         messages.extend(compressed)
 
         if messages[-1].get("role") == "assistant":

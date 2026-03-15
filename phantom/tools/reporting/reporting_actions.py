@@ -314,9 +314,23 @@ def create_vulnerability_report(  # noqa: PLR0912
                     "terminal_execute", command=_poc_code, timeout=60,
                 )
                 replay_out = str(replay_result or "")
-                if any(err in replay_out.lower() for err in (
-                    "error", "exception", "traceback", "fail",
-                )):
+                # Only treat as FAILED on execution-failure signals or empty output.
+                # Generic words like "error"/"fail" appear in legitimate exploit output
+                # (e.g. "SQL error", "authentication failed") and must NOT be matched.
+                _exec_failure_patterns = (
+                    "command not found",
+                    "no such file or directory",
+                    "permission denied",
+                    "syntax error",
+                    "traceback (most recent call last)",
+                    "importerror:",
+                    "modulenotfounderror:",
+                    "segmentation fault",
+                    "killed",
+                )
+                if not replay_out.strip():
+                    _replay = "FAILED"
+                elif any(p in replay_out.lower() for p in _exec_failure_patterns):
                     _replay = "FAILED"
                 else:
                     _replay = "PASSED"

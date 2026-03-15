@@ -280,6 +280,84 @@ def _update_tracer_with_result(
         raise
 
 
+def _extract_ffuf_findings(text: str, limit: int) -> str | None:
+    """Extract high-signal lines from ffuf output.
+
+    Keeps only lines that contain a status code (e.g. '[Status: 200]' or
+    lines starting with a URL/path followed by a status code number) while
+    skipping the 404 baseline noise.  Returns None if no finding lines were
+    found so the caller can fall back to head+tail truncation.
+    """
+    import re as _re
+    lines = text.splitlines()
+    header_lines: list[str] = []
+    finding_lines: list[str] = []
+    in_header = True
+    _status_re = _re.compile(r"\[Status:\s*(\d{3})", _re.IGNORECASE)
+    _progress_re = _re.compile(r"^\s*::")  # ffuf progress bars start with ::
+
+    for line in lines:
+        if in_header and (line.startswith("        /") or _progress_re.match(line)):
+            # ffuf banner/progress — keep a few header lines then stop
+            if len(header_lines) < 10:
+                header_lines.append(line)
+            continue
+        in_header = False
+        m = _status_re.search(line)
+        if m:
+            code = int(m.group(1))
+            if code != 404:
+                finding_lines.append(line)
+
+    if not finding_lines:
+        return None
+
+    result_lines = header_lines + [f"[ffuf findings: {len(finding_lines)} non-404 results]"] + finding_lines
+    result = "\n".join(result_lines)
+    if len(result) > limit:
+        # Even the finding lines exceed limit — truncate from the end
+        result = result[:limit] + "\n... [additional findings truncated] ..."
+    return result
+
+
+def _extract_nmap_findings(text: str, limit: int) -> str | None:
+    """Extract open-port lines and summary lines from nmap/naabu output.
+
+    Returns None if no 'open' port lines are found so the caller can fall
+    back to head+tail truncation.
+    """
+    lines = text.splitlines()
+    open_lines: list[str] = []
+    summary_lines: list[str] = []
+
+    for line in lines:
+        lower = line.lower()
+        if "/tcp" in lower or "/udp" in lower:
+            if "open" in lower:
+                open_lines.append(line)
+        elif lower.startswith("nmap scan report") or lower.startswith("host is up") or \
+                lower.startswith("nmap done") or lower.startswith("service detection"):
+            summary_lines.append(line)
+        # naabu format: host:port
+        elif ":" in line and not line.strip().startswith("#"):
+            parts = line.strip().split(":")
+            if len(parts) == 2 and parts[1].strip().isdigit():
+                open_lines.append(line)
+
+    if not open_lines:
+        return None
+
+    result_lines = (
+        [f"[nmap/naabu findings: {len(open_lines)} open port(s)]"]
+        + open_lines
+        + (["--- Summary ---"] + summary_lines if summary_lines else [])
+    )
+    result = "\n".join(result_lines)
+    if len(result) > limit:
+        result = result[:limit] + "\n... [additional findings truncated] ..."
+    return result
+
+
 def _get_truncation_limit(tool_name: str) -> int:
     """Return the char truncation limit for *tool_name*.
 
@@ -507,10 +585,24 @@ def _format_tool_result_with_meta(
         meta["limit"] = limit
         meta["chars_before"] = len(final_result_str)
         if len(final_result_str) > limit:
-            half = limit // 2
-            start_part = final_result_str[:half]
-            end_part = final_result_str[-half:]
-            final_result_str = start_part + "\n\n... [middle content truncated] ...\n\n" + end_part
+            # ── Smart extraction for high-noise tools ─────────────────────────
+            # Try to distil the output down to the signal lines before falling
+            # back to the generic head+tail approach.
+            extracted: str | None = None
+            if tool_name == "ffuf":
+                extracted = _extract_ffuf_findings(final_result_str, limit)
+            elif tool_name in {"nmap", "naabu"}:
+                extracted = _extract_nmap_findings(final_result_str, limit)
+
+            if extracted is not None:
+                final_result_str = extracted
+                meta["smart_extracted"] = True
+            else:
+                half = limit // 2
+                start_part = final_result_str[:half]
+                end_part = final_result_str[-half:]
+                final_result_str = start_part + "\n\n... [middle content truncated] ...\n\n" + end_part
+                meta["smart_extracted"] = False
             meta["truncated"] = True
         meta["chars_after"] = len(final_result_str)
 

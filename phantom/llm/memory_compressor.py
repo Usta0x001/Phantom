@@ -29,6 +29,60 @@ COMPRESSOR_MAX_TOKENS = 1500
 # Leaves 40% headroom for system prompt + output tokens + overhead.
 _CONTEXT_FILL_RATIO = 0.6
 
+# Keywords that indicate a message contains a confirmed finding worth anchoring.
+_ANCHOR_KEYWORDS = (
+    "vulnerability", "vulnerabilit", "exploit", "sqli", "xss", "rce",
+    "injection", "bypass", "authentication", "unauthorized", "open port",
+    "open ports", "found:", "discovered", "confirmed", "critical", "high",
+    "medium", "cve-", "owasp", "payload", "proof of concept", "poc",
+    "create_vulnerability_report",
+)
+
+
+def _extract_anchors_from_chunk(
+    messages: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Scan a chunk of messages about to be compressed and return anchor dicts
+    for any high-signal lines that should survive compression.
+
+    An anchor has the shape::
+
+        {"text": "<extracted snippet>", "key": "<dedup key>", "source": "compressor"}
+    """
+    anchors: list[dict[str, Any]] = []
+    for msg in messages:
+        text = ""
+        content = msg.get("content", "")
+        if isinstance(content, str):
+            text = content
+        elif isinstance(content, list):
+            parts = []
+            for part in content:
+                if isinstance(part, dict) and part.get("type") == "text":
+                    parts.append(part.get("text", ""))
+            text = " ".join(parts)
+
+        if not text:
+            continue
+
+        lower = text.lower()
+        if not any(kw in lower for kw in _ANCHOR_KEYWORDS):
+            continue
+
+        # Extract the first 600 chars as the anchor snippet — enough to be
+        # useful at report time without bloating the injected reminder.
+        snippet = text.strip()[:600]
+        if not snippet:
+            continue
+
+        anchors.append({
+            "key": snippet[:80],
+            "text": snippet,
+            "source": "compressor",
+        })
+
+    return anchors
+
 
 def _get_model_context_window(model: str) -> int:
     """Return the model's context window size, or MAX_TOTAL_TOKENS if unknown."""
@@ -307,6 +361,7 @@ class MemoryCompressor:
     def compress_history(
         self,
         messages: list[dict[str, Any]],
+        agent_state: Any | None = None,
     ) -> list[dict[str, Any]]:
         """Compress conversation history to stay within token limits.
 
@@ -377,6 +432,10 @@ class MemoryCompressor:
         compressed = []
         for i in range(0, len(old_msgs), chunk_size):
             chunk = old_msgs[i : i + chunk_size]
+            # Extract high-signal anchors before this chunk is summarized away.
+            if agent_state is not None and hasattr(agent_state, "add_finding_anchor"):
+                for anchor in _extract_anchors_from_chunk(chunk):
+                    agent_state.add_finding_anchor(anchor)
             summary = _summarize_messages(chunk, model_name, self.timeout)
             if summary:
                 compressed.append(summary)

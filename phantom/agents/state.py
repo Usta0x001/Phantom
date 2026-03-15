@@ -45,6 +45,20 @@ class AgentState(BaseModel):
 
     errors: list[str] = Field(default_factory=list)
 
+    # Finding anchors: high-signal items extracted from compressed message history
+    # so they survive memory compression and can be re-injected at report time.
+    finding_anchors: list[dict[str, Any]] = Field(default_factory=list)
+
+    def add_finding_anchor(self, anchor: dict[str, Any]) -> None:
+        """Store a high-signal finding so it survives memory compression."""
+        # Deduplicate by key if present
+        key = anchor.get("key") or anchor.get("text", "")[:80]
+        for existing in self.finding_anchors:
+            if (existing.get("key") or existing.get("text", "")[:80]) == key:
+                return  # already anchored
+        self.finding_anchors.append(anchor)
+        self.last_updated = datetime.now(UTC).isoformat()
+
     def increment_iteration(self) -> None:
         self.iteration += 1
         self.last_updated = datetime.now(UTC).isoformat()

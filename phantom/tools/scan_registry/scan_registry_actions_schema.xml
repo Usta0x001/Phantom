@@ -1,0 +1,56 @@
+<tools>
+  <tool name="check_scan_registry">
+    <description>Check whether a target has already been scanned in this run to avoid duplicate work.</description>
+    <details>Call this BEFORE running any scan (port scan, directory fuzz, vulnerability scan, etc.) to check
+if another agent has already covered this target. If already_scanned is true, skip the scan and move on
+to a different surface. This prevents duplicate cost from multiple agents re-scanning the same endpoint.</details>
+    <parameters>
+      <parameter name="target" type="string" required="true">
+        <description>The target to check (URL, host:port, IP address, path, etc.)</description>
+      </parameter>
+    </parameters>
+    <returns type="Dict[str, Any]">
+      <description>Response containing: - already_scanned: True if this target was already scanned - details: Scan metadata if already scanned - message: Human-readable status</description>
+    </returns>
+    <examples>
+  # Before running a port scan, check if already done
+  <function=check_scan_registry>
+  <parameter=target>example.com:80</parameter>
+  </function>
+
+  # Before running a directory fuzz
+  <function=check_scan_registry>
+  <parameter=target>https://example.com/api/v1</parameter>
+  </function>
+    </examples>
+  </tool>
+  <tool name="register_scan_target">
+    <description>Register a target as scanned so other agents skip it and avoid duplicate work.</description>
+    <details>Call this BEFORE (or immediately after) starting a scan so sibling and child agents know
+this surface is already covered. Use a descriptive scan_type label so the registry is informative.</details>
+    <parameters>
+      <parameter name="target" type="string" required="true">
+        <description>The target being scanned (URL, host:port, IP address, path, etc.)</description>
+      </parameter>
+      <parameter name="scan_type" type="string" required="false">
+        <description>Short label describing the type of scan: port_scan, directory_fuzz, sqli, xss, ssrf, lfi, xxe, auth_test, etc. (default: general)</description>
+      </parameter>
+    </parameters>
+    <returns type="Dict[str, Any]">
+      <description>Response containing: - registered: True if newly registered, False if already existed - message: Human-readable status</description>
+    </returns>
+    <examples>
+  # Register before running a port scan
+  <function=register_scan_target>
+  <parameter=target>example.com</parameter>
+  <parameter=scan_type>port_scan</parameter>
+  </function>
+
+  # Register a specific endpoint for SQL injection testing
+  <function=register_scan_target>
+  <parameter=target>https://example.com/api/v1/login</parameter>
+  <parameter=scan_type>sqli</parameter>
+  </function>
+    </examples>
+  </tool>
+</tools>

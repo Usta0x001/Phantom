@@ -214,7 +214,8 @@ def create_agent(
     agent_state: Any,
     task: str,
     name: str,
-    inherit_context: bool = True,
+    inherit_context: bool = False,
+    context_summary: str | None = None,
     skills: str | None = None,
 ) -> dict[str, Any]:
     try:
@@ -356,6 +357,21 @@ def create_agent(
             # child thread iterates over the snapshot don't cause a data race.
             import copy as _copy
             inherited_messages = _copy.deepcopy(agent_state.get_conversation_history())
+        elif context_summary and context_summary.strip():
+            # Lightweight context hand-off: pass only a concise summary written by
+            # the parent rather than the full (potentially huge) conversation history.
+            # This avoids blowing up the child's context window while still giving it
+            # the essential background it needs.
+            inherited_messages = [
+                {
+                    "role": "user",
+                    "content": (
+                        "<parent_context_summary>\n"
+                        + context_summary.strip()
+                        + "\n</parent_context_summary>"
+                    ),
+                }
+            ]
 
         with _GRAPH_LOCK:  # Rec 1 (B-01)
             _agent_instances[state.agent_id] = agent

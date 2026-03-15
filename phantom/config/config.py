@@ -44,10 +44,10 @@ class Config:
     # Hard cap on consecutive rate-limit hits in the agent loop before aborting
     phantom_llm_ratelimit_max_agent_retries = "10"  # PHANTOM_LLM_RATELIMIT_MAX_AGENT_RETRIES
     # Adaptive scan mode (auto-downgrade deep→standard→quick when budget is near)
-    phantom_adaptive_scan = "false"        # PHANTOM_ADAPTIVE_SCAN=true to enable
+    phantom_adaptive_scan = "true"         # PHANTOM_ADAPTIVE_SCAN=true to enable
     phantom_adaptive_scan_threshold = "0.8"  # fraction of PHANTOM_MAX_COST that triggers downgrade
     # Multi-model routing (use different models for reasoning vs tool-heavy iterations)
-    phantom_routing_enabled = "false"      # PHANTOM_ROUTING_ENABLED=true to enable
+    phantom_routing_enabled = "true"       # PHANTOM_ROUTING_ENABLED=true to enable
     phantom_routing_reasoning_model = None # PHANTOM_ROUTING_REASONING_MODEL
     phantom_routing_tool_model = None      # PHANTOM_ROUTING_TOOL_MODEL
     _LLM_CANONICAL_NAMES = (
