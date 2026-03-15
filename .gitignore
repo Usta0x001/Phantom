@@ -135,6 +135,8 @@ windows_user_env_backup*.json
 *env_backup*.json
 temp_helpers.txt
 test_results.txt
+REPORT_*.md
+nul
 *.spec
 !phantom.spec
 dist/
