@@ -101,6 +101,9 @@ schema.graphql
 
 .opencode/
 
+# Thesis / academic papers (local only -- never committed)
+thesis/
+
 # Audit & Security Reports (local only -- never committed)
 AUDIT_REPORT*.md
 ACADEMIC_REPORT.md
@@ -116,6 +119,22 @@ docs/CONTINUATION_PROMPT.md
 docs/CODEBASE_AUDIT.md
 docs/DEEP_SECURITY_AUDIT.md
 docs/SECURITY_AUDIT_REPORT*.md
+
+# Session reports, audit logs, and comparison docs (local only)
+COMPARISON_*.md
+PHANTOM_ADVERSARIAL*.md
+PHANTOM_ZERO_BASE*.md
+PHANTOM_POSTFIX*.md
+PHANTOM_S10*.md
+PHANTOM_S11*.md
+PHANTOM_S12*.md
+PHANTOM_v0*.md
+STRIX_PHANTOM*.md
+COST_OPTIMIZATION*.md
+FINAL_VERIFICATION*.md
+implementation_summary.md
+hel.py
+ruff_errors.json
 
 # LaTeX / PDF reports (local only)
 docs/*.pdf

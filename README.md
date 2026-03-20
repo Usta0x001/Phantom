@@ -559,7 +559,7 @@ pytest tests/ -m "security"
 pytest tests/ -m "integration"
 ```
 
-Current state: **150 tests passing · 0 failing · 689 skipped** (integration/e2e require live Docker)
+See [tests/](tests/) for the test suite. Integration and end-to-end tests require a live Docker environment.
 
 ---
 
