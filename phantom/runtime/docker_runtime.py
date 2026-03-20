@@ -260,6 +260,18 @@ class DockerRuntime(AbstractRuntime):
 
                 self._scan_container = container
 
+                # Connect to phantom-internal network so the sandbox can reach
+                # other Docker containers (e.g. juice-shop, vulnerable apps) by
+                # their container names instead of relying on host port forwards.
+                try:
+                    self.client.networks.get("phantom-internal")
+                except NotFound:
+                    self.client.networks.create("phantom-internal", driver="bridge")
+                try:
+                    self.client.networks.get("phantom-internal").connect(container)
+                except Exception as e:  # noqa: BLE001
+                    logger.warning("Could not connect container to phantom-internal network: %s", e)
+
                 # Rec 8 (B-13): Write token to /run/secrets so it's NOT readable
                 # via /proc/self/environ (which is world-readable by default in
                 # many Linux distros).  chmod 600 ensures only root can read it.
