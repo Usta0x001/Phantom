@@ -103,6 +103,13 @@ COMBINED MODE (code + deployed target present):
 - Use repository/local code at /workspace/<subdir> to accelerate and inform live testing against the URLs/domains
 - Validate suspected code issues dynamically; use dynamic anomalies to prioritize code paths for review
 
+TARGET VALIDATION (MANDATORY — DO THIS FIRST):
+Before doing ANYTHING else, verify the target is UP and REACHABLE:
+- For web targets: use terminal_execute to run "curl -s -o /dev/null -w '%{http_code}' <url>" and confirm HTTP 200-499 response
+- For ports: use terminal_execute to run "nmap -Pn -p <port> <host>" and confirm the port is open
+- If the target is DOWN or UNREACHABLE, STOP immediately and call finish_scan with a clear message explaining the target cannot be reached. Do NOT proceed with the scan — a scan against a dead target wastes tokens and produces no results.
+- If the target requires authentication: note this in your first output and proceed to find authentication-related vulnerabilities
+
 ASSESSMENT METHODOLOGY:
 1. Scope definition - Clearly establish boundaries first
 2. Breadth-first discovery - Map entire attack surface before deep diving
