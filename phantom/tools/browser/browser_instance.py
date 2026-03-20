@@ -67,7 +67,6 @@ async def _create_browser() -> Browser:
             "--no-sandbox",
             "--disable-dev-shm-usage",
             "--disable-gpu",
-            "--disable-web-security",
         ],
     )
     return _state.browser

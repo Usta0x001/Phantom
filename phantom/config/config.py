@@ -73,6 +73,7 @@ class Config:
     # Tool & Feature Configuration
     perplexity_api_key = None
     phantom_disable_browser = "false"
+    phantom_tool_subset = "core"  # full | core | core-fast | minimal — filters tools in system prompt to reduce tokens
     phantom_attach_browser_images = "false"
     phantom_browser_image_mode = "off"          # off | thumb | full
     phantom_browser_image_thumb_max_bytes = "80000"

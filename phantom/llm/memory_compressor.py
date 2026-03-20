@@ -4,6 +4,7 @@ from typing import Any
 import litellm
 
 from phantom.config.config import Config, resolve_llm_config
+from phantom.llm.pentager.chain_summarizer import ChainSummarizer
 
 
 logger = logging.getLogger(__name__)
@@ -36,6 +37,23 @@ _ANCHOR_KEYWORDS = (
     "open ports", "found:", "discovered", "confirmed", "critical", "high",
     "medium", "cve-", "owasp", "payload", "proof of concept", "poc",
     "create_vulnerability_report",
+    # Additional vulnerability types
+    "idor", "idor vulnerability", "idor allows",
+    "csrf", "xsrf", "csrf vulnerability", "csrf allows",
+    "ssrf", "xxe", "ssti", "template injection",
+    "lfi", "rfi", "path traversal", "directory traversal",
+    "weak password", "default credential", "hardcoded", "api key exposed",
+    "jwt", "token", "jwt vulnerability", "broken access", "broken auth",
+    "misconfiguration", "misconfigured",
+    "sensitive data", "data exposure", "information disclosure",
+    "race condition", "deserialization", "deserializ",
+    "buffer overflow", "heap overflow", "stack overflow",
+    "command injection", "os command", "remote code",
+    "upload vulnerability", "file upload",
+    "open redirect", "redirect vulnerability",
+    "host header", "host header injection",
+    "idor allows accessing", "idor allows viewing",
+    "idor vulnerability allows",
 )
 
 
@@ -136,6 +154,10 @@ def _count_tokens(text: str, model: str) -> int:
 
 
 def _get_message_tokens(msg: dict[str, Any], model: str) -> int:
+    try:
+        return int(litellm.token_counter(model=model, messages=[msg]))
+    except Exception:  # noqa: BLE001
+        pass
     content = msg.get("content", "")
     base = 0
     if isinstance(content, str):
@@ -153,7 +175,6 @@ def _get_message_tokens(msg: dict[str, Any], model: str) -> int:
                 else:
                     url = str(image_url)
                 base += max(len(url) // 4, 256)
-    # Add a fixed overhead per tool_call entry to account for JSON structure
     tool_calls = msg.get("tool_calls") or []
     base += len(tool_calls) * 30
     return base
@@ -256,25 +277,20 @@ def _summarize_messages(
         }
     except Exception:
         logger.exception("Failed to summarize messages — returning best-effort text summary")
-        # Return a compact text summary rather than discarding all but the first message.
-        # Returning messages[0] would silently drop all other messages in the chunk.
-        snippets = []
+        lines = []
         for m in messages:
-            text = _extract_message_text(m)[:120]
-            if text:
-                snippets.append(f"[{m.get('role', 'unknown')}] {text}")
-        recent_tail = ""
-        for m in reversed(messages[-3:]):
-            tail_text = _extract_message_text(m).strip()
-            if tail_text:
-                recent_tail += f"\n[recent:{m.get('role', 'unknown')}] {tail_text[:300]}"
+            role = m.get("role", "unknown")
+            text = _extract_message_text(m)
+            if not text:
+                continue
+            lines.append(f"[{role}] {text}")
 
-        fallback_text = " | ".join(snippets) if snippets else "no content"
+        fallback_text = "\n".join(lines) if lines else "no content"
         return {
             "role": "user",
             "content": (
                 f"<context_summary message_count='{len(messages)}' compressed='fallback'>"
-                f"{(fallback_text[:800] + recent_tail)[:1600]}"
+                f"{fallback_text[:8000]}"
                 f"</context_summary>"
             ),
         }
@@ -410,6 +426,38 @@ class MemoryCompressor:
 
         if total_tokens <= self._max_total_tokens * 0.9 and not image_pressure and evicted_images == 0:
             return messages
+
+        # Try Pentager ChainSummarizer first (FREE — no LLM call).
+        # Fires at 50% threshold so it runs BEFORE MemoryCompressor's 60% LLM pass.
+        try:
+            _t0 = __import__("time").monotonic()
+            pentager = ChainSummarizer(
+                model_name=model_name,
+                max_input_tokens=int(self._max_total_tokens / 0.5),
+            )
+            if pentager.should_summarize(messages):
+                pentager_result = pentager.summarize(messages)
+                pentager_tokens = sum(
+                    _get_message_tokens(msg, model_name) for msg in pentager_result
+                )
+                if pentager_tokens <= self._max_total_tokens * 0.9:
+                    logger.info(
+                        "MemoryCompressor: PentagerChainSummarizer free compression worked "
+                        "(%d -> %d tokens, %.0fms). Skipping LLM summarization.",
+                        total_tokens, pentager_tokens,
+                        (__import__("time").monotonic() - _t0) * 1000,
+                    )
+                    if agent_state is not None and hasattr(agent_state, "add_finding_anchor"):
+                        for anchor in _extract_anchors_from_chunk(regular_msgs):
+                            agent_state.add_finding_anchor(anchor)
+                    return pentager_result
+                logger.info(
+                    "MemoryCompressor: PentagerChainSummarizer insufficient "
+                    "(%d -> %d tokens, still over threshold). Falling through to LLM summarization.",
+                    total_tokens, pentager_tokens,
+                )
+        except Exception:  # noqa: BLE001
+            logger.exception("PentagerChainSummarizer failed — falling through to LLM summarization")
 
         # Configurable chunk size — larger chunks = fewer compression LLM calls = less latency.
         # PHANTOM_COMPRESSOR_CHUNK_SIZE default is 10 (was hardcoded 5).

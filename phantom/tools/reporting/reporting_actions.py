@@ -207,18 +207,19 @@ def _same_variant_surface(candidate: dict[str, Any], existing: dict[str, Any]) -
     endpoint_b = _normalize_variant_field(existing.get("endpoint"))
     method_a = _normalize_variant_field(candidate.get("method"))
     method_b = _normalize_variant_field(existing.get("method"))
+    param_a = _normalize_variant_field(candidate.get("parameter"))
+    param_b = _normalize_variant_field(existing.get("parameter"))
     target_a = _normalize_variant_field(candidate.get("target"))
     target_b = _normalize_variant_field(existing.get("target"))
 
-    # Endpoint+method is the strongest surface key when available.
     if endpoint_a and endpoint_b and method_a and method_b:
+        if param_a and param_b:
+            return endpoint_a == endpoint_b and method_a == method_b and param_a == param_b
         return endpoint_a == endpoint_b and method_a == method_b
 
-    # Fallback: if only endpoint exists, use endpoint equality.
     if endpoint_a and endpoint_b:
         return endpoint_a == endpoint_b
 
-    # Last fallback: target equality if endpoints are absent.
     if target_a and target_b:
         return target_a == target_b
 
@@ -238,6 +239,7 @@ def create_vulnerability_report(  # noqa: PLR0912
     cvss_breakdown: str,
     endpoint: str | None = None,
     method: str | None = None,
+    parameter: str | None = None,
     cve: str | None = None,
     cwe: str | None = None,
     code_locations: str | None = None,
@@ -320,8 +322,6 @@ def create_vulnerability_report(  # noqa: PLR0912
                 _exec_failure_patterns = (
                     "command not found",
                     "no such file or directory",
-                    "permission denied",
-                    "syntax error",
                     "traceback (most recent call last)",
                     "importerror:",
                     "modulenotfounderror:",
@@ -381,6 +381,15 @@ def create_vulnerability_report(  # noqa: PLR0912
 
         existing_reports = tracer.get_existing_vulnerabilities()
 
+        if not parameter and endpoint:
+            from urllib.parse import urlparse, parse_qs
+
+            ep = endpoint.strip()
+            if "?" in ep:
+                qs = parse_qs(ep.split("?", 1)[1])
+                if qs:
+                    parameter = list(qs.keys())[0]
+
         candidate = {
             "title": title,
             "description": description,
@@ -391,6 +400,7 @@ def create_vulnerability_report(  # noqa: PLR0912
             "poc_script_code": poc_script_code,
             "endpoint": endpoint,
             "method": method,
+            "parameter": parameter or "",
         }
 
         dedupe_result = check_duplicate(candidate, existing_reports)
@@ -442,10 +452,10 @@ def create_vulnerability_report(  # noqa: PLR0912
             cvss_breakdown=parsed_cvss,
             endpoint=endpoint,
             method=method,
+            parameter=parameter,
             cve=cve,
             cwe=cwe,
             code_locations=parsed_locations,
-            # Rec 10 (ER-001): propagate confidence and replay telemetry
             confidence=confidence,
             replay_status=replay_status,
         )

@@ -25,6 +25,7 @@ from phantom.llm.utils import (
 )
 from phantom.skills import load_skills
 from phantom.tools import get_tools_prompt
+from phantom.tools.dynamic_tools import get_tools_prompt_subset, TOOL_CATEGORIES
 from phantom.utils.resource_paths import get_phantom_resource_path
 
 
@@ -128,8 +129,21 @@ class LLM:
             skill_content = load_skills(skills_to_load)
             env.globals["get_skill"] = lambda name: skill_content.get(name, "")
 
+            subset_mode = (Config.get("phantom_tool_subset") or "full").lower()
+            if subset_mode == "full":
+                tools_prompt_fn = get_tools_prompt
+            else:
+                subset_cats = self._get_tool_subset_categories(subset_mode)
+                if subset_cats:
+                    needed_tools = set()
+                    for cat in subset_cats:
+                        needed_tools.update(TOOL_CATEGORIES.get(cat, []))
+                    tools_prompt_fn = lambda: get_tools_prompt_subset(list(needed_tools))
+                else:
+                    tools_prompt_fn = get_tools_prompt
+
             result = env.get_template("system_prompt.jinja").render(
-                get_tools_prompt=get_tools_prompt,
+                get_tools_prompt=tools_prompt_fn,
                 loaded_skill_names=list(skill_content.keys()),
                 phantom_port_range=os.environ.get("PHANTOM_PORT_RANGE", ""),
                 **skill_content,
@@ -141,6 +155,16 @@ class LLM:
         except Exception:  # noqa: BLE001
             logger.error("Failed to load system prompt for agent %s", agent_name, exc_info=True)
             return ""
+
+    def _get_tool_subset_categories(self, mode: str) -> list[str]:
+        """Return list of tool categories for the given subset mode."""
+        subsets = {
+            "minimal": ["web_testing", "terminal", "reporting", "python"],
+            "core": ["web_testing", "terminal", "browser", "reporting", "agent_management", "files", "thinking", "python"],
+            "core-fast": ["web_testing", "terminal", "browser", "reporting", "agent_management", "files", "python"],
+            "web": ["web_testing", "terminal", "browser", "reporting", "agent_management", "files", "thinking", "python", "web_search"],
+        }
+        return subsets.get(mode, [])
 
     def set_agent_identity(self, agent_name: str | None, agent_id: str | None) -> None:
         if agent_name:
@@ -198,6 +222,8 @@ class LLM:
                         max_retries,
                     )
                     messages = await self._force_compress_messages(messages)
+                    if self._is_anthropic() and self.config.enable_prompt_caching:
+                        messages = self._add_cache_control(messages)
                     continue
                 # Extract error code once — used for exhaustion check and backoff
                 code = getattr(e, "status_code", None) or getattr(
@@ -224,6 +250,8 @@ class LLM:
                             str(e)[:200],
                         )
                         messages = await self._force_compress_messages(messages)
+                        if self._is_anthropic() and self.config.enable_prompt_caching:
+                            messages = self._add_cache_control(messages)
                         continue  # one more attempt
                     _last_error = e
                     primary_exhausted = True
@@ -441,7 +469,10 @@ class LLM:
     def _estimate_request_size(self, messages: list[dict[str, Any]]) -> tuple[int, int]:
         serialized = json.dumps(messages, ensure_ascii=False, default=str)
         chars = len(serialized)
-        estimated_tokens = max(chars // 4, 1)
+        try:
+            estimated_tokens = litellm.token_counter(model=self.config.litellm_model, messages=messages)
+        except Exception:  # noqa: BLE001
+            estimated_tokens = max(chars // 4, 1)
         return chars, estimated_tokens
 
     def _drop_old_images_from_messages(
@@ -523,6 +554,8 @@ class LLM:
             if attempt == 1:
                 before_chars, before_tokens = chars, est_tokens
                 current = await self._force_compress_messages(current)
+                if self._is_anthropic() and self.config.enable_prompt_caching:
+                    current = self._add_cache_control(current)
                 after_chars, after_tokens = self._estimate_request_size(current)
                 if _audit:
                     _audit.log_preflight_reduction(

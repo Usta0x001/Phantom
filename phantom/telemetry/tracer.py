@@ -331,6 +331,7 @@ class Tracer:
         cvss_breakdown: dict[str, str] | None = None,
         endpoint: str | None = None,
         method: str | None = None,
+        parameter: str | None = None,
         cve: str | None = None,
         cwe: str | None = None,
         code_locations: list[dict[str, Any]] | None = None,
@@ -368,6 +369,8 @@ class Tracer:
             report["endpoint"] = endpoint.strip()
         if method:
             report["method"] = method.strip()
+        if parameter:
+            report["parameter"] = parameter.strip()
         if cve:
             report["cve"] = cve.strip()
         if cwe:

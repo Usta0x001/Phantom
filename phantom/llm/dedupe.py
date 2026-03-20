@@ -87,6 +87,7 @@ def _prepare_report_for_comparison(report: dict[str, Any]) -> dict[str, Any]:
         "poc_description",
         "endpoint",
         "method",
+        "parameter",
     ]
 
     cleaned = {}

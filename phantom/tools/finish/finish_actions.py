@@ -140,6 +140,14 @@ def finish_scan(
 
         vulnerability_count = len(tracer.vulnerability_reports)
 
+        if vulnerability_count == 0:
+            return {
+                "success": False,
+                "scan_completed": False,
+                "error": "no_vulnerabilities_found",
+                "message": "Cannot finish scan: no vulnerabilities were found. Either the target is secure, the testing was incomplete, or the agent should investigate why no findings were discovered.",
+            }
+
         return {
             "success": True,
             "scan_completed": True,
