@@ -460,7 +460,9 @@ def display_completion_message(args: argparse.Namespace, results_path: Path) -> 
     console.print("\n")
     console.print(panel)
     console.print()
-    console.print("[#60a5fa]models.phantom.ai[/]  [dim]·[/]  [#60a5fa]discord.gg/phantom-ai[/]")
+    brand = Config.get("phantom_footer_brand") or "phantom-agent"
+    discord = Config.get("phantom_footer_discord") or "phantom-agent"
+    console.print(f"[#60a5fa]{brand}[/]  [dim]·[/]  [#60a5fa]https://github.com/usta0x001/{discord}[/]")
     console.print()
 
 

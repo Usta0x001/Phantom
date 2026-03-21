@@ -176,7 +176,7 @@ class SplashScreen(Static):  # type: ignore[misc]
         return Panel.fit(content, border_style=self.PRIMARY_GREEN, padding=(1, 6))
 
     def _build_url_text(self) -> Text:
-        return Text("phantom.ai", style=Style(color=self.PRIMARY_GREEN, bold=True))
+        return Text(Config.get("phantom_footer_brand") or "phantom-agent", style=Style(color=self.PRIMARY_GREEN, bold=True))
 
     def _build_welcome_text(self) -> Text:
         text = Text("Welcome to ", style=Style(color="white", bold=True))

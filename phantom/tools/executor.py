@@ -504,8 +504,8 @@ def _get_truncation_limit(tool_name: str) -> int:
         "curl":                     3000,   # curl: increased from 2000
         "ffuf":                     5000,   # directory fuzzer: increased from 3000
         "nikto":                    6000,   # nikto: increased from 4000
-        "terminal_execute":         5000,   # generic terminal: decreased from 8000
-        "browser_action":           6000,   # browser: increased from 3000
+        "terminal_execute":        32000,   # generic terminal: increased from 5000 for full page capture
+        "browser_action":         12000,   # browser: increased from 6000
         "nuclei":                   6000,   # vuln scanner: decreased from 10000
         "sqlmap":                   6000,   # SQL injection: decreased from 10000
         "create_vulnerability_report": 12000,  # reports: keep full detail

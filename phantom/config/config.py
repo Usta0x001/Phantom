@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 
-PHANTOM_API_BASE = "https://models.phantom.ai/api/v1"
+PHANTOM_API_BASE = None
 
 logger = logging.getLogger(__name__)
 
@@ -81,8 +81,10 @@ class Config:
     phantom_browser_image_full_max_bytes = "250000"
     phantom_browser_image_max_per_turn = "1"
     phantom_adaptive_truncation = "true"
-    phantom_browser_truncation_burst_limit = "10000"
-    phantom_terminal_truncation_burst_limit = "8000"
+    phantom_browser_truncation_burst_limit = "16000"
+    phantom_terminal_truncation_burst_limit = "32000"
+    phantom_footer_brand = "phantom-agent"
+    phantom_footer_discord = "phantom-agent"
     phantom_max_total_image_bytes = "300000"
     phantom_max_request_chars = "900000"
     phantom_max_request_estimated_tokens = "220000"

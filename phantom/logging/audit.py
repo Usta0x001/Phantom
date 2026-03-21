@@ -150,23 +150,44 @@ class AuditLogger:
                 except OSError:
                     logger.debug("audit: failed to write log record")
 
+    # Whitelist of top-level payload keys that are numeric/metric and must never be
+    # redacted — they are not secret, and scrubbing them destroys audit value.
+    _NUMERIC_KEYS: frozenset[str] = frozenset({
+        "tokens_in", "tokens_out", "tokens_cached", "cached_tokens",
+        "cost_usd", "cost", "duration_ms", "chars_in", "chars_out",
+        "chars_truncated", "chars_before", "chars_after", "limit",
+        "burst_applied", "message_count", "input_chars", "output_chars",
+        "request_count", "requests", "input_tokens", "output_tokens",
+        "tokens", "input_cost", "output_cost", "error_count",
+        "messages_in", "messages_out", "tokens_before", "chunk_size",
+        "tokens_after", "messages_after", "total_tokens", "total_cost",
+        "kept_images", "evicted_images", "bytes_before", "bytes_after",
+        "max_total_image_bytes", "exec_id", "attempt", "pid",
+        "max_iterations", "iteration",
+    })
+
     def _sanitize_record(self, record: dict[str, Any]) -> dict[str, Any]:
-        def _sanitize(value: Any, key_hint: str | None = None) -> Any:
+        def _sanitize(value: Any, key_hint: str | None = None, in_numeric_list: bool = False) -> Any:
             if isinstance(value, dict):
                 out: dict[str, Any] = {}
                 for key, nested in value.items():
                     key_str = str(key)
                     if _SENSITIVE_KEY_RE.search(key_str):
                         out[key_str] = _REDACTED
+                    elif key_str in self._NUMERIC_KEYS:
+                        out[key_str] = nested
                     else:
                         out[key_str] = _sanitize(nested, key_hint=key_str)
                 return out
 
             if isinstance(value, list):
-                return [_sanitize(item, key_hint=key_hint) for item in value]
+                return [_sanitize(item, key_hint=key_hint, in_numeric_list=in_numeric_list) for item in value]
 
             if isinstance(value, tuple):
-                return [_sanitize(item, key_hint=key_hint) for item in value]
+                return [_sanitize(item, key_hint=key_hint, in_numeric_list=in_numeric_list) for item in value]
+
+            if isinstance(value, (int, float)):
+                return value
 
             if isinstance(value, str):
                 if key_hint and _SENSITIVE_KEY_RE.search(key_hint):
