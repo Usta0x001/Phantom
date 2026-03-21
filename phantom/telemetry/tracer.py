@@ -761,14 +761,14 @@ class Tracer:
                     writer.writeheader()
 
                     for report in sorted_reports:
-                        cvss_score = report.get("cvss") or {}
+                        cvss_score = report.get("cvss")
                         writer.writerow(
                             {
                                 "id": report["id"],
                                 "title": report["title"],
                                 "severity": report["severity"].upper(),
                                 "confidence": report.get("confidence", "UNKNOWN"),
-                                "cvss": cvss_score.get("score", "N/A") if isinstance(cvss_score, dict) else "N/A",
+                                "cvss": cvss_score.get("score") if isinstance(cvss_score, dict) else (cvss_score if isinstance(cvss_score, (int, float)) else "N/A"),
                                 "target": report.get("target", ""),
                                 "endpoint": report.get("endpoint", ""),
                                 "method": report.get("method", ""),
@@ -828,26 +828,16 @@ class Tracer:
         )
 
     def get_total_llm_stats(self) -> dict[str, Any]:
-        from phantom.tools.agents_graph.agents_graph_actions import _agent_instances
+        from phantom.llm.llm import _GLOBAL_TOTAL_STATS
 
+        stats = _GLOBAL_TOTAL_STATS
         total_stats = {
-            "input_tokens": 0,
-            "output_tokens": 0,
-            "cached_tokens": 0,
-            "cost": 0.0,
-            "requests": 0,
+            "input_tokens": stats.input_tokens,
+            "output_tokens": stats.output_tokens,
+            "cached_tokens": stats.cached_tokens,
+            "cost": round(stats.cost, 4),
+            "requests": stats.requests,
         }
-
-        for agent_instance in _agent_instances.values():
-            if hasattr(agent_instance, "llm") and hasattr(agent_instance.llm, "_total_stats"):
-                agent_stats = agent_instance.llm._total_stats
-                total_stats["input_tokens"] += agent_stats.input_tokens
-                total_stats["output_tokens"] += agent_stats.output_tokens
-                total_stats["cached_tokens"] += agent_stats.cached_tokens
-                total_stats["cost"] += agent_stats.cost
-                total_stats["requests"] += agent_stats.requests
-
-        total_stats["cost"] = round(total_stats["cost"], 4)
 
         return {
             "total": total_stats,
@@ -855,30 +845,18 @@ class Tracer:
         }
 
     def get_per_model_stats(self) -> dict[str, dict[str, Any]]:
-        """Aggregate per-model RequestStats from all active agent LLM instances."""
-        from phantom.tools.agents_graph.agents_graph_actions import _agent_instances
+        """Aggregate per-model RequestStats, deduplicating shared RequestStats objects."""
+        from phantom.llm.llm import _GLOBAL_PER_MODEL_STATS
 
         result: dict[str, dict[str, Any]] = {}
-        for agent_instance in _agent_instances.values():
-            if not (hasattr(agent_instance, "llm") and hasattr(agent_instance.llm, "_per_model_stats")):
-                continue
-            for model_name, stats in agent_instance.llm._per_model_stats.items():
-                if model_name not in result:
-                    result[model_name] = {
-                        "input_tokens": 0,
-                        "output_tokens": 0,
-                        "cached_tokens": 0,
-                        "cost": 0.0,
-                        "requests": 0,
-                    }
-                r = result[model_name]
-                r["input_tokens"] += stats.input_tokens
-                r["output_tokens"] += stats.output_tokens
-                r["cached_tokens"] += stats.cached_tokens
-                r["cost"] += stats.cost
-                r["requests"] += stats.requests
-        for v in result.values():
-            v["cost"] = round(v["cost"], 4)
+        for model_name, stats in _GLOBAL_PER_MODEL_STATS.items():
+            result[model_name] = {
+                "input_tokens": stats.input_tokens,
+                "output_tokens": stats.output_tokens,
+                "cached_tokens": stats.cached_tokens,
+                "cost": round(stats.cost, 4),
+                "requests": stats.requests,
+            }
         return result
 
     @property
