@@ -915,8 +915,9 @@ def _render_html_report(run_name: str, data: dict) -> str:
     vuln_rows = ""
     for i, v in enumerate(vulns_sorted, 1):
         name = html_lib.escape(str(v.get("name", "Unknown")))
-        sev = str(v.get("severity", "info")).lower()
-        color = sev_colors.get(sev, "#64748b")
+        sev_key = str(v.get("severity", "info")).lower()
+        color = sev_colors.get(sev_key, "#64748b")
+        sev = html_lib.escape(sev_key.upper())
         endpoint = html_lib.escape(str(v.get("endpoint", "")))
         desc = html_lib.escape(str(v.get("description", "")))
         payload = html_lib.escape(str(v.get("payload", "")))
@@ -924,7 +925,7 @@ def _render_html_report(run_name: str, data: dict) -> str:
 
         vuln_rows += f"""
         <div class="finding" id="finding-{i}">
-          <h3><span class="badge" style="background:{color}">{sev.upper()}</span> {i}. {name}</h3>
+                    <h3><span class="badge" style="background:{color}">{sev}</span> {i}. {name}</h3>
           <p><strong>Endpoint:</strong> <code>{endpoint}</code></p>
           <p>{desc}</p>
           {"<p><strong>Payload:</strong> <code>" + payload + "</code></p>" if payload else ""}
@@ -1279,7 +1280,7 @@ def report_export(
     console.print(f"[dim]Exporting {run_name} as {fmt.value}...[/]")
 
     # Find the report JSON
-    report_files = list(runs_dir.glob("**/*.json"))
+    report_files = [p for p in runs_dir.glob("*.json") if p.is_file()]
     if not report_files:
         console.print("[red]No report data found in this run.[/]")
         raise typer.Exit(1)

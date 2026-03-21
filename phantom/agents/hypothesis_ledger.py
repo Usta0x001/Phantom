@@ -163,19 +163,28 @@ class HypothesisLedger:
 
     # ── Prompt Injection ──────────────────────────────────────────────────────
 
-    def to_prompt_summary(self, top_n: int = 10) -> str:
+    def to_prompt_summary(self, top_n: int = 10, status_filter: list[str] | None = None) -> str:
         """
         Return a compact text summary safe to inject into the LLM prompt.
 
-        Prioritises:
-        1. Confirmed/rejected (for awareness, deduplication)
-        2. Actively testing (current work)
-        3. Open but untouched (highest exploration value)
+        Args:
+            top_n: Max entries to include.
+            status_filter: If provided, only include hypotheses with these statuses
+                           (e.g. ["open", "testing"] to skip resolved items).
 
-        Hard limit: top_n entries to prevent token bloat.
+        AUDIT-FIX-08: status_filter allows callers to exclude confirmed/rejected
+        hypotheses from periodic injections, saving ~400 tokens per call.
         """
         with self._lock:
             hyps = list(self._hypotheses.values())
+
+        if not hyps:
+            return ""
+
+        # Apply status filter if requested
+        if status_filter:
+            _filter_lower = {s.lower() for s in status_filter}
+            hyps = [h for h in hyps if h.status.lower() in _filter_lower]
 
         if not hyps:
             return ""
@@ -199,13 +208,15 @@ class HypothesisLedger:
             )
             lines.append(line)
 
-        open_count = sum(1 for h in hyps if h.status == "open")
-        testing_count = sum(1 for h in hyps if h.status == "testing")
-        confirmed_count = sum(1 for h in hyps if h.status == "confirmed")
-        rejected_count = sum(1 for h in hyps if h.status == "rejected")
+        with self._lock:
+            all_hyps = list(self._hypotheses.values())
+        open_count = sum(1 for h in all_hyps if h.status == "open")
+        testing_count = sum(1 for h in all_hyps if h.status == "testing")
+        confirmed_count = sum(1 for h in all_hyps if h.status == "confirmed")
+        rejected_count = sum(1 for h in all_hyps if h.status == "rejected")
 
         lines.append(
-            f"  Total: {len(hyps)} | open={open_count} testing={testing_count} "
+            f"  Total: {len(all_hyps)} | open={open_count} testing={testing_count} "
             f"confirmed={confirmed_count} rejected={rejected_count}"
         )
         lines.append("[END LEDGER]")

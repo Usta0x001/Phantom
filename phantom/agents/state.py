@@ -66,6 +66,13 @@ class AgentState(BaseModel):
     def add_message(
         self, role: str, content: Any, thinking_blocks: list[dict[str, Any]] | None = None
     ) -> None:
+        # AUDIT-QW-05: Deduplicate identical messages within a 5-msg window
+        # to prevent error message flooding from circuit breakers / validation.
+        if isinstance(content, str) and self.messages:
+            _window = self.messages[-5:]
+            for m in reversed(_window):
+                if m.get("role") == role and m.get("content") == content:
+                    return  # already present in recent window
         message = {"role": role, "content": content}
         # Do NOT store thinking_blocks in history — they bloat context invisibly
         # to the memory compressor and get re-sent on every subsequent call.
@@ -144,7 +151,6 @@ class AgentState(BaseModel):
         if (
             self.stop_requested
             or self.llm_failed
-            or self.completed
             or self.has_reached_max_iterations()
         ):
             return False

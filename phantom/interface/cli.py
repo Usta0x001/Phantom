@@ -311,8 +311,8 @@ async def run_cli(args: Any) -> None:  # noqa: PLR0912, PLR0915
                     console.print()
                     sys.exit(1)
 
-                # Mark scan completed in checkpoint
-                if checkpoint_mgr:
+                # Mark scan completed in checkpoint — only on actual success
+                if checkpoint_mgr and isinstance(result, dict) and result.get("success"):
                     checkpoint_mgr.mark_completed()
             finally:
                 stop_updates.set()

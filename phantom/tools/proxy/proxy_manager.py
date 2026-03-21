@@ -74,8 +74,12 @@ def _is_registered_ssrf_host(hostname: str) -> bool:
 def _is_ssrf_safe(url: str) -> bool:
     """Return True if *url* is safe to forward; False if it targets a private/internal address."""
     try:
-        host = urlparse(url).hostname or ""
+        parsed = urlparse(url)
+        host = parsed.hostname or ""
         if not host:
+            return False
+
+        if parsed.username or parsed.password:
             return False
 
         host_lower = _normalize_ssrf_host(host)
@@ -105,8 +109,9 @@ def _is_ssrf_safe(url: str) -> bool:
                 if addr.is_private or addr.is_loopback or addr.is_link_local or addr.is_reserved:
                     return False
         except (socket.gaierror, OSError):
-            # Unable to resolve — allow and let the proxy decide.
-            return True
+            # Unresolvable .local-style hosts are blocked; unresolved public hosts
+            # are allowed to avoid false negatives in restricted DNS environments.
+            return not host_lower.endswith(".local")
 
         return True
     except Exception:  # noqa: BLE001

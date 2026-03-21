@@ -3,6 +3,7 @@ from urllib.parse import urlparse
 
 from phantom.agents.base_agent import BaseAgent
 from phantom.llm.config import LLMConfig
+from phantom.skills import _sanitize_skill_content
 
 
 class PhantomAgent(BaseAgent):
@@ -99,9 +100,10 @@ class PhantomAgent(BaseAgent):
         task_description = " ".join(task_parts)
 
         if user_instructions:
+            safe_user_instructions = _sanitize_skill_content(str(user_instructions))
             task_description += (
                 "\n\nUser-supplied mission constraints (highest priority):\n"
-                f"{user_instructions}\n"
+                f"{safe_user_instructions}\n"
                 "\nYou must explicitly incorporate these constraints while planning "
                 "and executing the scan."
             )

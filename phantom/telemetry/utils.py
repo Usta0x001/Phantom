@@ -37,7 +37,7 @@ _SENSITIVE_TOKEN_PATTERN = re.compile(
     r"xox[baprs]-[a-z0-9-]{12,}"
     r")\b"
 )
-_SCRUBADUB_PLACEHOLDER_PATTERN = re.compile(r"\{\{[^}]+\}\}")
+_SCRUBBER_TAG_PATTERN = re.compile(r"\{\{[^}]+\}\}")
 _EVENTS_FILE_LOCKS_LOCK = threading.Lock()
 _EVENTS_FILE_LOCKS: dict[str, threading.Lock] = {}
 _NOISY_OTEL_CONTENT_PREFIXES = (
@@ -95,7 +95,7 @@ class TelemetrySanitizer:
                 return _REDACTED
 
             cleaned = self._scrubber.clean(data)
-            return _SCRUBADUB_PLACEHOLDER_PATTERN.sub(_REDACTED, cleaned)
+            return _SCRUBBER_TAG_PATTERN.sub(_REDACTED, cleaned)
 
         if isinstance(data, int | float | bool):
             return data

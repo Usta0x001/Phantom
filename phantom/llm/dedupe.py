@@ -5,7 +5,7 @@ from typing import Any
 
 import litellm
 
-from phantom.config.config import resolve_llm_config
+from phantom.config.config import Config, resolve_llm_config
 from phantom.llm.utils import resolve_phantom_model
 
 
@@ -151,15 +151,67 @@ def check_duplicate(
             "reason": "No existing reports to compare against",
         }
 
+    # A6: Fast heuristic pre-check — skip LLM call if surfaces are clearly different
+    candidate_endpoint = (candidate.get("endpoint") or "").strip().lower()
+    candidate_param = (candidate.get("parameter") or "").strip().lower()
+    candidate_method = (candidate.get("method") or "").strip().lower()
+
+    has_any_surface_overlap = False
+    for report in existing_reports:
+        r_endpoint = (report.get("endpoint") or "").strip().lower()
+        r_param = (report.get("parameter") or "").strip().lower()
+        r_method = (report.get("method") or "").strip().lower()
+
+        if candidate_endpoint and r_endpoint:
+            if candidate_endpoint == r_endpoint:
+                has_any_surface_overlap = True
+                break
+
+    if not has_any_surface_overlap and candidate_endpoint:
+        logger.info(
+            "A6: Heuristic dedupe skip — no surface overlap for endpoint=%s param=%s",
+            candidate_endpoint[:60], candidate_param[:30],
+        )
+        return {
+            "is_duplicate": False,
+            "duplicate_id": "",
+            "confidence": 1.0,
+            "reason": "Heuristic: no surface overlap with existing reports",
+        }
+
     try:
         candidate_cleaned = _prepare_report_for_comparison(candidate)
         existing_cleaned = [_prepare_report_for_comparison(r) for r in existing_reports]
 
-        comparison_data = {"candidate": candidate_cleaned, "existing_reports": existing_cleaned}
+        # B4: Shrink payload — only send relevant fields, truncate descriptions,
+        # limit to 5 most similar existing reports
+        def _slim_report(r: dict[str, Any]) -> dict[str, Any]:
+            return {
+                "id": r.get("id", ""),
+                "title": (r.get("title") or "")[:200],
+                "endpoint": r.get("endpoint", ""),
+                "method": r.get("method", ""),
+                "parameter": r.get("parameter", ""),
+                "description": (r.get("description") or "")[:300],
+                "target": r.get("target", ""),
+            }
+
+        slim_candidate = _slim_report(candidate_cleaned)
+        slim_existing = [_slim_report(r) for r in existing_cleaned[:20]]
+
+        comparison_data = {"candidate": slim_candidate, "existing_reports": slim_existing}
 
         model_name, api_key, api_base = resolve_llm_config()
-        litellm_model, _ = resolve_phantom_model(model_name)
-        litellm_model = litellm_model or model_name
+        # Fix 7: Use a dedicated cheaper model for deduplication if configured
+        dedupe_model = Config.get("phantom_dedupe_llm")
+        if dedupe_model:
+            litellm_model, dedupe_api_key = resolve_phantom_model(dedupe_model)
+            litellm_model = litellm_model or dedupe_model
+            api_key = dedupe_api_key or Config.get("phantom_dedupe_api_key") or api_key
+            api_base = Config.get("phantom_dedupe_api_base") or api_base
+        else:
+            litellm_model, _ = resolve_phantom_model(model_name)
+            litellm_model = litellm_model or model_name
 
         messages = [
             {"role": "system", "content": DEDUPE_SYSTEM_PROMPT},

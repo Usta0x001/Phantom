@@ -18,14 +18,45 @@ _CVSS_FIELDS = (
 )
 
 
+_background_tasks: set[Any] = set()
+
+
 def parse_cvss_xml(xml_str: str) -> dict[str, str] | None:
+    """Parse CVSS breakdown from XML tags or plain CVSS vector string.
+
+    A5: Accepts both XML format and plain CVSS vector strings like
+    'AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H' for more forgiving input.
+    """
     if not xml_str or not xml_str.strip():
         return None
     result = {}
+    # Try XML format first
     for field in _CVSS_FIELDS:
         match = re.search(rf"<{field}>(.*?)</{field}>", xml_str, re.DOTALL)
         if match:
             result[field] = match.group(1).strip()
+    if result:
+        return result
+
+    # A5: Fallback - try plain CVSS vector string (AV:N/AC:L/...)
+    _vector_map = {
+        "AV": "attack_vector",
+        "AC": "attack_complexity",
+        "PR": "privileges_required",
+        "UI": "user_interaction",
+        "S": "scope",
+        "C": "confidentiality",
+        "I": "integrity",
+        "A": "availability",
+    }
+    # Strip "CVSS:3.1/" prefix if present
+    clean = re.sub(r"^CVSS:[\d.]+/", "", xml_str.strip())
+    for part in clean.split("/"):
+        if ":" in part:
+            key, val = part.split(":", 1)
+            field_name = _vector_map.get(key.strip().upper())
+            if field_name:
+                result[field_name] = val.strip().upper()
     return result if result else None
 
 
@@ -155,6 +186,8 @@ def calculate_cvss_and_severity(
 def _validate_required_fields(**kwargs: str | None) -> list[str]:
     validation_errors: list[str] = []
 
+    # A5: poc_script_code is only required for LIKELY/VERIFIED confidence
+    confidence = (kwargs.get("confidence") or "LIKELY").upper().strip()
     required_fields = {
         "title": "Title cannot be empty",
         "description": "Description cannot be empty",
@@ -162,9 +195,11 @@ def _validate_required_fields(**kwargs: str | None) -> list[str]:
         "target": "Target cannot be empty",
         "technical_analysis": "Technical analysis cannot be empty",
         "poc_description": "PoC description cannot be empty",
-        "poc_script_code": "PoC script/code is REQUIRED - provide the actual exploit/payload",
         "remediation_steps": "Remediation steps cannot be empty",
     }
+    # A5: Only require poc_script_code for non-SUSPECTED reports
+    if confidence != "SUSPECTED":
+        required_fields["poc_script_code"] = "PoC script/code is REQUIRED - provide the actual exploit/payload"
 
     for field_name, error_msg in required_fields.items():
         value = kwargs.get(field_name)
@@ -250,6 +285,7 @@ def create_vulnerability_report(  # noqa: PLR0912
     # SUSPECTED = Discovery signal only, not yet validated.
     confidence: str = "LIKELY",
 ) -> dict[str, Any]:
+    # A5: Pass confidence to _validate_required_fields so it can relax poc_script_code
     validation_errors = _validate_required_fields(
         title=title,
         description=description,
@@ -259,11 +295,25 @@ def create_vulnerability_report(  # noqa: PLR0912
         poc_description=poc_description,
         poc_script_code=poc_script_code,
         remediation_steps=remediation_steps,
+        confidence=confidence,
     )
 
     parsed_cvss = parse_cvss_xml(cvss_breakdown)
     if not parsed_cvss:
-        validation_errors.append("cvss: could not parse CVSS breakdown XML")
+        # A5: Auto-fill default CVSS for SUSPECTED confidence instead of rejecting
+        if (confidence or "LIKELY").upper().strip() == "SUSPECTED":
+            parsed_cvss = {
+                "attack_vector": "N",
+                "attack_complexity": "L",
+                "privileges_required": "N",
+                "user_interaction": "N",
+                "scope": "U",
+                "confidentiality": "L",
+                "integrity": "L",
+                "availability": "N",
+            }
+        else:
+            validation_errors.append("cvss: could not parse CVSS breakdown XML or vector string")
     else:
         validation_errors.extend(_validate_cvss_parameters(**parsed_cvss))
 
@@ -353,7 +403,9 @@ def create_vulnerability_report(  # noqa: PLR0912
         try:
             loop = asyncio.get_running_loop()
             # Schedule non-blocking — does NOT block report creation
-            loop.create_task(_background_replay(poc_script_code, title, confidence))
+            task = loop.create_task(_background_replay(poc_script_code, title, confidence))
+            _background_tasks.add(task)
+            task.add_done_callback(lambda finished: _background_tasks.discard(finished))
             replay_status = "PENDING"  # will be updated async
         except RuntimeError:
             replay_status = "SKIPPED"

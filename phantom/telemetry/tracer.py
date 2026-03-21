@@ -752,16 +752,27 @@ class Tracer:
                 with vuln_csv_file.open("w", encoding="utf-8", newline="") as f:
                     import csv
 
-                    fieldnames = ["id", "title", "severity", "timestamp", "file"]
+                    fieldnames = [
+                        "id", "title", "severity", "confidence", "cvss",
+                        "target", "endpoint", "method", "parameter",
+                        "timestamp", "file",
+                    ]
                     writer = csv.DictWriter(f, fieldnames=fieldnames)
                     writer.writeheader()
 
                     for report in sorted_reports:
+                        cvss_score = report.get("cvss") or {}
                         writer.writerow(
                             {
                                 "id": report["id"],
                                 "title": report["title"],
                                 "severity": report["severity"].upper(),
+                                "confidence": report.get("confidence", "UNKNOWN"),
+                                "cvss": cvss_score.get("score", "N/A") if isinstance(cvss_score, dict) else "N/A",
+                                "target": report.get("target", ""),
+                                "endpoint": report.get("endpoint", ""),
+                                "method": report.get("method", ""),
+                                "parameter": report.get("parameter", ""),
                                 "timestamp": report["timestamp"],
                                 "file": f"vulnerabilities/{report['id']}.md",
                             }

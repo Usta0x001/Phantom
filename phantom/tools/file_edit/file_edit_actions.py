@@ -16,25 +16,22 @@ def _validate_workspace_path(path: str) -> str:
     Rejects symlinks that escape the workspace boundary, '..' traversal,
     and absolute paths outside /workspace.
     """
-    path_obj = Path(path)
-    if not path_obj.is_absolute():
-        path_obj = Path("/workspace") / path_obj
+    normalized = path.replace("\\", "/").strip()
+    posix_path = PurePosixPath(normalized)
 
-    # Resolve symlinks to get canonical path
-    try:
-        resolved = path_obj.resolve(strict=False)
-    except (OSError, ValueError) as e:
-        raise ValueError(f"Cannot resolve path: {e}") from e
+    if posix_path.is_absolute():
+        if not str(posix_path).startswith("/workspace"):
+            raise ValueError(
+                f"Path traversal blocked: resolved path '{posix_path}' is outside /workspace"
+            )
+        candidate = posix_path
+    else:
+        candidate = WORKSPACE_ROOT / posix_path
 
-    # Verify the resolved path is under /workspace
-    try:
-        resolved.relative_to("/workspace")
-    except ValueError:
-        raise ValueError(
-            f"Path traversal blocked: resolved path '{resolved}' is outside /workspace"
-        )
+    if ".." in candidate.parts:
+        raise ValueError(f"Path traversal blocked: '{path}' contains parent traversal")
 
-    return str(path_obj)
+    return str(candidate)
 
 
 def _parse_file_editor_output(output: str) -> dict[str, Any]:
@@ -96,14 +93,6 @@ def list_files(
 
     try:
         path = _validate_workspace_path(path)
-        path_obj = Path(path)
-
-        if not path_obj.exists():
-            return {"error": f"Directory not found: {path}"}
-
-        if not path_obj.is_dir():
-            return {"error": f"Path is not a directory: {path}"}
-
         safe_path = shlex.quote(path)
         cmd = f"find {safe_path} -type f -o -type d | head -500" if recursive else f"ls -1a {safe_path}"
 
@@ -118,12 +107,12 @@ def list_files(
         dirs = []
 
         for item in items:
-            item_path = item if recursive else str(Path(path) / item)
-            item_path_obj = Path(item_path)
+            if item in {".", ".."}:
+                continue
 
-            if item_path_obj.is_file():
+            if "." in item and not item.endswith("/"):
                 files.append(item)
-            elif item_path_obj.is_dir():
+            else:
                 dirs.append(item)
 
         return {
@@ -157,7 +146,7 @@ def search_files(
         safe_regex = shlex.quote(regex)
         safe_pattern = shlex.quote(file_pattern)
 
-        cmd = f"rg --line-number --glob {safe_pattern} {safe_regex} {safe_path}"
+        cmd = f"rg --line-number --max-count 500 --glob {safe_pattern} {safe_regex} {safe_path}"
 
         exit_code, stdout, stderr = run_shell_cmd(cmd)
 

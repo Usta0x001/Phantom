@@ -4,7 +4,10 @@ import sys
 import threading
 from typing import Any
 
-from IPython.core.interactiveshell import InteractiveShell
+try:
+    from IPython.core.interactiveshell import InteractiveShell
+except ImportError:  # pragma: no cover - optional dependency guard
+    InteractiveShell = None  # type: ignore[assignment]
 
 
 MAX_STDOUT_LENGTH = 10_000
@@ -16,8 +19,91 @@ MAX_STDERR_LENGTH = 5_000
 _STDOUT_REDIRECT_LOCK = threading.Lock()
 
 
+def _validate_code_safety(code: str) -> str | None:
+    blocked_import_roots = {
+        "os",
+        "subprocess",
+        "socket",
+        "ctypes",
+        "multiprocessing",
+        "importlib",
+        "shutil",
+        "sys",
+        "pty",
+    }
+    blocked_calls = {
+        "eval",
+        "exec",
+        "compile",
+        "__import__",
+        "open",
+        "input",
+        "getattr",
+        "setattr",
+        "delattr",
+        "hasattr",
+    }
+    blocked_attrs = {
+        "system",
+        "popen",
+        "spawn",
+        "run",
+        "call",
+        "check_call",
+        "check_output",
+        "startfile",
+        "remove",
+        "unlink",
+        "rmtree",
+        "rmdir",
+        "__subclasses__",
+        "__bases__",
+        "__globals__",
+    }
+
+    if "%" in code:
+        return "Blocked unsafe magic command usage"
+
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return None
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name) and node.id == "__builtins__":
+            return "Blocked unsafe access: __builtins__"
+
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                root = alias.name.split(".", 1)[0]
+                if root in blocked_import_roots:
+                    return f"Blocked unsafe import: {root}"
+
+        if isinstance(node, ast.ImportFrom):
+            if node.module:
+                root = node.module.split(".", 1)[0]
+                if root in blocked_import_roots:
+                    return f"Blocked unsafe import: {root}"
+
+        if isinstance(node, ast.Call):
+            if isinstance(node.func, ast.Name) and node.func.id in blocked_calls:
+                return f"Blocked unsafe call: {node.func.id}"
+            if isinstance(node.func, ast.Attribute):
+                attr = node.func.attr
+                if attr in blocked_attrs or attr.startswith("__"):
+                    return f"Blocked unsafe call: {attr}"
+
+        if isinstance(node, ast.Attribute) and node.attr.startswith("__"):
+            return f"Blocked unsafe attribute access: {node.attr}"
+
+    return None
+
+
 class PythonInstance:
     def __init__(self, session_id: str) -> None:
+        if InteractiveShell is None:
+            raise RuntimeError("IPython is required for python tool execution")
+
         self.session_id = session_id
         self.is_running = True
         self._execution_lock = threading.Lock()
@@ -120,65 +206,7 @@ class PythonInstance:
         }
 
     def _validate_code_safety(self, code: str) -> str | None:
-        blocked_import_roots = {
-            "os",
-            "subprocess",
-            "socket",
-            "ctypes",
-            "multiprocessing",
-            "importlib",
-            "shutil",
-        }
-        blocked_calls = {
-            "eval",
-            "exec",
-            "compile",
-            "__import__",
-            "open",
-            "input",
-        }
-        blocked_attrs = {
-            "system",
-            "popen",
-            "spawn",
-            "run",
-            "call",
-            "check_call",
-            "check_output",
-            "startfile",
-            "remove",
-            "unlink",
-            "rmtree",
-            "rmdir",
-        }
-
-        try:
-            tree = ast.parse(code)
-        except SyntaxError:
-            return None
-
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Import):
-                for alias in node.names:
-                    root = alias.name.split(".", 1)[0]
-                    if root in blocked_import_roots:
-                        return f"Blocked unsafe import: {root}"
-
-            if isinstance(node, ast.ImportFrom):
-                if node.module:
-                    root = node.module.split(".", 1)[0]
-                    if root in blocked_import_roots:
-                        return f"Blocked unsafe import: {root}"
-
-            if isinstance(node, ast.Call):
-                if isinstance(node.func, ast.Name) and node.func.id in blocked_calls:
-                    return f"Blocked unsafe call: {node.func.id}"
-                if isinstance(node.func, ast.Attribute):
-                    attr = node.func.attr
-                    if attr in blocked_attrs:
-                        return f"Blocked unsafe call: {attr}"
-
-        return None
+        return _validate_code_safety(code)
 
     def execute_code(self, code: str, timeout: int = 30) -> dict[str, Any]:
         session_error = self._validate_session()
@@ -195,25 +223,40 @@ class PythonInstance:
             stderr_capture = io.StringIO()
             cancelled = threading.Event()
 
+            def _trace_calls(frame: Any, event: str, arg: Any) -> Any:
+                if cancelled.is_set():
+                    raise SystemExit("Execution timeout")
+                return _trace_calls
+
             def _run_code() -> None:
                 # Acquire the module-level lock inside the thread so that only
                 # one Python instance redirects sys.stdout/stderr at a time.
-                with _STDOUT_REDIRECT_LOCK:
-                    old_stdout, old_stderr = sys.stdout, sys.stderr
-                    try:
-                        sys.stdout = stdout_capture
-                        sys.stderr = stderr_capture
-                        execution_result = self.shell.run_cell(code, silent=False, store_history=True)
-                        result_container["execution_result"] = execution_result
-                        result_container["stdout"] = stdout_capture.getvalue()
-                        result_container["stderr"] = stderr_capture.getvalue()
-                    except (KeyboardInterrupt, SystemExit) as e:
-                        result_container["error"] = e
-                    except Exception as e:  # noqa: BLE001
-                        result_container["error"] = e
-                    finally:
-                        sys.stdout = old_stdout
-                        sys.stderr = old_stderr
+                sys.settrace(_trace_calls)
+                lock_acquired = False
+                old_stdout, old_stderr = sys.stdout, sys.stderr
+                try:
+                    _STDOUT_REDIRECT_LOCK.acquire()
+                    lock_acquired = True
+                    sys.stdout = stdout_capture
+                    sys.stderr = stderr_capture
+                    execution_result = self.shell.run_cell(code, silent=False, store_history=True)
+                    result_container["execution_result"] = execution_result
+                    result_container["stdout"] = stdout_capture.getvalue()
+                    result_container["stderr"] = stderr_capture.getvalue()
+                except (KeyboardInterrupt, SystemExit) as e:
+                    result_container["error"] = e
+                except Exception as e:  # noqa: BLE001
+                    result_container["error"] = e
+                finally:
+                    sys.stdout = old_stdout
+                    sys.stderr = old_stderr
+                    sys.settrace(None)
+                    if lock_acquired:
+                        try:
+                            _STDOUT_REDIRECT_LOCK.release()
+                        except RuntimeError:
+                            # Lock may have been force-released on timeout.
+                            pass
                 cancelled.set()
 
             exec_thread = threading.Thread(target=_run_code, daemon=True)
@@ -222,8 +265,11 @@ class PythonInstance:
 
             if exec_thread.is_alive():
                 cancelled.set()
-                # The thread still holds _STDOUT_REDIRECT_LOCK; wait a moment
-                # so it can release and restore sys.stdout/sys.stderr cleanly.
+                try:
+                    if _STDOUT_REDIRECT_LOCK.locked():
+                        _STDOUT_REDIRECT_LOCK.release()
+                except RuntimeError:
+                    pass
                 exec_thread.join(timeout=1)
                 return self._handle_execution_error(
                     TimeoutError(f"Code execution timed out after {timeout} seconds")

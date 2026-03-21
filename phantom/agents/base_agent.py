@@ -2,6 +2,7 @@ import asyncio
 import contextlib
 import json
 import logging
+import os
 import random
 from typing import TYPE_CHECKING, Any, Optional
 
@@ -17,6 +18,7 @@ from jinja2 import (
 
 from phantom.agents.hypothesis_ledger import HypothesisLedger  # Rec 6 (SF-005)
 from phantom.llm import LLM, LLMConfig, LLMRequestFailedError
+from phantom.llm.pentager.reflector import get_reflector
 from phantom.llm.utils import clean_content
 from phantom.config import Config
 from phantom.runtime import SandboxInitializationError
@@ -96,6 +98,16 @@ class BaseAgent(metaclass=AgentMeta):
         self.hypothesis_ledger: HypothesisLedger = config.get(
             "hypothesis_ledger"
         ) or HypothesisLedger()
+
+        # AUDIT-FIX-10: Track (signature, success) for dedup checking
+        self._recent_action_results: list[tuple[str, bool]] = []
+
+        # C1: Wire hypothesis ledger to the tool so the LLM can interact with it
+        try:
+            from phantom.tools.hypothesis.hypothesis_actions import set_ledger
+            set_ledger(self.hypothesis_ledger)
+        except ImportError:
+            pass  # Tool module not available in this environment
 
         from phantom.telemetry.tracer import get_global_tracer
 
@@ -212,6 +224,11 @@ class BaseAgent(metaclass=AgentMeta):
                 continue
 
             if self.state.should_stop():
+                if not self.state.completed and self.state.has_reached_max_iterations():
+                    self.state.set_completed({"success": False, "error": "Max iterations reached"})
+                    if tracer:
+                        tracer.update_agent_status(self.state.agent_id, "failed")
+
                 if self.non_interactive:
                     return self.state.final_result or {}
                 await self._enter_waiting_state(tracer)
@@ -527,48 +544,34 @@ class BaseAgent(metaclass=AgentMeta):
     async def _process_iteration(self, tracer: Optional["Tracer"]) -> bool:
         final_response = None
         self._last_iteration_action_count = 0
+        use_reflector = os.environ.get("PHANTOM_USE_REFLECTOR", "false").lower() == "true"
 
         # Rec 6 (SF-005): Inject Hypothesis Ledger summary every 10 iterations.
-        # Keeps the LLM aware of the scan's coverage state without bloating every
-        # message with the full ledger (which would waste tokens massively).
+        # AUDIT-FIX-08: Only inject unresolved hypotheses (PROPOSED/TESTING).
+        # Resolved hypotheses waste tokens by re-injecting closed items.
         _LEDGER_INJECT_EVERY = int(Config.get("phantom_ledger_inject_interval") or "10")
         if (
             len(self.hypothesis_ledger) > 0
             and self.state.iteration > 0
             and self.state.iteration % _LEDGER_INJECT_EVERY == 0
         ):
-            ledger_summary = self.hypothesis_ledger.to_prompt_summary(top_n=10)
+            ledger_summary = self.hypothesis_ledger.to_prompt_summary(
+                top_n=10,
+                status_filter=["open", "testing"],
+            )
             if ledger_summary:
                 self.state.add_message("user", ledger_summary)
 
-        # S-07: Phase-gate reporting reminders at 33%, 66%, and 90% of max iterations.
-        # Forces the agent to transition from recon → exploit → report
-        # instead of endlessly looping in reconnaissance.
+        # S-07: Phase-gate reporting reminder at 85% of max iterations.
         _max_iter = self.state.max_iterations
         _cur_iter = self.state.iteration
         if _max_iter and _max_iter > 0 and _cur_iter > 1:
-            _pct = _cur_iter / _max_iter
             _gate_msg = None
-            if _cur_iter == max(2, int(_max_iter * 0.33)):
+            if _cur_iter == max(4, int(_max_iter * 0.85)):
                 _gate_msg = (
-                    "[PHASE GATE — RECON → EXPLOIT] You have used 33% of your iterations. "
-                    "If you have identified ANY potential vulnerability targets, you MUST now "
-                    "transition to active exploitation. Stop mapping and start testing payloads. "
-                    "Report findings via create_vulnerability_report as you go."
-                )
-            elif _cur_iter == max(3, int(_max_iter * 0.66)):
-                _gate_msg = (
-                    "[PHASE GATE — EXPLOIT → REPORT] You have used 66% of your iterations. "
-                    "URGENT: If you have found ANY vulnerabilities and have NOT yet called "
-                    "create_vulnerability_report, you MUST do so NOW. Every unreported finding "
-                    "is LOST. Even SUSPECTED findings must be reported with confidence=SUSPECTED."
-                )
-            elif _cur_iter == max(4, int(_max_iter * 0.90)):
-                _gate_msg = (
-                    "[FINAL WARNING — REPORT NOW] You have used 90% of your iterations. "
+                    "[FINAL WARNING — REPORT NOW] You have used 85% of your iterations. "
                     "You are about to run out of time. If you have ANY unreported findings, "
-                    "call create_vulnerability_report IMMEDIATELY in your next action. "
-                    "A scan with 0 reports is a FAILURE."
+                    "call create_vulnerability_report as soon as possible, then prepare to finish the scan."
                 )
             if _gate_msg:
                 self.state.add_message("user", _gate_msg)
@@ -586,15 +589,22 @@ class BaseAgent(metaclass=AgentMeta):
 
         if not content_stripped:
             self._last_iteration_action_count = 0
+            if use_reflector:
+                try:
+                    reflector = get_reflector()
+                    context = "\n".join(
+                        str(msg.get("content", ""))
+                        for msg in self.state.get_conversation_history()[-4:]
+                    )
+                    suggestion = await reflector.reflect(context)
+                    if suggestion:
+                        self.state.add_message("user", f"Reflector suggestion: {suggestion}")
+                        return False
+                except Exception:
+                    pass
+            # B2: Compact corrective message (was ~200 tokens, now ~30)
             corrective_message = (
-                "You MUST NOT respond with empty messages. "
-                "If you currently have nothing to do or say, use an appropriate tool instead:\n"
-                "- Use agents_graph_actions.wait_for_message to wait for messages "
-                "from user or other agents\n"
-                "- Use agents_graph_actions.agent_finish if you are a sub-agent "
-                "and your task is complete\n"
-                "- Use finish_actions.finish_scan if you are the root/main agent "
-                "and the scan is complete"
+                "Empty response. You MUST call a tool. Try: terminal_execute, send_request, or create_vulnerability_report."
             )
             self.state.add_message("user", corrective_message)
             return False
@@ -619,6 +629,16 @@ class BaseAgent(metaclass=AgentMeta):
             self._last_iteration_action_count = len(actions)
             return await self._execute_actions(actions, tracer)
 
+        if use_reflector:
+            try:
+                reflector = get_reflector()
+                context = (final_response.content or "")[:500]
+                suggestion = await reflector.reflect(context)
+                if suggestion:
+                    self.state.add_message("user", f"Reflector suggestion: {suggestion}")
+            except Exception:
+                pass
+
         self._last_iteration_action_count = 0
         return False
 
@@ -641,8 +661,12 @@ class BaseAgent(metaclass=AgentMeta):
             batch_signature = ""
 
         if batch_signature:
-            if len(self._recent_action_batches) >= 2 and all(
-                sig == batch_signature for sig in self._recent_action_batches[-2:]
+            # AUDIT-FIX-10: Only block repeated batches when the previous
+            # identical call SUCCEEDED. If it errored/timed-out, allow retry.
+            _recent = self._recent_action_results[-2:] if len(self._recent_action_results) >= 2 else []
+            if _recent and all(
+                sig == batch_signature and succeeded
+                for sig, succeeded in _recent
             ):
                 self.state.add_message(
                     "user",
@@ -650,7 +674,7 @@ class BaseAgent(metaclass=AgentMeta):
                     "signal. Change payload/target/vector before retrying.",
                 )
                 return False
-            self._recent_action_batches.append(batch_signature)
+            # NOTE: _recent_action_results is appended AFTER execution below
             if len(self._recent_action_batches) > 8:
                 self._recent_action_batches = self._recent_action_batches[-8:]
 
@@ -667,9 +691,19 @@ class BaseAgent(metaclass=AgentMeta):
         try:
             should_agent_finish = await tool_task
             self._current_task = None
+            # AUDIT-FIX-10: Record (signature, succeeded=True) for dedup tracking
+            if batch_signature:
+                self._recent_action_results.append((batch_signature, True))
+                if len(self._recent_action_results) > 8:
+                    self._recent_action_results = self._recent_action_results[-8:]
         except asyncio.CancelledError:
             self._current_task = None
             self.state.add_error("Tool execution cancelled by user")
+            # AUDIT-FIX-10: Cancelled execution → mark as not-succeeded so retry is allowed
+            if batch_signature:
+                self._recent_action_results.append((batch_signature, False))
+                if len(self._recent_action_results) > 8:
+                    self._recent_action_results = self._recent_action_results[-8:]
             raise
 
         self.state.messages = conversation_history
@@ -731,44 +765,13 @@ class BaseAgent(metaclass=AgentMeta):
                             if sender_id and sender_id in _agent_graph.get("nodes", {}):
                                 sender_name = _agent_graph["nodes"][sender_id]["name"]
 
-                            # Escape all dynamic values before embedding into XML to
-                            # prevent XML/prompt injection via crafted agent names,
-                            # message types, or content.
+                            # B3: Compact inter-agent message format (was ~400 tokens XML, now ~50 tokens)
                             import html as _html
 
                             safe_sender_name = _html.escape(str(sender_name))
-                            safe_sender_id = _html.escape(str(sender_id or ""))
-                            safe_msg_type = _html.escape(
-                                str(message.get("message_type", "information"))
-                            )
-                            safe_priority = _html.escape(str(message.get("priority", "normal")))
-                            safe_timestamp = _html.escape(str(message.get("timestamp", "")))
-                            safe_content = _html.escape(str(message.get("content", "")))
+                            safe_content = _html.escape(str(message.get("content", ""))[:200])
 
-                            message_content = f"""<inter_agent_message>
-    <delivery_notice>
-        <important>You have received a message from another agent. You should acknowledge
-        this message and respond appropriately based on its content. However, DO NOT echo
-        back or repeat the entire message structure in your response. Simply process the
-        content and respond naturally as/if needed.</important>
-    </delivery_notice>
-    <sender>
-        <agent_name>{safe_sender_name}</agent_name>
-        <agent_id>{safe_sender_id}</agent_id>
-    </sender>
-    <message_metadata>
-        <type>{safe_msg_type}</type>
-        <priority>{safe_priority}</priority>
-        <timestamp>{safe_timestamp}</timestamp>
-    </message_metadata>
-    <content>
-{safe_content}
-    </content>
-    <delivery_info>
-        <note>This message was delivered during your task execution.
-        Please acknowledge and respond if needed.</note>
-    </delivery_info>
-</inter_agent_message>"""
+                            message_content = f"[From {safe_sender_name}]: {safe_content}"
                             state.add_message("user", message_content.strip())
 
                         message["read"] = True
@@ -920,7 +923,9 @@ class BaseAgent(metaclass=AgentMeta):
         self.state.add_error(error_msg)
         if tracer:
             tracer.update_agent_status(self.state.agent_id, "error")
-        return True
+        if isinstance(error, asyncio.CancelledError):
+            return True  # Cancelled — don't propagate, loop will handle
+        return False  # Real error — propagate to non_interactive raise or waiting state
 
     def cancel_current_execution(self) -> None:
         self._force_stop = True

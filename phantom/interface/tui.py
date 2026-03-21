@@ -1492,10 +1492,26 @@ class PhantomTUIApp(App):  # type: ignore[misc]
                     self._phantom_agent = agent  # expose for checkpoint saving on stop/quit
 
                     if not self._scan_stop_event.is_set():
-                        loop.run_until_complete(agent.execute_scan(self.scan_config))
+                        result = loop.run_until_complete(agent.execute_scan(self.scan_config))
+
+                        # Check result and mark completed only on success
+                        if isinstance(result, dict):
+                            if not result.get("success", True):
+                                error_msg = result.get("error", "Unknown error")
+                                logging.error("Scan failed: %s", error_msg)
+                            else:
+                                # Mark scan completed in checkpoint
+                                if self._checkpoint_mgr:
+                                    self._checkpoint_mgr.mark_completed()
+                        elif result is None:
+                            # Agent finished without explicit result dict
+                            if self._checkpoint_mgr:
+                                self._checkpoint_mgr.mark_completed()
 
                 except (KeyboardInterrupt, asyncio.CancelledError):
                     logging.info("Scan interrupted by user")
+                    if self._checkpoint_mgr:
+                        self._checkpoint_mgr.mark_interrupted()
                 except (ConnectionError, TimeoutError):
                     logging.exception("Network error during scan")
                 except RuntimeError:
@@ -1504,6 +1520,14 @@ class PhantomTUIApp(App):  # type: ignore[misc]
                     logging.exception("Unexpected error during scan")
                 finally:
                     loop.close()
+                    # Always cleanup tracer
+                    try:
+                        from phantom.telemetry.tracer import get_global_tracer
+                        tracer = get_global_tracer()
+                        if tracer:
+                            tracer.cleanup()
+                    except Exception:  # noqa: BLE001
+                        pass
                     self._scan_completed.set()
 
             except Exception:

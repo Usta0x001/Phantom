@@ -27,6 +27,23 @@ _SESSIONS: dict[str, dict[str, Any]] = {}
 # ─────────────────────────────────────────────────────────────────────────────
 
 
+def _mask_value(value: str) -> str:
+    if not value:
+        return ""
+    if len(value) <= 4:
+        return "****"
+    return value[:2] + "***" + value[-2:]
+
+
+def _safe_session_repr(session: dict[str, Any]) -> dict[str, Any]:
+    safe = dict(session)
+    for key in ("cookies", "headers", "tokens"):
+        items = safe.get(key, {})
+        if isinstance(items, dict):
+            safe[key] = {str(k): _mask_value(str(v)) for k, v in items.items()}
+    return safe
+
+
 # ── Public Python API ─────────────────────────────────────────────────────────
 
 def get_session(session_id: str) -> dict[str, Any] | None:

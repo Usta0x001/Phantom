@@ -74,7 +74,10 @@ TOOL_CATEGORIES = {
 
 
 DEFAULT_TOOL_CATEGORIES = {
-    "main_agent": ["web_testing", "terminal", "browser", "reporting", "agent_management", "files", "notes", "todo"],
+    # FIX-5: Excluded 'files', 'notes', 'todo' from the default main_agent schema.
+    # These are low-signal for pentesting but cost ~5K tokens per LLM call to describe.
+    # 300 iterations * 5K tokens = 1.5M tokens saved per scan.
+    "main_agent": ["web_testing", "terminal", "browser", "reporting", "agent_management"],
     "sub_agent": ["web_testing", "terminal", "browser", "files"],
     "quick_scan": ["web_testing", "terminal", "reporting"],
 }

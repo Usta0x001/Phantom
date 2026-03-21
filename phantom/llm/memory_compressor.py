@@ -17,18 +17,28 @@ logger = logging.getLogger(__name__)
 MAX_TOTAL_TOKENS = 128_000
 # R-02 regression fix: Strix kept 15 recent messages; Phantom reduced to 12,
 # causing the agent to lose context about its most recent findings.
-MIN_RECENT_MESSAGES = 15
+MIN_RECENT_MESSAGES = 10
 # Hard ceiling on compression threshold regardless of model context window size.
 # Prevents runaway context growth on models with very large windows (e.g. 200k+).
-MAX_CONTEXT_CEILING = 120_000
+MAX_CONTEXT_CEILING = 80_000
 
 # Max tokens for the compressor's own summarization call (cheap, non-thinking)
-COMPRESSOR_MAX_TOKENS = 1500
+# AUDIT-FIX-03: Increased from 3000 to 8000 so summaries preserve exploit detail.
+COMPRESSOR_MAX_TOKENS = 8000
 
-# Fraction of context window to use as the compression trigger threshold.
-# 0.6 means we start compressing when we've used 60% of the model's context.
-# Leaves 40% headroom for system prompt + output tokens + overhead.
-_CONTEXT_FILL_RATIO = 0.6
+
+def _get_context_fill_ratio(context_window: int) -> float:
+    """AUDIT-FIX-02: Model-aware compression ratio.
+
+    Old: fixed 0.25 fired too aggressively on large-context models, wasting 75%
+    of the context window. Now we scale by model capacity.
+    """
+    if context_window >= 100_000:
+        return 0.65  # 128K model -> compress at ~83K tokens
+    elif context_window >= 32_000:
+        return 0.50  # 32K model -> compress at ~16K tokens
+    else:
+        return 0.40  # Small models -> conservative compression
 
 # Keywords that indicate a message contains a confirmed finding worth anchoring.
 _ANCHOR_KEYWORDS = (
@@ -87,9 +97,9 @@ def _extract_anchors_from_chunk(
         if not any(kw in lower for kw in _ANCHOR_KEYWORDS):
             continue
 
-        # Extract the first 600 chars as the anchor snippet — enough to be
-        # useful at report time without bloating the injected reminder.
-        snippet = text.strip()[:600]
+        # Extract the first 1500 chars as the anchor snippet — increased from 600
+        # to preserve enough detail for vulnerability reporting.
+        snippet = text.strip()[:1500]
         if not snippet:
             continue
 
@@ -114,34 +124,30 @@ def _get_model_context_window(model: str) -> int:
         pass
     return MAX_TOTAL_TOKENS
 
-SUMMARY_PROMPT_TEMPLATE = """You are an agent performing context
-condensation for a security agent. Your job is to compress scan data while preserving
-ALL operationally critical information for continuing the security assessment.
+SUMMARY_PROMPT_TEMPLATE = """You are a context compression agent for a penetration testing system.
+Compress the scan data below while preserving ALL operationally critical information.
 
-CRITICAL ELEMENTS TO PRESERVE:
-- Discovered vulnerabilities and potential attack vectors
-- Scan results and tool outputs (compressed but maintaining key findings)
-- System architecture insights and potential weak points
-- Progress made in the assessment
-- Failed attempts and dead ends (to avoid duplication)
-- Any decisions made about the testing approach
+PRESERVE EXACTLY (copy verbatim, do NOT paraphrase):
+- All URLs that showed vulnerability signals (full URL with path and query params)
+- All parameter names confirmed as injectable or interesting
+- All working payloads and exploit strings
+- All session tokens, cookies, or credentials found
+- All tool names and exact commands used that produced findings
+- All HTTP status codes and response patterns indicating vulnerabilities
+- All open ports and services discovered
 
-COMPRESSION GUIDELINES:
-- Preserve exact technical details (URLs, paths, parameters, payloads)
-- Summarize verbose tool outputs while keeping critical findings
-- Maintain version numbers, specific technologies identified
-- Keep exact error messages that might indicate vulnerabilities
-- Compress repetitive or similar findings into consolidated form
-
-Remember: Another security agent will use this summary to continue the assessment.
-They must be able to pick up exactly where you left off without losing any
-operational advantage or context needed to find vulnerabilities.
+Output format:
+STATUS: (current phase)
+PROGRESS: (what has been done)
+FINDINGS: (list each finding with exact URL, parameter, and evidence)
+DEAD ENDS: (list of failed attempts — tool + target + why it failed)
+TECH STACK: (discovered technologies)
+AUTH STATE: (any auth tokens/cookies obtained)
 
 CONVERSATION SEGMENT TO SUMMARIZE:
 {conversation}
 
-Provide a technically precise summary that preserves all operational security context while
-keeping the summary concise and to the point."""
+Provide a technically precise summary. Copy vulnerability evidence verbatim."""
 
 
 def _count_tokens(text: str, model: str) -> int:
@@ -355,14 +361,15 @@ class MemoryCompressor:
             self._max_total_tokens = int(env_override)
         else:
             ctx_window = _get_model_context_window(self.model_name)
-            # Use configured ratio to leave room for system prompt + output tokens.
+            # AUDIT-FIX-02: Use model-aware fill ratio instead of fixed 0.25.
+            fill_ratio = _get_context_fill_ratio(ctx_window)
             # Capped by MAX_CONTEXT_CEILING to prevent excessive memory growth on
             # models with very large context windows (200k+ tokens).
             self._max_total_tokens = min(
                 MAX_CONTEXT_CEILING,
                 max(
                     MIN_RECENT_MESSAGES * 200,  # absolute minimum to not compress into nothing
-                    int(ctx_window * _CONTEXT_FILL_RATIO),
+                    int(ctx_window * fill_ratio),
                 ),
             )
         logger.debug(
@@ -427,37 +434,8 @@ class MemoryCompressor:
         if total_tokens <= self._max_total_tokens * 0.9 and not image_pressure and evicted_images == 0:
             return messages
 
-        # Try Pentager ChainSummarizer first (FREE — no LLM call).
-        # Fires at 50% threshold so it runs BEFORE MemoryCompressor's 60% LLM pass.
-        try:
-            _t0 = __import__("time").monotonic()
-            pentager = ChainSummarizer(
-                model_name=model_name,
-                max_input_tokens=int(self._max_total_tokens / 0.5),
-            )
-            if pentager.should_summarize(messages):
-                pentager_result = pentager.summarize(messages)
-                pentager_tokens = sum(
-                    _get_message_tokens(msg, model_name) for msg in pentager_result
-                )
-                if pentager_tokens <= self._max_total_tokens * 0.9:
-                    logger.info(
-                        "MemoryCompressor: PentagerChainSummarizer free compression worked "
-                        "(%d -> %d tokens, %.0fms). Skipping LLM summarization.",
-                        total_tokens, pentager_tokens,
-                        (__import__("time").monotonic() - _t0) * 1000,
-                    )
-                    if agent_state is not None and hasattr(agent_state, "add_finding_anchor"):
-                        for anchor in _extract_anchors_from_chunk(regular_msgs):
-                            agent_state.add_finding_anchor(anchor)
-                    return pentager_result
-                logger.info(
-                    "MemoryCompressor: PentagerChainSummarizer insufficient "
-                    "(%d -> %d tokens, still over threshold). Falling through to LLM summarization.",
-                    total_tokens, pentager_tokens,
-                )
-        except Exception:  # noqa: BLE001
-            logger.exception("PentagerChainSummarizer failed — falling through to LLM summarization")
+        # Pentager ChainSummarizer was here, but removed due to catastrophic forgetting
+        # as it permanently deleted old messages rather than summarizing them.
 
         # Configurable chunk size — larger chunks = fewer compression LLM calls = less latency.
         # PHANTOM_COMPRESSOR_CHUNK_SIZE default is 10 (was hardcoded 5).

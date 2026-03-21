@@ -28,6 +28,8 @@ from .registry import (
 
 
 _SERVER_TIMEOUT = float(Config.get("phantom_sandbox_execution_timeout") or "120")
+AUTO_SUMMARIZE_THRESHOLD = int(Config.get("phantom_auto_summarize_threshold") or "16000")
+SUMMARIZE_MODEL = Config.get("phantom_summarize_llm") or "gpt-4o-mini"
 SANDBOX_EXECUTION_TIMEOUT = _SERVER_TIMEOUT + 30
 SANDBOX_CONNECT_TIMEOUT = float(Config.get("phantom_sandbox_connect_timeout") or "10")
 
@@ -71,6 +73,20 @@ _HIGH_SIGNAL_MARKERS = (
     "rfi",
     "path traversal",
 )
+
+
+def _cleanup_screenshot_artifacts(path: str | Path | None = None) -> None:
+    if path is None:
+        return
+    target = Path(path)
+    if not target.exists() or not target.is_file():
+        return
+    if target.suffix.lower() not in {".png", ".jpg", ".jpeg", ".webp"}:
+        return
+    try:
+        target.unlink(missing_ok=True)
+    except OSError:
+        return
 
 
 async def execute_tool(tool_name: str, agent_state: Any | None = None, **kwargs: Any) -> Any:
@@ -341,6 +357,93 @@ def _extract_ffuf_findings(text: str, limit: int) -> str | None:
     return result
 
 
+def _extract_nuclei_findings(text: str, limit: int) -> str | None:
+    """Extract vulnerability-tagged lines from nuclei output.
+
+    Nuclei marks findings with severity tags like [critical], [high], [medium],
+    [low], [info].  Also captures template-id tagged lines like
+    [cors-misconfiguration], [open-redirect], etc.
+    Returns None if no finding lines were found.
+    """
+    lines = text.splitlines()
+    header_lines: list[str] = []
+    finding_lines: list[str] = []
+    _severity_markers = ("[critical]", "[high]", "[medium]", "[low]", "[info]")
+    # A3: Also match any template-id tagged lines — nuclei template findings
+    # look like "[template-id] [protocol] [severity] target" or
+    # "[template-id:matcher-name] ..."
+    import re as _re_nuclei
+    _template_tag_re = _re_nuclei.compile(r"^\[\w[\w.-]+\]")
+
+    for line in lines:
+        lower = line.lower()
+        if any(m in lower for m in _severity_markers):
+            finding_lines.append(line)
+        elif _template_tag_re.match(line.strip()):
+            # Template-tagged finding line (e.g. [cors-misconfiguration] ...)
+            finding_lines.append(line)
+        elif lower.startswith("[") and "]" in lower and ("http" in lower or "/" in lower):
+            # Template match lines like [template-id] [protocol] ...
+            finding_lines.append(line)
+        elif len(header_lines) < 5 and ("nuclei" in lower or "target" in lower or "template" in lower):
+            header_lines.append(line)
+
+    if not finding_lines:
+        return None
+
+    result_lines = header_lines + [f"[nuclei findings: {len(finding_lines)} results]"] + finding_lines
+    result = "\n".join(result_lines)
+    if len(result) > limit:
+        result = result[:limit] + "\n... [additional findings truncated] ..."
+    return result
+
+
+
+def _extract_sqlmap_findings(text: str, limit: int) -> str | None:
+    """Extract injection confirmations and database info from sqlmap output.
+
+    Keeps lines indicating confirmed injections, extracted data, and
+    database/table/column information.
+    Returns None if no finding lines were found.
+    """
+    lines = text.splitlines()
+    finding_lines: list[str] = []
+    _signal_markers = (
+        "parameter '",
+        "is vulnerable",
+        "injectable",
+        "payload:",
+        "type:",
+        "title:",
+        "database:",
+        "table:",
+        "column:",
+        "[warning]",
+        "[critical]",
+        "fetched data",
+        "available databases",
+        "entries",
+        "dumped",
+        "back-end dbms",
+    )
+
+    for line in lines:
+        lower = line.strip().lower()
+        if not lower:
+            continue
+        if any(m in lower for m in _signal_markers):
+            finding_lines.append(line)
+
+    if not finding_lines:
+        return None
+
+    result_lines = [f"[sqlmap findings: {len(finding_lines)} signal lines]"] + finding_lines
+    result = "\n".join(result_lines)
+    if len(result) > limit:
+        result = result[:limit] + "\n... [additional findings truncated] ..."
+    return result
+
+
 def _extract_nmap_findings(text: str, limit: int) -> str | None:
     """Extract open-port lines and summary lines from nmap/naabu output.
 
@@ -395,17 +498,17 @@ def _get_truncation_limit(tool_name: str) -> int:
     """
     # ── Built-in per-tool defaults ────────────────────────────────────────────
     _BUILT_IN_TOOL_LIMITS: dict[str, int] = {
-        "naabu":                    1500,   # port scan: repetitive IP:port lines
-        "nmap":                     3000,   # nmap: structured, compact enough at 3K
-        "grep":                     2000,   # grep: line matches, keep tight
-        "curl":                     2000,   # curl: HTTP response headers/body snippets
-        "ffuf":                     3000,   # directory fuzzer: many short lines
-        "nikto":                    4000,   # nikto: medium-density findings
-        "terminal_execute":         4000,   # generic terminal: down from 6K
-        "browser_action":           3000,   # browser HTML dumps are verbose/boilerplate
-        "nuclei":                   5000,   # vuln scanner: high-value, keep more
-        "sqlmap":                   5000,   # SQL injection: detailed payloads matter
-        "create_vulnerability_report": 12000,  # reports: need full detail
+        "naabu":                    3000,   # port scan: increased from 1500
+        "nmap":                     3000,   # nmap: decreased from 6000
+        "grep":                     3000,   # grep: increased from 2000
+        "curl":                     3000,   # curl: increased from 2000
+        "ffuf":                     5000,   # directory fuzzer: increased from 3000
+        "nikto":                    6000,   # nikto: increased from 4000
+        "terminal_execute":         5000,   # generic terminal: decreased from 8000
+        "browser_action":           6000,   # browser: increased from 3000
+        "nuclei":                   6000,   # vuln scanner: decreased from 10000
+        "sqlmap":                   6000,   # SQL injection: decreased from 10000
+        "create_vulnerability_report": 12000,  # reports: keep full detail
     }
     # ─────────────────────────────────────────────────────────────────────────
 
@@ -450,6 +553,43 @@ def _is_high_signal_output(tool_name: str, text: str) -> bool:
         lowered = text.lower()
         return any(marker in lowered for marker in _HIGH_SIGNAL_MARKERS)
     return False
+
+
+async def _auto_summarize_result(result_text: str, tool_name: str) -> str:
+    """Optionally summarize oversized tool output using a lightweight model.
+
+    Falls back safely to original text when disabled or on any model error.
+    """
+    if len(result_text) <= AUTO_SUMMARIZE_THRESHOLD:
+        return result_text
+
+    use_auto_summarize = os.environ.get("PHANTOM_USE_AUTO_SUMMARIZE", "false").lower() == "true"
+    if not use_auto_summarize:
+        return result_text
+
+    try:
+        import litellm
+
+        prompt = (
+            "Summarize this security tool output for an autonomous pentest agent. "
+            "Preserve: confirmed findings, endpoints, parameters, payloads, response codes, and errors. "
+            "Keep it concise and factual.\n\n"
+            f"Tool: {tool_name}\n"
+            "Output:\n"
+            f"{result_text[:120000]}"
+        )
+        response = await litellm.acompletion(
+            model=SUMMARIZE_MODEL,
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=700,
+            timeout=20,
+        )
+        content = response.choices[0].message.content
+        if isinstance(content, str) and content.strip():
+            return content.strip()
+        return result_text
+    except Exception:
+        return result_text
 
 
 def _build_thumb_image_bytes(raw: bytes, max_dim: int, max_bytes: int) -> bytes | None:
@@ -515,6 +655,72 @@ def _build_image_attachment(
         }
 
     return None
+
+
+def _extract_vuln_signals(tool_name: str, output: str) -> list[str]:
+    """A4: Extract structured vulnerability confirmation signals from tool output.
+
+    Scans for known patterns that indicate confirmed vulnerabilities, so the LLM
+    gets a machine-readable summary even when the raw output is truncated.
+    Returns a list of signal lines, or empty list if no signals found.
+    """
+    import re as _re_sig
+
+    signals: list[str] = []
+    lower = output.lower()
+
+    # SQLi signals
+    _sqli_patterns = [
+        (r"is vulnerable", "SQL_INJECTION"),
+        (r"injectable", "SQL_INJECTION"),
+        (r"back-end dbms", "SQL_INJECTION"),
+        (r"parameter.*appears.*injectable", "SQL_INJECTION"),
+        (r"sqlmap identified the following injection", "SQL_INJECTION"),
+        (r"type:\s*(boolean-based|time-based|union|error-based|stacked)", "SQL_INJECTION"),
+    ]
+    for pattern, signal_type in _sqli_patterns:
+        if _re_sig.search(pattern, lower):
+            # Find the specific line for context
+            for line in output.splitlines():
+                if _re_sig.search(pattern, line.lower()):
+                    signals.append(f"{signal_type}: {line.strip()[:200]}")
+                    break
+
+    # XSS signals
+    _xss_patterns = [
+        (r"reflected", "XSS_REFLECTED"),
+        (r"xss", "XSS_POTENTIAL"),
+        (r"<script>", "XSS_REFLECTED"),
+        (r"alert\(", "XSS_REFLECTED"),
+    ]
+    for pattern, signal_type in _xss_patterns:
+        if pattern in lower and tool_name in {"send_request", "browser_action", "terminal_execute"}:
+            signals.append(f"{signal_type}: Pattern '{pattern}' detected in response")
+            break
+
+    # RCE signals
+    _rce_keywords = ["uid=", "root:", "/bin/", "whoami", "id=", "www-data"]
+    for kw in _rce_keywords:
+        if kw in lower:
+            signals.append(f"RCE_POTENTIAL: '{kw}' found in output")
+            break
+
+    # SSRF signals
+    _ssrf_keywords = ["internal", "127.0.0.1", "localhost", "169.254.169.254", "metadata"]
+    if tool_name in {"send_request", "terminal_execute"}:
+        for kw in _ssrf_keywords:
+            if kw in lower:
+                signals.append(f"SSRF_POTENTIAL: '{kw}' found in response")
+                break
+
+    # Nuclei/scanner severity signals
+    for severity in ["critical", "high"]:
+        marker = f"[{severity}]"
+        if marker in lower:
+            count = lower.count(marker)
+            signals.append(f"SCANNER_{severity.upper()}: {count} {severity} finding(s) detected")
+
+    return signals
 
 
 def _format_tool_result_with_meta(
@@ -605,6 +811,8 @@ def _format_tool_result_with_meta(
         meta["burst_applied"] = burst_applied
         meta["limit"] = limit
         meta["chars_before"] = len(final_result_str)
+        needs_llm_summary = len(final_result_str) > AUTO_SUMMARIZE_THRESHOLD
+        meta["needs_llm_summary"] = needs_llm_summary
         if len(final_result_str) > limit:
             # ── Smart extraction for high-noise tools ─────────────────────────
             # Try to distil the output down to the signal lines before falling
@@ -614,6 +822,23 @@ def _format_tool_result_with_meta(
                 extracted = _extract_ffuf_findings(final_result_str, limit)
             elif tool_name in {"nmap", "naabu"}:
                 extracted = _extract_nmap_findings(final_result_str, limit)
+            elif tool_name == "nuclei":
+                extracted = _extract_nuclei_findings(final_result_str, limit)
+            elif tool_name == "sqlmap":
+                extracted = _extract_sqlmap_findings(final_result_str, limit)
+            elif tool_name == "terminal_execute":
+                # FIX-3: Detect scanner names in terminal_execute output and
+                # apply the matching smart extractor to preserve finding signals
+                # instead of dumb head+tail truncation.
+                _out_lower = final_result_str[:2000].lower()
+                if "sqlmap" in _out_lower or "is vulnerable" in _out_lower:
+                    extracted = _extract_sqlmap_findings(final_result_str, limit)
+                elif "nuclei" in _out_lower or "[critical]" in _out_lower or "[high]" in _out_lower:
+                    extracted = _extract_nuclei_findings(final_result_str, limit)
+                elif "ffuf" in _out_lower or "[Status:" in final_result_str[:2000]:
+                    extracted = _extract_ffuf_findings(final_result_str, limit)
+                elif "nmap" in _out_lower or "/tcp" in _out_lower:
+                    extracted = _extract_nmap_findings(final_result_str, limit)
 
             if extracted is not None:
                 final_result_str = extracted
@@ -627,8 +852,34 @@ def _format_tool_result_with_meta(
             meta["truncated"] = True
         meta["chars_after"] = len(final_result_str)
 
+    # AUDIT-FIX-01: Extract vuln signals FIRST from untruncated output, then
+    # prepend them as a prominent header so the LLM sees signals before any
+    # truncated/escaped tool output.  Old code appended signals after the
+    # result block which was easy to miss.
+    original_for_signals = str(result_str) if result_str is not None else ""
+    signal_lines = _extract_vuln_signals(tool_name, original_for_signals)
+
+    signal_header = ""
+    if signal_lines:
+        meta["vuln_signals"] = signal_lines
+        meta["has_signals"] = True
+        signal_header = (
+            "[PHANTOM_SIGNAL_DETECTED]\n"
+            + "\n".join(f"  >> {s}" for s in signal_lines)
+            + "\n[/PHANTOM_SIGNAL_DETECTED]\n"
+        )
+        # Inject mandatory reporting instruction for critical signal types
+        _critical_types = ("SQL_INJECTION", "RCE", "SSRF", "XXE")
+        if any(ct in s for s in signal_lines for ct in _critical_types):
+            signal_header += (
+                "[MANDATORY] A critical vulnerability signal was detected above. "
+                "You MUST call create_vulnerability_report with confidence=SUSPECTED "
+                "in your NEXT response. Do NOT delay reporting.\n"
+            )
+
     observation_xml = (
-        f"<tool_result>\n<tool_name>{html.escape(tool_name)}</tool_name>\n"
+        signal_header
+        + f"<tool_result>\n<tool_name>{html.escape(tool_name)}</tool_name>\n"
         f"<result>{html.escape(final_result_str)}</result>\n</tool_result>"
     )
 
@@ -732,6 +983,24 @@ async def _execute_single_tool(
         image_slots_remaining=image_slots_remaining,
     )
 
+    needs_llm_summary = bool(meta.get("needs_llm_summary"))
+    if needs_llm_summary:
+        summarized_xml = await _auto_summarize_result(observation_xml, tool_name)
+        if summarized_xml and summarized_xml != observation_xml:
+            observation_xml = summarized_xml
+
+    # FIX-1: Wire HypothesisLedger into Tool Execution
+    if meta.get("vuln_signals") and hasattr(agent_state, "hypothesis_ledger"):
+        for sig in meta.get("vuln_signals", []):
+            try:
+                # Truncate the signal to avoid huge payload blobs
+                short_sig = sig[:200]
+                hyp_id = agent_state.hypothesis_ledger.add(surface=tool_name, vuln_class="auto_extraction")
+                agent_state.hypothesis_ledger.record_payload(hyp_id, short_sig)
+                agent_state.hypothesis_ledger.record_result(hyp_id, "testing", "Automatically extracted from tool output")
+            except Exception:
+                pass
+
     if meta.get("truncated"):
         from phantom.logging.audit import get_audit_logger as _get_audit
 
@@ -790,6 +1059,13 @@ async def process_tool_invocations(
         if tool_should_finish:
             should_agent_finish = True
 
+        # FIX-1: Auto-record detected vulnerability signals into the
+        # HypothesisLedger so the agent tracks tested surfaces automatically
+        # without relying on the LLM to voluntarily call manage_hypothesis.
+        _auto_record_hypothesis(
+            tool_inv, observation_xml, agent_state
+        )
+
     if all_images:
         content = [{"type": "text", "text": "Tool Results:\n\n" + "\n\n".join(observation_parts)}]
         content.extend(all_images)
@@ -799,6 +1075,118 @@ async def process_tool_invocations(
         conversation_history.append({"role": "user", "content": observation_content})
 
     return should_agent_finish
+
+
+def _auto_record_hypothesis(
+    tool_inv: dict[str, Any],
+    observation_xml: str,
+    agent_state: Any | None,
+) -> None:
+    """FIX-1: Automatically populate the HypothesisLedger from tool results.
+
+    When send_request or terminal_execute returns output containing vulnerability
+    signals, extract the attack surface and vuln class and auto-register a
+    hypothesis so the ledger is no longer dead code.
+    """
+    import re as _re_hyp
+    import logging as _log_hyp
+    _logger = _log_hyp.getLogger(__name__)
+
+    try:
+        # Get the ledger from the agent's BaseAgent instance
+        ledger = None
+        if agent_state is not None:
+            # Walk up to the BaseAgent that owns this state
+            try:
+                from phantom.tools.hypothesis.hypothesis_actions import _ledger
+                ledger = _ledger
+            except (ImportError, AttributeError):
+                pass
+
+        if ledger is None:
+            return
+
+        tool_name = tool_inv.get("toolName", "")
+        args = tool_inv.get("args", {})
+
+        # Only process security-relevant tools
+        if tool_name not in {"send_request", "terminal_execute", "browser_action"}:
+            return
+
+        # Determine the attack surface from tool arguments
+        surface = ""
+        if tool_name == "send_request":
+            url = args.get("url", "")
+            method = args.get("method", "GET")
+            surface = f"{url} {method}".strip()[:100]
+        elif tool_name == "terminal_execute":
+            cmd = args.get("command", "")
+            # Extract target from common scanner commands
+            url_match = _re_hyp.search(r'https?://[^\s\'"]+', cmd)
+            if url_match:
+                surface = url_match.group(0)[:100]
+            else:
+                surface = cmd[:80]
+        elif tool_name == "browser_action":
+            surface = args.get("url", args.get("action", ""))[:100]
+
+        if not surface:
+            return
+
+        # Detect vuln class from the observation output
+        obs_lower = observation_xml.lower()
+        vuln_class = ""
+        if any(kw in obs_lower for kw in ("sql_injection", "is vulnerable", "injectable", "sqlmap", "back-end dbms")):
+            vuln_class = "SQL_INJECTION"
+        elif any(kw in obs_lower for kw in ("xss", "<script", "reflected", "alert(")):
+            vuln_class = "XSS"
+        elif any(kw in obs_lower for kw in ("rce", "uid=", "www-data", "whoami")):
+            vuln_class = "RCE"
+        elif any(kw in obs_lower for kw in ("ssrf", "169.254.169.254", "metadata")):
+            vuln_class = "SSRF"
+        elif any(kw in obs_lower for kw in ("idor", "unauthorized", "broken access")):
+            vuln_class = "IDOR"
+        elif any(kw in obs_lower for kw in ("open redirect", "redirect")):
+            vuln_class = "OPEN_REDIRECT"
+        elif any(kw in obs_lower for kw in ("xxe", "xml external")):
+            vuln_class = "XXE"
+        elif any(kw in obs_lower for kw in ("[critical]", "[high]")):
+            vuln_class = "SCANNER_FINDING"
+        else:
+            # No signal detected — register as "RECON" to track that this
+            # surface was already tested (preventing redundant retesting)
+            vuln_class = "RECON"
+
+        # Auto-register the hypothesis
+        hyp_id = ledger.add(surface, vuln_class)
+
+        # If there's a concrete payload in the tool args, record it too
+        payload = ""
+        if tool_name == "send_request":
+            body = args.get("body", "")
+            if body:
+                payload = body[:200]
+        elif tool_name == "terminal_execute":
+            payload = args.get("command", "")[:200]
+        if payload:
+            ledger.record_payload(hyp_id, payload)
+
+        # If a vulnerability signal was detected, mark as 'testing'
+        if vuln_class not in ("RECON",):
+            evidence_snip = ""
+            # Try to grab a signal line from the observation
+            for line in observation_xml.split("\n"):
+                ll = line.lower()
+                if any(kw in ll for kw in ("vulnerable", "injectable", "confirmed", "critical", "reflected")):
+                    evidence_snip = line.strip()[:300]
+                    break
+            ledger.record_result(hyp_id, "testing", evidence_snip)
+
+        _logger.debug("FIX-1: Auto-recorded hypothesis %s: %s on %s", hyp_id, vuln_class, surface[:60])
+
+    except Exception:  # noqa: BLE001
+        # Never let auto-recording crash the tool pipeline
+        pass
 
 
 def extract_screenshot_from_result(result: Any) -> str | None:

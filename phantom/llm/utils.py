@@ -55,7 +55,8 @@ def resolve_phantom_model(model_name: str | None) -> tuple[str | None, str | Non
     if not model_name or not model_name.startswith("phantom/"):
         return model_name, model_name
 
-    base_model = model_name[6:]
+    # "phantom/" prefix is 8 characters (not 6 — fixed off-by-one bug)
+    base_model = model_name[len("phantom/"):]
     api_model = f"openai/{base_model}"
     canonical_model = PHANTOM_MODEL_MAP.get(base_model, api_model)
     return api_model, canonical_model

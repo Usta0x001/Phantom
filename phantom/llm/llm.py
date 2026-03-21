@@ -66,6 +66,33 @@ class RequestStats:
             "completed_requests": self.completed_requests,
         }
 
+_GLOBAL_TOTAL_STATS = RequestStats()
+_GLOBAL_PER_MODEL_STATS: dict[str, RequestStats] = {}
+_GLOBAL_RATE_LIMIT_UNTIL: float = 0.0
+
+
+class _TokenRateLimiter:
+    def __init__(self) -> None:
+        self._calls_by_model: dict[str, list[float]] = {}
+
+    def _limit(self) -> int:
+        raw = os.getenv("PHANTOM_LLM_RATE_LIMIT_PER_MINUTE", "1000")
+        try:
+            parsed = int(raw)
+        except ValueError:
+            return 1000
+        return max(parsed, 1)
+
+    def check_and_record(self, model: str) -> bool:
+        now = time.monotonic()
+        window_start = now - 60.0
+        calls = self._calls_by_model.setdefault(model, [])
+        calls[:] = [stamp for stamp in calls if stamp >= window_start]
+        if len(calls) >= self._limit():
+            return False
+        calls.append(now)
+        return True
+
 
 class LLM:
     # Scan mode downgrade order for adaptive mode
@@ -78,9 +105,9 @@ class LLM:
         self.config = config
         self.agent_name = agent_name
         self.agent_id: str | None = None
-        self._total_stats = RequestStats()
+        self._total_stats = _GLOBAL_TOTAL_STATS
         # Per-model breakdown: model_name -> RequestStats (only agent iteration calls)
-        self._per_model_stats: dict[str, RequestStats] = {}
+        self._per_model_stats = _GLOBAL_PER_MODEL_STATS
         # Call type counters
         self._agent_calls: int = 0    # LLM calls during agent loop iterations
         self._error_calls: int = 0    # LLM calls that ended in an error (after retries)
@@ -142,7 +169,16 @@ class LLM:
                 else:
                     tools_prompt_fn = get_tools_prompt
 
-            result = env.get_template("system_prompt.jinja").render(
+            use_condensed_prompt = (
+                os.environ.get("PHANTOM_USE_CONDENSED_PROMPT", "false").lower() == "true"
+            )
+            template_name = "system_prompt_condensed.jinja" if use_condensed_prompt else "system_prompt.jinja"
+            try:
+                template = env.get_template(template_name)
+            except Exception:
+                template = env.get_template("system_prompt.jinja")
+
+            result = template.render(
                 get_tools_prompt=tools_prompt_fn,
                 loaded_skill_names=list(skill_content.keys()),
                 phantom_port_range=os.environ.get("PHANTOM_PORT_RANGE", ""),
@@ -179,6 +215,13 @@ class LLM:
     async def generate(
         self, conversation_history: list[dict[str, Any]]
     ) -> AsyncIterator[LLMResponse]:
+        global _GLOBAL_RATE_LIMIT_UNTIL
+        now = time.monotonic()
+        if now < _GLOBAL_RATE_LIMIT_UNTIL:
+            wait_time = _GLOBAL_RATE_LIMIT_UNTIL - now
+            logger.warning("Global rate limit in effect, agent '%s' sleeping for %.1fs...", self.agent_name, wait_time)
+            await asyncio.sleep(wait_time)
+
         self._check_budget()
         self._agent_calls += 1
         messages = await self._prepare_messages(conversation_history)
@@ -272,9 +315,10 @@ class LLM:
                 if code == 429:
                     wait = min(120, 4 * (2**attempt))
                     logger.warning(
-                        "Rate limit hit (attempt %d/%d); backing off %.0fs...",
+                        "Rate limit hit (attempt %d/%d); backing off %.0fs globally...",
                         attempt + 1, ratelimit_max_retries, wait,
                     )
+                    _GLOBAL_RATE_LIMIT_UNTIL = max(_GLOBAL_RATE_LIMIT_UNTIL, time.monotonic() + wait)
                 else:
                     wait = min(10, 2 * (2**attempt))
                 await asyncio.sleep(wait)
@@ -377,6 +421,18 @@ class LLM:
         accumulated = fix_incomplete_tool_call(_truncate_to_first_function(accumulated))
         _parsed_tools = parse_tool_invocations(accumulated)
 
+        # AUDIT-FIX-09: When the LLM produces text that looks like a tool call
+        # but fails to parse, prepend a corrective message so the agent knows
+        # its call was NOT executed and can reformat.
+        _xml_markers = ["<function=", "<invoke ", "</function>"]
+        _looks_like_tool = any(m in accumulated for m in _xml_markers)
+        if _looks_like_tool and not _parsed_tools:
+            accumulated = (
+                "[SYSTEM: Your tool call was malformed and NOT executed. "
+                "Reformat using: <function=tool_name><parameter=name>value</parameter></function>]\n"
+                + accumulated
+            )
+
         # ── Audit: log the completed response ────────────────────────────────
         if _audit and _audit_rid:
             _audit.log_llm_response(
@@ -429,31 +485,36 @@ class LLM:
         conversation_history.extend(compressed)
 
         # ── Finding anchors injection ─────────────────────────────────────────
-        # When approaching the iteration limit, re-inject high-signal findings
-        # that were extracted from previously compressed messages.  This ensures
-        # the agent still "knows" about confirmed vulnerabilities even when the
-        # full history has been summarised away.
-        if (
+        # AUDIT-FIX-04: Re-inject high-signal findings continuously from iter 2+
+        # (was: only at 75% of max iterations, far too late for exploitation).
+        # This ensures the agent always "knows" about confirmed vulnerabilities
+        # even when the full history has been summarised away.
+        _has_anchors = (
             _state is not None
-            and hasattr(_state, "is_approaching_max_iterations")
-            and _state.is_approaching_max_iterations(threshold=0.75)
             and hasattr(_state, "finding_anchors")
             and _state.finding_anchors
-        ):
-            anchor_lines = []
-            for anchor in _state.finding_anchors[:20]:  # cap at 20 to avoid bloat
-                text = anchor.get("text", "").strip()
-                if text:
-                    anchor_lines.append(f"- {text[:300]}")
-            if anchor_lines:
-                anchor_reminder = (
-                    "<finding_anchors>\n"
-                    "The following high-signal findings were extracted from earlier in this scan "
-                    "and must be included in your final report:\n"
-                    + "\n".join(anchor_lines)
-                    + "\n</finding_anchors>"
-                )
-                messages.append({"role": "user", "content": anchor_reminder})
+        )
+        if _has_anchors:
+            # Only inject if not already present in last 5 messages
+            _last_msgs = compressed[-5:] if len(compressed) >= 5 else compressed
+            _already_injected = any(
+                "finding_anchors" in str(m.get("content", "")) for m in _last_msgs
+            )
+            if not _already_injected:
+                anchor_lines = []
+                for anchor in _state.finding_anchors[:15]:  # cap at 15
+                    text = anchor.get("text", "").strip()
+                    if text:
+                        anchor_lines.append(f"- {text[:600]}")  # 600 chars, was 300
+                if anchor_lines:
+                    anchor_reminder = (
+                        "<finding_anchors>\n"
+                        "Confirmed signals from earlier in this scan — "
+                        "report any that have NOT been reported yet:\n"
+                        + "\n".join(anchor_lines)
+                        + "\n</finding_anchors>"
+                    )
+                    messages.append({"role": "user", "content": anchor_reminder})
         # ─────────────────────────────────────────────────────────────────────
 
         messages.extend(compressed)

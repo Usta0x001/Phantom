@@ -356,7 +356,11 @@ class ChainSummarizer:
 
             i -= 1
 
-        if len(qa_blocks) < keep:
+        # FIX-4: Removed the 'if len(qa_blocks) < keep: return messages' guard.
+        # This was causing the free ChainSummarizer to do NOTHING for early iterations
+        # (when the conversation is short but token-heavy due to scanner outputs),
+        # falling through to the expensive LLM memory compressor instead.
+        if len(qa_blocks) == 0:
             return messages
 
         result = []

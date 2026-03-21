@@ -5,6 +5,36 @@ from phantom.utils.resource_paths import get_phantom_resource_path
 
 _EXCLUDED_CATEGORIES = {"scan_modes", "coordination"}
 _FRONTMATTER_PATTERN = re.compile(r"^---\s*\n.*?\n---\s*\n", re.DOTALL)
+_INJECTION_REPLACEMENT = "[REDACTED]"
+_SKILL_INJECTION_PATTERNS = (
+    re.compile(r"\{\{.*?\}\}", re.DOTALL),
+    re.compile(r"\{%.*?%\}", re.DOTALL),
+    re.compile(r"<\s*script\b.*?>.*?<\s*/\s*script\s*>", re.IGNORECASE | re.DOTALL),
+    re.compile(r"onerror\s*=", re.IGNORECASE),
+    re.compile(r"onload\s*=", re.IGNORECASE),
+    re.compile(r"javascript:\s*", re.IGNORECASE),
+    re.compile(r"\$\{.*?\}", re.DOTALL),
+    re.compile(r"#\{.*?\}", re.DOTALL),
+    re.compile(r"<\s*style\b.*?>.*?<\s*/\s*style\s*>", re.IGNORECASE | re.DOTALL),
+    re.compile(r"data:text/html", re.IGNORECASE),
+)
+
+
+def _sanitize_skill_content(content: str) -> str:
+    sanitized = content
+    was_modified = False
+    for pattern in _SKILL_INJECTION_PATTERNS:
+        if pattern.search(sanitized):
+            sanitized = pattern.sub(_INJECTION_REPLACEMENT, sanitized)
+            was_modified = True
+
+    # Ensure raw Jinja markers are never left behind.
+    sanitized = sanitized.replace("{{", "").replace("}}", "")
+    sanitized = sanitized.replace("{%", "").replace("%}", "")
+
+    if was_modified:
+        return sanitized
+    return sanitized
 
 
 def get_available_skills() -> dict[str, list[str]]:
@@ -132,6 +162,7 @@ def load_skills(skill_names: list[str]) -> dict[str, str]:
                 var_name = skill_name.split("/")[-1]
                 content = full_path.read_text(encoding="utf-8")
                 content = _FRONTMATTER_PATTERN.sub("", content).lstrip()
+                content = _sanitize_skill_content(content)
                 skill_content[var_name] = content
                 logger.info(f"Loaded skill: {skill_name} -> {var_name}")
             else:

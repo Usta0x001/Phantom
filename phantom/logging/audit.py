@@ -34,6 +34,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import threading
 import time
 import uuid
@@ -42,6 +43,15 @@ from pathlib import Path
 from typing import Any
 
 logger = logging.getLogger(__name__)
+
+_REDACTED = "[REDACTED]"
+_SENSITIVE_KEY_RE = re.compile(
+    r"(api[_-]?key|token|secret|password|authorization|cookie|session)",
+    re.IGNORECASE,
+)
+_SENSITIVE_VALUE_RE = re.compile(
+    r"(?i)(bearer\s+[a-z0-9._-]+|sk-[a-z0-9_-]{8,}|gh[pousr]_[a-z0-9_-]{8,})"
+)
 
 _instance: "AuditLogger | None" = None
 _instance_lock = threading.Lock()
@@ -115,6 +125,7 @@ class AuditLogger:
         """Append one event record to both output files. Never raises."""
         if not self.enabled:
             return
+        record = self._sanitize_record(record)
         record.setdefault("timestamp", datetime.now(UTC).isoformat())
         record["run_id"] = self.run_id
         with self._lock:
@@ -138,6 +149,33 @@ class AuditLogger:
                         f.write(line)
                 except OSError:
                     logger.debug("audit: failed to write log record")
+
+    def _sanitize_record(self, record: dict[str, Any]) -> dict[str, Any]:
+        def _sanitize(value: Any, key_hint: str | None = None) -> Any:
+            if isinstance(value, dict):
+                out: dict[str, Any] = {}
+                for key, nested in value.items():
+                    key_str = str(key)
+                    if _SENSITIVE_KEY_RE.search(key_str):
+                        out[key_str] = _REDACTED
+                    else:
+                        out[key_str] = _sanitize(nested, key_hint=key_str)
+                return out
+
+            if isinstance(value, list):
+                return [_sanitize(item, key_hint=key_hint) for item in value]
+
+            if isinstance(value, tuple):
+                return [_sanitize(item, key_hint=key_hint) for item in value]
+
+            if isinstance(value, str):
+                if key_hint and _SENSITIVE_KEY_RE.search(key_hint):
+                    return _REDACTED
+                return _SENSITIVE_VALUE_RE.sub(_REDACTED, value)
+
+            return value
+
+        return _sanitize(record)
 
     def _summarize(self, record: dict[str, Any]) -> str:  # noqa: PLR0911
         ev = record.get("event_type", "")

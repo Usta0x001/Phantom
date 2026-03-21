@@ -35,8 +35,8 @@ security implications and details."""
 @register_tool(sandbox_execution=False)
 async def web_search(query: str) -> dict[str, Any]:
     try:
-        api_key = os.getenv("PERPLEXITY_API_KEY")
-        if not api_key:
+        token = os.getenv("PERPLEXITY_API_KEY")
+        if not token:
             return {
                 "success": False,
                 "message": "PERPLEXITY_API_KEY environment variable not set",
@@ -44,7 +44,8 @@ async def web_search(query: str) -> dict[str, Any]:
             }
 
         url = "https://api.perplexity.ai/chat/completions"
-        headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+        bearer_token = f"Bearer {token}"
+        headers = {"Authorization": bearer_token, "Content-Type": "application/json"}
 
         payload = {
             "model": "sonar-reasoning",

@@ -1,4 +1,5 @@
 import html
+import os
 import threading
 from datetime import UTC, datetime
 from typing import Any, Literal
@@ -236,11 +237,43 @@ def create_agent(
                 "agent_id": None,
             }
 
+        # FIX-7: Enforce sub-agent context validation.
+        # If the parent agent fails to pass context, the sub-agent will pointlessly
+        # repeat the exact same recon steps. We force the LLM to write a real brief.
+        if not context_summary or len(context_summary.strip()) < 100:
+            return {
+                "success": False,
+                "error": (
+                    "Validation Failed: 'context_summary' is required and must be at least 100 characters. "
+                    "You MUST provide a detailed briefing for the sub-agent including discovered URLs, "
+                    "parameters, session tokens, and exact attack instructions."
+                ),
+                "agent_id": None,
+            }
+        
+        url_keywords = ("http://", "https://", "10.", "192.168.", "172.", ".com", ".org", ".net", "localhost", "127.0.0.1", "/", "api")
+        if not any(k in context_summary.lower() for k in url_keywords):
+            return {
+                "success": False,
+                "error": (
+                    "Validation Failed: 'context_summary' does not appear to contain any URLs, paths, or IPs. "
+                    "You must explicitly provide the exact targets the sub-agent should attack."
+                ),
+                "agent_id": None,
+            }
+
         # ── Rec 9 (SF-004): Agent count and depth limits ──────────────────────
         from phantom.config import Config as _Cfg
         _max_concurrent = int(_Cfg.get("phantom_max_concurrent_agents") or "20")
         _max_total = int(_Cfg.get("phantom_max_total_agents") or "100")
         _max_depth = int(_Cfg.get("phantom_max_agent_depth") or "5")
+
+        use_tool_delegation = (
+            os.environ.get("PHANTOM_USE_TOOL_DELEGATION", "false").lower() == "true"
+        )
+        if use_tool_delegation:
+            _max_total = min(_max_total, 24)
+            _max_concurrent = min(_max_concurrent, 8)
 
         with _GRAPH_LOCK:
             _running_now = sum(
@@ -352,26 +385,49 @@ def create_agent(
         agent = PhantomAgent(agent_config)
 
         inherited_messages = []
+
+        # FIX 5: Always inject Recon Briefing / Context Summary if provided
+        if context_summary and context_summary.strip():
+            inherited_messages.append({
+                "role": "user",
+                "content": (
+                    "<recon_briefing>\n"
+                    "Your parent agent provided this vital established context. DO NOT REPEAT RECONNAISSANCE for these items (e.g. do not re-curl or re-browser unless necessary):\n"
+                    + context_summary.strip()
+                    + "\n</recon_briefing>"
+                )
+            })
+
         if inherit_context:
-            # Take a deep copy so mutations to the parent's message list while the
-            # child thread iterates over the snapshot don't cause a data race.
             import copy as _copy
-            inherited_messages = _copy.deepcopy(agent_state.get_conversation_history())
-        elif context_summary and context_summary.strip():
-            # Lightweight context hand-off: pass only a concise summary written by
-            # the parent rather than the full (potentially huge) conversation history.
-            # This avoids blowing up the child's context window while still giving it
-            # the essential background it needs.
-            inherited_messages = [
-                {
+            history = agent_state.get_conversation_history()
+            
+            # Retrieve parent finding anchors to ensure subagent knows what was actually found.
+            anchors_text = ""
+            if hasattr(agent_state, "finding_anchors") and agent_state.finding_anchors:
+                anchors_text = "\\n".join([f"- {a.get('text', '')}" for a in agent_state.finding_anchors])
+                
+            # FIX 2: Defuse the Context Bomb 
+            # Sub-agents inheriting full history causes exponential token growth (e.g. 5x 40K tokens).
+            # We slice the bloated middle to cap input costs at O(1) growth per sub-agent.
+            if len(history) > 10:
+                copied_hist = _copy.deepcopy([history[0]] + history[-9:])
+                warning_msg = "<system_warning>Inherited history truncated to prevent token bloat.</system_warning>"
+                if anchors_text:
+                    warning_msg += f"\\n\\n<parent_findings>\\nCrucial findings from parent:\\n{anchors_text}\\n</parent_findings>"
+                copied_hist.append({
                     "role": "user",
-                    "content": (
-                        "<parent_context_summary>\n"
-                        + context_summary.strip()
-                        + "\n</parent_context_summary>"
-                    ),
-                }
-            ]
+                    "content": warning_msg
+                })
+                inherited_messages.extend(copied_hist)
+            else:
+                copied_hist = _copy.deepcopy(history)
+                if anchors_text:
+                    copied_hist.append({
+                        "role": "user",
+                        "content": f"<parent_findings>\\nCrucial findings from parent:\\n{anchors_text}\\n</parent_findings>"
+                    })
+                inherited_messages.extend(copied_hist)
 
         with _GRAPH_LOCK:  # Rec 1 (B-01)
             _agent_instances[state.agent_id] = agent
@@ -475,6 +531,28 @@ def send_message_to_agent(
         return {"success": False, "error": f"Failed to send message: {e}", "message_id": None}
 
 
+def _generate_task_plan(task: str) -> str:
+    t = task.lower()
+    
+    # Generic template that works for everything
+    plan = "<task_plan>\n"
+    
+    if "sql" in t:
+        plan += "        1. Use sqlmap\n        2. Confirm sqli injection\n        3. Report sql\n        4. agent_finish\n"
+    elif "xss" in t:
+        plan += "        1. Test xss payloads\n        2. Confirm input reflects\n        3. agent_finish\n"
+    elif "recon" in t:
+        plan += "        1. Map surface points\n        2. Enumerate recon ports\n        3. agent_finish\n"
+    elif "auth" in t:
+        plan += "        1. Bypass auth login\n        2. Test credentials\n        3. agent_finish\n"
+    elif "rce" in t or "command injection" in t:
+        plan += "        1. Inject rce exec commands\n        2. Verify RCE\n        3. agent_finish\n"
+    else:
+        plan += "        1. Execute generic task\n        2. agent_finish\n"
+        
+    plan += "</task_plan>"
+    return plan
+
 @register_tool(sandbox_execution=False)
 def agent_finish(
     agent_state: Any,
@@ -505,9 +583,12 @@ def agent_finish(
 
             agent_node["status"] = "finished" if success else "failed"
             agent_node["finished_at"] = datetime.now(UTC).isoformat()
+            
+            clean_findings = [f for f in (findings or []) if f and str(f).strip()]
+            
             agent_node["result"] = {
                 "summary": result_summary,
-                "findings": findings or [],
+                "findings": clean_findings,
                 "success": success,
                 "recommendations": final_recommendations or [],
             }
@@ -746,3 +827,45 @@ def wait_for_message(
                 "Waiting timeout reached",
             ],
         }
+
+@register_tool(sandbox_execution=False)
+def wait_for_agents(
+    agent_state: Any,
+    agent_ids: list[str],
+    timeout_seconds: int = 300,
+) -> dict[str, Any]:
+    import time
+    if not agent_ids:
+        return {"success": False, "error": "Must provide a non-empty list of agent_ids"}
+    
+    start_time = time.monotonic()
+    
+    while True:
+        all_finished = True
+        timed_out = []
+        results = {}
+        
+        with _GRAPH_LOCK:
+            for aid in agent_ids:
+                if aid not in _agent_graph["nodes"]:
+                    results[aid] = {"status": "not_found"}
+                    continue
+                node = _agent_graph["nodes"][aid]
+                status = node.get("status")
+                if status in ["completed", "error", "failed", "stopped", "finished"]:
+                    results[aid] = {"status": status, "result": node.get("result", {})}
+                else:
+                    all_finished = False
+        
+        if all_finished:
+            return {"success": True, "all_finished": True, "timed_out": [], "results": results, "summary": f"All agents finished: {', '.join(agent_ids)}"}
+            
+        if time.monotonic() - start_time >= timeout_seconds:
+            with _GRAPH_LOCK:
+                for aid in agent_ids:
+                    if aid in _agent_graph["nodes"] and _agent_graph["nodes"][aid].get("status") not in ["completed", "error", "failed", "stopped"]:
+                        timed_out.append(aid)
+            return {"success": True, "all_finished": False, "timed_out": timed_out, "results": results, "summary": "Timeout reached while waiting"}
+            
+        time.sleep(0.1)
+

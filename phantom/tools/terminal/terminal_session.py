@@ -32,7 +32,7 @@ class TerminalSession:
     # multi-command injection (pane.send_keys receives the raw string, so \n/\r
     # would physically press Enter and execute a second command).
     # Blocked when quarantine=True to prevent untrusted data from pivoting.
-    _QUARANTINE_METACHARACTERS: frozenset[str] = frozenset(";|&$`\n\r")
+    _QUARANTINE_METACHARACTERS: frozenset[str] = frozenset(";|&$`#!%\n\r")
 
     def __init__(self, session_id: str, work_dir: str = "/workspace", quarantine: bool = True) -> None:
         self.session_id = session_id

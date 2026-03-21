@@ -398,12 +398,21 @@ class DockerRuntime(AbstractRuntime):
                 f"iptables -A OUTPUT -d {allowed_cidr} -j ACCEPT",
                 # Allow loopback and host gateway (tool server communication)
                 f"iptables -A OUTPUT -o lo -j ACCEPT",
-                f"iptables -A OUTPUT -d 172.0.0.0/8 -j ACCEPT",   # Docker bridge range
-                f"iptables -A OUTPUT -d 10.0.0.0/8 -j ACCEPT",    # Docker bridge range
+            ]
+
+            try:
+                container.reload()
+                gateway_ip = container.attrs.get("NetworkSettings", {}).get("Gateway")
+                if gateway_ip:
+                    rules.append(f"iptables -A OUTPUT -d {gateway_ip} -j ACCEPT")
+            except Exception:
+                pass
+
+            rules.extend([
                 # Log then drop everything else
                 f"iptables -A OUTPUT -j LOG --log-prefix 'PHANTOM-OOB: ' --log-level 4",
                 f"iptables -A OUTPUT -j DROP",
-            ]
+            ])
             for rule in rules:
                 result = container.exec_run(
                     ["bash", "-c", rule],

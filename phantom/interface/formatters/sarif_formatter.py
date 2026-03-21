@@ -38,6 +38,21 @@ def _safe_str(val: Any, default: str = "") -> str:
     return str(val) if val is not None else default
 
 
+def _safe_cvss(value: Any) -> float | None:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return None
+    if parsed < 0.0 or parsed > 10.0:
+        return None
+    return parsed
+
+
+def _safe_uri(value: Any) -> str:
+    raw = _safe_str(value)
+    return "".join(ch for ch in raw if ord(ch) >= 32)
+
+
 def _rule_id(vuln: dict[str, Any]) -> str:
     """Generate a stable, slug-safe rule ID from the vulnerability name."""
     name = _safe_str(vuln.get("name") or vuln.get("title"), "Unknown")
@@ -83,6 +98,7 @@ def _make_result(vuln: dict[str, Any], run_index: int = 0) -> dict[str, Any]:
     name = _safe_str(vuln.get("name") or vuln.get("title"), "Unknown Finding")
     description = _safe_str(vuln.get("description"), name)
     endpoint = _safe_str(vuln.get("endpoint") or vuln.get("url"), "")
+    endpoint = _safe_uri(endpoint)
     payload = vuln.get("payload")
 
     message_text = description
@@ -148,10 +164,9 @@ def _make_result(vuln: dict[str, Any], run_index: int = 0) -> dict[str, Any]:
         extra["phantom-agent"] = agent_name
     cvss = vuln.get("cvss_score")
     if cvss is not None:
-        try:
-            extra["cvss"] = float(cvss)
-        except (TypeError, ValueError):
-            pass
+        safe_cvss = _safe_cvss(cvss)
+        if safe_cvss is not None:
+            extra["cvss"] = safe_cvss
     if extra:
         result["properties"] = extra
 

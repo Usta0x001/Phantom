@@ -21,6 +21,12 @@ from rich.panel import Panel
 from rich.text import Text
 
 
+def _strip_internal_paths(text: str) -> str:
+    result = re.sub(r"/workspace/[A-Za-z0-9_./\\-]*", "[REDACTED_PATH]", text)
+    result = re.sub(r"\bphantom/[A-Za-z0-9_./\\-]*", "[REDACTED_MODEL_PATH]", result)
+    return result
+
+
 # Token formatting utilities
 def format_token_count(count: float) -> str:
     count = int(count)
