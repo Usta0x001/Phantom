@@ -172,10 +172,12 @@ class AuditLogger:
                 out: dict[str, Any] = {}
                 for key, nested in value.items():
                     key_str = str(key)
-                    if _SENSITIVE_KEY_RE.search(key_str):
-                        out[key_str] = _REDACTED
-                    elif key_str in self._NUMERIC_KEYS:
+                    # Numeric/metric fields — always preserve (checked before regex to
+                    # avoid false-positives like "tokens_in" matching the word "token").
+                    if key_str in self._NUMERIC_KEYS:
                         out[key_str] = nested
+                    elif _SENSITIVE_KEY_RE.search(key_str):
+                        out[key_str] = _REDACTED
                     else:
                         out[key_str] = _sanitize(nested, key_hint=key_str)
                 return out
