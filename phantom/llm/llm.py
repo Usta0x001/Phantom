@@ -890,10 +890,24 @@ class LLM:
             pass
 
     def _extract_cost(self, response: Any) -> float:
+        # 1. API-reported cost (if provider returns it directly)
         if hasattr(response, "usage") and response.usage:
             direct_cost = getattr(response.usage, "cost", None)
             if direct_cost is not None:
                 return float(direct_cost)
+        # 2. User-configured rates (from config file / env vars) — checked before
+        # litellm so explicit user overrides take priority over built-in pricing.
+        try:
+            rate_in = float(Config.get("phantom_cost_per_1m_input") or "0")
+            rate_out = float(Config.get("phantom_cost_per_1m_output") or "0")
+            if rate_in > 0 or rate_out > 0:
+                usage = getattr(response, "usage", None) or {}
+                tok_in = getattr(usage, "prompt_tokens", 0) or 0
+                tok_out = getattr(usage, "completion_tokens", 0) or 0
+                return (tok_in * rate_in + tok_out * rate_out) / 1_000_000
+        except Exception:  # noqa: BLE001
+            pass
+        # 3. litellm built-in pricing via completion_cost.
         try:
             if hasattr(response, "_hidden_params"):
                 response._hidden_params.pop("custom_llm_provider", None)
@@ -902,9 +916,7 @@ class LLM:
                 return cost
         except Exception:  # noqa: BLE001
             pass
-        # Fallback: smart model-name lookup in litellm.model_cost registry.
-        # Handles Azure AI Foundry models like "openai/DeepSeek-V3.2" by stripping
-        # the provider prefix and trying case-insensitive name variants.
+        # 4. Manual litellm.model_cost registry lookup (handles Azure/other prefixes).
         try:
             import litellm as _litellm
             usage = getattr(response, "usage", None)
@@ -913,7 +925,6 @@ class LLM:
             if tok_in or tok_out:
                 model_key = self.config.litellm_model or ""
                 bare = model_key.split("/", 1)[-1] if "/" in model_key else model_key
-                # Build candidate names: full, bare, lowercase variants
                 candidates = [model_key, bare, bare.lower(), model_key.lower()]
                 model_cost_lower = {
                     k.lower(): v for k, v in _litellm.model_cost.items()
@@ -927,17 +938,6 @@ class LLM:
                         r_out = info.get("output_cost_per_token", 0) or 0
                         if r_in or r_out:
                             return (tok_in * r_in) + (tok_out * r_out)
-        except Exception:  # noqa: BLE001
-            pass
-        # Last resort: environment-variable-configurable rates.
-        try:
-            rate_in = float(Config.get("phantom_cost_per_1m_input") or "0")
-            rate_out = float(Config.get("phantom_cost_per_1m_output") or "0")
-            if rate_in or rate_out:
-                usage = getattr(response, "usage", None) or {}
-                tok_in = getattr(usage, "prompt_tokens", 0) or 0
-                tok_out = getattr(usage, "completion_tokens", 0) or 0
-                return (tok_in * rate_in + tok_out * rate_out) / 1_000_000
         except Exception:  # noqa: BLE001
             pass
         return 0.0
