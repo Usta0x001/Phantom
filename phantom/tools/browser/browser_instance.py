@@ -530,6 +530,165 @@ class BrowserInstance:
 
         return await self._get_page_state(tab_id)
 
+    # =========================================================================
+    # CSS Selector-based interactions (more reliable than coordinates)
+    # =========================================================================
+
+    def click_selector(
+        self, selector: str, tab_id: str | None = None, timeout: float = 5.0
+    ) -> dict[str, Any]:
+        """Click an element by CSS selector."""
+        with self._execution_lock:
+            return self._run_async(self._click_selector(selector, tab_id, timeout))
+
+    async def _click_selector(
+        self, selector: str, tab_id: str | None = None, timeout: float = 5.0
+    ) -> dict[str, Any]:
+        if not tab_id:
+            tab_id = self.current_page_id
+
+        if not tab_id or tab_id not in self.pages:
+            raise ValueError(f"Tab '{tab_id}' not found")
+
+        page = self.pages[tab_id]
+
+        try:
+            await page.click(selector, timeout=timeout * 1000)
+            state = await self._get_page_state(tab_id)
+            state["selector_found"] = True
+            state["selector_used"] = selector
+            return state
+        except Exception as e:  # noqa: BLE001
+            state = await self._get_page_state(tab_id)
+            state["selector_found"] = False
+            state["selector_used"] = selector
+            state["selector_error"] = str(e)
+            return state
+
+    def fill_selector(
+        self, selector: str, text: str, tab_id: str | None = None, timeout: float = 5.0
+    ) -> dict[str, Any]:
+        """Fill an input element by CSS selector."""
+        with self._execution_lock:
+            return self._run_async(self._fill_selector(selector, text, tab_id, timeout))
+
+    async def _fill_selector(
+        self, selector: str, text: str, tab_id: str | None = None, timeout: float = 5.0
+    ) -> dict[str, Any]:
+        if not tab_id:
+            tab_id = self.current_page_id
+
+        if not tab_id or tab_id not in self.pages:
+            raise ValueError(f"Tab '{tab_id}' not found")
+
+        page = self.pages[tab_id]
+
+        try:
+            await page.fill(selector, text, timeout=timeout * 1000)
+            state = await self._get_page_state(tab_id)
+            state["selector_found"] = True
+            state["selector_used"] = selector
+            state["text_filled"] = text[:50] + ("..." if len(text) > 50 else "")
+            return state
+        except Exception as e:  # noqa: BLE001
+            state = await self._get_page_state(tab_id)
+            state["selector_found"] = False
+            state["selector_used"] = selector
+            state["selector_error"] = str(e)
+            return state
+
+    def wait_for_selector(
+        self, selector: str, tab_id: str | None = None, timeout: float = 10.0, state: str = "visible"
+    ) -> dict[str, Any]:
+        """Wait for an element matching selector to appear."""
+        with self._execution_lock:
+            return self._run_async(self._wait_for_selector(selector, tab_id, timeout, state))
+
+    async def _wait_for_selector(
+        self, selector: str, tab_id: str | None = None, timeout: float = 10.0, state: str = "visible"
+    ) -> dict[str, Any]:
+        if not tab_id:
+            tab_id = self.current_page_id
+
+        if not tab_id or tab_id not in self.pages:
+            raise ValueError(f"Tab '{tab_id}' not found")
+
+        page = self.pages[tab_id]
+
+        try:
+            await page.wait_for_selector(selector, timeout=timeout * 1000, state=state)
+            page_state = await self._get_page_state(tab_id)
+            page_state["selector_found"] = True
+            page_state["selector_used"] = selector
+            page_state["wait_state"] = state
+            return page_state
+        except Exception as e:  # noqa: BLE001
+            page_state = await self._get_page_state(tab_id)
+            page_state["selector_found"] = False
+            page_state["selector_used"] = selector
+            page_state["selector_error"] = str(e)
+            page_state["wait_state"] = state
+            return page_state
+
+    def query_selector_all(
+        self, selector: str, tab_id: str | None = None
+    ) -> dict[str, Any]:
+        """Query all elements matching selector and return their info."""
+        with self._execution_lock:
+            return self._run_async(self._query_selector_all(selector, tab_id))
+
+    async def _query_selector_all(
+        self, selector: str, tab_id: str | None = None
+    ) -> dict[str, Any]:
+        if not tab_id:
+            tab_id = self.current_page_id
+
+        if not tab_id or tab_id not in self.pages:
+            raise ValueError(f"Tab '{tab_id}' not found")
+
+        page = self.pages[tab_id]
+
+        try:
+            elements = await page.query_selector_all(selector)
+            element_info = []
+
+            for i, el in enumerate(elements[:50]):  # Limit to 50 elements
+                try:
+                    bbox = await el.bounding_box()
+                    tag_name = await el.evaluate("el => el.tagName.toLowerCase()")
+                    text_content = await el.evaluate("el => el.textContent?.slice(0, 100) || ''")
+                    attrs = await el.evaluate("""el => {
+                        const attrs = {};
+                        for (const attr of el.attributes) {
+                            attrs[attr.name] = attr.value.slice(0, 100);
+                        }
+                        return attrs;
+                    }""")
+
+                    element_info.append({
+                        "index": i,
+                        "tag": tag_name,
+                        "text": text_content.strip()[:100],
+                        "attributes": attrs,
+                        "bbox": bbox,
+                    })
+                except Exception:  # noqa: BLE001
+                    continue
+
+            state = await self._get_page_state(tab_id)
+            state["selector_used"] = selector
+            state["elements_found"] = len(elements)
+            state["elements_returned"] = len(element_info)
+            state["elements"] = element_info
+            return state
+        except Exception as e:  # noqa: BLE001
+            state = await self._get_page_state(tab_id)
+            state["selector_used"] = selector
+            state["selector_error"] = str(e)
+            state["elements_found"] = 0
+            state["elements"] = []
+            return state
+
     def save_pdf(self, file_path: str, tab_id: str | None = None) -> dict[str, Any]:
         with self._execution_lock:
             return self._run_async(self._save_pdf(file_path, tab_id))

@@ -1,38 +1,12 @@
 <tools>
   <tool name="create_vulnerability_report">
-    <description>Create a vulnerability report for a discovered security issue.
+    <description>Create a vulnerability report for a discovered security issue. One report per vulnerability. Deduplication is automatic — if rejected as duplicate, do not re-submit. IMPORTANT: if the same report fails validation 3+ times (missing params), stop retrying and try a different approach.
 
-IMPORTANT: This tool includes automatic LLM-based deduplication. Reports that describe the same vulnerability (same root cause on the same asset) as an existing report will be rejected.
+REQUIRED: title, description, impact, target, technical_analysis.
+OPTIONAL (auto-filled if omitted): poc_description (=description), poc_script_code (only required for LIKELY/VERIFIED), remediation_steps (= "See impact + technical analysis for remediation guidance."), cvss_breakdown (auto-calculated from severity if provided, otherwise estimated LOW).
+Optional: endpoint, method, parameter, cve, cwe, code_locations (MANDATORY for white-box: include fix_before/fix_after), severity (auto-calculates cvss_breakdown).
 
-Use this tool to document a specific fully verified security vulnerability.
-
-DO NOT USE:
-- For general security observations without specific vulnerabilities
-- When you don't have concrete vulnerability details
-- When you don't have a proof of concept, or still not 100% sure if it's a vulnerability
-- For tracking multiple vulnerabilities (create separate reports)
-- For reporting multiple vulnerabilities at once. Use a separate create_vulnerability_report for each vulnerability.
-- To re-report a vulnerability that was already reported (even with different details)
-
-White-box requirement (when you have access to the code): You MUST include code_locations with nested XML, including fix_before/fix_after on locations where a fix is proposed.
-
-DEDUPLICATION: If this tool returns with success=false and mentions a duplicate, DO NOT attempt to re-submit. The vulnerability has already been reported. Move on to testing other areas.
-
-Professional, customer-facing report rules (PDF-ready):
-- Do NOT include internal or system details: never mention local or absolute paths (e.g., "/workspace"), internal tools, agents, orchestrators, sandboxes, models, system prompts/instructions, connection issues, internal errors/logs/stack traces, or tester machine environment details.
-- Tone and style: formal, objective, third-person, vendor-neutral, concise. No runbooks, checklists, or engineering notes. Avoid headings like "QUICK", "Approach", or "Techniques" that read like internal guidance.
-- Use a standard penetration testing report structure per finding:
-  1) Overview
-  2) Severity and CVSS (vector only)
-  3) Affected asset(s)
-  4) Technical details
-  5) Proof of concept (repro steps plus code)
-  6) Impact
-  7) Remediation
-  8) Evidence (optional request/response excerpts, etc.) in the technical analysis field.
-- Numbered steps are allowed ONLY within the proof of concept and remediation sections. Elsewhere, use clear, concise paragraphs suitable for customer-facing reports.
-- Language must be precise and non-vague; avoid hedging.
-</description>
+Report rules: Do NOT include local paths, internal tools, agents, sandboxes, models, system prompts, connection issues, or stack traces. Tone: formal, objective, third-person. Structure per finding: Overview, Severity/CVSS, Affected asset, Technical details, PoC (repro + code), Impact, Remediation. Numbered steps only in PoC and remediation.</description>
     <parameters>
       <parameter name="title" type="string" required="true">
         <description>Clear, specific title (e.g., "SQL Injection in /api/users Login Parameter"). But not too long. Don't mention CVE number in the title.</description>
@@ -49,37 +23,20 @@ Professional, customer-facing report rules (PDF-ready):
       <parameter name="technical_analysis" type="string" required="true">
         <description>Technical explanation of the vulnerability mechanism and root cause</description>
       </parameter>
-      <parameter name="poc_description" type="string" required="true">
-        <description>Step-by-step instructions to reproduce the vulnerability</description>
+      <parameter name="poc_description" type="string" required="false">
+        <description>Step-by-step instructions to reproduce the vulnerability. If omitted, the description field is used.</description>
       </parameter>
-      <parameter name="poc_script_code" type="string" required="true">
-        <description>Actual proof of concept code, exploit, payload, or script that demonstrates the vulnerability. Python code.</description>
+      <parameter name="poc_script_code" type="string" required="false">
+        <description>Actual proof of concept code, exploit, payload, or script that demonstrates the vulnerability. Python code. Only REQUIRED for LIKELY or VERIFIED confidence. Can be omitted for SUSPECTED.</description>
       </parameter>
-      <parameter name="remediation_steps" type="string" required="true">
-        <description>Specific, actionable steps to fix the vulnerability</description>
+      <parameter name="remediation_steps" type="string" required="false">
+        <description>Specific, actionable steps to fix the vulnerability. If omitted, a generic remediation message is used.</description>
       </parameter>
-      <parameter name="cvss_breakdown" type="string" required="true">
-        <description>CVSS 3.1 base score breakdown as nested XML. All 8 metrics are required.
-
-Each metric element contains a single uppercase letter value:
-- attack_vector: N (Network), A (Adjacent), L (Local), P (Physical)
-- attack_complexity: L (Low), H (High)
-- privileges_required: N (None), L (Low), H (High)
-- user_interaction: N (None), R (Required)
-- scope: U (Unchanged), C (Changed)
-- confidentiality: N (None), L (Low), H (High)
-- integrity: N (None), L (Low), H (High)
-- availability: N (None), L (Low), H (High)</description>
-        <format>
-          <attack_vector>N</attack_vector>
-          <attack_complexity>L</attack_complexity>
-          <privileges_required>N</privileges_required>
-          <user_interaction>N</user_interaction>
-          <scope>U</scope>
-          <confidentiality>H</confidentiality>
-          <integrity>H</integrity>
-          <availability>N</availability>
-        </format>
+      <parameter name="cvss_breakdown" type="string" required="false">
+        <description>CVSS 3.1 base score as nested XML. If omitted, auto-calculated from severity: CRITICAL=9.8, HIGH=8.9, MEDIUM=6.5, LOW=3.7, INFO=0.1. You can also provide plain vector like "AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:N".</description>
+      </parameter>
+      <parameter name="severity" type="string" required="false">
+        <description>Severity tier: CRITICAL, HIGH, MEDIUM, LOW, INFO. If provided, auto-calculates cvss_breakdown and cvss_score. Overrides any provided cvss_breakdown.</description>
       </parameter>
       <parameter name="endpoint" type="string" required="false">
         <description>API endpoint(s) or URL path(s) (e.g., "/api/login") - for web vulnerabilities, or Git repository path(s) - for code vulnerabilities</description>
@@ -91,7 +48,7 @@ Each metric element contains a single uppercase letter value:
         <description>The specific HTTP parameter, header, or query string variable that carries the vulnerability (e.g., "q", "id", "username", "Authorization").
 If the endpoint contains a query string (e.g., "/search?q=test"), extract the parameter name from it (e.g., "q").
 If the vulnerable input is in a request body (e.g., POST JSON), include the field name (e.g., "username").
-If there is no specific parameter (e.g., SSRF via URL field), omit this field.</parameter>
+If there is no specific parameter (e.g., SSRF via URL field), omit this field.</description>
       </parameter>
       <parameter name="cve" type="string" required="false">
         <description>CVE identifier. ONLY the ID, e.g. "CVE-2024-1234" — do NOT include the name or description.
@@ -99,63 +56,10 @@ You must be 100% certain of the exact CVE number. Do NOT guess, approximate, or 
 If web_search is available, use it to verify the CVE exists and matches this vulnerability. If you cannot verify it, omit this field entirely.</description>
       </parameter>
       <parameter name="cwe" type="string" required="false">
-        <description>CWE identifier. ONLY the ID, e.g. "CWE-89" — do NOT include the name or parenthetical (wrong: "CWE-89 (SQL Injection)").
-
-You must be 100% certain of the exact CWE number. Do NOT guess or approximate.
-If web_search is available and you are unsure, use it to look up the correct CWE. If you cannot be certain, omit this field entirely.
-Always prefer the most specific child CWE over a broad parent.
-For example, use CWE-89 instead of CWE-74, or CWE-78 instead of CWE-77.
-
-Reference (ID only — names here are just for your reference, do NOT include them in the value):
-- Injection: CWE-79 XSS, CWE-89 SQLi, CWE-78 OS Command Injection, CWE-94 Code Injection, CWE-77 Command Injection
-- Auth/Access: CWE-287 Improper Authentication, CWE-862 Missing Authorization, CWE-863 Incorrect Authorization, CWE-306 Missing Authentication for Critical Function, CWE-639 Authorization Bypass Through User-Controlled Key
-- Web: CWE-352 CSRF, CWE-918 SSRF, CWE-601 Open Redirect, CWE-434 Unrestricted Upload of File with Dangerous Type
-- Memory: CWE-787 Out-of-bounds Write, CWE-125 Out-of-bounds Read, CWE-416 Use After Free, CWE-120 Classic Buffer Overflow
-- Data: CWE-502 Deserialization of Untrusted Data, CWE-22 Path Traversal, CWE-611 XXE
-- Crypto/Config: CWE-798 Use of Hard-coded Credentials, CWE-327 Use of Broken or Risky Cryptographic Algorithm, CWE-311 Missing Encryption of Sensitive Data, CWE-916 Password Hash With Insufficient Computational Effort
-
-Do NOT use broad/parent CWEs like CWE-74, CWE-20, CWE-200, CWE-284, or CWE-693.</description>
+        <description>CWE identifier. ONLY the ID (e.g., "CWE-89"). Do NOT include the name or parenthetical. Use web_search to verify. Prefer the most specific child CWE over broad parents (e.g., CWE-89 over CWE-74). Common: CWE-89 SQLi, CWE-79 XSS, CWE-918 SSRF, CWE-352 CSRF, CWE-78 OS Command Injection, CWE-94 Code Injection, CWE-287 Improper Auth, CWE-862/863 Authorization, CWE-601 Open Redirect, CWE-502 XXE, CWE-22 Path Traversal, CWE-798 Hard-coded Credentials, CWE-434 Unsafe Upload. Omit if uncertain.</description>
       </parameter>
       <parameter name="code_locations" type="string" required="false">
-        <description>Nested XML list of code locations where the vulnerability exists. MANDATORY for white-box testing.
-
-CRITICAL — HOW fix_before/fix_after WORK:
-fix_before and fix_after are LITERAL BLOCK-LEVEL REPLACEMENTS used directly for GitHub/GitLab PR suggestion blocks. When a reviewer clicks "Accept suggestion", the platform replaces the EXACT lines from start_line to end_line with the fix_after content. This means:
-
-1. fix_before MUST be an EXACT, VERBATIM copy of the source code at lines start_line through end_line. Same whitespace, same indentation, same line breaks. If fix_before does not match the actual file content character-for-character, the suggestion will be wrong or will corrupt the code when accepted.
-
-2. fix_after is the COMPLETE replacement for that entire block. It replaces ALL lines from start_line to end_line. It can be more lines, fewer lines, or the same number of lines as fix_before.
-
-3. start_line and end_line define the EXACT line range being replaced. They must precisely cover the lines in fix_before — no more, no less. If the vulnerable code spans lines 45-48, then start_line=45 and end_line=48, and fix_before must contain all 4 lines exactly as they appear in the file.
-
-MULTI-PART FIXES:
-Many fixes require changes in multiple non-contiguous parts of a file (e.g., adding an import at the top AND changing code lower down), or across multiple files. Since each fix_before/fix_after pair covers ONE contiguous block, you MUST create SEPARATE location entries for each part of the fix:
-
-- Each location covers one contiguous block of lines to change
-- Use the label field to describe how each part relates to the overall fix (e.g., "Add import for parameterized query library", "Replace string interpolation with parameterized query")
-- Order fix locations logically: primary fix first (where the vulnerability manifests), then supporting changes (imports, config, etc.)
-
-COMMON MISTAKES TO AVOID:
-- Do NOT guess line numbers. Read the file and verify the exact lines before reporting.
-- Do NOT paraphrase or reformat code in fix_before. It must be a verbatim copy.
-- Do NOT set start_line=end_line when the vulnerable code spans multiple lines. Cover the full range.
-- Do NOT put an import addition and a code change in the same fix_before/fix_after if they are not on adjacent lines. Split them into separate locations.
-- Do NOT include lines outside the vulnerable/fixed code in fix_before just to "pad" the range.
-- Do NOT duplicate changes across locations. Each location's fix_after must ONLY contain changes for its own line range. Never repeat a change that is already covered by another location.
-
-Each location element fields:
-- file (REQUIRED): Path relative to repository root. No leading slash, no absolute paths, no ".." traversal.
-  Correct: "src/db/queries.ts" or "app/routes/users.py"
-  Wrong: "/workspace/repo/src/db/queries.ts", "./src/db/queries.ts", "../../etc/passwd"
-- start_line (REQUIRED): Exact 1-based line number where the vulnerable/affected code begins. Must be a positive integer. You must be certain of this number — go back and verify against the actual file content if needed.
-- end_line (REQUIRED): Exact 1-based line number where the vulnerable/affected code ends. Must be >= start_line. Set equal to start_line ONLY if the code is truly on a single line.
-- snippet (optional): The actual source code at this location, copied verbatim from the file.
-- label (optional): Short role description for this location. For multi-part fixes, use this to explain the purpose of each change (e.g., "Add import for escape utility", "Sanitize user input before SQL query").
-- fix_before (optional): The vulnerable code to be replaced — VERBATIM copy of lines start_line through end_line. Must match the actual source character-for-character including whitespace and indentation.
-- fix_after (optional): The corrected code that replaces the entire fix_before block. Must be syntactically valid and ready to apply as a direct replacement.
-
-Locations without fix_before/fix_after are informational context (e.g. showing the source of tainted data).
-Locations with fix_before/fix_after are actionable fixes (used directly for PR suggestion blocks).</description>
+        <description>MANDATORY for white-box testing. Nested XML list of code locations. Each location has: file (path relative to repo root, no leading slash), start_line, end_line (1-based inclusive range), snippet (optional), label (optional), fix_before (verbatim vulnerable code), fix_after (corrected code). fix_before/fix_after are LITERAL line-range replacements — fix_before must match source exactly character-for-character. Do NOT guess line numbers. Multi-part fixes need separate location entries. Omit this field for black-box testing.</description>
         <format>
           <location>
             <file>src/db/queries.ts</file>

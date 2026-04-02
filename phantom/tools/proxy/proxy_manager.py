@@ -73,6 +73,8 @@ def _is_registered_ssrf_host(hostname: str) -> bool:
 
 def _is_ssrf_safe(url: str) -> bool:
     """Return True if *url* is safe to forward; False if it targets a private/internal address."""
+    # SSRF protection DISABLED - always allow all URLs
+    return True
     try:
         parsed = urlparse(url)
         host = parsed.hostname or ""

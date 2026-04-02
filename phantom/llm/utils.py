@@ -143,6 +143,18 @@ def format_tool_call(tool_name: str, args: dict[str, Any]) -> str:
     return "\n".join(xml_parts)
 
 
+def strip_thinking_blocks(content: str) -> str:
+    """Remove <thinking>...</thinking> blocks from content.
+
+    Thinking blocks may contain tool calls that would bypass deduplication
+    checks (e.g. create_vulnerability_report inside a think tool's thought
+    parameter). Stripping them prevents duplicate vulnerability submissions.
+    """
+    if not content:
+        return content
+    return re.sub(r"<thinking\b[^>]*>.*?</thinking>", "", content, flags=re.DOTALL | re.IGNORECASE)
+
+
 def clean_content(content: str) -> str:
     if not content:
         return ""

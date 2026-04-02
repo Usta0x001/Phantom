@@ -41,13 +41,16 @@ def _get_context_fill_ratio(context_window: int) -> float:
         return 0.40  # Small models -> conservative compression
 
 # Keywords that indicate a message contains a confirmed finding worth anchoring.
+# ENHANCED: Added credentials, network info, and attack progression keywords
+# to prevent context loss during memory compression.
 _ANCHOR_KEYWORDS = (
+    # Core vulnerability indicators
     "vulnerability", "vulnerabilit", "exploit", "sqli", "xss", "rce",
     "injection", "bypass", "authentication", "unauthorized", "open port",
     "open ports", "found:", "discovered", "confirmed", "critical", "high",
     "medium", "cve-", "owasp", "payload", "proof of concept", "poc",
     "create_vulnerability_report",
-    # Additional vulnerability types
+    # Vulnerability types
     "idor", "idor vulnerability", "idor allows",
     "csrf", "xsrf", "csrf vulnerability", "csrf allows",
     "ssrf", "xxe", "ssti", "template injection",
@@ -64,6 +67,39 @@ _ANCHOR_KEYWORDS = (
     "host header", "host header injection",
     "idor allows accessing", "idor allows viewing",
     "idor vulnerability allows",
+    # ADDED: Credentials and secrets (prevent losing discovered credentials)
+    "password", "passwd", "credential", "secret", "api_key", "apikey",
+    "api-key", "bearer", "authorization", "auth_token", "access_token",
+    "refresh_token", "private_key", "public_key", "ssh_key",
+    # ADDED: Session and authentication tokens
+    "session", "cookie", "session_id", "sessionid", "phpsessid",
+    "jsessionid", "asp.net_sessionid", "csrf_token", "xsrf_token",
+    # ADDED: Network and infrastructure (internal IPs, cloud metadata)
+    "internal", "private", "localhost", "127.0.0.1", "0.0.0.0",
+    "10.0.", "10.1.", "10.2.", "172.16.", "172.17.", "172.18.",
+    "192.168.", "169.254.", "metadata.google", "169.254.169.254",
+    "metadata", "aws", "gcp", "azure", "ec2", "iam", "s3 bucket",
+    # ADDED: System and execution (prevent losing shell/command info)
+    "shell", "command", "exec", "system", "eval", "subprocess",
+    "admin", "root", "sudo", "privilege", "escalat", "elevated",
+    # ADDED: Files and paths (prevent losing file discovery info)
+    "upload", "download", "file", "/etc/", "/var/", "/tmp/",
+    "config", "backup", ".env", ".git", "web.config", "wp-config",
+    ".htaccess", "robots.txt", "sitemap", "swagger", "openapi",
+    # ADDED: Testing context (preserve what was tested and findings)
+    "endpoint", "parameter", "header", "query", "body", "form",
+    "response", "status", "error", "exception", "stack trace",
+    "500 internal", "403 forbidden", "401 unauthorized", "400 bad",
+    # ADDED: Attack progression (preserve chaining information)
+    "chain", "pivot", "escalat", "exfiltrat", "lateral", "post-exploit",
+    "foothold", "persistence", "c2", "callback", "reverse shell",
+    "bind shell", "webshell", "backdoor",
+    # ADDED: WAF and bypass indicators
+    "waf", "firewall", "blocked", "filtered", "sanitized", "encoded",
+    "bypass", "evasion", "obfuscat",
+    # ADDED: Out-of-band indicators
+    "oast", "out-of-band", "dns callback", "http callback", "blind",
+    "time-based", "sleep", "delay", "waitfor",
 )
 
 

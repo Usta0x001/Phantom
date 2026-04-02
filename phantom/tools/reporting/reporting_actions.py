@@ -20,11 +20,15 @@ _CVSS_FIELDS = (
 
 _background_tasks: set[Any] = set()
 
+_TITLE_ATTEMPT_COUNTS: dict[str, int] = {}
+
+_MAX_ATTEMPTS_PER_TITLE = 3
+
 
 def parse_cvss_xml(xml_str: str) -> dict[str, str] | None:
     """Parse CVSS breakdown from XML tags or plain CVSS vector string.
 
-    A5: Accepts both XML format and plain CVSS vector strings like
+    Accepts both XML format and plain CVSS vector strings like
     'AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H' for more forgiving input.
     """
     if not xml_str or not xml_str.strip():
@@ -38,7 +42,7 @@ def parse_cvss_xml(xml_str: str) -> dict[str, str] | None:
     if result:
         return result
 
-    # A5: Fallback - try plain CVSS vector string (AV:N/AC:L/...)
+    # Fallback - try plain CVSS vector string (AV:N/AC:L/...)
     _vector_map = {
         "AV": "attack_vector",
         "AC": "attack_complexity",
@@ -58,6 +62,66 @@ def parse_cvss_xml(xml_str: str) -> dict[str, str] | None:
             if field_name:
                 result[field_name] = val.strip().upper()
     return result if result else None
+
+
+_SEVERITY_CVSS_DEFAULTS: dict[str, dict[str, str]] = {
+    "CRITICAL": {
+        "attack_vector": "N",
+        "attack_complexity": "L",
+        "privileges_required": "N",
+        "user_interaction": "N",
+        "scope": "U",
+        "confidentiality": "H",
+        "integrity": "H",
+        "availability": "H",
+    },
+    "HIGH": {
+        "attack_vector": "N",
+        "attack_complexity": "L",
+        "privileges_required": "N",
+        "user_interaction": "N",
+        "scope": "U",
+        "confidentiality": "H",
+        "integrity": "H",
+        "availability": "N",
+    },
+    "MEDIUM": {
+        "attack_vector": "N",
+        "attack_complexity": "L",
+        "privileges_required": "N",
+        "user_interaction": "N",
+        "scope": "U",
+        "confidentiality": "L",
+        "integrity": "L",
+        "availability": "N",
+    },
+    "LOW": {
+        "attack_vector": "N",
+        "attack_complexity": "H",
+        "privileges_required": "N",
+        "user_interaction": "N",
+        "scope": "U",
+        "confidentiality": "L",
+        "integrity": "N",
+        "availability": "N",
+    },
+    "INFO": {
+        "attack_vector": "N",
+        "attack_complexity": "H",
+        "privileges_required": "N",
+        "user_interaction": "N",
+        "scope": "U",
+        "confidentiality": "N",
+        "integrity": "N",
+        "availability": "N",
+    },
+}
+
+
+def _cvss_from_severity(severity: str | None) -> dict[str, str] | None:
+    if not severity:
+        return None
+    return _SEVERITY_CVSS_DEFAULTS.get(severity.upper().strip())
 
 
 def parse_code_locations_xml(xml_str: str) -> list[dict[str, Any]] | None:
@@ -186,7 +250,6 @@ def calculate_cvss_and_severity(
 def _validate_required_fields(**kwargs: str | None) -> list[str]:
     validation_errors: list[str] = []
 
-    # A5: poc_script_code is only required for LIKELY/VERIFIED confidence
     confidence = (kwargs.get("confidence") or "LIKELY").upper().strip()
     required_fields = {
         "title": "Title cannot be empty",
@@ -194,12 +257,9 @@ def _validate_required_fields(**kwargs: str | None) -> list[str]:
         "impact": "Impact cannot be empty",
         "target": "Target cannot be empty",
         "technical_analysis": "Technical analysis cannot be empty",
-        "poc_description": "PoC description cannot be empty",
-        "remediation_steps": "Remediation steps cannot be empty",
     }
-    # A5: Only require poc_script_code for non-SUSPECTED reports
     if confidence != "SUSPECTED":
-        required_fields["poc_script_code"] = "PoC script/code is REQUIRED - provide the actual exploit/payload"
+        required_fields["poc_script_code"] = "PoC script/code is REQUIRED for LIKELY/VERIFIED confidence - provide the actual exploit/payload, or change confidence to SUSPECTED"
 
     for field_name, error_msg in required_fields.items():
         value = kwargs.get(field_name)
@@ -268,23 +328,29 @@ def create_vulnerability_report(  # noqa: PLR0912
     impact: str,
     target: str,
     technical_analysis: str,
-    poc_description: str,
-    poc_script_code: str,
-    remediation_steps: str,
-    cvss_breakdown: str,
+    poc_description: str | None = None,
+    poc_script_code: str | None = None,
+    remediation_steps: str | None = None,
+    cvss_breakdown: str | None = None,
     endpoint: str | None = None,
     method: str | None = None,
     parameter: str | None = None,
     cve: str | None = None,
     cwe: str | None = None,
     code_locations: str | None = None,
-    # Rec 10 (ER-001): Confidence tier — distinguishes verified findings from
-    # suspected ones so consumers can triage reports accurately.
-    # VERIFIED  = PoC auto-replayed and confirmed.
-    # LIKELY    = Validated by agent reasoning, not replayed (default).
-    # SUSPECTED = Discovery signal only, not yet validated.
+    severity: str | None = None,
+    # Confidence tier: VERIFIED/PoC auto-replayed, LIKELY/validated (default), SUSPECTED/discovery signal
     confidence: str = "LIKELY",
 ) -> dict[str, Any]:
+    # Fill in defaults for optional fields
+    if not poc_description:
+        poc_description = description
+    if not remediation_steps:
+        remediation_steps = "See impact and technical analysis for remediation guidance."
+    if not poc_script_code:
+        poc_script_code = ""
+    if not cvss_breakdown:
+        cvss_breakdown = ""
     # A5: Pass confidence to _validate_required_fields so it can relax poc_script_code
     validation_errors = _validate_required_fields(
         title=title,
@@ -300,20 +366,14 @@ def create_vulnerability_report(  # noqa: PLR0912
 
     parsed_cvss = parse_cvss_xml(cvss_breakdown)
     if not parsed_cvss:
-        # A5: Auto-fill default CVSS for SUSPECTED confidence instead of rejecting
-        if (confidence or "LIKELY").upper().strip() == "SUSPECTED":
-            parsed_cvss = {
-                "attack_vector": "N",
-                "attack_complexity": "L",
-                "privileges_required": "N",
-                "user_interaction": "N",
-                "scope": "U",
-                "confidentiality": "L",
-                "integrity": "L",
-                "availability": "N",
-            }
-        else:
-            validation_errors.append("cvss: could not parse CVSS breakdown XML or vector string")
+        # Try severity-based auto-calculation
+        parsed_cvss = _cvss_from_severity(severity)
+        if not parsed_cvss:
+            # Fallback default for SUSPECTED confidence
+            if (confidence or "LIKELY").upper().strip() == "SUSPECTED":
+                parsed_cvss = _cvss_from_severity("LOW")
+            if not parsed_cvss:
+                validation_errors.append("cvss: could not parse CVSS breakdown XML or vector string (provide cvss_breakdown XML or set severity=CRITICAL/HIGH/MEDIUM/LOW/INFO)")
     else:
         validation_errors.extend(_validate_cvss_parameters(**parsed_cvss))
 
@@ -333,7 +393,27 @@ def create_vulnerability_report(  # noqa: PLR0912
             validation_errors.append(cwe_err)
 
     if validation_errors:
-        return {"success": False, "message": "Validation failed", "errors": validation_errors}
+        # Track failed attempts so the agent knows not to retry endlessly
+        title_key = title.strip().lower()
+        _TITLE_ATTEMPT_COUNTS[title_key] = _TITLE_ATTEMPT_COUNTS.get(title_key, 0) + 1
+        attempt_count = _TITLE_ATTEMPT_COUNTS[title_key]
+        if attempt_count >= _MAX_ATTEMPTS_PER_TITLE:
+            return {
+                "success": False,
+                "message": (
+                    f"Validation failed ({attempt_count} attempts). "
+                    f"Stop retrying — fix the errors below or change confidence to SUSPECTED "
+                    f"to skip optional fields like cvss_breakdown and poc_script_code."
+                ),
+                "errors": validation_errors,
+                "attempt_count": attempt_count,
+            }
+        return {
+            "success": False,
+            "message": "Validation failed",
+            "errors": validation_errors,
+            "attempt_count": attempt_count,
+        }
 
     # Rec 10 (ER-001): Validate and normalise confidence tier.
     _VALID_CONFIDENCE = ("VERIFIED", "LIKELY", "SUSPECTED")
@@ -416,7 +496,7 @@ def create_vulnerability_report(  # noqa: PLR0912
         replay_status = "SKIPPED"
 
     assert parsed_cvss is not None
-    cvss_score, severity, cvss_vector = calculate_cvss_and_severity(**parsed_cvss)
+    cvss_score, cvss_severity, cvss_vector = calculate_cvss_and_severity(**parsed_cvss)
 
     try:
         from phantom.telemetry.tracer import get_global_tracer
@@ -488,12 +568,16 @@ def create_vulnerability_report(  # noqa: PLR0912
                     "duplicate_title": duplicate_title,
                     "confidence": dedupe_confidence,
                     "reason": dedupe_result.get("reason", ""),
+                    "attempt_count": 0,
                 }
+                # Reset attempt counter — title was successfully evaluated
+                title_key = title.strip().lower()
+                _TITLE_ATTEMPT_COUNTS.pop(title_key, None)
 
         report_id = tracer.add_vulnerability_report(
             title=title,
             description=description,
-            severity=severity,
+            severity=cvss_severity,
             impact=impact,
             target=target,
             technical_analysis=technical_analysis,
@@ -518,15 +602,20 @@ def create_vulnerability_report(  # noqa: PLR0912
                 "message": "Failed to persist vulnerability report: tracer returned empty report_id",
             }
 
+        # Reset attempt counter on success
+        title_key = title.strip().lower()
+        _TITLE_ATTEMPT_COUNTS.pop(title_key, None)
+
         return {
             "success": True,
             "message": f"Vulnerability report '{title}' created successfully",
             "report_id": report_id,
-            "severity": severity,
+            "severity": cvss_severity,
             "cvss_score": cvss_score,
             # Rec 10: surface confidence and replay status to callers
             "confidence": confidence,
             "replay_status": replay_status,
+            "attempt_count": 0,
         }
 
     except (ImportError, AttributeError) as e:

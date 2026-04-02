@@ -22,6 +22,7 @@ from phantom.llm.utils import (
     fix_incomplete_tool_call,
     normalize_tool_format,
     parse_tool_invocations,
+    strip_thinking_blocks,
 )
 from phantom.skills import load_skills
 from phantom.tools import get_tools_prompt
@@ -419,6 +420,9 @@ class LLM:
 
         accumulated = normalize_tool_format(accumulated)
         accumulated = fix_incomplete_tool_call(_truncate_to_first_function(accumulated))
+        # Strip thinking blocks so their embedded tool calls (e.g. create_vulnerability_report
+        # inside a think tool's thought parameter) do not bypass deduplication checks.
+        accumulated = strip_thinking_blocks(accumulated)
         _parsed_tools = parse_tool_invocations(accumulated)
 
         # AUDIT-FIX-09: When the LLM produces text that looks like a tool call

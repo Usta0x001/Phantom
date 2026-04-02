@@ -38,22 +38,12 @@ Use this tool when:
       <description>Response containing: - agent_completed: Whether the agent was marked as completed - parent_notified: Whether parent was notified (if applicable) - completion_summary: Summary of completion status</description>
     </returns>
     <examples>
-  # Sub-agent completing subdomain enumeration task
-  <function=agent_finish>
-  <parameter=result_summary>Completed comprehensive subdomain enumeration for target.com.
-              Discovered 47 subdomains including several interesting ones with admin/dev
-              in the name. Found 3 subdomains with exposed services on non-standard
-              ports.</parameter>
-  <parameter=findings>["admin.target.com - exposed phpMyAdmin",
-                "dev-api.target.com - unauth API endpoints",
-                "staging.target.com - directory listing enabled",
-                "mail.target.com - POP3/IMAP services"]</parameter>
-  <parameter=success>true</parameter>
-  <parameter=report_to_parent>true</parameter>
-  <parameter=final_recommendations>["Prioritize testing admin.target.com for default creds",
-                             "Enumerate dev-api.target.com API endpoints",
-                             "Check staging.target.com for sensitive files"]</parameter>
-  </function>
+<function=agent_finish>
+<parameter=result_summary>Completed SQL injection testing. Found critical SQLi in /api/login, confirmed with UNION SELECT payload. Database enumeration successful.</parameter>
+<parameter=findings>["SQLi in /api/login parameter 'username'"]</parameter>
+<parameter=success>true</parameter>
+<parameter=report_to_parent>true</parameter>
+</function>
     </examples>
   </tool>
   <tool name="create_agent">
@@ -92,36 +82,12 @@ Include: URLs tested, vulnerabilities found, techniques attempted, target techno
       <description>Response containing: - agent_id: Unique identifier for the created agent - success: Whether the agent was created successfully - message: Status message - agent_info: Details about the created agent</description>
     </returns>
     <examples>
-  # After confirming no SQL testing agent exists, create agent for vulnerability validation
-  <function=create_agent>
-  <parameter=task>Validate and exploit the suspected SQL injection vulnerability found in
-              the login form. Confirm exploitability and document proof of concept.</parameter>
-  <parameter=name>SQLi Validator</parameter>
-  <parameter=skills>sql_injection</parameter>
-  </function>
-
-  <function=create_agent>
-  <parameter=task>Test authentication mechanisms, JWT implementation, and session management
-              for security vulnerabilities and bypass techniques.</parameter>
-  <parameter=name>Auth Specialist</parameter>
-  <parameter=skills>authentication_jwt, business_logic</parameter>
-  </function>
-
-  # Example of single-skill specialization (most focused)
-  <function=create_agent>
-  <parameter=task>Perform comprehensive XSS testing including reflected, stored, and DOM-based
-              variants across all identified input points.</parameter>
-  <parameter=name>XSS Specialist</parameter>
-  <parameter=skills>xss</parameter>
-  </function>
-
-  # Example of up to 5 related skills (borderline acceptable)
-  <function=create_agent>
-  <parameter=task>Test for server-side vulnerabilities including SSRF, XXE, and potential
-              RCE vectors in file upload and XML processing endpoints.</parameter>
-  <parameter=name>Server-Side Attack Specialist</parameter>
-  <parameter=skills>ssrf, xxe, rce</parameter>
-  </function>
+<function=create_agent>
+<parameter=task>Test authentication mechanisms, JWT implementation, and session management for security vulnerabilities.</parameter>
+<parameter=name>Auth Specialist</parameter>
+<parameter=skills>authentication_jwt</parameter>
+<parameter=context_summary>Already tested: login endpoint has SQL injection. Now need to test authenticated areas for IDOR, privilege escalation, and session handling.</parameter>
+</function>
     </examples>
   </tool>
   <tool name="send_message_to_agent">
@@ -154,26 +120,12 @@ Best practices:
       <description>Response containing: - success: Whether the message was sent successfully - message_id: Unique identifier for the message - delivery_status: Status of message delivery</description>
     </returns>
     <examples>
-  # Share discovered vulnerability information
-  <function=send_message_to_agent>
-  <parameter=target_agent_id>agent_abc123</parameter>
-  <parameter=message>Found SQL injection vulnerability in /login.php parameter 'username'.
-              Payload: admin' OR '1'='1' -- successfully bypassed authentication.
-              You should focus your testing on the authenticated areas of the
-              application.</parameter>
-  <parameter=message_type>information</parameter>
-  <parameter=priority>high</parameter>
-  </function>
-
-  # Request assistance from specialist agent
-  <function=send_message_to_agent>
-  <parameter=target_agent_id>agent_def456</parameter>
-  <parameter=message>I've identified what appears to be a custom encryption implementation
-              in the API responses. Can you analyze the cryptographic strength and look
-              for potential weaknesses?</parameter>
-  <parameter=message_type>query</parameter>
-  <parameter=priority>normal</parameter>
-  </function>
+<function=send_message_to_agent>
+<parameter=target_agent_id>agent_abc123</parameter>
+<parameter=message>Found SQL injection in /api/login 'username' parameter. Payload: admin' OR '1'='1' -- . Focus testing on authenticated areas.</parameter>
+<parameter=message_type>information</parameter>
+<parameter=priority>high</parameter>
+</function>
     </examples>
   </tool>
   <tool name="view_agent_graph">
@@ -217,15 +169,9 @@ NOTE: If you are waiting for an agent that is NOT your subagent, you first tell 
       <description>Response containing: - success: Whether the agent successfully entered waiting state - status: Current agent status ("waiting") - reason: The reason for waiting - agent_info: Details about the waiting agent - resume_conditions: List of conditions that will resume the agent</description>
     </returns>
     <examples>
-  # Wait for subagents to complete their tasks
-  <function=wait_for_message>
-  <parameter=reason>Waiting for subdomain enumeration and port scanning subagents to complete their tasks and report findings</parameter>
-  </function>
-
-  # Coordinate with other agents
-  <function=wait_for_message>
-  <parameter=reason>Waiting for vulnerability assessment agent to share discovered attack vectors before proceeding with exploitation phase</parameter>
-  </function>
+<function=wait_for_message>
+<parameter=reason>Waiting for SQL injection validation agent to complete and report findings</parameter>
+</function>
     </examples>
   </tool>
 </tools>

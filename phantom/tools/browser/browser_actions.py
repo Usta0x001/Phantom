@@ -29,6 +29,11 @@ BrowserAction = Literal[
     "view_source",
     "close",
     "list_tabs",
+    # CSS Selector-based actions (more reliable than coordinates)
+    "click_selector",
+    "fill_selector",
+    "wait_for_selector",
+    "query_selector_all",
 ]
 
 
@@ -70,6 +75,11 @@ def _validate_key(action_name: str, key: str | None) -> None:
 def _validate_file_path(action_name: str, file_path: str | None) -> None:
     if not file_path:
         raise ValueError(f"file_path parameter is required for {action_name} action")
+
+
+def _validate_selector(action_name: str, selector: str | None) -> None:
+    if not selector:
+        raise ValueError(f"selector parameter is required for {action_name} action")
 
 
 def _handle_navigation_actions(
@@ -180,6 +190,41 @@ def _handle_utility_actions(
     raise ValueError(f"Unknown utility action: {action}")
 
 
+def _handle_selector_actions(
+    manager: "BrowserTabManager",
+    action: str,
+    selector: str | None = None,
+    text: str | None = None,
+    tab_id: str | None = None,
+    timeout: float | None = None,
+    wait_state: str | None = None,
+) -> dict[str, Any]:
+    """Handle CSS selector-based browser actions."""
+    _validate_selector(action, selector)
+    assert selector is not None
+
+    # Default timeout is 5 seconds for most actions, 10 for wait_for_selector
+    default_timeout = 10.0 if action == "wait_for_selector" else 5.0
+    effective_timeout = timeout if timeout is not None else default_timeout
+
+    if action == "click_selector":
+        return manager.click_selector(selector, tab_id, effective_timeout)
+
+    if action == "fill_selector":
+        _validate_text(action, text)
+        assert text is not None
+        return manager.fill_selector(selector, text, tab_id, effective_timeout)
+
+    if action == "wait_for_selector":
+        effective_state = wait_state if wait_state else "visible"
+        return manager.wait_for_selector(selector, tab_id, effective_timeout, effective_state)
+
+    if action == "query_selector_all":
+        return manager.query_selector_all(selector, tab_id)
+
+    raise ValueError(f"Unknown selector action: {action}")
+
+
 @register_tool
 def browser_action(
     action: BrowserAction,
@@ -192,6 +237,10 @@ def browser_action(
     key: str | None = None,
     file_path: str | None = None,
     clear: bool = False,
+    # CSS Selector parameters
+    selector: str | None = None,
+    timeout: float | None = None,
+    wait_state: str | None = None,
 ) -> dict[str, Any]:
     from .tab_manager import get_browser_tab_manager
 
@@ -217,6 +266,12 @@ def browser_action(
             "view_source",
             "close",
         }
+        selector_actions = {
+            "click_selector",
+            "fill_selector",
+            "wait_for_selector",
+            "query_selector_all",
+        }
 
         if action in navigation_actions:
             return _handle_navigation_actions(manager, action, url, tab_id)
@@ -227,6 +282,10 @@ def browser_action(
         if action in utility_actions:
             return _handle_utility_actions(
                 manager, action, duration, js_code, file_path, tab_id, clear
+            )
+        if action in selector_actions:
+            return _handle_selector_actions(
+                manager, action, selector, text, tab_id, timeout, wait_state
             )
 
         _raise_unknown_action(action)

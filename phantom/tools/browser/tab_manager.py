@@ -226,6 +226,84 @@ class BrowserTabManager:
         else:
             return result
 
+    # =========================================================================
+    # CSS Selector-based interactions (more reliable than coordinates)
+    # =========================================================================
+
+    def click_selector(
+        self, selector: str, tab_id: str | None = None, timeout: float = 5.0
+    ) -> dict[str, Any]:
+        """Click an element by CSS selector."""
+        browser = self._get_agent_browser()
+        if browser is None:
+            raise ValueError("Browser not launched")
+
+        try:
+            result = browser.click_selector(selector, tab_id, timeout)
+            if result.get("selector_found"):
+                result["message"] = f"Clicked element matching '{selector}'"
+            else:
+                result["message"] = f"Failed to find element matching '{selector}'"
+        except (OSError, ValueError, RuntimeError) as e:
+            raise RuntimeError(f"Failed to click selector: {e}") from e
+        else:
+            return result
+
+    def fill_selector(
+        self, selector: str, text: str, tab_id: str | None = None, timeout: float = 5.0
+    ) -> dict[str, Any]:
+        """Fill an input element by CSS selector."""
+        browser = self._get_agent_browser()
+        if browser is None:
+            raise ValueError("Browser not launched")
+
+        try:
+            result = browser.fill_selector(selector, text, tab_id, timeout)
+            if result.get("selector_found"):
+                result["message"] = f"Filled element '{selector}' with text"
+            else:
+                result["message"] = f"Failed to find element matching '{selector}'"
+        except (OSError, ValueError, RuntimeError) as e:
+            raise RuntimeError(f"Failed to fill selector: {e}") from e
+        else:
+            return result
+
+    def wait_for_selector(
+        self, selector: str, tab_id: str | None = None, timeout: float = 10.0, state: str = "visible"
+    ) -> dict[str, Any]:
+        """Wait for an element matching selector to appear."""
+        browser = self._get_agent_browser()
+        if browser is None:
+            raise ValueError("Browser not launched")
+
+        try:
+            result = browser.wait_for_selector(selector, tab_id, timeout, state)
+            if result.get("selector_found"):
+                result["message"] = f"Element '{selector}' is now {state}"
+            else:
+                result["message"] = f"Timeout waiting for '{selector}' to be {state}"
+        except (OSError, ValueError, RuntimeError) as e:
+            raise RuntimeError(f"Failed to wait for selector: {e}") from e
+        else:
+            return result
+
+    def query_selector_all(
+        self, selector: str, tab_id: str | None = None
+    ) -> dict[str, Any]:
+        """Query all elements matching selector and return their info."""
+        browser = self._get_agent_browser()
+        if browser is None:
+            raise ValueError("Browser not launched")
+
+        try:
+            result = browser.query_selector_all(selector, tab_id)
+            count = result.get("elements_found", 0)
+            result["message"] = f"Found {count} elements matching '{selector}'"
+        except (OSError, ValueError, RuntimeError) as e:
+            raise RuntimeError(f"Failed to query selectors: {e}") from e
+        else:
+            return result
+
     def save_pdf(self, file_path: str, tab_id: str | None = None) -> dict[str, Any]:
         browser = self._get_agent_browser()
         if browser is None:

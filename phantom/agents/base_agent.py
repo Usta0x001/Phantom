@@ -17,6 +17,8 @@ from jinja2 import (
 )
 
 from phantom.agents.hypothesis_ledger import HypothesisLedger  # Rec 6 (SF-005)
+from phantom.agents.coverage_tracker import CoverageTracker  # Enhancement: Coverage tracking
+from phantom.agents.correlation_engine import CorrelationEngine  # Enhancement: Vulnerability chains
 from phantom.llm import LLM, LLMConfig, LLMRequestFailedError
 from phantom.llm.pentager.reflector import get_reflector
 from phantom.llm.utils import clean_content
@@ -98,6 +100,20 @@ class BaseAgent(metaclass=AgentMeta):
         self.hypothesis_ledger: HypothesisLedger = config.get(
             "hypothesis_ledger"
         ) or HypothesisLedger()
+
+        # Enhancement: Coverage Tracker - tracks what attack surfaces have been
+        # tested for which vulnerability classes. Returns FACTS not commands.
+        # Root agents get a fresh tracker; sub-agents share if passed via config.
+        self.coverage_tracker: CoverageTracker = config.get(
+            "coverage_tracker"
+        ) or CoverageTracker()
+
+        # Enhancement: Correlation Engine - identifies potential vulnerability chains.
+        # Returns SUGGESTIONS not commands - LLM decides whether to pursue chains.
+        # Root agents get a fresh engine; sub-agents share if passed via config.
+        self.correlation_engine: CorrelationEngine = config.get(
+            "correlation_engine"
+        ) or CorrelationEngine()
 
         # AUDIT-FIX-10: Track (signature, success) for dedup checking
         self._recent_action_results: list[tuple[str, bool]] = []
@@ -561,6 +577,30 @@ class BaseAgent(metaclass=AgentMeta):
             )
             if ledger_summary:
                 self.state.add_message("user", ledger_summary)
+
+        # Enhancement: Coverage Tracker injection (same cadence as hypothesis ledger).
+        # Reports FACTS about coverage state - LLM decides what to test based on this.
+        _COVERAGE_INJECT_EVERY = int(Config.get("phantom_coverage_inject_interval") or "15")
+        if (
+            len(self.coverage_tracker) > 0
+            and self.state.iteration > 0
+            and self.state.iteration % _COVERAGE_INJECT_EVERY == 0
+        ):
+            coverage_summary = self.coverage_tracker.to_prompt_summary(max_items=15)
+            if coverage_summary:
+                self.state.add_message("user", coverage_summary)
+
+        # Enhancement: Correlation Engine injection - shows potential vulnerability chains.
+        # Reports SUGGESTIONS not commands - LLM decides whether to pursue chains.
+        _CORRELATION_INJECT_EVERY = int(Config.get("phantom_correlation_inject_interval") or "20")
+        if (
+            len(self.correlation_engine) > 0
+            and self.state.iteration > 0
+            and self.state.iteration % _CORRELATION_INJECT_EVERY == 0
+        ):
+            correlation_summary = self.correlation_engine.to_prompt_summary(max_items=10)
+            if correlation_summary:
+                self.state.add_message("user", correlation_summary)
 
         # S-07: Phase-gate reporting reminder at 85% of max iterations.
         _max_iter = self.state.max_iterations

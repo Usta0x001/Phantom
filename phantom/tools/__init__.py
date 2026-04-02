@@ -35,7 +35,9 @@ if not SANDBOX_MODE:
         from .browser import *  # noqa: F403
     from .file_edit import *  # noqa: F403
     from .finish import *  # noqa: F403
+    from .fuzzer import *  # noqa: F403
     from .notes import *  # noqa: F403
+    from .oast import *  # noqa: F403
     from .proxy import *  # noqa: F403
     from .python import *  # noqa: F403
     from .reporting import *  # noqa: F403
@@ -50,6 +52,8 @@ else:
     if not DISABLE_BROWSER:
         from .browser import *  # noqa: F403
     from .file_edit import *  # noqa: F403
+    from .fuzzer import *  # noqa: F403
+    from .oast import *  # noqa: F403
     from .proxy import *  # noqa: F403
     from .python import *  # noqa: F403
     from .terminal import *  # noqa: F403

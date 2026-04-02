@@ -176,6 +176,7 @@ class SplashScreen(Static):  # type: ignore[misc]
         return Panel.fit(content, border_style=self.PRIMARY_GREEN, padding=(1, 6))
 
     def _build_url_text(self) -> Text:
+        from phantom.config import Config
         return Text(Config.get("phantom_footer_brand") or "phantom-agent", style=Style(color=self.PRIMARY_GREEN, bold=True))
 
     def _build_welcome_text(self) -> Text:
@@ -1520,12 +1521,17 @@ class PhantomTUIApp(App):  # type: ignore[misc]
                     logging.exception("Unexpected error during scan")
                 finally:
                     loop.close()
-                    # Always cleanup tracer
+                    # Always cleanup tracer and runtime (kill container)
                     try:
                         from phantom.telemetry.tracer import get_global_tracer
                         tracer = get_global_tracer()
                         if tracer:
                             tracer.cleanup()
+                    except Exception:  # noqa: BLE001
+                        pass
+                    try:
+                        from phantom.runtime import cleanup_runtime
+                        cleanup_runtime()
                     except Exception:  # noqa: BLE001
                         pass
                     self._scan_completed.set()

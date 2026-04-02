@@ -161,6 +161,157 @@ class HypothesisLedger:
                 and h.iterations_spent >= iteration_threshold
             ]
 
+    def get_scored_hypotheses(self) -> list[dict[str, Any]]:
+        """
+        Return hypotheses with computed priority scores.
+
+        This returns SCORED DATA for the LLM to analyze - it does NOT prescribe
+        what to test next. The LLM uses these scores as input for its own decision.
+
+        Scoring factors:
+        - Evidence balance: More evidence_for increases score
+        - Freshness: Recently updated hypotheses score higher
+        - Investment: Moderate iteration count is optimal (too few = untested,
+          too many = likely false positive)
+        - Status: 'testing' scores higher than 'open' (already invested)
+
+        Returns:
+            List of dicts with hypothesis data plus 'priority_score' and 'score_factors'
+        """
+        from datetime import datetime as dt
+
+        with self._lock:
+            hypotheses = [h for h in self._hypotheses.values() if h.status in {"open", "testing"}]
+
+        if not hypotheses:
+            return []
+
+        scored: list[dict[str, Any]] = []
+        now = dt.now(UTC)
+
+        for h in hypotheses:
+            factors: dict[str, float] = {}
+
+            # Evidence balance factor (0-30 points)
+            # More evidence_for relative to evidence_against = higher score
+            ev_for = len(h.evidence_for)
+            ev_against = len(h.evidence_against)
+            if ev_for + ev_against > 0:
+                factors["evidence_balance"] = (ev_for / (ev_for + ev_against)) * 30
+            else:
+                factors["evidence_balance"] = 15.0  # Neutral if no evidence
+
+            # Freshness factor (0-20 points)
+            # Recently updated hypotheses get higher scores
+            try:
+                last_update = dt.fromisoformat(h.last_updated)
+                hours_ago = (now - last_update).total_seconds() / 3600
+                # Score decays over 24 hours
+                factors["freshness"] = max(0, 20 - (hours_ago * (20 / 24)))
+            except (ValueError, TypeError):
+                factors["freshness"] = 10.0  # Default if parsing fails
+
+            # Investment factor (0-25 points)
+            # Optimal is 3-10 iterations (enough to be promising, not too many)
+            iterations = h.iterations_spent
+            if iterations == 0:
+                factors["investment"] = 5.0  # Untested - low but not zero
+            elif 3 <= iterations <= 10:
+                factors["investment"] = 25.0  # Sweet spot
+            elif iterations < 3:
+                factors["investment"] = 10.0 + (iterations * 3)  # Building up
+            else:
+                # Diminishing returns after 10 iterations
+                factors["investment"] = max(5, 25 - (iterations - 10) * 2)
+
+            # Status factor (0-15 points)
+            # 'testing' means we're already invested
+            if h.status == "testing":
+                factors["status"] = 15.0
+            else:  # 'open'
+                factors["status"] = 8.0
+
+            # Payload variety factor (0-10 points)
+            # Some payloads tested but not too many suggests methodical approach
+            payload_count = len(h.payloads_tested)
+            if 1 <= payload_count <= 5:
+                factors["payload_variety"] = 10.0
+            elif payload_count == 0:
+                factors["payload_variety"] = 3.0  # Needs testing
+            else:
+                factors["payload_variety"] = max(3, 10 - (payload_count - 5))
+
+            # Calculate total score
+            total_score = sum(factors.values())
+
+            scored.append({
+                "hypothesis_id": h.id,
+                "surface": h.surface,
+                "vuln_class": h.vuln_class,
+                "status": h.status,
+                "payloads_tested": len(h.payloads_tested),
+                "iterations_spent": h.iterations_spent,
+                "evidence_for": ev_for,
+                "evidence_against": ev_against,
+                "priority_score": round(total_score, 1),
+                "score_factors": {k: round(v, 1) for k, v in factors.items()},
+            })
+
+        # Sort by score descending
+        scored.sort(key=lambda x: x["priority_score"], reverse=True)
+
+        return scored
+
+    def get_prioritized_summary(self, top_n: int = 10) -> str:
+        """
+        Return a scored summary of hypotheses for LLM decision-making.
+
+        This is an ENHANCED version of to_prompt_summary that includes priority
+        scores. The LLM uses these scores as INPUT for its decisions - the scores
+        are SUGGESTIONS not COMMANDS.
+        """
+        scored = self.get_scored_hypotheses()
+
+        if not scored:
+            return ""
+
+        lines = ["[HYPOTHESIS PRIORITY ANALYSIS — scored for LLM consideration]"]
+        lines.append("  (Scores are suggestions based on evidence/investment/freshness — you decide priority)")
+        lines.append("")
+
+        for entry in scored[:top_n]:
+            score = entry["priority_score"]
+            h_id = entry["hypothesis_id"]
+            vuln = entry["vuln_class"]
+            surface = entry["surface"][:45]
+            ev_balance = f"+{entry['evidence_for']}/-{entry['evidence_against']}"
+            iters = entry["iterations_spent"]
+
+            # Score interpretation hint
+            if score >= 70:
+                hint = "HIGH"
+            elif score >= 50:
+                hint = "MED"
+            else:
+                hint = "LOW"
+
+            lines.append(
+                f"  [{hint:4s} {score:5.1f}] {h_id} | {vuln:12s} | {surface:45s} | "
+                f"ev={ev_balance} iters={iters}"
+            )
+
+        # Summary stats
+        with self._lock:
+            total = len(self._hypotheses)
+            active = len([h for h in self._hypotheses.values() if h.status in {"open", "testing"}])
+            confirmed = len([h for h in self._hypotheses.values() if h.status == "confirmed"])
+
+        lines.append("")
+        lines.append(f"  Active: {active}/{total} | Confirmed vulns: {confirmed}")
+        lines.append("[END PRIORITY ANALYSIS]")
+
+        return "\n".join(lines)
+
     # ── Prompt Injection ──────────────────────────────────────────────────────
 
     def to_prompt_summary(self, top_n: int = 10, status_filter: list[str] | None = None) -> str:
