@@ -93,23 +93,94 @@ def _is_ssrf_safe(url: str) -> bool:
             return False
 
         # SSRF-NEW-4 FIX: Check for hex IP addresses (e.g., 0xa9fea9fe = 169.254.169.254)
-        # Browsers and curl parse hex IPs but Python's ipaddress module doesn't
-        try:
-            if host_lower.startswith("0x") and len(host_lower) <= 10:
-                hex_value = int(host_lower, 16)
-                if 0 <= hex_value <= 0xFFFFFFFF:
-                    octets = [
-                        (hex_value >> 24) & 0xFF,
-                        (hex_value >> 16) & 0xFF,
-                        (hex_value >> 8) & 0xFF,
-                        hex_value & 0xFF,
-                    ]
-                    potential_ip = ".".join(str(o) for o in octets)
-                    ip_obj = ipaddress.ip_address(potential_ip)
+        # SSRF-NEW-5 FIX: Check for decimal and octal IP addresses
+        # Browsers/curl parse these formats but Python's ipaddress doesn't
+        
+        # Case 1: Pure decimal IP (e.g., 2130706433 = 127.0.0.1)
+        if host_lower.isdigit():
+            try:
+                decimal_value = int(host_lower)
+                if 0 <= decimal_value <= 0xFFFFFFFF:
+                    ip_obj = ipaddress.ip_address(decimal_value)
                     if ip_obj.is_private or ip_obj.is_loopback or ip_obj.is_link_local:
                         return False
-        except (ValueError, OverflowError):
-            pass
+            except (ValueError, OverflowError):
+                pass
+        
+        # Case 2: Pure hex IP (e.g., 0x0100007f = 127.0.0.1, 0xa9fea9fe = 169.254.169.254)
+        # Check for 0x prefix + valid hex, or pure 8-char hex
+        if host_lower.startswith("0x") and len(host_lower) <= 10:
+            try:
+                hex_value = int(host_lower, 16)
+                if 0 <= hex_value <= 0xFFFFFFFF:
+                    ip_obj = ipaddress.ip_address(hex_value)
+                    if ip_obj.is_private or ip_obj.is_loopback or ip_obj.is_link_local:
+                        return False
+            except (ValueError, OverflowError):
+                pass
+        
+        # Case 2b: Pure 8-char hex (no 0x prefix) e.g., 0100007f = 127.0.0.1
+        if len(host_lower) == 8 and all(c in '0123456789abcdef' for c in host_lower):
+            try:
+                hex_value = int(host_lower, 16)
+                if 0 <= hex_value <= 0xFFFFFFFF:
+                    ip_obj = ipaddress.ip_address(hex_value)
+                    if ip_obj.is_private or ip_obj.is_loopback or ip_obj.is_link_local:
+                        return False
+            except (ValueError, OverflowError):
+                pass
+        
+        # Case 3: Dotted notation with octal/hex octets (e.g., 0177.0.0.01, 0x7f.0x01)
+        if "." in host_lower:
+            octets = host_lower.split(".")
+            if len(octets) == 4:
+                try:
+                    normalized_octets = []
+                    for octet in octets:
+                        if octet.startswith("0x") and len(octet) <= 4:
+                            # Hex octet (e.g., 0x7f or 0x01)
+                            normalized_octets.append(int(octet, 16))
+                        elif octet.startswith("0") and len(octet) > 1 and octet.isdigit():
+                            # Octal octet
+                            normalized_octets.append(int(octet, 8))
+                        elif octet.isdigit():
+                            # Decimal octet - also handle shorthand like "1" = "0.0.0.1"
+                            normalized_octets.append(int(octet))
+                        else:
+                            raise ValueError("Not a valid IP octet")
+                    
+                    # Validate all octets are in range
+                    if all(0 <= o <= 255 for o in normalized_octets):
+                        normalized_ip = ".".join(str(o) for o in normalized_octets)
+                        ip_obj = ipaddress.ip_address(normalized_ip)
+                        if ip_obj.is_private or ip_obj.is_loopback or ip_obj.is_link_local:
+                            return False
+                except (ValueError, OverflowError):
+                    pass
+        
+        # Case 4: Dotted shorthand (e.g., 127.1 = 127.0.0.1, 10.0 = 10.0.0.0)
+        if "." in host_lower:
+            octets = host_lower.split(".")
+            if 2 <= len(octets) <= 4:
+                try:
+                    normalized_octets = []
+                    for octet in octets:
+                        if not octet.isdigit():
+                            raise ValueError("Non-digit in shorthand IP")
+                        normalized_octets.append(int(octet))
+                    
+                    # Pad to 4 octets (shorthand notation)
+                    while len(normalized_octets) < 4:
+                        normalized_octets.append(0)
+                    
+                    # Validate all octets are in range
+                    if all(0 <= o <= 255 for o in normalized_octets):
+                        normalized_ip = ".".join(str(o) for o in normalized_octets)
+                        ip_obj = ipaddress.ip_address(normalized_ip)
+                        if ip_obj.is_private or ip_obj.is_loopback or ip_obj.is_link_local:
+                            return False
+                except (ValueError, OverflowError):
+                    pass
 
         # Direct IP address check.
         try:

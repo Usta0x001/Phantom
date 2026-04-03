@@ -37,6 +37,58 @@ _VALIDATION_AGENT_KEYWORDS = frozenset({
     "validation", "validator", "verif", "verify", "verifier",
 })
 
+# SM-001 FIX: Agent state cleanup
+_AGENT_TTL_HOURS = 24
+
+
+def cleanup_old_agents() -> int:
+    """Remove agents older than TTL. Returns count removed."""
+    from datetime import timedelta
+    
+    cutoff = datetime.now(UTC) - timedelta(hours=_AGENT_TTL_HOURS)
+    removed = 0
+    
+    with _GRAPH_LOCK:
+        to_remove = []
+        for agent_id, node in _agent_graph["nodes"].items():
+            finished_at = node.get("finished_at")
+            if finished_at:
+                try:
+                    finished_dt = datetime.fromisoformat(finished_at)
+                    if finished_dt < cutoff:
+                        to_remove.append(agent_id)
+                except ValueError:
+                    pass
+        
+        for agent_id in to_remove:
+            _agent_graph["nodes"].pop(agent_id, None)
+            _agent_messages.pop(agent_id, None)
+            _agent_instances.pop(agent_id, None)
+            _agent_states.pop(agent_id, None)
+            _running_agents.pop(agent_id, None)
+            removed += 1
+        
+        _agent_graph["edges"] = [
+            e for e in _agent_graph["edges"]
+            if e["from"] not in to_remove and e["to"] not in to_remove
+        ]
+    
+    return removed
+
+
+def reset_all_state() -> None:
+    """Reset all global state (call between scans)."""
+    global _total_agents_created, _root_agent_id
+    with _GRAPH_LOCK:
+        _agent_graph["nodes"].clear()
+        _agent_graph["edges"].clear()
+        _agent_messages.clear()
+        _running_agents.clear()
+        _agent_instances.clear()
+        _agent_states.clear()
+        _total_agents_created = 0
+        _root_agent_id = None
+
 
 def _run_agent_in_thread(
     agent: Any, state: Any, inherited_messages: list[dict[str, Any]]
