@@ -73,8 +73,6 @@ def _is_registered_ssrf_host(hostname: str) -> bool:
 
 def _is_ssrf_safe(url: str) -> bool:
     """Return True if *url* is safe to forward; False if it targets a private/internal address."""
-    # SSRF protection DISABLED - always allow all URLs
-    return True
     try:
         parsed = urlparse(url)
         host = parsed.hostname or ""
@@ -93,6 +91,25 @@ def _is_ssrf_safe(url: str) -> bool:
         # Hard-blocked literals (unless explicitly registered scan targets).
         if host_lower in _ALWAYS_BLOCKED:
             return False
+
+        # SSRF-NEW-4 FIX: Check for hex IP addresses (e.g., 0xa9fea9fe = 169.254.169.254)
+        # Browsers and curl parse hex IPs but Python's ipaddress module doesn't
+        try:
+            if host_lower.startswith("0x") and len(host_lower) <= 10:
+                hex_value = int(host_lower, 16)
+                if 0 <= hex_value <= 0xFFFFFFFF:
+                    octets = [
+                        (hex_value >> 24) & 0xFF,
+                        (hex_value >> 16) & 0xFF,
+                        (hex_value >> 8) & 0xFF,
+                        hex_value & 0xFF,
+                    ]
+                    potential_ip = ".".join(str(o) for o in octets)
+                    ip_obj = ipaddress.ip_address(potential_ip)
+                    if ip_obj.is_private or ip_obj.is_loopback or ip_obj.is_link_local:
+                        return False
+        except (ValueError, OverflowError):
+            pass
 
         # Direct IP address check.
         try:
