@@ -21,6 +21,7 @@ if os.getenv("PHANTOM_SANDBOX_MODE", "false").lower() == "false":
     from phantom.runtime import get_runtime
 
 from .argument_parser import convert_arguments
+from .cache import get_tool_cache
 from .registry import (
     get_tool_by_name,
     get_tool_names,
@@ -164,6 +165,9 @@ def _validate_tool_argument_injection(tool_name: str, kwargs: dict[str, Any]) ->
     """CMD-002 FIX: Validate tool arguments for command injection patterns.
     
     Returns error message if injection detected, None if safe.
+    
+    AUDIT-FIX CRIT-03: Now checks ALL tool string arguments against prompt
+    injection patterns, not just the `command` param of `terminal_execute`.
     """
     if tool_name == "terminal_execute":
         command = kwargs.get("command", "")
@@ -190,6 +194,24 @@ def _validate_tool_argument_injection(tool_name: str, kwargs: dict[str, Any]) ->
                     f"Error: Path traversal detected in parameter '{param}'. "
                     f"Absolute paths or '..' sequences are not allowed."
                 )
+    
+    # AUDIT-FIX CRIT-03: Check ALL string arguments against prompt injection
+    # patterns. Previously only terminal_execute's `command` was checked,
+    # leaving send_request URLs, browser_action inputs, etc. unprotected.
+    _SKIP_INJECTION_CHECK_TOOLS = frozenset({
+        "create_vulnerability_report",  # report content is expected to contain payloads
+        "terminal_execute",             # already checked above via command injection patterns
+    })
+    if tool_name not in _SKIP_INJECTION_CHECK_TOOLS:
+        for param_name, param_value in kwargs.items():
+            if isinstance(param_value, str) and len(param_value) > 5:
+                is_injection, matched = _detect_prompt_injection(param_value)
+                if is_injection:
+                    return (
+                        f"Error: Potential prompt injection detected in parameter "
+                        f"'{param_name}' of tool '{tool_name}'. "
+                        f"Pattern: '{matched}'. Input rejected for safety."
+                    )
     
     return None
 
@@ -307,6 +329,21 @@ def _cleanup_screenshot_artifacts(path: str | Path | None = None) -> None:
 
 
 async def execute_tool(tool_name: str, agent_state: Any | None = None, **kwargs: Any) -> Any:
+    # ════════════════════════════════════════════════════════════════════════════
+    # SECURITY REC LOW-7: Tool-Level RBAC Permission Check
+    # ════════════════════════════════════════════════════════════════════════════
+    # Check RBAC permissions before executing any tool.
+    # This ensures only authorized agents can execute sensitive tools.
+    try:
+        from phantom.tools.rbac import can_execute_tool, check_tool_permission
+        allowed, reason = check_tool_permission(tool_name)
+        if not allowed:
+            logger.warning("RBAC blocked tool '%s': %s", tool_name, reason)
+            return {"error": f"Permission denied: {reason}", "error_type": "rbac_denied"}
+    except ImportError:
+        pass  # RBAC module not available - allow execution
+    # ─────────────────────────────────────────────────────────────────────────────
+    
     execute_in_sandbox = should_execute_in_sandbox(tool_name)
     sandbox_mode = os.getenv("PHANTOM_SANDBOX_MODE", "false").lower() == "true"
 
@@ -317,15 +354,44 @@ async def execute_tool(tool_name: str, agent_state: Any | None = None, **kwargs:
     _exec_id = _audit.log_tool_start(_agent_id, tool_name, kwargs) if _audit else None
     _t0 = time.monotonic()
     # ──────────────────────────────────────────────────────────────────
+    
+    # ════════════════════════════════════════════════════════════════════════
+    # EFFICIENCY FIX CRIT-04: Tool Result Caching
+    # ════════════════════════════════════════════════════════════════════════
+    # Check cache BEFORE execution for idempotent tools.
+    # Expected savings: 21% reduction in redundant calls, $0.15-0.30/scan
+    _cache = get_tool_cache()
+    if _cache.is_cacheable(tool_name):
+        cached_result = _cache.get(tool_name, kwargs)
+        if cached_result is not None:
+            # Cache hit - log and return immediately
+            if _audit and _exec_id:
+                _audit.log_tool_result(
+                    _exec_id, _agent_id, tool_name, cached_result,
+                    (time.monotonic() - _t0) * 1000,
+                    cache_hit=True,
+                )
+            return cached_result
+    # ──────────────────────────────────────────────────────────────────
+    
     try:
         if execute_in_sandbox and not sandbox_mode:
             result = await _execute_tool_in_sandbox(tool_name, agent_state, **kwargs)
         else:
             result = await _execute_tool_locally(tool_name, agent_state, **kwargs)
+        
+        # ════════════════════════════════════════════════════════════════════
+        # EFFICIENCY FIX CRIT-04: Cache successful results for idempotent tools
+        # ════════════════════════════════════════════════════════════════════
+        if _cache.is_cacheable(tool_name):
+            _cache.put(tool_name, kwargs, result)
+        # ──────────────────────────────────────────────────────────────────
+        
         if _audit and _exec_id:
             _audit.log_tool_result(
                 _exec_id, _agent_id, tool_name, result,
                 (time.monotonic() - _t0) * 1000,
+                cache_hit=False,
             )
         return result
     except Exception:
@@ -489,9 +555,13 @@ async def execute_tool_with_validation(
         _audit = _get_audit()
         if _audit:
             _agent_id = getattr(agent_state, "agent_id", "unknown") if agent_state else "unknown"
+            # AUDIT-FIX CONTRA-05: Parameters were reversed — event_subtype
+            # must come first, then agent_id. Previously _agent_id went into
+            # event_subtype producing nonsensical event types like
+            # "security.agent_abc123" instead of "security.injection_blocked".
             _audit.log_security_event(
-                _agent_id,
                 "injection_blocked",
+                _agent_id,
                 {"tool": tool_name, "error": injection_error[:200]},
             )
         return injection_error
@@ -1109,10 +1179,16 @@ def _format_tool_result_with_meta(
                 "in your NEXT response. Do NOT delay reporting.\n"
             )
 
+    # AUDIT-FIX CRIT-04: Apply _semantic_sanitize_output() BEFORE html.escape()
+    # to neutralize prompt injection attempts in tool output. Previously this
+    # function existed but was never called — the #1 prompt injection surface
+    # (malicious target HTTP responses) was completely undefended.
+    sanitized_result = _semantic_sanitize_output(final_result_str)
+
     observation_xml = (
         signal_header
         + f"<tool_result>\n<tool_name>{html.escape(tool_name)}</tool_name>\n"
-        f"<result>{html.escape(final_result_str)}</result>\n</tool_result>"
+        f"<result>{html.escape(sanitized_result)}</result>\n</tool_result>"
     )
 
     return observation_xml, images, meta

@@ -333,6 +333,7 @@ class BaseAgent(metaclass=AgentMeta):
                         # ── Audit: log agent completed ────────────────────────────
                         from phantom.logging.audit import get_audit_logger as _get_audit_done
                         _audit_done = _get_audit_done()
+                        _scan_duration = (_time_mod.monotonic() - self._agent_start_time) * 1000
                         if _audit_done:
                             _audit_done.log_agent_completed(
                                 agent_id=self.state.agent_id,
@@ -340,8 +341,22 @@ class BaseAgent(metaclass=AgentMeta):
                                 task=self.state.task,
                                 result=self.state.final_result,
                                 iterations=self.state.iteration,
-                                duration_ms=(_time_mod.monotonic() - self._agent_start_time) * 1000,
+                                duration_ms=_scan_duration,
                             )
+                            # ── EFFICIENCY REC HIGH-2: Log cache statistics ────────
+                            try:
+                                from phantom.tools.cache import get_tool_cache
+                                _cache = get_tool_cache()
+                                if _cache and _cache.enabled:
+                                    _cache_stats = _cache.get_stats_summary()
+                                    _audit_done.log_cache_stats(
+                                        agent_id=self.state.agent_id,
+                                        cache_stats=_cache_stats,
+                                        scan_duration_ms=_scan_duration,
+                                    )
+                            except Exception:  # noqa: BLE001
+                                pass  # Non-critical — don't fail scan if cache reporting fails
+                            # ───────────────────────────────────────────────────────
                         # ─────────────────────────────────────────────────────────
                         return self.state.final_result or {}
                     await self._enter_waiting_state(tracer, task_completed=True)

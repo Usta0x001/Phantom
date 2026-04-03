@@ -356,8 +356,16 @@ class AuditLogger:
         tokens_before: int,
         chunk_size: int,
         duration_ms: float,
+        tokens_after: int = 0,
+        compression_ratio: float = 0.0,
+        chunks_processed: int = 0,
+        parallel_mode: bool = False,
     ) -> None:
-        """Log a memory-compression cycle so the watch layer can detect idle overhead."""
+        """Log a memory-compression cycle so the watch layer can detect idle overhead.
+        
+        EFFICIENCY FIX MEM-P1.3: Enhanced with tokens_after, compression_ratio, 
+        chunks_processed, and parallel_mode for better observability.
+        """
         self._write({
             "event_type": "llm.compression",
             "actor": {"agent_id": agent_id},
@@ -366,7 +374,12 @@ class AuditLogger:
                 "messages_in": messages_in,
                 "messages_out": messages_out,
                 "tokens_before": tokens_before,
+                "tokens_after": tokens_after,
+                "tokens_saved": tokens_before - tokens_after,
+                "compression_ratio": round(compression_ratio, 4),
                 "chunk_size": chunk_size,
+                "chunks_processed": chunks_processed,
+                "parallel_mode": parallel_mode,
                 "duration_ms": round(duration_ms, 1),
             },
         })
@@ -428,8 +441,18 @@ class AuditLogger:
         tool_name: str,
         result: Any,
         duration_ms: float,
+        cache_hit: bool = False,
     ) -> None:
-        """Log a successful tool result."""
+        """Log a successful tool result.
+        
+        Args:
+            exec_id: Correlation ID from log_tool_start
+            agent_id: The agent that executed the tool
+            tool_name: Name of the tool
+            result: The tool result
+            duration_ms: Execution time in milliseconds
+            cache_hit: Whether result was served from cache (EFFICIENCY FIX CRIT-04)
+        """
         result_preview = str(result)[:4_096] if result is not None else None
         self._write({
             "event_type": "tool.result",
@@ -440,6 +463,7 @@ class AuditLogger:
                 "result_preview": result_preview,
                 "result_chars": len(str(result)) if result is not None else 0,
                 "duration_ms": round(duration_ms, 1),
+                "cache_hit": cache_hit,
             },
             "status": "completed",
         })
@@ -685,6 +709,33 @@ class AuditLogger:
                 "run_dir": run_dir,
                 "iteration": iteration,
             },
+        })
+
+    # ── Cache statistics ─────────────────────────────────────────────────────
+    # EFFICIENCY REC HIGH-2: End-of-scan cache performance reporting
+    # ────────────────────────────────────────────────────────────────────────
+
+    def log_cache_stats(
+        self,
+        agent_id: str,
+        cache_stats: dict[str, Any],
+        scan_duration_ms: float | None = None,
+    ) -> None:
+        """Log end-of-scan tool result cache statistics.
+        
+        Args:
+            agent_id: Agent that completed the scan
+            cache_stats: Cache statistics dictionary from ToolResultCache.get_stats_summary()
+            scan_duration_ms: Total scan duration in milliseconds (optional)
+        """
+        self._write({
+            "event_type": "cache.stats",
+            "actor": {"agent_id": agent_id},
+            "payload": {
+                **cache_stats,
+                "scan_duration_ms": round(scan_duration_ms, 1) if scan_duration_ms else None,
+            },
+            "status": "info",
         })
 
     # ─── Stats ───────────────────────────────────────────────────────────────

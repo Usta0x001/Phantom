@@ -279,17 +279,33 @@ class DockerRuntime(AbstractRuntime):
                 # Rec 8 (B-13): Write token to /run/secrets so it's NOT readable
                 # via /proc/self/environ (which is world-readable by default in
                 # many Linux distros).  chmod 600 ensures only root can read it.
+                #
+                # AUDIT-FIX CRIT-01: Use Docker put_archive API instead of
+                # bash printf with f-string interpolation. The old code was:
+                #   printf '%s' '{token}' > /run/secrets/tool_server_token
+                # which would break or allow shell injection if the token
+                # ever contained single-quotes or shell metacharacters.
                 try:
+                    import tarfile as _tarfile
+                    from io import BytesIO as _BytesIO
+
+                    # Create secrets dir first (no user data in this command)
                     container.exec_run(
-                        [
-                            "bash", "-c",
-                            f"mkdir -p /run/secrets && "
-                            f"printf '%s' '{self._tool_server_token}' "
-                            f"> /run/secrets/tool_server_token && "
-                            f"chmod 600 /run/secrets/tool_server_token",
-                        ],
+                        ["mkdir", "-p", "/run/secrets"],
                         user="root",
                     )
+                    # Write token via tar archive — no shell interpolation
+                    token_bytes = self._tool_server_token.encode("utf-8")
+                    tar_buf = _BytesIO()
+                    with _tarfile.open(fileobj=tar_buf, mode="w") as tar:
+                        info = _tarfile.TarInfo(name="tool_server_token")
+                        info.size = len(token_bytes)
+                        info.mode = 0o600
+                        info.uid = 0
+                        info.gid = 0
+                        tar.addfile(info, _BytesIO(token_bytes))
+                    tar_buf.seek(0)
+                    container.put_archive("/run/secrets", tar_buf.getvalue())
                 except Exception:  # noqa: BLE001
                     # Non-fatal: env-var fallback is still present.
                     logger.warning("Could not write tool_server_token to /run/secrets — "

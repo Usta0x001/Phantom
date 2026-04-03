@@ -50,6 +50,32 @@ class Config:
     phantom_routing_enabled = "true"       # PHANTOM_ROUTING_ENABLED=true to enable
     phantom_routing_reasoning_model = None # PHANTOM_ROUTING_REASONING_MODEL
     phantom_routing_tool_model = None      # PHANTOM_ROUTING_TOOL_MODEL
+    # ════════════════════════════════════════════════════════════════════════════
+    # EFFICIENCY FIX CRIT-04: Tool Result Caching Configuration
+    # ════════════════════════════════════════════════════════════════════════════
+    # Cache idempotent tool results to eliminate 21% redundant calls
+    phantom_tool_cache_enabled = "true"    # PHANTOM_TOOL_CACHE_ENABLED — enable/disable caching
+    phantom_tool_cache_max_size = "500"    # PHANTOM_TOOL_CACHE_MAX_SIZE — max cached entries
+    phantom_tool_cache_ttl = "300"         # PHANTOM_TOOL_CACHE_TTL — cache TTL in seconds (5 min)
+    # ════════════════════════════════════════════════════════════════════════════
+    # EFFICIENCY FIX MEM-P1.1: Parallel Compression Configuration
+    # ════════════════════════════════════════════════════════════════════════════
+    # Enable parallel chunk compression for 4x speedup (12s → 3s)
+    phantom_compressor_parallel = "true"   # PHANTOM_COMPRESSOR_PARALLEL — enable parallel compression
+    # ════════════════════════════════════════════════════════════════════════════
+    # RELIABILITY REC MED-5: Circuit Breaker Configuration
+    # ════════════════════════════════════════════════════════════════════════════
+    # Circuit breaker prevents cascading LLM failures after repeated errors
+    phantom_circuit_breaker_enabled = "true"      # PHANTOM_CIRCUIT_BREAKER_ENABLED
+    phantom_circuit_breaker_threshold = "5"         # Consecutive failures before opening
+    phantom_circuit_breaker_timeout = "60"         # Seconds to wait before testing recovery
+    # ════════════════════════════════════════════════════════════════════════════
+    # SECURITY REC LOW-7: RBAC Configuration
+    # ════════════════════════════════════════════════════════════════════════════
+    # Tool-level role-based access control
+    phantom_rbac_enabled = "false"                 # PHANTOM_RBAC_ENABLED - off by default
+    phantom_rbac_default_role = "senior_pentester" # PHANTOM_RBAC_DEFAULT_ROLE
+    # ────────────────────────────────────────────────────────────────────────────
     _LLM_CANONICAL_NAMES = (
         "phantom_llm",
         "llm_api_key",
@@ -101,7 +127,10 @@ class Config:
     phantom_container_cpu_quota = "200000"   # PHANTOM_CONTAINER_CPU_QUOTA (100000 = 1 CPU)
     phantom_container_pids_limit = "512"     # PHANTOM_CONTAINER_PIDS_LIMIT
     # Rec 7 (AI-SEC-008): Network-level scope enforcement — set to hostname or IP/CIDR of target
-    phantom_scope_enforcement = "false"      # PHANTOM_SCOPE_ENFORCEMENT=true to enable iptables rules
+    # ════════════════════════════════════════════════════════════════════════════
+    # SECURITY REC HIGH-1: Scope enforcement enabled by default for safety
+    # ════════════════════════════════════════════════════════════════════════════
+    phantom_scope_enforcement = "true"       # PHANTOM_SCOPE_ENFORCEMENT — iptables-based network isolation
     # Rec 9 (SF-004): Agent concurrency and tree depth limits
     phantom_max_concurrent_agents = "20"     # PHANTOM_MAX_CONCURRENT_AGENTS
     phantom_max_total_agents = "100"         # PHANTOM_MAX_TOTAL_AGENTS

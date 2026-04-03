@@ -29,6 +29,74 @@ if TYPE_CHECKING:
 
 CAIDO_PORT = 48080  # Fixed port inside container
 
+# ══════════════════════════════════════════════════════════════════════════════
+# SECURITY REC MED-4: DNS Pinning for SSRF TOCTOU Prevention
+# ══════════════════════════════════════════════════════════════════════════════
+# Cache DNS resolutions and verify they match on subsequent requests to the same
+# hostname. This prevents time-of-check-time-of-use attacks where an attacker
+# controls DNS and changes the resolution between validation and request.
+#
+# Example attack without pinning:
+#   1. Agent validates evil.com → 1.2.3.4 (public IP, passes check)
+#   2. Attacker changes DNS: evil.com → 127.0.0.1
+#   3. Agent sends request → SSRF bypass
+#
+# With pinning, step 3 detects the resolution changed and blocks the request.
+
+_DNS_PIN_CACHE: dict[str, tuple[set[str], float]] = {}  # hostname -> (ips, timestamp)
+_DNS_PIN_TTL = 300.0  # 5 minutes — balance between security and DNS changes
+
+def pin_dns_resolution(hostname: str) -> set[str] | None:
+    """Resolve and cache DNS for a hostname.
+    
+    Returns:
+        Set of resolved IP addresses, or None if resolution failed
+    """
+    hostname_lower = _normalize_ssrf_host(hostname)
+    if not hostname_lower:
+        return None
+    
+    # Check cache
+    now = time.time()
+    if hostname_lower in _DNS_PIN_CACHE:
+        ips, cached_at = _DNS_PIN_CACHE[hostname_lower]
+        if now - cached_at < _DNS_PIN_TTL:
+            return ips
+    
+    # Resolve DNS
+    try:
+        infos = socket.getaddrinfo(hostname_lower, None, socket.AF_UNSPEC, socket.SOCK_STREAM)
+        ips = {sockaddr[0] for _family, _type, _proto, _canon, sockaddr in infos}
+        _DNS_PIN_CACHE[hostname_lower] = (ips, now)
+        return ips
+    except (socket.gaierror, OSError):
+        return None
+
+def verify_dns_pinning(hostname: str) -> bool:
+    """Verify that a hostname still resolves to the same IPs as when pinned.
+    
+    Returns:
+        True if resolution matches pin (or no pin exists), False if changed
+    """
+    hostname_lower = _normalize_ssrf_host(hostname)
+    if not hostname_lower or hostname_lower not in _DNS_PIN_CACHE:
+        # No pin exists - allow but log warning
+        return True
+    
+    pinned_ips, _ = _DNS_PIN_CACHE[hostname_lower]
+    current_ips = pin_dns_resolution(hostname_lower)
+    
+    if current_ips is None:
+        # Resolution failed - suspicious, block
+        return False
+    
+    # Allow if current IPs are subset of pinned IPs (handles A/AAAA record removal)
+    # Block if new IPs appear (potential attack)
+    new_ips = current_ips - pinned_ips
+    return len(new_ips) == 0
+
+# ──────────────────────────────────────────────────────────────────────────────
+
 # ── SSRF protection ──────────────────────────────────────────────────────────
 # Scan targets must be registered here via allow_ssrf_host() before requests
 # are sent so that private-network addresses used as targets are permitted.
@@ -61,8 +129,13 @@ def _ssrf_host_aliases(hostname: str) -> set[str]:
 
 
 def allow_ssrf_host(hostname: str) -> None:
-    """Register a hostname as an allowed SSRF destination (the scan target)."""
+    """Register a hostname as an allowed SSRF destination (the scan target).
+    
+    Also pins the DNS resolution for TOCTOU protection.
+    """
     _ALLOWED_SSRF_HOSTS.update(_ssrf_host_aliases(hostname))
+    # Pin DNS resolution for registered scan targets
+    pin_dns_resolution(hostname)
 
 
 def _is_registered_ssrf_host(hostname: str) -> bool:
@@ -102,6 +175,18 @@ def _is_ssrf_safe(url: str) -> bool:
                 decimal_value = int(host_lower)
                 if 0 <= decimal_value <= 0xFFFFFFFF:
                     ip_obj = ipaddress.ip_address(decimal_value)
+                    if ip_obj.is_private or ip_obj.is_loopback or ip_obj.is_link_local:
+                        return False
+            except (ValueError, OverflowError):
+                pass
+        
+        # Case 1b: Pure octal IP (e.g., 017700000001 = 127.0.0.1 in octal)
+        # This is an 11-digit number starting with 0 that looks like octal
+        if host_lower.startswith("0") and len(host_lower) > 1 and len(host_lower) <= 12:
+            try:
+                octal_value = int(host_lower, 8)
+                if 0 <= octal_value <= 0xFFFFFFFF:
+                    ip_obj = ipaddress.ip_address(octal_value)
                     if ip_obj.is_private or ip_obj.is_loopback or ip_obj.is_link_local:
                         return False
             except (ValueError, OverflowError):
@@ -182,22 +267,78 @@ def _is_ssrf_safe(url: str) -> bool:
                 except (ValueError, OverflowError):
                     pass
 
-        # Direct IP address check.
+        # ════════════════════════════════════════════════════════════════════════
+        # SECURITY REC MED-3: IPv6 SSRF Protection
+        # ════════════════════════════════════════════════════════════════════════
+        # Direct IP address check (handles both IPv4 and IPv6)
         try:
             addr = ipaddress.ip_address(host_lower)
-            # Only allow globally routable unicast addresses.
+            
+            # IPv6-specific checks
+            if isinstance(addr, ipaddress.IPv6Address):
+                # Block IPv6 loopback (::1)
+                if addr.is_loopback:
+                    return False
+                # Block link-local addresses (fe80::/10)
+                if addr.is_link_local:
+                    return False
+                # Block unique local addresses (fc00::/7) - IPv6 equivalent of RFC1918
+                if addr.is_private:
+                    return False
+                # Block site-local addresses (deprecated but still dangerous: fec0::/10)
+                if addr.is_site_local:
+                    return False
+                # Block multicast (ff00::/8)
+                if addr.is_multicast:
+                    return False
+                # Block IPv4-mapped IPv6 addresses (::ffff:0:0/96) to prevent IPv4 bypass
+                # Example: ::ffff:127.0.0.1 = IPv6-wrapped localhost
+                if addr.ipv4_mapped:
+                    ipv4_addr = addr.ipv4_mapped
+                    if ipv4_addr.is_private or ipv4_addr.is_loopback or ipv4_addr.is_link_local:
+                        return False
+                # Block 6to4 addresses (2002::/16) to prevent tunneling attacks
+                if addr.packed[:2] == b'\x20\x02':
+                    return False
+                # Block Teredo tunneling (2001::/32)
+                if addr.packed[:4] == b'\x20\x01\x00\x00':
+                    return False
+            
+            # IPv4 and IPv6: Only allow globally routable unicast addresses.
             return addr.is_global and not addr.is_private and not addr.is_loopback and not addr.is_link_local
         except ValueError:
             pass  # hostname, not an IP literal
+        # ────────────────────────────────────────────────────────────────────────
 
         # Resolve hostname and block if any resolved address is non-public.
+        # Check both IPv4 and IPv6 resolutions to prevent bypasses via AAAA records.
+        # ════════════════════════════════════════════════════════════════════════
+        # SECURITY REC MED-4: DNS Pinning TOCTOU Protection
+        # ════════════════════════════════════════════════════════════════════════
+        # Verify DNS resolution matches previous pin to prevent DNS rebinding attacks
+        if not verify_dns_pinning(host_lower):
+            return False  # DNS resolution changed - potential attack
+        # ────────────────────────────────────────────────────────────────────────
+        
         try:
             infos = socket.getaddrinfo(host_lower, None, socket.AF_UNSPEC, socket.SOCK_STREAM)
             for _family, _type, _proto, _canon, sockaddr in infos:
                 ip_str = sockaddr[0]
                 addr = ipaddress.ip_address(ip_str)
+                
+                # Block private/internal addresses (IPv4 and IPv6)
                 if addr.is_private or addr.is_loopback or addr.is_link_local or addr.is_reserved:
                     return False
+                
+                # IPv6-specific checks on DNS resolution
+                if isinstance(addr, ipaddress.IPv6Address):
+                    if addr.is_site_local or addr.is_multicast:
+                        return False
+                    # Block IPv4-mapped IPv6 in DNS responses
+                    if addr.ipv4_mapped:
+                        ipv4 = addr.ipv4_mapped
+                        if ipv4.is_private or ipv4.is_loopback or ipv4.is_link_local:
+                            return False
         except (socket.gaierror, OSError):
             # Unresolvable .local-style hosts are blocked; unresolved public hosts
             # are allowed to avoid false negatives in restricted DNS environments.

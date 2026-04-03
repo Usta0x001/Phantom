@@ -72,6 +72,118 @@ _GLOBAL_PER_MODEL_STATS: dict[str, RequestStats] = {}
 _GLOBAL_RATE_LIMIT_UNTIL: float = 0.0
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+# RELIABILITY REC MED-5: Circuit Breaker for LLM Failures
+# ══════════════════════════════════════════════════════════════════════════════
+# Prevents cascading failures by temporarily stopping LLM requests after repeated
+# failures. Uses a 3-state pattern: CLOSED (normal), OPEN (blocking), HALF_OPEN (testing).
+#
+# Example: After 5 consecutive failures, circuit opens for 60s. During this time,
+# requests fail-fast instead of retrying endlessly. After 60s, one test request
+# is allowed (HALF_OPEN). If it succeeds, circuit closes; if it fails, circuit
+# reopens for another 60s.
+
+from enum import Enum
+
+@dataclass
+class CircuitState(Enum):
+    CLOSED = "closed"      # Normal operation
+    OPEN = "open"          # Blocking requests (failure threshold exceeded)
+    HALF_OPEN = "half_open"  # Testing if service recovered
+
+
+@dataclass
+class CircuitBreaker:
+    """Circuit breaker to prevent cascading LLM failures.
+    
+    Tracks failure rate and temporarily blocks requests when threshold is exceeded.
+    """
+    failure_threshold: int = 5      # Consecutive failures before opening
+    timeout_seconds: float = 60.0   # How long to wait before testing recovery
+    _state: CircuitState = CircuitState.CLOSED
+    _failure_count: int = 0
+    _last_failure_time: float = 0.0
+    
+    def __post_init__(self) -> None:
+        """Initialize from config if available."""
+        enabled = (Config.get("phantom_circuit_breaker_enabled") or "").lower()
+        if enabled != "true":
+            # If disabled via config, set threshold to very high (essentially no-op)
+            self.failure_threshold = 999999
+        
+        threshold = Config.get("phantom_circuit_breaker_threshold")
+        if threshold:
+            try:
+                self.failure_threshold = max(1, int(threshold))
+            except ValueError:
+                pass
+        
+        timeout = Config.get("phantom_circuit_breaker_timeout")
+        if timeout:
+            try:
+                self.timeout_seconds = max(1.0, float(timeout))
+            except ValueError:
+                pass
+    
+    def record_success(self) -> None:
+        """Record successful request - resets failure counter and closes circuit."""
+        self._failure_count = 0
+        self._state = CircuitState.CLOSED
+    
+    def record_failure(self) -> None:
+        """Record failed request - may open circuit if threshold exceeded."""
+        self._failure_count += 1
+        self._last_failure_time = time.monotonic()
+        
+        if self._failure_count >= self.failure_threshold:
+            self._state = CircuitState.OPEN
+            logger.warning(
+                "Circuit breaker OPEN: %d consecutive LLM failures. "
+                "Blocking requests for %.0fs to prevent cascading failures.",
+                self._failure_count,
+                self.timeout_seconds,
+            )
+    
+    def allow_request(self) -> bool:
+        """Check if a request should be allowed based on circuit state.
+        
+        Returns:
+            True if request allowed, False if blocked by open circuit
+        """
+        if self._state == CircuitState.CLOSED:
+            return True
+        
+        if self._state == CircuitState.OPEN:
+            # Check if timeout elapsed - transition to HALF_OPEN for testing
+            elapsed = time.monotonic() - self._last_failure_time
+            if elapsed >= self.timeout_seconds:
+                self._state = CircuitState.HALF_OPEN
+                logger.info(
+                    "Circuit breaker HALF_OPEN: Testing LLM recovery after %.0fs cooldown.",
+                    elapsed,
+                )
+                return True  # Allow one test request
+            return False  # Still in timeout - block request
+        
+        # HALF_OPEN: allow request (will close on success or reopen on failure)
+        return True
+    
+    def get_state(self) -> CircuitState:
+        """Get current circuit state."""
+        return self._state
+    
+    def reset(self) -> None:
+        """Manually reset circuit to CLOSED state."""
+        self._failure_count = 0
+        self._state = CircuitState.CLOSED
+
+
+# Global circuit breaker instance (per-process singleton)
+_CIRCUIT_BREAKER = CircuitBreaker()
+
+# ──────────────────────────────────────────────────────────────────────────────
+
+
 class _TokenRateLimiter:
     def __init__(self) -> None:
         self._calls_by_model: dict[str, list[float]] = {}
@@ -222,6 +334,13 @@ class LLM:
             wait_time = _GLOBAL_RATE_LIMIT_UNTIL - now
             logger.warning("Global rate limit in effect, agent '%s' sleeping for %.1fs...", self.agent_name, wait_time)
             await asyncio.sleep(wait_time)
+
+        # RELIABILITY REC MED-5: Check circuit breaker before making request
+        if not _CIRCUIT_BREAKER.allow_request():
+            raise LLMRequestFailedError(
+                message="LLM circuit breaker is OPEN - too many consecutive failures",
+                details=f"Circuit state: {_CIRCUIT_BREAKER.get_state().value}. Wait before retrying."
+            )
 
         self._check_budget()
         self._agent_calls += 1
@@ -417,6 +536,9 @@ class LLM:
                 self._total_stats.cost,
             )
             self._check_per_request_budget(cost_before)
+
+        # RELIABILITY REC MED-5: Record successful LLM call - close circuit
+        _CIRCUIT_BREAKER.record_success()
 
         accumulated = normalize_tool_format(accumulated)
         accumulated = fix_incomplete_tool_call(_truncate_to_first_function(accumulated))
@@ -679,15 +801,23 @@ class LLM:
             return int(env_val)
         return None  # let the model use its full output budget (Strix behaviour)
 
+    # ════════════════════════════════════════════════════════════════════════════
+    # EFFICIENCY FIX SCALE-P1.1: Budget threshold tracking for graceful degradation
+    # ════════════════════════════════════════════════════════════════════════════
+    _budget_warning_80_emitted: bool = False
+    _budget_warning_90_emitted: bool = False
+
     def _check_budget(self) -> None:
-        """Hard-stop if PHANTOM_MAX_COST is set and exceeded.
+        """Check budget and apply graceful degradation at thresholds.
+        
+        EFFICIENCY FIX SCALE-P1.1: Graceful Limit Degradation
+        - 80% budget: Warning logged, continue normally
+        - 90% budget: Warning logged, reduce reasoning effort, suggest wrap-up
+        - 100% budget: Stop or continue based on PHANTOM_COST_ABORT_ON_LIMIT
 
         Uses the *global* scan cost aggregated across all agent instances via the
         Tracer, so sub-agents cannot each individually spend up to max_cost.
         Falls back to this agent's local stats when the Tracer is unavailable.
-
-        Rec 2 (SF-001): If PHANTOM_COST_ABORT_ON_LIMIT is "false", log a
-        warning instead of raising — making the budget advisory, not fatal.
         """
         max_cost_str = Config.get("phantom_max_cost")
         if not max_cost_str:
@@ -696,7 +826,10 @@ class LLM:
             max_cost = float(max_cost_str)
         except ValueError:
             return
-        # Lazy import to avoid circular dependency at module load time.
+        if max_cost <= 0:
+            return
+            
+        # Get current global cost
         try:
             from phantom.telemetry.tracer import get_global_tracer
             tracer = get_global_tracer()
@@ -707,6 +840,89 @@ class LLM:
                 current_cost = self._total_stats.cost
         except Exception:  # noqa: BLE001
             current_cost = self._total_stats.cost
+        
+        budget_fraction = current_cost / max_cost
+        
+        # ════════════════════════════════════════════════════════════════════
+        # 80% threshold: Warning, continue normally
+        # ════════════════════════════════════════════════════════════════════
+        if budget_fraction >= 0.80 and not self._budget_warning_80_emitted:
+            self._budget_warning_80_emitted = True
+            logger.warning(
+                "BUDGET ALERT: 80%% used ($%.4f / $%.4f). "
+                "Consider wrapping up current testing phase.",
+                current_cost, max_cost,
+            )
+            # Log to audit
+            try:
+                from phantom.logging.audit import get_audit_logger as _get_audit
+                _audit = _get_audit()
+                if _audit:
+                    _audit.log_security_event(
+                        "budget_warning_80",
+                        self.agent_id,
+                        {
+                            "current_cost": round(current_cost, 4),
+                            "max_cost": max_cost,
+                            "percentage": round(budget_fraction * 100, 1),
+                            "action": "warning_only",
+                        },
+                    )
+            except Exception:  # noqa: BLE001
+                pass
+        
+        # ════════════════════════════════════════════════════════════════════
+        # 90% threshold: Warning + reduce reasoning effort + inject wrap-up hint
+        # ════════════════════════════════════════════════════════════════════
+        if budget_fraction >= 0.90 and not self._budget_warning_90_emitted:
+            self._budget_warning_90_emitted = True
+            logger.warning(
+                "BUDGET CRITICAL: 90%% used ($%.4f / $%.4f). "
+                "Reducing reasoning effort and preparing for graceful shutdown.",
+                current_cost, max_cost,
+            )
+            
+            # Reduce reasoning effort to save tokens
+            if self._reasoning_effort in ("high", "xhigh"):
+                self._reasoning_effort = "medium"
+                logger.info("Reasoning effort reduced from high/xhigh to medium to conserve budget")
+            elif self._reasoning_effort == "medium":
+                self._reasoning_effort = "low"
+                logger.info("Reasoning effort reduced from medium to low to conserve budget")
+            
+            # Auto-downgrade scan mode if adaptive is enabled
+            if self._adaptive_scan_enabled:
+                new_mode = self._SCAN_MODE_DOWNGRADE.get(self.config.scan_mode)
+                if new_mode:
+                    logger.warning(
+                        "Auto-downgrading scan mode %s → %s due to 90%% budget",
+                        self.config.scan_mode, new_mode
+                    )
+                    self.config.scan_mode = new_mode
+            
+            # Log to audit
+            try:
+                from phantom.logging.audit import get_audit_logger as _get_audit
+                _audit = _get_audit()
+                if _audit:
+                    _audit.log_security_event(
+                        "budget_warning_90",
+                        self.agent_id,
+                        {
+                            "current_cost": round(current_cost, 4),
+                            "max_cost": max_cost,
+                            "percentage": round(budget_fraction * 100, 1),
+                            "action": "degradation_applied",
+                            "reasoning_effort": self._reasoning_effort,
+                            "scan_mode": self.config.scan_mode,
+                        },
+                    )
+            except Exception:  # noqa: BLE001
+                pass
+        
+        # ════════════════════════════════════════════════════════════════════
+        # 100% threshold: Hard stop or advisory continue
+        # ════════════════════════════════════════════════════════════════════
         if current_cost >= max_cost:
             # Rec 2 (SF-001): Respect abort-on-limit flag.
             abort_on_limit = (Config.get("phantom_cost_abort_on_limit") or "true").lower()
@@ -1050,6 +1266,8 @@ class LLM:
         return code == 429 or (500 <= code < 600)
 
     def _raise_error(self, e: Exception) -> None:
+        # RELIABILITY REC MED-5: Record LLM failure for circuit breaker
+        _CIRCUIT_BREAKER.record_failure()
         raise LLMRequestFailedError(f"LLM request failed: {type(e).__name__}", str(e)) from e
 
     def _is_anthropic(self) -> bool:
