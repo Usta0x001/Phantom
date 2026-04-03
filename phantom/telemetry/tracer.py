@@ -400,6 +400,70 @@ class Tracer:
     def get_existing_vulnerabilities(self) -> list[dict[str, Any]]:
         return list(self.vulnerability_reports)
 
+    def update_vulnerability_replay(
+        self,
+        title: str,
+        replay_status: str,
+        confidence: str | None = None,
+    ) -> None:
+        """Update an existing vulnerability report with replay verification results.
+        
+        Args:
+            title: Title of the vulnerability to update
+            replay_status: Replay status (PASSED, FAILED, ERROR, etc.)
+            confidence: Updated confidence level (VERIFIED if passed)
+        """
+        # Validate inputs
+        if not isinstance(title, str):
+            logger.error(f"Invalid title type: {type(title).__name__} - expected str")
+            return
+        
+        if not isinstance(replay_status, str):
+            logger.error(f"Invalid replay_status type: {type(replay_status).__name__} - expected str")
+            return
+        
+        # Validate replay_status against allowed values
+        valid_statuses = {"PASSED", "FAILED", "ERROR", "SKIPPED", "PENDING"}
+        if replay_status.upper() not in valid_statuses:
+            logger.warning(
+                f"Replay status '{replay_status}' not in valid set: {valid_statuses}. "
+                "Accepting anyway for forward compatibility."
+            )
+        
+        # Find the vulnerability by title
+        for report in self.vulnerability_reports:
+            if report.get("title") == title:
+                # Update replay status
+                report["replay_status"] = replay_status
+                
+                # Update confidence if provided
+                if confidence:
+                    report["confidence"] = confidence
+                
+                logger.info(
+                    f"Updated vulnerability replay: {report['id']} - {title} -> {replay_status}"
+                )
+                
+                # Emit telemetry event
+                self._emit_event(
+                    "finding.replay.updated",
+                    payload={
+                        "report_id": report["id"],
+                        "title": title,
+                        "replay_status": replay_status,
+                        "confidence": confidence,
+                    },
+                    status=replay_status.lower(),
+                    source="phantom.findings",
+                )
+                
+                # Save the updated data
+                self.save_run_data()
+                return
+        
+        # Log warning if vulnerability not found
+        logger.warning(f"Could not find vulnerability with title: {title}")
+
     def update_scan_final_fields(
         self,
         executive_summary: str,
