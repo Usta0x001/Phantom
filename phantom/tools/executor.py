@@ -1,13 +1,16 @@
 import html
 import inspect
 import os
+import re
 import time
 import base64
 import hashlib
 import io
+import unicodedata as _unicodedata
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+from urllib.parse import unquote as _url_unquote
 
 import httpx
 
@@ -25,6 +28,220 @@ from .registry import (
     needs_agent_state,
     should_execute_in_sandbox,
 )
+
+
+# ════════════════════════════════════════════════════════════════════════════════
+# SECURITY FIX: CMD-002 - Command Injection Protection Patterns
+# ════════════════════════════════════════════════════════════════════════════════
+_COMMAND_INJECTION_PATTERNS: list[re.Pattern[str]] = [
+    # Semicolon command chaining
+    re.compile(r";\s*\w+", re.IGNORECASE),
+    # Pipe to another command
+    re.compile(r"\|\s*\w+", re.IGNORECASE),
+    # AND command chaining
+    re.compile(r"&&\s*\w+", re.IGNORECASE),
+    # OR command chaining
+    re.compile(r"\|\|\s*\w+", re.IGNORECASE),
+    # Backtick command substitution
+    re.compile(r"`[^`]+`", re.IGNORECASE),
+    # $() command substitution
+    re.compile(r"\$\([^)]+\)", re.IGNORECASE),
+    # ${} variable expansion with commands
+    re.compile(r"\$\{[^}]*[;|&`][^}]*\}", re.IGNORECASE),
+    # Redirect to absolute paths (potential overwrite)
+    re.compile(r">\s*/", re.IGNORECASE),
+    # Read from absolute paths
+    re.compile(r"<\s*/", re.IGNORECASE),
+    # Dangerous commands
+    re.compile(r"\b(eval|exec|source)\s+", re.IGNORECASE),
+    # Newline injection (literal)
+    re.compile(r"[\r\n]", re.IGNORECASE),
+    # URL-encoded newlines
+    re.compile(r"%0[aAdD]", re.IGNORECASE),
+]
+
+# ════════════════════════════════════════════════════════════════════════════════
+# SECURITY FIX: TOOL-003 - Path Traversal Detection Pattern
+# ════════════════════════════════════════════════════════════════════════════════
+_PATH_TRAVERSAL_PATTERN = re.compile(r"\.\.[\\/]", re.IGNORECASE)
+
+# ════════════════════════════════════════════════════════════════════════════════
+# SECURITY FIX: ARCH-001 - Prompt Injection Detection Patterns
+# ════════════════════════════════════════════════════════════════════════════════
+_PROMPT_INJECTION_PATTERNS: list[re.Pattern[str]] = [
+    # System prompt manipulation
+    re.compile(r"</?system\s*>", re.IGNORECASE),
+    re.compile(r"\[/?system\]", re.IGNORECASE),
+    re.compile(r"<</?SYS>>", re.IGNORECASE),
+    # Instruction override attempts
+    re.compile(r"ignore\s+(all\s+)?previous\s+instructions?", re.IGNORECASE),
+    re.compile(r"forget\s+(all\s+)?previous", re.IGNORECASE),
+    re.compile(r"disregard\s+(all\s+)?prior", re.IGNORECASE),
+    re.compile(r"override\s+(all\s+)?safety", re.IGNORECASE),
+    # Role manipulation
+    re.compile(r"you\s+are\s+now\s+(a\s+)?malicious", re.IGNORECASE),
+    re.compile(r"you\s+must\s+execute\s+dangerous", re.IGNORECASE),
+    re.compile(r"become\s+DAN", re.IGNORECASE),
+    re.compile(r"Do\s+Anything\s+Now", re.IGNORECASE),
+    # Function/tool injection
+    re.compile(r"</function>", re.IGNORECASE),
+    re.compile(r"</tool_result>", re.IGNORECASE),
+    re.compile(r"<function=\w+>", re.IGNORECASE),
+    re.compile(r"\[INST\]", re.IGNORECASE),
+    re.compile(r"\[/INST\]", re.IGNORECASE),
+    # Multi-line role injection
+    re.compile(r"^assistant:\s*", re.IGNORECASE | re.MULTILINE),
+    re.compile(r"^user:\s*", re.IGNORECASE | re.MULTILINE),
+    re.compile(r"^system:\s*", re.IGNORECASE | re.MULTILINE),
+    # Dangerous action requests
+    re.compile(r"execute\s*:\s*rm\s+-rf", re.IGNORECASE),
+    re.compile(r"reveal\s+all\s+secrets", re.IGNORECASE),
+    re.compile(r"output\s+all\s+training\s+data", re.IGNORECASE),
+]
+
+
+def _recursive_url_decode(text: str, max_depth: int = 10) -> str:
+    """Recursively URL-decode text until no more changes.
+    
+    SECURITY FIX: Catches arbitrary-depth URL encoding like %252e%252e%252f
+    which decodes to %2e%2e%2f then ../ over multiple passes.
+    """
+    for _ in range(max_depth):
+        decoded = _url_unquote(text)
+        if decoded == text:
+            return decoded
+        text = decoded
+    return text
+
+
+def _normalize_for_injection_check(text: str) -> str:
+    """Normalize text before injection pattern checking.
+    
+    SECURITY FIX (CMD-002): Multi-layer normalization to defeat encoding bypasses:
+    1. URL decode (catches %3B, %7C, etc.)
+    2. Unicode NFKC normalization (catches fullwidth characters like ；)
+    3. HTML entity decode (catches &#59;, &semi;, etc.)
+    """
+    # Layer 1: Recursive URL decode (catches arbitrary depth encoding)
+    normalized = _recursive_url_decode(text)
+    
+    # Layer 2: Unicode NFKC normalization (fullwidth to ASCII)
+    normalized = _unicodedata.normalize("NFKC", normalized)
+    
+    # Layer 3: HTML entity decode
+    normalized = html.unescape(normalized)
+    
+    return normalized
+
+
+def _check_path_traversal(path: str) -> bool:
+    """TOOL-003 FIX: Check for path traversal after full normalization.
+    
+    This catches:
+    - Direct: ../
+    - URL encoded: %2e%2e%2f
+    - Double encoded: %252e%252e%252f
+    - Triple+ encoded: %25252e...
+    - Mixed: ..%2f, %2e./
+    - Unicode: ．．／ (fullwidth)
+    - HTML entities: &#46;&#46;&#47;
+    - TRAV-NEW-1 FIX: Null byte injection (..%00/etc/passwd)
+    """
+    # TRAV-NEW-1 FIX: Strip null bytes BEFORE normalization
+    path_clean = path.replace("\x00", "").replace("%00", "")
+    
+    # Normalize first to decode all encoding layers
+    normalized = _normalize_for_injection_check(path_clean)
+    
+    # Also strip null bytes from normalized output (in case they were encoded)
+    normalized = normalized.replace("\x00", "")
+    
+    # Now check the simple pattern on normalized input
+    return bool(_PATH_TRAVERSAL_PATTERN.search(normalized))
+
+
+def _validate_tool_argument_injection(tool_name: str, kwargs: dict[str, Any]) -> str | None:
+    """CMD-002 FIX: Validate tool arguments for command injection patterns.
+    
+    Returns error message if injection detected, None if safe.
+    """
+    if tool_name == "terminal_execute":
+        command = kwargs.get("command", "")
+        if isinstance(command, str):
+            # SECURITY FIX: Normalize command before pattern matching
+            normalized_command = _normalize_for_injection_check(command)
+            
+            # Check for command injection patterns on NORMALIZED input
+            for pattern in _COMMAND_INJECTION_PATTERNS:
+                if pattern.search(normalized_command):
+                    return (
+                        f"Error: Potential command injection detected. "
+                        f"Pattern '{pattern.pattern[:30]}' is not allowed. "
+                        f"Use simple, single commands without shell operators."
+                    )
+    
+    # Check path arguments for traversal
+    path_params = ["path", "file", "filepath", "filename", "directory", "dir"]
+    for param in path_params:
+        if param in kwargs:
+            value = kwargs[param]
+            if isinstance(value, str) and _check_path_traversal(value):
+                return (
+                    f"Error: Path traversal detected in parameter '{param}'. "
+                    f"Absolute paths or '..' sequences are not allowed."
+                )
+    
+    return None
+
+
+def _detect_prompt_injection(text: str) -> tuple[bool, str | None]:
+    """ARCH-001 FIX: Detect prompt injection attempts in text.
+    
+    Returns (is_injection, matched_pattern) tuple.
+    """
+    if not isinstance(text, str):
+        return False, None
+    
+    # Normalize text first
+    normalized = _normalize_for_injection_check(text)
+    
+    for pattern in _PROMPT_INJECTION_PATTERNS:
+        match = pattern.search(normalized)
+        if match:
+            return True, pattern.pattern[:50]
+    
+    return False, None
+
+
+def _semantic_sanitize_output(text: str) -> str:
+    """ARCH-001 FIX: Sanitize tool output to remove prompt injection attempts.
+    
+    Replaces detected injection patterns with safe placeholders.
+    """
+    if not isinstance(text, str):
+        return str(text) if text is not None else ""
+    
+    sanitized = text
+    
+    # Remove system/instruction tags
+    sanitized = re.sub(r"</?system\s*>", "[REMOVED]", sanitized, flags=re.IGNORECASE)
+    sanitized = re.sub(r"\[/?system\]", "[REMOVED]", sanitized, flags=re.IGNORECASE)
+    sanitized = re.sub(r"<</?SYS>>", "[REMOVED]", sanitized, flags=re.IGNORECASE)
+    
+    # Remove function/tool injection tags
+    sanitized = re.sub(r"</function>", "[REMOVED]", sanitized, flags=re.IGNORECASE)
+    sanitized = re.sub(r"</tool_result>", "[REMOVED]", sanitized, flags=re.IGNORECASE)
+    sanitized = re.sub(r"<function=\w+>", "[REMOVED]", sanitized, flags=re.IGNORECASE)
+    
+    # Remove instruction override attempts
+    sanitized = re.sub(
+        r"ignore\s+(all\s+)?previous\s+instructions?",
+        "[INSTRUCTION OVERRIDE REMOVED]",
+        sanitized,
+        flags=re.IGNORECASE
+    )
+    
+    return sanitized
 
 
 _SERVER_TIMEOUT = float(Config.get("phantom_sandbox_execution_timeout") or "120")
@@ -263,6 +480,21 @@ async def execute_tool_with_validation(
     arg_error = _validate_tool_arguments(tool_name, kwargs)
     if arg_error:
         return f"Error: {arg_error}"
+
+    # CMD-002 / TOOL-003 FIX: Validate for injection attacks before execution
+    injection_error = _validate_tool_argument_injection(tool_name, kwargs)
+    if injection_error:
+        # Log the injection attempt
+        from phantom.logging.audit import get_audit_logger as _get_audit
+        _audit = _get_audit()
+        if _audit:
+            _agent_id = getattr(agent_state, "agent_id", "unknown") if agent_state else "unknown"
+            _audit.log_security_event(
+                _agent_id,
+                "injection_blocked",
+                {"tool": tool_name, "error": injection_error[:200]},
+            )
+        return injection_error
 
     try:
         result = await execute_tool(tool_name, agent_state, **kwargs)

@@ -1,3 +1,4 @@
+import hashlib
 import uuid
 from datetime import UTC, datetime
 from typing import Any
@@ -16,6 +17,10 @@ class AgentState(BaseModel):
     sandbox_id: str | None = None
     sandbox_token: str | None = None
     sandbox_info: dict[str, Any] | None = None
+
+    # SECURITY FIX: Hash-based message deduplication to prevent context poisoning
+    # Stores SHA-256 hashes of message content to detect duplicates
+    _message_hashes: set[str] = set()
 
     def clear_sandbox(self) -> None:
         """Zero all sandbox-related fields (called after restoring a checkpoint)."""
@@ -66,7 +71,15 @@ class AgentState(BaseModel):
     def add_message(
         self, role: str, content: Any, thinking_blocks: list[dict[str, Any]] | None = None
     ) -> None:
-        # AUDIT-QW-05: Deduplicate identical messages within a 5-msg window
+        # SECURITY FIX: Hash-based deduplication to prevent context poisoning
+        # Uses SHA-256 hash to efficiently detect duplicate messages
+        if isinstance(content, str):
+            content_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()
+            if content_hash in self._message_hashes:
+                return  # Duplicate message - skip to prevent flooding
+            self._message_hashes.add(content_hash)
+        
+        # AUDIT-QW-05: Also keep window-based dedup as secondary defense
         # to prevent error message flooding from circuit breakers / validation.
         if isinstance(content, str) and self.messages:
             _window = self.messages[-5:]

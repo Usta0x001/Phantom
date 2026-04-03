@@ -238,6 +238,10 @@ class DockerRuntime(AbstractRuntime):
                         f"{CONTAINER_CAIDO_PORT}/tcp": self._caido_port,
                     },
                     cap_add=["NET_ADMIN", "NET_RAW"],
+                    # SECURITY FIX: Drop dangerous capabilities that could enable container escape
+                    # SYS_ADMIN: Prevents mount/namespace manipulation for container escape
+                    # SYS_PTRACE: Prevents process debugging/injection attacks
+                    cap_drop=["SYS_ADMIN", "SYS_PTRACE"],
                     labels={"phantom-scan-id": scan_id},
                     environment={
                         "PYTHONUNBUFFERED": "1",

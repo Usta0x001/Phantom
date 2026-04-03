@@ -19,8 +19,10 @@ class TerminalManager:
         # thread.  A 15-second buffer leaves time for result serialisation.
         _env_timeout = float(os.getenv("PHANTOM_SANDBOX_EXECUTION_TIMEOUT", "600"))
         self.default_timeout = max(30.0, _env_timeout - 15.0)
-        # C-04: quarantine mode — when enabled, block shell metacharacters in commands
-        self.quarantine = os.getenv("PHANTOM_TERMINAL_QUARANTINE", "true").lower() == "true"
+        # SECURITY FIX (TOOL-004): Quarantine mode is now HARDCODED to True
+        # This prevents attackers from disabling quarantine via environment variables
+        # which would allow shell metacharacter injection attacks
+        self.quarantine = True  # HARDCODED - cannot be overridden
 
         self._register_cleanup_handlers()
 

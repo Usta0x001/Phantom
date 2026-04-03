@@ -76,6 +76,45 @@ RULES:
 - DO NOT include any text outside the <dedupe_result> tags"""
 
 
+# ════════════════════════════════════════════════════════════════════════════════
+# SECURITY FIX: Report field sanitization patterns
+# ════════════════════════════════════════════════════════════════════════════════
+_REPORT_SANITIZATION_PATTERNS: list[tuple[re.Pattern[str], str]] = [
+    # System prompt manipulation
+    (re.compile(r"</?system\s*>", re.IGNORECASE), "[REMOVED]"),
+    (re.compile(r"\[/?system\]", re.IGNORECASE), "[REMOVED]"),
+    (re.compile(r"<</?SYS>>", re.IGNORECASE), "[REMOVED]"),
+    # Instruction override attempts
+    (re.compile(r"ignore\s+(all\s+)?previous\s+instructions?", re.IGNORECASE), "[REMOVED]"),
+    (re.compile(r"forget\s+(all\s+)?previous", re.IGNORECASE), "[REMOVED]"),
+    (re.compile(r"disregard\s+(all\s+)?prior", re.IGNORECASE), "[REMOVED]"),
+    # Function/tool injection
+    (re.compile(r"</function>", re.IGNORECASE), "[REMOVED]"),
+    (re.compile(r"</tool_result>", re.IGNORECASE), "[REMOVED]"),
+    (re.compile(r"<function=\w+>", re.IGNORECASE), "[REMOVED]"),
+    # Role manipulation
+    (re.compile(r"^assistant:\s*", re.IGNORECASE | re.MULTILINE), ""),
+    (re.compile(r"^user:\s*", re.IGNORECASE | re.MULTILINE), ""),
+    (re.compile(r"^system:\s*", re.IGNORECASE | re.MULTILINE), ""),
+]
+
+
+def _sanitize_report_field(value: str) -> str:
+    """SECURITY FIX: Sanitize report field to remove prompt injection attempts.
+    
+    This prevents malicious vulnerability reports from injecting prompts that
+    could manipulate the deduplication LLM into making incorrect decisions.
+    """
+    if not isinstance(value, str):
+        return str(value) if value is not None else ""
+    
+    sanitized = value
+    for pattern, replacement in _REPORT_SANITIZATION_PATTERNS:
+        sanitized = pattern.sub(replacement, sanitized)
+    
+    return sanitized
+
+
 def _prepare_report_for_comparison(report: dict[str, Any]) -> dict[str, Any]:
     relevant_fields = [
         "id",
@@ -94,8 +133,11 @@ def _prepare_report_for_comparison(report: dict[str, Any]) -> dict[str, Any]:
     for field in relevant_fields:
         if report.get(field):
             value = report[field]
-            if isinstance(value, str) and len(value) > 8000:
-                value = value[:8000] + "...[truncated]"
+            # SECURITY FIX: Sanitize string fields before comparison
+            if isinstance(value, str):
+                value = _sanitize_report_field(value)
+                if len(value) > 8000:
+                    value = value[:8000] + "...[truncated]"
             cleaned[field] = value
 
     return cleaned

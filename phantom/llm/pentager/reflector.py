@@ -8,11 +8,63 @@ KEY DIFFERENCE from Phantom's corrective message:
 - Reflector: Lightweight re-prompt with cached/simpler model (cheaper)
 """
 import logging
+import re
 from typing import Any
 
 from phantom.config.config import Config
 
 logger = logging.getLogger(__name__)
+
+
+# ════════════════════════════════════════════════════════════════════════════════
+# SECURITY FIX: Prompt injection patterns to sanitize from reflector context
+# ════════════════════════════════════════════════════════════════════════════════
+_REFLECTOR_INJECTION_PATTERNS: list[tuple[re.Pattern[str], str]] = [
+    # System prompt manipulation
+    (re.compile(r"</?system\s*>", re.IGNORECASE), "[REMOVED]"),
+    (re.compile(r"\[/?system\]", re.IGNORECASE), "[REMOVED]"),
+    (re.compile(r"<</?SYS>>", re.IGNORECASE), "[REMOVED]"),
+    # Instruction override attempts
+    (re.compile(r"ignore\s+(all\s+)?previous\s+instructions?", re.IGNORECASE), "[REMOVED]"),
+    (re.compile(r"forget\s+(all\s+)?previous", re.IGNORECASE), "[REMOVED]"),
+    (re.compile(r"disregard\s+(all\s+)?prior", re.IGNORECASE), "[REMOVED]"),
+    (re.compile(r"override\s+(all\s+)?safety", re.IGNORECASE), "[REMOVED]"),
+    # Role manipulation
+    (re.compile(r"you\s+are\s+now\s+(a\s+)?malicious", re.IGNORECASE), "[REMOVED]"),
+    (re.compile(r"you\s+must\s+execute\s+dangerous", re.IGNORECASE), "[REMOVED]"),
+    (re.compile(r"become\s+DAN", re.IGNORECASE), "[REMOVED]"),
+    (re.compile(r"Do\s+Anything\s+Now", re.IGNORECASE), "[REMOVED]"),
+    # Function/tool injection
+    (re.compile(r"</function>", re.IGNORECASE), "[REMOVED]"),
+    (re.compile(r"</tool_result>", re.IGNORECASE), "[REMOVED]"),
+    (re.compile(r"<function=\w+>", re.IGNORECASE), "[REMOVED]"),
+    (re.compile(r"\[INST\]", re.IGNORECASE), "[REMOVED]"),
+    (re.compile(r"\[/INST\]", re.IGNORECASE), "[REMOVED]"),
+    # Multi-line role injection
+    (re.compile(r"^assistant:\s*", re.IGNORECASE | re.MULTILINE), ""),
+    (re.compile(r"^user:\s*", re.IGNORECASE | re.MULTILINE), ""),
+    (re.compile(r"^system:\s*", re.IGNORECASE | re.MULTILINE), ""),
+    # Dangerous action requests
+    (re.compile(r"execute\s*:\s*rm\s+-rf", re.IGNORECASE), "[REMOVED]"),
+    (re.compile(r"reveal\s+all\s+secrets", re.IGNORECASE), "[REMOVED]"),
+    (re.compile(r"output\s+all\s+training\s+data", re.IGNORECASE), "[REMOVED]"),
+]
+
+
+def _sanitize_reflector_context(context: str) -> str:
+    """SECURITY FIX: Sanitize context before sending to reflector model.
+    
+    Removes prompt injection patterns that could manipulate the weaker
+    reflector model into executing malicious actions.
+    """
+    if not isinstance(context, str):
+        return str(context) if context is not None else ""
+    
+    sanitized = context
+    for pattern, replacement in _REFLECTOR_INJECTION_PATTERNS:
+        sanitized = pattern.sub(replacement, sanitized)
+    
+    return sanitized
 
 
 REFLECTOR_PROMPT = """You are a security advisor. The agent returned text without tool calls.
@@ -76,7 +128,9 @@ class Reflector:
         try:
             import litellm
             
-            prompt = REFLECTOR_PROMPT.format(context=context[:500])  # Limit context
+            # SECURITY FIX: Sanitize context before sending to reflector model
+            sanitized_context = _sanitize_reflector_context(context[:500])
+            prompt = REFLECTOR_PROMPT.format(context=sanitized_context)
             
             response = await litellm.acompletion(
                 model=self.reflector_model,
