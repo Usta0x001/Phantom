@@ -1,0 +1,58 @@
+<tool name="parse_openapi_schema">
+<description>
+Parse OpenAPI/Swagger schema and extract API structure.
+
+Supports OpenAPI 2.0 (Swagger) and OpenAPI 3.x formats in JSON or YAML.
+Returns parsed schema with endpoints, parameters, and security requirements.
+
+P3.6: API Schema Validation - Automatically discover API endpoints and their security requirements from OpenAPI specifications.
+</description>
+<parameters>
+<parameter name="schema_url_or_data">
+<type>string</type>
+<required>true</required>
+<description>URL to schema file or direct schema content (JSON/YAML). Can be https://example.com/openapi.json or raw JSON/YAML string.</description>
+</parameter>
+</parameters>
+</tool>
+
+<tool name="extract_api_endpoints">
+<description>
+Extract testable endpoints from OpenAPI/Swagger schema.
+
+Returns detailed endpoint information including paths, methods, parameters,
+and security requirements. Useful for automated API testing.
+
+P3.6: Enables systematic API testing by extracting all endpoints from schema.
+</description>
+<parameters>
+<parameter name="schema_url_or_data">
+<type>string</type>
+<required>true</required>
+<description>URL to schema or direct schema content (JSON/YAML)</description>
+</parameter>
+<parameter name="filter_by_tag">
+<type>string</type>
+<required>false</required>
+<description>Optional tag to filter endpoints (e.g., "admin", "public", "users")</description>
+</parameter>
+</parameters>
+</tool>
+
+<tool name="analyze_security_requirements">
+<description>
+Analyze security/authentication requirements from OpenAPI schema.
+
+Identifies authentication schemes, authorization requirements, and
+security policies defined in the API schema. Helps identify insecure endpoints.
+
+P3.6: Security analysis - find endpoints without authentication, OAuth scopes, API key requirements.
+</description>
+<parameters>
+<parameter name="schema_url_or_data">
+<type>string</type>
+<required>true</required>
+<description>URL to schema or direct schema content</description>
+</parameter>
+</parameters>
+</tool>

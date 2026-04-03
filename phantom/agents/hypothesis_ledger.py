@@ -30,6 +30,8 @@ class Hypothesis:
     evidence_against: list[str] = field(default_factory=list)
     created_at: str = field(default_factory=lambda: datetime.now(UTC).isoformat())
     last_updated: str = field(default_factory=lambda: datetime.now(UTC).isoformat())
+    # P3.2: Payload Learning - Track successful payloads
+    successful_payloads: list[str] = field(default_factory=list)  # Payloads that confirmed vuln
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -43,6 +45,7 @@ class Hypothesis:
             "evidence_against": self.evidence_against,
             "created_at": self.created_at,
             "last_updated": self.last_updated,
+            "successful_payloads": self.successful_payloads,  # P3.2
         }
 
     @classmethod
@@ -96,10 +99,12 @@ class HypothesisLedger:
         hyp_id: str,
         outcome: str,
         evidence: str = "",
+        successful_payload: str | None = None,  # P3.2: Track successful payload
     ) -> None:
         """
         Update hypothesis status.
         outcome: 'confirmed' | 'rejected' | 'testing'
+        successful_payload: If outcome='confirmed', the payload that worked
         """
         with self._lock:
             hyp = self._hypotheses.get(hyp_id)
@@ -112,6 +117,10 @@ class HypothesisLedger:
                     hyp.evidence_for.append(evidence)
                 elif outcome == "rejected":
                     hyp.evidence_against.append(evidence)
+            # P3.2: Record successful payload
+            if outcome == "confirmed" and successful_payload:
+                if successful_payload not in hyp.successful_payloads:
+                    hyp.successful_payloads.append(successful_payload)
             hyp.last_updated = datetime.now(UTC).isoformat()
 
     def increment_iteration(self, hyp_id: str) -> None:
@@ -261,6 +270,122 @@ class HypothesisLedger:
         scored.sort(key=lambda x: x["priority_score"], reverse=True)
 
         return scored
+
+    # ── P3.2: Payload Learning ───────────────────────────────────────────────
+
+    def get_successful_payloads(
+        self,
+        vuln_class: str | None = None,
+        limit: int = 10
+    ) -> list[dict[str, Any]]:
+        """
+        P3.2: Retrieve successful payloads from confirmed vulnerabilities.
+        
+        Returns payloads that successfully exploited vulnerabilities, optionally
+        filtered by vulnerability class. This enables payload reuse against
+        similar attack surfaces.
+        
+        Args:
+            vuln_class: Filter by vulnerability type (e.g. 'sqli', 'xss'). 
+                       None returns all successful payloads.
+            limit: Maximum number of payloads to return (default 10)
+        
+        Returns:
+            List of dicts with payload, vuln_class, surface, and hypothesis_id
+        
+        Security: This retrieves READ-ONLY data. No execution occurs.
+        """
+        with self._lock:
+            results: list[dict[str, Any]] = []
+            
+            for hyp in self._hypotheses.values():
+                # Only confirmed hypotheses have proven successful payloads
+                if hyp.status != "confirmed":
+                    continue
+                
+                # Filter by vuln_class if specified
+                if vuln_class and hyp.vuln_class != vuln_class:
+                    continue
+                
+                # Add each successful payload from this hypothesis
+                for payload in hyp.successful_payloads:
+                    results.append({
+                        "payload": payload,
+                        "vuln_class": hyp.vuln_class,
+                        "surface": hyp.surface,
+                        "hypothesis_id": hyp.id,
+                    })
+            
+            # Return most recent first (reverse chronological by hypothesis)
+            return results[:limit]
+
+    def get_payload_stats(self) -> dict[str, Any]:
+        """
+        P3.2: Return statistics about payload effectiveness across all hypotheses.
+        
+        Provides metrics on:
+        - Total payloads tested vs successful
+        - Success rate by vulnerability class
+        - Most effective payloads
+        
+        Returns:
+            Dict with payload effectiveness statistics
+        
+        Security: Aggregates READ-ONLY data. No execution.
+        """
+        with self._lock:
+            total_tested = 0
+            total_successful = 0
+            by_vuln_class: dict[str, dict[str, int]] = {}
+            payload_frequency: dict[str, int] = {}
+            
+            for hyp in self._hypotheses.values():
+                total_tested += len(hyp.payloads_tested)
+                total_successful += len(hyp.successful_payloads)
+                
+                # Track by vulnerability class
+                if hyp.vuln_class not in by_vuln_class:
+                    by_vuln_class[hyp.vuln_class] = {
+                        "tested": 0,
+                        "successful": 0,
+                    }
+                
+                by_vuln_class[hyp.vuln_class]["tested"] += len(hyp.payloads_tested)
+                by_vuln_class[hyp.vuln_class]["successful"] += len(hyp.successful_payloads)
+                
+                # Count payload reuse across hypotheses
+                for payload in hyp.successful_payloads:
+                    payload_frequency[payload] = payload_frequency.get(payload, 0) + 1
+            
+            # Calculate success rates
+            success_rate = (total_successful / total_tested * 100) if total_tested > 0 else 0.0
+            
+            # Success rate by vuln class
+            vuln_class_rates: dict[str, float] = {}
+            for vc, stats in by_vuln_class.items():
+                if stats["tested"] > 0:
+                    vuln_class_rates[vc] = (stats["successful"] / stats["tested"]) * 100
+                else:
+                    vuln_class_rates[vc] = 0.0
+            
+            # Most effective payloads (appearing in multiple successful exploits)
+            most_effective = sorted(
+                payload_frequency.items(),
+                key=lambda x: x[1],
+                reverse=True
+            )[:10]
+            
+            return {
+                "total_payloads_tested": total_tested,
+                "total_successful_payloads": total_successful,
+                "overall_success_rate": round(success_rate, 2),
+                "by_vuln_class": by_vuln_class,
+                "success_rate_by_class": {k: round(v, 2) for k, v in vuln_class_rates.items()},
+                "most_effective_payloads": [
+                    {"payload": p, "success_count": count}
+                    for p, count in most_effective
+                ],
+            }
 
     def get_prioritized_summary(self, top_n: int = 10) -> str:
         """
