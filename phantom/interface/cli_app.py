@@ -1050,7 +1050,9 @@ def config_show(
             rows[key] = (saved_val, "saved")
         elif default is not None:
             rows[key] = (default, "default")
-        # else: skip — completely unset with no default
+        else:
+            # Show ALL tracked vars even if None - mark as "not set"
+            rows[key] = ("<not set>", "default")
 
     if not rows:
         console.print("[dim]No configuration found. Use 'phantom config set KEY VALUE' to configure.[/]")
@@ -1058,9 +1060,11 @@ def config_show(
 
     _source_style = {"env": "bold green", "saved": "yellow", "default": "dim"}
     for key, (value, source) in sorted(rows.items()):
-        # Mask secrets
+        # Mask secrets - but show NOT_SET or placeholder so users know which are not configured
         display_value = value
-        if any(s in key.lower() for s in ("key", "token", "secret", "password")):
+        if value in ("NOT_SET", "<not set>"):
+            display_value = value  # Show NOT_SET so users know it's not configured
+        elif any(s in key.lower() for s in ("key", "token", "secret", "password")):
             display_value = value[:8] + "..." + value[-4:] if len(value) > 12 else "***"
         style = _source_style.get(source, "")
         table.add_row(key, display_value, f"[{style}]{source}[/]")

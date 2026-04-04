@@ -32,6 +32,8 @@ class TestedItem:
     last_tested: str = field(default_factory=lambda: datetime.now(UTC).isoformat())
     notes: list[str] = field(default_factory=list)  # Observations from tests
     discovered_at: str = field(default_factory=lambda: datetime.now(UTC).isoformat())
+    # FEAT-002: Track failure reasons to prevent repeated futile attacks after memory compression
+    failure_reasons: list[str] = field(default_factory=list)  # e.g. ["WAF_BLOCKED", "403_FORBIDDEN", "RATE_LIMITED"]
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -43,6 +45,7 @@ class TestedItem:
             "last_tested": self.last_tested,
             "notes": self.notes,
             "discovered_at": self.discovered_at,
+            "failure_reasons": self.failure_reasons,  # FEAT-002
         }
 
     @classmethod
@@ -202,6 +205,83 @@ class CoverageTracker:
                     tested.notes = tested.notes[-20:]
 
             return surface_id
+
+    def record_failure(
+        self,
+        surface: str,
+        surface_type: str,
+        failure_reason: str,
+        vuln_class: str | None = None,
+    ) -> str:
+        """
+        FEAT-002: Record a test failure reason on a surface.
+        
+        This tracks WHY tests failed (WAF blocked, rate limited, 403, etc.) so the
+        agent doesn't retry futile attacks after memory compression.
+        
+        Common failure_reasons:
+        - WAF_BLOCKED: Web Application Firewall blocked the request
+        - RATE_LIMITED: Target returned 429 or similar
+        - ACCESS_DENIED: 401/403 response
+        - NOT_FOUND: 404 - endpoint doesn't exist
+        - TIMEOUT: Request timed out
+        - CONNECTION_REFUSED: Target refused connection
+        
+        Returns the surface ID.
+        """
+        with self._lock:
+            surface_key = f"{surface_type}:{surface}"
+            surface_id = f"S-{hashlib.md5(surface_key.encode()).hexdigest()[:8].upper()}"
+            
+            # Ensure surface exists in tested
+            if surface_id not in self._tested:
+                # Promote from discovered if needed
+                if surface_id in self._discovered:
+                    discovered = self._discovered.pop(surface_id)
+                    self._tested[surface_id] = TestedItem(
+                        id=surface_id,
+                        surface=discovered.surface,
+                        surface_type=discovered.surface_type,
+                        discovered_at=discovered.discovered_at,
+                    )
+                else:
+                    self._tested[surface_id] = TestedItem(
+                        id=surface_id,
+                        surface=surface,
+                        surface_type=surface_type,
+                    )
+            
+            tested = self._tested[surface_id]
+            
+            # Record the failure reason
+            reason_with_class = f"[{vuln_class}] {failure_reason}" if vuln_class else failure_reason
+            if reason_with_class not in tested.failure_reasons:
+                tested.failure_reasons.append(reason_with_class)
+                # Keep failure reasons limited
+                if len(tested.failure_reasons) > 10:
+                    tested.failure_reasons = tested.failure_reasons[-10:]
+            
+            tested.last_tested = datetime.now(UTC).isoformat()
+            return surface_id
+
+    def get_blocked_surfaces(self) -> list[dict[str, Any]]:
+        """
+        FEAT-002: Return surfaces that have blocking failures (WAF, rate limit, etc.)
+        
+        This helps the agent avoid wasting iterations on surfaces that are protected.
+        Returns FACTS about what's blocked and why.
+        """
+        with self._lock:
+            blocked = []
+            for item in self._tested.values():
+                if item.failure_reasons:
+                    blocked.append({
+                        "surface": item.surface,
+                        "surface_type": item.surface_type,
+                        "failure_reasons": item.failure_reasons,
+                        "test_count": item.test_count,
+                    })
+            return blocked
 
     # ── Coverage Queries (return FACTS, not commands) ─────────────────────────
 

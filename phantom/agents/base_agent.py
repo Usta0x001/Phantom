@@ -115,6 +115,14 @@ class BaseAgent(metaclass=AgentMeta):
             "correlation_engine"
         ) or CorrelationEngine()
 
+        # FEAT-001: Set scan mode for stealth rate limiting
+        # This enables programmatic rate limiting in executor.py when scan_mode="stealth"
+        try:
+            from phantom.tools.executor import set_scan_mode
+            set_scan_mode(self.llm_config.scan_mode)
+        except Exception:
+            pass  # Rate limiting not critical - continue without it
+
         # AUDIT-FIX-10: Track (signature, success) for dedup checking
         self._recent_action_results: list[tuple[str, bool]] = []
 

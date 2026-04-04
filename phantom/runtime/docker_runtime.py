@@ -375,6 +375,45 @@ class DockerRuntime(AbstractRuntime):
 
         return self._create_container(scan_id)
 
+    def _extract_scope_targets(self, scan_config: dict | None) -> str:
+        """
+        SEC-002 FIX: Extract target hosts from scan_config for scope enforcement.
+        
+        Returns comma-separated list of target hosts/IPs.
+        """
+        if not scan_config:
+            return ""
+        
+        targets = scan_config.get("targets", [])
+        if not targets:
+            return ""
+        
+        extracted: list[str] = []
+        for target_info in targets:
+            if isinstance(target_info, dict):
+                # Try different keys where host might be stored
+                host = (
+                    target_info.get("host")
+                    or target_info.get("hostname")
+                    or target_info.get("ip")
+                    or target_info.get("original", "")
+                )
+                if host:
+                    # Strip protocol and path, keep just the host
+                    if "://" in host:
+                        host = host.split("://", 1)[1]
+                    if "/" in host:
+                        host = host.split("/", 1)[0]
+                    if ":" in host and not host.startswith("["):
+                        # Remove port from host:port, but keep IPv6 [::1]:port
+                        host = host.rsplit(":", 1)[0]
+                    if host:
+                        extracted.append(host)
+            elif isinstance(target_info, str):
+                extracted.append(target_info)
+        
+        return ",".join(extracted)
+
     def _configure_scope_firewall(self, container: Container, scan_target: str) -> None:
         """
         Rec 7 (AI-SEC-008): Enforce scan scope at the network level via iptables.
@@ -484,6 +523,7 @@ class DockerRuntime(AbstractRuntime):
         agent_id: str,
         existing_token: str | None = None,
         local_sources: list[dict[str, str]] | None = None,
+        scan_config: dict | None = None,
     ) -> SandboxInfo:
         scan_id = self._get_scan_id(agent_id)
         container = self._get_or_create_container(scan_id)
@@ -502,12 +542,26 @@ class DockerRuntime(AbstractRuntime):
 
         # Rec 7 / FIX: Actually invoke the scope firewall after container boot.
         # Previously _configure_scope_firewall was defined but never called.
+        # SEC-002 FIX: Enable by default using scan targets when phantom_scope_enforcement="true"
         scope_key = f"_scope_configured_{scan_id}"
         if not hasattr(self, scope_key):
             scope_enforcement = Config.get("phantom_scope_enforcement") or "false"
             if scope_enforcement.lower() not in ("false", "0", "no", ""):
-                # scope_enforcement contains the scan target (IP, CIDR, or hostname)
-                self._configure_scope_firewall(container, scope_enforcement)
+                # SEC-002: If "true", derive targets from scan_config
+                if scope_enforcement.lower() in ("true", "1", "yes", "auto"):
+                    # Extract target hosts from scan_config
+                    scope_targets = self._extract_scope_targets(scan_config)
+                else:
+                    # User explicitly specified target(s)
+                    scope_targets = scope_enforcement
+                
+                if scope_targets:
+                    # Configure firewall for each target
+                    for target in scope_targets.split(","):
+                        target = target.strip()
+                        if target:
+                            self._configure_scope_firewall(container, target)
+                    logger.info("Scope firewall configured for targets: %s", scope_targets)
             setattr(self, scope_key, True)
 
         if container.id is None:

@@ -5,7 +5,7 @@ import pytest
 def test_import_phantom():
     """Test that phantom package can be imported."""
     import phantom
-    assert phantom.__version__ == "0.9.130"
+    assert phantom.__version__ == "0.9.135"
 
 
 def test_import_agents():

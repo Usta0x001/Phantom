@@ -6,6 +6,7 @@ import time
 import base64
 import hashlib
 import io
+import threading
 import unicodedata as _unicodedata
 from datetime import UTC, datetime
 from pathlib import Path
@@ -15,6 +16,76 @@ from urllib.parse import unquote as _url_unquote
 import httpx
 
 from phantom.config import Config
+
+
+# ════════════════════════════════════════════════════════════════════════════════
+# FEAT-001: Stealth Mode Rate Limiting
+# ════════════════════════════════════════════════════════════════════════════════
+# Implements actual rate limiting for stealth mode instead of relying only on
+# LLM prompt instructions. This adds programmatic delays between HTTP-related
+# tool executions to reduce detection risk.
+
+_STEALTH_DELAY_SECONDS = 2.0  # Minimum delay between requests in stealth mode
+_stealth_last_request_time: float = 0.0
+_stealth_lock = threading.Lock()
+_current_scan_mode: str | None = None  # Set by agent at scan start
+
+# Tools that make outbound HTTP requests and should be rate-limited in stealth mode
+_HTTP_TOOLS = frozenset({
+    "terminal",  # Can run curl, wget, etc.
+    "http_request",
+    "analyze_response", 
+    "crawl_website",
+    "fetch_url",
+    "browser_navigate",
+    "browser_action",
+    "nuclei_scan",
+    "waf_detect",
+    "subdomain_enum",
+    "shodan_query",
+    "cve_search",
+    "fuzzer",
+})
+
+
+def set_scan_mode(mode: str) -> None:
+    """Set the current scan mode for stealth rate limiting. Called by agent at start."""
+    global _current_scan_mode
+    _current_scan_mode = mode
+
+
+def get_scan_mode() -> str | None:
+    """Get the current scan mode."""
+    return _current_scan_mode
+
+
+def _apply_stealth_rate_limit(tool_name: str) -> None:
+    """
+    FEAT-001: Apply rate limiting delay for stealth mode.
+    
+    This ensures a minimum delay between HTTP-related tool executions
+    to reduce the chance of triggering rate limiting, WAF detection, or IDS alerts.
+    """
+    global _stealth_last_request_time
+    
+    # Only apply in stealth mode
+    if _current_scan_mode != "stealth":
+        return
+    
+    # Only rate-limit HTTP-related tools
+    if tool_name not in _HTTP_TOOLS:
+        return
+    
+    with _stealth_lock:
+        current_time = time.monotonic()
+        time_since_last = current_time - _stealth_last_request_time
+        
+        if time_since_last < _STEALTH_DELAY_SECONDS:
+            sleep_time = _STEALTH_DELAY_SECONDS - time_since_last
+            time.sleep(sleep_time)
+        
+        _stealth_last_request_time = time.monotonic()
+# ════════════════════════════════════════════════════════════════════════════════
 
 
 if os.getenv("PHANTOM_SANDBOX_MODE", "false").lower() == "false":
@@ -288,6 +359,13 @@ def _cleanup_screenshot_artifacts(path: str | Path | None = None) -> None:
 
 
 async def execute_tool(tool_name: str, agent_state: Any | None = None, **kwargs: Any) -> Any:
+    # ════════════════════════════════════════════════════════════════════════════
+    # FEAT-001: Stealth Rate Limiting
+    # ════════════════════════════════════════════════════════════════════════════
+    # Apply rate limiting before execution for stealth mode
+    _apply_stealth_rate_limit(tool_name)
+    # ─────────────────────────────────────────────────────────────────────────────
+    
     # ════════════════════════════════════════════════════════════════════════════
     # SECURITY REC LOW-7: Tool-Level RBAC Permission Check
     # ════════════════════════════════════════════════════════════════════════════

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Phantom 0.9.70 — Comprehensive feature verification script.
+"""Phantom 0.9.135 — Comprehensive feature verification script.
 
 Proves every Phantom-specific addition is real, functional, and not decorative.
 Run: python scripts/verify_all.py
@@ -35,7 +35,7 @@ def check(name: str, fn):
 
 
 print("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-print("  PHANTOM 0.9.70 — FULL FEATURE VERIFICATION")
+print("  PHANTOM 0.9.135 — FULL FEATURE VERIFICATION")
 print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
 
 
@@ -44,16 +44,16 @@ print("[1] VERSION CONSISTENCY")
 
 def v_version_init():
     import phantom
-    assert phantom.__version__ == "0.9.70", f"Got {phantom.__version__}"
+    assert phantom.__version__ == "0.9.135", f"Got {phantom.__version__}"
 
 def v_version_pyproject():
     pyproject = (
         __import__("pathlib").Path(__file__).parent.parent / "pyproject.toml"
     ).read_text(encoding="utf-8")
-    assert 'version = "0.9.70"' in pyproject
+    assert 'version = "0.9.135"' in pyproject
 
-check("phantom.__version__ == '0.9.70'", v_version_init)
-check("pyproject.toml version == '0.9.70'", v_version_pyproject)
+check("phantom.__version__ == '0.9.135'", v_version_init)
+check("pyproject.toml version == '0.9.135'", v_version_pyproject)
 
 
 # ── 2. COST CONTROLS ───────────────────────────────────────────────────────────
@@ -1434,8 +1434,8 @@ check("_is_context_too_large catches OpenRouter 'model context limits'", v_is_co
 check("_is_context_too_large regex fallback catches 'exceed.*context'", v_is_context_too_large_catches_regex)
 
 
-# ── 22. v0.9.70 — RESUME NUMERIC ID + CLEAR_SANDBOX ─────────────────────────
-print("\n[22] v0.9.70 — RESUME NUMERIC ID + CLEAR_SANDBOX")
+# ── 22. v0.9.135 — RESUME NUMERIC ID + CLEAR_SANDBOX ─────────────────────────
+print("\n[22] v0.9.135 — RESUME NUMERIC ID + CLEAR_SANDBOX")
 
 
 def v_resume_accepts_numeric_id():

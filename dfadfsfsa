@@ -1,0 +1,8 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "agent": {
+    "compaction": {
+      "model": "MiniMax M2.5 Free OpenCode Zen"
+    }
+  }
+}

@@ -79,13 +79,25 @@ class Config:
     # OSINT & Vulnerability Intelligence API Keys (Phase 1 Enhancements)
     # ════════════════════════════════════════════════════════════════════════════
     # All keys are OPTIONAL - tools degrade gracefully without them
-    phantom_shodan_api_key = None      # PHANTOM_SHODAN_API_KEY — for shodan_search tool
-    phantom_github_token = None        # PHANTOM_GITHUB_TOKEN — for github_dork tool (rate limits)
-    phantom_vulners_api_key = None     # PHANTOM_VULNERS_API_KEY — for exploit_search tool
-    phantom_whoisxml_api_key = None    # PHANTOM_WHOISXML_API_KEY — for whois_lookup tool
-    phantom_api_ninjas_key = None      # PHANTOM_API_NINJAS_KEY — fallback for whois_lookup
-    phantom_nvd_api_key = None         # PHANTOM_NVD_API_KEY — for cve_search (higher rate limits)
-    # ────────────────────────────────────────────────────────────────────────────
+    # NOTE: Use placeholder "NOT_SET" to show in config output. Tools check for None/unset.
+    phantom_shodan_api_key = "NOT_SET"      # PHANTOM_SHODAN_API_KEY — for shodan_search tool
+    phantom_github_token = "NOT_SET"        # PHANTOM_GITHUB_TOKEN — for github_dork tool (rate limits)
+    phantom_vulners_api_key = "NOT_SET"     # PHANTOM_VULNERS_API_KEY — for exploit_search tool
+    phantom_whoisxml_api_key = "NOT_SET"    # PHANTOM_WHOISXML_API_KEY — for whois_lookup tool
+    phantom_api_ninjas_key = "NOT_SET"      # PHANTOM_API_NINJAS_KEY — fallback for whois_lookup
+    phantom_nvd_api_key = "NOT_SET"         # PHANTOM_NVD_API_KEY — for cve_search (higher rate limits)
+
+    @classmethod
+    def _is_api_key_set(cls, key: str) -> bool:
+        """Check if an API key is actually set (not None or NOT_SET placeholder)."""
+        val = cls.get(key)
+        return val is not None and val != "NOT_SET"
+
+    # ════════════════════════════════════════════════════════════════════════════
+    # SEC-003: Checkpoint HMAC key for team environments
+    # ════════════════════════════════════════════════════════════════════════════
+    phantom_checkpoint_key = "NOT_SET"       # PHANTOM_CHECKPOINT_KEY — shared HMAC secret for checkpoint integrity
+    # ════════════════════════════════════════════════════════════════════════════
     _LLM_CANONICAL_NAMES = (
         "phantom_llm",
         "llm_api_key",
