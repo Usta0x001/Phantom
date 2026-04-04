@@ -570,9 +570,6 @@ def create_vulnerability_report(  # noqa: PLR0912
                     "reason": dedupe_result.get("reason", ""),
                     "attempt_count": 0,
                 }
-                # Reset attempt counter — title was successfully evaluated
-                title_key = title.strip().lower()
-                _TITLE_ATTEMPT_COUNTS.pop(title_key, None)
 
         report_id = tracer.add_vulnerability_report(
             title=title,

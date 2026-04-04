@@ -1,4 +1,7 @@
+import logging
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 from phantom.tools.registry import register_tool
 
@@ -140,18 +143,15 @@ def finish_scan(
 
         vulnerability_count = len(tracer.vulnerability_reports)
 
+        # Allow clean scans (zero vulnerabilities) to complete successfully
+        # This is a legitimate outcome - the target may be secure or properly hardened
         if vulnerability_count == 0:
-            return {
-                "success": False,
-                "scan_completed": False,
-                "error": "no_vulnerabilities_found",
-                "message": "Cannot finish scan: no vulnerabilities were found. Either the target is secure, the testing was incomplete, or the agent should investigate why no findings were discovered.",
-            }
+            logger.warning("Scan completing with no vulnerabilities found - target appears secure or testing was incomplete")
 
         return {
             "success": True,
             "scan_completed": True,
-            "message": "Scan completed successfully",
+            "message": "Scan completed successfully" if vulnerability_count > 0 else "Scan completed - no vulnerabilities found",
             "vulnerabilities_found": vulnerability_count,
         }
 
