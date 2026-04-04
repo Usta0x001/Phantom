@@ -20,82 +20,17 @@ _STDOUT_REDIRECT_LOCK = threading.Lock()
 
 
 def _validate_code_safety(code: str) -> str | None:
-    blocked_import_roots = {
-        "os",
-        "subprocess",
-        "socket",
-        "ctypes",
-        "multiprocessing",
-        "importlib",
-        "shutil",
-        "sys",
-        "pty",
-    }
-    blocked_calls = {
-        "eval",
-        "exec",
-        "compile",
-        "__import__",
-        "open",
-        "input",
-        "getattr",
-        "setattr",
-        "delattr",
-        "hasattr",
-    }
-    blocked_attrs = {
-        "system",
-        "popen",
-        "spawn",
-        "run",
-        "call",
-        "check_call",
-        "check_output",
-        "startfile",
-        "remove",
-        "unlink",
-        "rmtree",
-        "rmdir",
-        "__subclasses__",
-        "__bases__",
-        "__globals__",
-    }
-
-    if "%" in code:
-        return "Blocked unsafe magic command usage"
-
-    try:
-        tree = ast.parse(code)
-    except SyntaxError:
-        return None
-
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Name) and node.id == "__builtins__":
-            return "Blocked unsafe access: __builtins__"
-
-        if isinstance(node, ast.Import):
-            for alias in node.names:
-                root = alias.name.split(".", 1)[0]
-                if root in blocked_import_roots:
-                    return f"Blocked unsafe import: {root}"
-
-        if isinstance(node, ast.ImportFrom):
-            if node.module:
-                root = node.module.split(".", 1)[0]
-                if root in blocked_import_roots:
-                    return f"Blocked unsafe import: {root}"
-
-        if isinstance(node, ast.Call):
-            if isinstance(node.func, ast.Name) and node.func.id in blocked_calls:
-                return f"Blocked unsafe call: {node.func.id}"
-            if isinstance(node.func, ast.Attribute):
-                attr = node.func.attr
-                if attr in blocked_attrs or attr.startswith("__"):
-                    return f"Blocked unsafe call: {attr}"
-
-        if isinstance(node, ast.Attribute) and node.attr.startswith("__"):
-            return f"Blocked unsafe attribute access: {node.attr}"
-
+    """Validate Python code for safety.
+    
+    ⚠️ DISABLED PER USER REQUEST ⚠️
+    Phantom is a penetration testing tool that needs full Python capabilities
+    for exploit development, network programming, and system interaction.
+    
+    The agent runs inside a sandboxed Docker container, so OS-level isolation
+    is already provided. Code-level restrictions only weaken pentesting ability.
+    """
+    # DISABLED: All Python code restrictions removed
+    # Use terminal_execute for truly dangerous operations if needed
     return None
 
 
