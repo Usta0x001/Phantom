@@ -525,6 +525,7 @@ class Tracer:
             "created_at": datetime.now(UTC).isoformat(),
             "updated_at": datetime.now(UTC).isoformat(),
             "tool_executions": [],
+            "phase": "recon",  # FIX: Add phase tracking for status bar badge
         }
 
         self.agents[agent_id] = agent_data
@@ -666,6 +667,20 @@ class Tracer:
             payload={"error_message": error_message},
             status=status,
             error=error_message,
+            source="phantom.agents",
+        )
+
+    def update_agent_phase(self, agent_id: str, phase: str) -> None:
+        """FIX: Update agent phase for status bar badge display"""
+        if agent_id in self.agents:
+            self.agents[agent_id]["phase"] = phase
+            self.agents[agent_id]["updated_at"] = datetime.now(UTC).isoformat()
+        
+        self._emit_event(
+            "agent.phase.updated",
+            actor={"agent_id": agent_id},
+            payload={"phase": phase},
+            status="updated",
             source="phantom.agents",
         )
 

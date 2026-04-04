@@ -1,6 +1,7 @@
 import argparse
 import asyncio
 import atexit
+import hashlib
 import logging
 import signal
 import sys
@@ -328,6 +329,49 @@ class PauseAllScreen(ModalScreen):  # type: ignore[misc]
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "confirm_pause_all":
             self.app.action_confirm_pause_all()
+        else:
+            self.app.pop_screen()
+
+
+class CriticalVulnAlertScreen(ModalScreen):  # type: ignore[misc]
+    """FIX Phase 2.4: Modal alert for CRITICAL severity vulnerabilities"""
+    
+    def __init__(self, vulnerability: dict[str, Any]) -> None:
+        super().__init__()
+        self.vulnerability = vulnerability
+    
+    def compose(self) -> ComposeResult:
+        title = self.vulnerability.get("title", "Unknown Vulnerability")
+        target = self.vulnerability.get("target", "Unknown target")
+        
+        content = Text()
+        content.append("⚠  CRITICAL VULNERABILITY DISCOVERED  ⚠\n\n", style="bold #dc2626")
+        content.append("Title: ", style="bold white")
+        content.append(f"{title}\n", style="#dc2626")
+        content.append("Target: ", style="bold white")
+        content.append(f"{target}\n\n", style="white")
+        content.append("This finding requires immediate attention.\n", style="dim")
+        content.append("Press Enter to view full details or Esc to dismiss.", style="dim italic")
+        
+        yield Grid(
+            Static(content, id="critical_alert_content"),
+            Horizontal(
+                Button("View Details", variant="error", id="view_critical_details"),
+                Button("Dismiss", variant="default", id="dismiss_critical_alert"),
+                id="critical_alert_buttons",
+            ),
+            id="critical_alert_dialog",
+        )
+    
+    def on_mount(self) -> None:
+        view_button = self.query_one("#view_critical_details", Button)
+        view_button.focus()
+    
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "view_critical_details":
+            # Pop this alert and push the detailed vulnerability screen
+            self.app.pop_screen()
+            self.app.push_screen(VulnerabilityDetailScreen(self.vulnerability))
         else:
             self.app.pop_screen()
 
@@ -688,12 +732,24 @@ class VulnerabilitiesPanel(VerticalScroll):  # type: ignore[misc]
         if not self._vulnerabilities:
             return
 
+        # FIX: Add text badges for severity (accessibility + clarity)
+        SEVERITY_BADGES = {
+            "critical": "CRIT",
+            "high": "HIGH",
+            "medium": "MED",
+            "low": "LOW",
+            "info": "INFO",
+        }
+        
         for vuln in self._vulnerabilities:
             severity = vuln.get("severity", "info").lower()
             title = vuln.get("title", "Unknown Vulnerability")
             color = self.SEVERITY_COLORS.get(severity, "#f59e0b")
+            badge = SEVERITY_BADGES.get(severity, "INFO")
 
             label = Text()
+            # Colored badge text + colored dot
+            label.append(f"[{badge}] ", style=Style(color=color, bold=True))
             label.append("● ", style=Style(color=color))
             label.append(title, style=Style(color="#d4d4d4"))
 
@@ -796,6 +852,9 @@ class PhantomTUIApp(App):  # type: ignore[misc]
         self.tracer = Tracer(self.scan_config["run_name"])
         self.tracer.set_scan_config(self.scan_config)
         set_global_tracer(self.tracer)
+        
+        # FIX Phase 2.4: Set callback to show alert modal for CRITICAL vulns
+        self.tracer.vulnerability_found_callback = self._on_vulnerability_found
 
         # Seed tracer with previously found vulnerabilities so they render in
         # the TUI immediately without waiting for the agent to re-discover them.
@@ -809,8 +868,11 @@ class PhantomTUIApp(App):  # type: ignore[misc]
 
         self._displayed_agents: set[str] = set()
         self._displayed_events: list[str] = []
+        
+        # FIX: Queue for agents added during splash (before tree is mounted)
+        self._pending_agent_adds: list[tuple[str, dict[str, Any]]] = []
 
-        self._streaming_render_cache: dict[str, tuple[int, Any]] = {}
+        self._streaming_render_cache: dict[str, tuple[str, Any]] = {}
         self._last_streaming_len: dict[str, int] = {}
 
         self._scan_thread: threading.Thread | None = None
@@ -965,12 +1027,16 @@ class PhantomTUIApp(App):  # type: ignore[misc]
     def on_mount(self) -> None:
         self.title = "phantom"
 
-        self.set_timer(4.5, self._hide_splash_screen)
+        # FIX: Reduced from 4.5s to 2s (less annoyance during debugging/restarts)
+        self.set_timer(2.0, self._hide_splash_screen)
 
     def _hide_splash_screen(self) -> None:
         self.show_splash = False
 
         self._start_scan_thread()
+
+        # FIX: Flush pending agent additions that occurred during splash
+        self._flush_pending_agent_adds()
 
         self.set_interval(0.35, self._update_ui_from_tracer)
 
@@ -996,7 +1062,11 @@ class PhantomTUIApp(App):  # type: ignore[misc]
         agent_updates = False
         for agent_id, agent_data in list(self.tracer.agents.items()):
             if agent_id not in self._displayed_agents:
-                self._add_agent_node(agent_data)
+                # FIX: Queue agent adds during splash, add immediately after
+                if self.show_splash:
+                    self._pending_agent_adds.append((agent_id, agent_data))
+                else:
+                    self._add_agent_node(agent_data)
                 self._displayed_agents.add(agent_id)
                 agent_updates = True
             elif self._update_agent_node(agent_id, agent_data):
@@ -1012,6 +1082,21 @@ class PhantomTUIApp(App):  # type: ignore[misc]
         self._update_stats_display()
 
         self._update_vulnerabilities_panel()
+
+    def _flush_pending_agent_adds(self) -> None:
+        """Flush agents that were queued during splash screen"""
+        if not self._pending_agent_adds:
+            return
+        
+        for agent_id, agent_data in self._pending_agent_adds:
+            try:
+                self._add_agent_node(agent_data)
+            except Exception as e:
+                import logging
+                logging.warning(f"Failed to add queued agent {agent_id}: {e}")
+        
+        self._pending_agent_adds.clear()
+        self._expand_new_agent_nodes()
 
     def _update_agent_node(self, agent_id: str, agent_data: dict[str, Any]) -> bool:
         if agent_id not in self.agent_nodes:
@@ -1166,11 +1251,12 @@ class PhantomTUIApp(App):  # type: ignore[misc]
 
     def _render_streaming_content(self, content: str, agent_id: str | None = None) -> Any:
         cache_key = agent_id or self.selected_agent_id or ""
-        content_len = len(content)
+        # FIX: Use content hash instead of length to prevent stale renders
+        content_hash = hashlib.sha256(content.encode()).hexdigest()
 
         if cache_key in self._streaming_render_cache:
-            cached_len, cached_output = self._streaming_render_cache[cache_key]
-            if cached_len == content_len:
+            cached_hash, cached_output = self._streaming_render_cache[cache_key]
+            if cached_hash == content_hash:
                 return cached_output
 
         renderables: list[Any] = []
@@ -1200,7 +1286,7 @@ class PhantomTUIApp(App):  # type: ignore[misc]
         else:
             result = self._merge_renderables(renderables)
 
-        self._streaming_render_cache[cache_key] = (content_len, result)
+        self._streaming_render_cache[cache_key] = (content_hash, result)
         return result
 
     def _render_streaming_tool(
@@ -1253,7 +1339,23 @@ class PhantomTUIApp(App):  # type: ignore[misc]
             return (Text(" "), keymap, status_vm.should_animate)
 
         if status_vm.mode == "active":
+            # FIX: Add phase badge to status bar
+            PHASE_BADGES = {
+                "recon": ("RECON", "#4ade80"),
+                "enumeration": ("ENUM", "#60a5fa"),
+                "exploitation": ("EXPLOIT", "#f87171"),
+                "post_exploitation": ("POST-EX", "#c084fc"),
+                "reporting": ("REPORT", "#facc15"),
+            }
+            
             animated_text = Text()
+            
+            # Add phase badge if available
+            phase = agent_data.get("phase", "recon")
+            if phase in PHASE_BADGES:
+                badge_text, badge_color = PHASE_BADGES[phase]
+                animated_text.append(f"[{badge_text}] ", style=Style(color=badge_color, bold=True))
+            
             animated_text.append_text(self._get_sweep_animation(self._sweep_colors))
             animated_text.append("esc", style="white")
             animated_text.append(" ", style="dim")
@@ -1364,6 +1466,14 @@ class PhantomTUIApp(App):  # type: ignore[misc]
                         name: str = self.tracer.agents[agent_id].get("name", "Unknown Agent")
                         return name
         return None
+    
+    def _on_vulnerability_found(self, report: dict[str, Any]) -> None:
+        """FIX Phase 2.4: Callback when vulnerability is found - show alert for CRITICAL"""
+        severity = report.get("severity", "").lower()
+        if severity == "critical":
+            # Show modal alert for critical vulnerabilities
+            # Use call_later to avoid issues if called during render
+            self.call_later(lambda: self.push_screen(CriticalVulnAlertScreen(report)))
 
     def _get_sweep_animation(self, color_palette: list[str]) -> Text:
         text = Text()

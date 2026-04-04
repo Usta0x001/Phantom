@@ -162,6 +162,21 @@ def scan(
             help="Run without TUI (exits on completion).",
         ),
     ] = False,
+    quiet: Annotated[
+        bool,
+        typer.Option(
+            "-q",
+            "--quiet",
+            help="FIX: Minimal output (no rich panels, CI/CD friendly).",
+        ),
+    ] = False,
+    json_output: Annotated[
+        bool,
+        typer.Option(
+            "--json",
+            help="FIX: Output results as JSON (for scripting/piping to jq).",
+        ),
+    ] = False,
     scan_mode: Annotated[
         ScanMode,
         typer.Option(
@@ -290,6 +305,8 @@ def scan(
         instruction=instruction,
         instruction_file=None,  # Already read above
         non_interactive=non_interactive,
+        quiet=quiet,  # FIX: Pass quiet flag
+        json_output=json_output,  # FIX: Pass JSON output flag
         scan_mode=scan_mode.value,
         config=str(config_file) if config_file else None,
         output_format=output_format.value if output_format else None,

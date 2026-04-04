@@ -42,6 +42,14 @@ def _build_resume_diff_text(cp: Any) -> str:
 
 async def run_cli(args: Any) -> None:  # noqa: PLR0912, PLR0915
     console = Console()
+    
+    # FIX: Check for quiet/JSON mode
+    quiet_mode = getattr(args, "quiet", False)
+    json_mode = getattr(args, "json_output", False)
+    
+    # FIX: TTY detection - auto-enable quiet mode if piped
+    if not quiet_mode and not json_mode and not sys.stdout.isatty():
+        quiet_mode = True
 
     # ── Resume: load checkpoint and restore state ──────────────────────────
     resume_run: str | None = getattr(args, "resume_run", None)
@@ -65,16 +73,21 @@ async def run_cli(args: Any) -> None:  # noqa: PLR0912, PLR0915
             sys.exit(1)
 
         diff_text = _build_resume_diff_text(cp)
-        resume_panel = Panel(
-            diff_text,
-            title="[bold yellow]PHANTOM ─ RESUMING SCAN",
-            title_align="left",
-            border_style="yellow",
-            padding=(1, 2),
-        )
-        console.print("\n")
-        console.print(resume_panel)
-        console.print()
+        
+        # FIX: Skip rich panels in quiet/json mode
+        if not quiet_mode and not json_mode:
+            resume_panel = Panel(
+                diff_text,
+                title="[bold yellow]PHANTOM ─ RESUMING SCAN",
+                title_align="left",
+                border_style="yellow",
+                padding=(1, 2),
+            )
+            console.print("\n")
+            console.print(resume_panel)
+            console.print()
+        elif not json_mode:
+            console.print(diff_text)  # Plain text in quiet mode
 
         # Restore agent state
         restored_state = AgentState.model_validate(cp.root_agent_state)
@@ -130,24 +143,29 @@ async def run_cli(args: Any) -> None:  # noqa: PLR0912, PLR0915
     note_text.append("\n\n", style="dim")
     note_text.append("Vulnerabilities will be displayed in real-time.", style="dim")
 
-    startup_panel = Panel(
-        Text.assemble(
-            start_text,
-            "\n\n",
-            target_text,
-            "\n",
-            results_text,
-            note_text,
-        ),
-        title="[bold white]PHANTOM",
-        title_align="left",
-        border_style="#dc2626",
-        padding=(1, 2),
-    )
+    # FIX: Skip rich panels in quiet/json mode
+    if not quiet_mode and not json_mode:
+        startup_panel = Panel(
+            Text.assemble(
+                start_text,
+                "\n\n",
+                target_text,
+                "\n",
+                results_text,
+                note_text,
+            ),
+            title="[bold white]PHANTOM",
+            title_align="left",
+            border_style="#dc2626",
+            padding=(1, 2),
+        )
 
-    console.print("\n")
-    console.print(startup_panel)
-    console.print()
+        console.print("\n")
+        console.print(startup_panel)
+        console.print()
+    elif not json_mode:
+        # Quiet mode: minimal plain text
+        console.print(f"Phantom scan started: {args.run_name}")
 
     scan_mode = getattr(args, "scan_mode", "deep")
 
@@ -278,67 +296,103 @@ async def run_cli(args: Any) -> None:  # noqa: PLR0912, PLR0915
         )
 
     try:
-        console.print()
+        # FIX: Skip Live panel in quiet/json mode
+        if quiet_mode or json_mode:
+            # Run without live updates
+            agent = PhantomAgent(agent_config)
+            _agent_holder[0] = agent
+            result = await agent.execute_scan(scan_config)
+            
+            if isinstance(result, dict) and not result.get("success", True):
+                error_msg = result.get("error", "Unknown error")
+                if not json_mode:
+                    console.print(f"Error: {error_msg}")
+                sys.exit(1)
+            
+            if checkpoint_mgr and isinstance(result, dict) and result.get("success"):
+                checkpoint_mgr.mark_completed()
+        else:
+            # Normal mode with live panel
+            console.print()
 
-        with Live(
-            create_live_status(), console=console, refresh_per_second=2, transient=False
-        ) as live:
-            stop_updates = threading.Event()
+            with Live(
+                create_live_status(), console=console, refresh_per_second=2, transient=False
+            ) as live:
+                stop_updates = threading.Event()
 
-            def update_status() -> None:
-                while not stop_updates.is_set():
-                    try:
-                        live.update(create_live_status())
-                        time.sleep(2)
-                    except Exception:  # noqa: BLE001
-                        break
+                def update_status() -> None:
+                    while not stop_updates.is_set():
+                        try:
+                            live.update(create_live_status())
+                            time.sleep(2)
+                        except Exception:  # noqa: BLE001
+                            break
 
-            update_thread = threading.Thread(target=update_status, daemon=True)
-            update_thread.start()
+                update_thread = threading.Thread(target=update_status, daemon=True)
+                update_thread.start()
 
-            try:
-                agent = PhantomAgent(agent_config)
-                _agent_holder[0] = agent  # allow signal handler to save checkpoint
-                result = await agent.execute_scan(scan_config)
+                try:
+                    agent = PhantomAgent(agent_config)
+                    _agent_holder[0] = agent  # allow signal handler to save checkpoint
+                    result = await agent.execute_scan(scan_config)
 
-                if isinstance(result, dict) and not result.get("success", True):
-                    error_msg = result.get("error", "Unknown error")
-                    error_details = result.get("details")
-                    console.print()
-                    console.print(f"[bold red]Penetration test failed:[/] {error_msg}")
-                    if error_details:
-                        console.print(f"[dim]{error_details}[/]")
-                    console.print()
-                    sys.exit(1)
+                    if isinstance(result, dict) and not result.get("success", True):
+                        error_msg = result.get("error", "Unknown error")
+                        error_details = result.get("details")
+                        console.print()
+                        console.print(f"[bold red]Penetration test failed:[/] {error_msg}")
+                        if error_details:
+                            console.print(f"[dim]{error_details}[/]")
+                        console.print()
+                        sys.exit(1)
 
-                # Mark scan completed in checkpoint — only on actual success
-                if checkpoint_mgr and isinstance(result, dict) and result.get("success"):
-                    checkpoint_mgr.mark_completed()
-            finally:
-                stop_updates.set()
-                update_thread.join(timeout=1)
+                    # Mark scan completed in checkpoint — only on actual success
+                    if checkpoint_mgr and isinstance(result, dict) and result.get("success"):
+                        checkpoint_mgr.mark_completed()
+                finally:
+                    stop_updates.set()
+                    update_thread.join(timeout=1)
 
     except Exception as e:
         console.print(f"[bold red]Error during penetration test:[/] {e}")
         raise
 
     if tracer.final_scan_result:
-        console.print()
+        # FIX: JSON output mode for scripting
+        if json_mode:
+            import json
+            output = {
+                "run_name": args.run_name,
+                "status": "completed",
+                "vulnerabilities": tracer.vulnerability_reports,
+                "stats": {
+                    "vuln_count": len(tracer.vulnerability_reports),
+                    "messages": len(tracer.chat_messages),
+                    "tool_executions": len(tracer.tool_executions),
+                }
+            }
+            print(json.dumps(output, indent=2))
+        elif quiet_mode:
+            # Quiet mode: just print vuln count
+            console.print(f"\nScan complete: {len(tracer.vulnerability_reports)} vulnerabilities found")
+        else:
+            # Normal rich output
+            console.print()
 
-        final_report_text = Text()
-        final_report_text.append("Penetration test summary", style="bold #60a5fa")
+            final_report_text = Text()
+            final_report_text.append("Penetration test summary", style="bold #60a5fa")
 
-        final_report_panel = Panel(
-            Text.assemble(
-                final_report_text,
-                "\n\n",
-                tracer.final_scan_result,
-            ),
-            title="[bold white]PHANTOM",
-            title_align="left",
-            border_style="#60a5fa",
-            padding=(1, 2),
-        )
+            final_report_panel = Panel(
+                Text.assemble(
+                    final_report_text,
+                    "\n\n",
+                    tracer.final_scan_result,
+                ),
+                title="[bold white]PHANTOM",
+                title_align="left",
+                border_style="#60a5fa",
+                padding=(1, 2),
+            )
 
-        console.print(final_report_panel)
-        console.print()
+            console.print(final_report_panel)
+            console.print()

@@ -450,6 +450,16 @@ def build_tui_stats_text(tracer: Any, agent_config: dict[str, Any] | None = None
     stats_text.append("  ·  ", style="dim white")
     stats_text.append("Tools ", style="dim")
     stats_text.append(str(tool_count), style="white")
+    
+    # FIX: Add active tool count (Phase 2.3)
+    active_tool_count = sum(
+        1 for exec_data in tracer.tool_executions.values()
+        if exec_data.get("status") == "running"
+    )
+    if active_tool_count > 0:
+        stats_text.append(" (", style="dim white")
+        stats_text.append(str(active_tool_count), style="bold #22c55e")  # Green for active
+        stats_text.append(" active)", style="dim white")
 
     # ── Vulnerabilities ───────────────────────────────────────────────────────
     vuln_count = len(tracer.vulnerability_reports)
@@ -479,8 +489,34 @@ def build_tui_stats_text(tracer: Any, agent_config: dict[str, Any] | None = None
         stats_text.append("\n")
         stats_text.append("Caido: ", style="bold white")
         stats_text.append(caido_url, style="white")
+        
+        # FIX: Add health indicator with HTTP ping
+        health_status = _check_caido_health(caido_url)
+        if health_status == "connected":
+            stats_text.append(" ● ", style="bold #22c55e")  # Green dot
+            stats_text.append("connected", style="#22c55e")
+        else:
+            stats_text.append(" ● ", style="bold #ef4444")  # Red dot
+            stats_text.append("disconnected", style="#ef4444")
 
     return stats_text
+
+
+def _check_caido_health(caido_url: str) -> str:
+    """FIX: Check if Caido proxy is reachable via HTTP ping"""
+    try:
+        # Quick health check with 2s timeout
+        # Caido typically runs a web UI on the proxy port
+        url = f"http://{caido_url}"
+        req = Request(url, method="HEAD")
+        
+        with urlopen(req, timeout=2) as response:
+            if response.status in (200, 301, 302, 401, 403):  # Any response means it's alive
+                return "connected"
+    except (URLError, HTTPError, OSError, TimeoutError):
+        pass
+    
+    return "disconnected"
 
 
 # Name generation utilities
