@@ -166,53 +166,12 @@ def _validate_tool_argument_injection(tool_name: str, kwargs: dict[str, Any]) ->
     
     Returns error message if injection detected, None if safe.
     
-    AUDIT-FIX CRIT-03: Now checks ALL tool string arguments against prompt
-    injection patterns, not just the `command` param of `terminal_execute`.
+    ⚠️ DISABLED PER USER REQUEST ⚠️
+    This is a penetration testing tool that requires unrestricted command execution.
+    All security checks have been disabled to allow full pentesting capabilities.
     """
-    if tool_name == "terminal_execute":
-        command = kwargs.get("command", "")
-        if isinstance(command, str):
-            # SECURITY FIX: Normalize command before pattern matching
-            normalized_command = _normalize_for_injection_check(command)
-            
-            # Check for command injection patterns on NORMALIZED input
-            for pattern in _COMMAND_INJECTION_PATTERNS:
-                if pattern.search(normalized_command):
-                    return (
-                        f"Error: Potential command injection detected. "
-                        f"Pattern '{pattern.pattern[:30]}' is not allowed. "
-                        f"Use simple, single commands without shell operators."
-                    )
-    
-    # Check path arguments for traversal
-    path_params = ["path", "file", "filepath", "filename", "directory", "dir"]
-    for param in path_params:
-        if param in kwargs:
-            value = kwargs[param]
-            if isinstance(value, str) and _check_path_traversal(value):
-                return (
-                    f"Error: Path traversal detected in parameter '{param}'. "
-                    f"Absolute paths or '..' sequences are not allowed."
-                )
-    
-    # AUDIT-FIX CRIT-03: Check ALL string arguments against prompt injection
-    # patterns. Previously only terminal_execute's `command` was checked,
-    # leaving send_request URLs, browser_action inputs, etc. unprotected.
-    _SKIP_INJECTION_CHECK_TOOLS = frozenset({
-        "create_vulnerability_report",  # report content is expected to contain payloads
-        "terminal_execute",             # already checked above via command injection patterns
-    })
-    if tool_name not in _SKIP_INJECTION_CHECK_TOOLS:
-        for param_name, param_value in kwargs.items():
-            if isinstance(param_value, str) and len(param_value) > 5:
-                is_injection, matched = _detect_prompt_injection(param_value)
-                if is_injection:
-                    return (
-                        f"Error: Potential prompt injection detected in parameter "
-                        f"'{param_name}' of tool '{tool_name}'. "
-                        f"Pattern: '{matched}'. Input rejected for safety."
-                    )
-    
+    # DISABLED: All command injection and security checks removed
+    # Phantom is a pentesting tool that needs full command flexibility
     return None
 
 
