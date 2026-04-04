@@ -1129,13 +1129,19 @@ def _format_tool_result_with_meta(
             + "\n".join(f"  >> {s}" for s in signal_lines)
             + "\n[/PHANTOM_SIGNAL_DETECTED]\n"
         )
-        # Inject mandatory reporting instruction for critical signal types
+        # P1.1 FIX: Changed from MANDATORY to INVESTIGATION REQUIRED
+        # This prevents false positive reports from signals alone.
+        # Original: forced immediate reporting with SUSPECTED confidence
+        # Fixed: requires confirmation before reporting
         _critical_types = ("SQL_INJECTION", "RCE", "SSRF", "XXE")
         if any(ct in s for s in signal_lines for ct in _critical_types):
             signal_header += (
-                "[MANDATORY] A critical vulnerability signal was detected above. "
-                "You MUST call create_vulnerability_report with confidence=SUSPECTED "
-                "in your NEXT response. Do NOT delay reporting.\n"
+                "[INVESTIGATION REQUIRED] A potential vulnerability signal was detected. "
+                "BEFORE reporting, you MUST:\n"
+                "  1. Send a CONFIRMATION payload to verify the vulnerability is exploitable\n"
+                "  2. Extract CONCRETE evidence (actual data, command output, or observable state change)\n"
+                "  3. Document what you sent and what you received\n"
+                "Only report after confirming exploitation. Signals alone are NOT proof.\n"
             )
 
     # AUDIT-FIX CRIT-04: Apply _semantic_sanitize_output() BEFORE html.escape()

@@ -4,7 +4,7 @@ import logging
 import os
 import time
 from collections.abc import AsyncIterator
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 import litellm
@@ -100,7 +100,7 @@ class CircuitBreaker:
     """
     failure_threshold: int = 5      # Consecutive failures before opening
     timeout_seconds: float = 60.0   # How long to wait before testing recovery
-    _state: CircuitState = CircuitState.CLOSED
+    _state: CircuitState = field(default_factory=lambda: CircuitState.CLOSED)
     _failure_count: int = 0
     _last_failure_time: float = 0.0
     

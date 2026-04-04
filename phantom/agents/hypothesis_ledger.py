@@ -94,6 +94,67 @@ class HypothesisLedger:
                 hyp.iterations_spent += 1
                 hyp.last_updated = datetime.now(UTC).isoformat()
 
+    def _validate_evidence_quality(self, evidence: str, outcome: str) -> tuple[bool, str]:
+        """
+        P2.1 FIX: Validate that evidence contains substantive data, not vague claims.
+        
+        Returns:
+            (is_valid, modified_evidence): If evidence is weak, it's tagged.
+        """
+        if not evidence or len(evidence.strip()) < 10:
+            return False, evidence
+        
+        evidence_lower = evidence.lower()
+        
+        # Weak evidence indicators (vague claims without proof)
+        _weak_phrases = (
+            "appears to be",
+            "seems like",
+            "might be",
+            "could be",
+            "potentially",
+            "possibly",
+            "suggests that",
+            "indicates that",
+            "looks like",
+            "may be vulnerable",
+        )
+        
+        # Strong evidence indicators (concrete artifacts)
+        _strong_patterns = (
+            "extracted:",
+            "output:",
+            "response:",
+            "returned:",
+            "received:",
+            "data:",
+            "error message:",
+            "status code:",
+            "header:",
+            "body:",
+            "rows",
+            "uid=",
+            "root:",
+            "admin",
+            "'",  # SQL/XSS payloads often contain quotes
+            "<script",
+            "SELECT",
+            "UNION",
+        )
+        
+        has_weak = any(phrase in evidence_lower for phrase in _weak_phrases)
+        has_strong = any(pattern.lower() in evidence_lower for pattern in _strong_patterns)
+        
+        if has_weak and not has_strong:
+            # Tag as weak evidence but don't reject
+            return True, f"[WEAK_EVIDENCE] {evidence}"
+        
+        if outcome == "confirmed" and not has_strong and len(evidence) < 50:
+            # Confirmation claims need stronger evidence
+            return True, f"[NEEDS_MORE_DETAIL] {evidence}"
+        
+        return True, evidence
+
     def record_result(
         self,
         hyp_id: str,
@@ -105,6 +166,10 @@ class HypothesisLedger:
         Update hypothesis status.
         outcome: 'confirmed' | 'rejected' | 'testing'
         successful_payload: If outcome='confirmed', the payload that worked
+        
+        P2.1 ENHANCEMENT: Evidence is validated for quality. Weak evidence
+        is tagged but not rejected, allowing the system to flag questionable
+        confirmations without blocking legitimate ones.
         """
         with self._lock:
             hyp = self._hypotheses.get(hyp_id)
@@ -113,10 +178,13 @@ class HypothesisLedger:
             if outcome in _VALID_STATUSES:
                 hyp.status = outcome
             if evidence:
+                # P2.1: Validate evidence quality
+                _, validated_evidence = self._validate_evidence_quality(evidence, outcome)
+                
                 if outcome == "confirmed":
-                    hyp.evidence_for.append(evidence)
+                    hyp.evidence_for.append(validated_evidence)
                 elif outcome == "rejected":
-                    hyp.evidence_against.append(evidence)
+                    hyp.evidence_against.append(validated_evidence)
             # P3.2: Record successful payload
             if outcome == "confirmed" and successful_payload:
                 if successful_payload not in hyp.successful_payloads:

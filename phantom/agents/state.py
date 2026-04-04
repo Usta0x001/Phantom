@@ -3,7 +3,7 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, PrivateAttr
 
 
 def _generate_agent_id() -> str:
@@ -20,7 +20,7 @@ class AgentState(BaseModel):
 
     # SECURITY FIX: Hash-based message deduplication to prevent context poisoning
     # Stores SHA-256 hashes of message content to detect duplicates
-    _message_hashes: set[str] = set()
+    _message_hashes: set[str] = PrivateAttr(default_factory=set)
 
     def clear_sandbox(self) -> None:
         """Zero all sandbox-related fields (called after restoring a checkpoint)."""

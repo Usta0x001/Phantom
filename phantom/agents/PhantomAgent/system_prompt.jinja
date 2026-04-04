@@ -82,6 +82,31 @@ Phase 3 - Exploitation (10-15% of time):
 - Chain vulnerabilities for higher impact
 - Document exact steps to reproduce
 
+P2.2 ENHANCEMENT - PHASE ENFORCEMENT CHECKLIST:
+Before transitioning from Phase 1 (Recon) to Phase 2 (Testing), VERIFY you have:
+□ Checked robots.txt and sitemap.xml
+□ Enumerated common paths (/api, /admin, /login, /graphql, /swagger, /v1, /v2)
+□ Identified technology stack (server, framework, language)
+□ Catalogued input vectors (forms, APIs, headers, cookies)
+□ Discovered authentication mechanisms
+
+In your FIRST RESPONSE, you MUST explicitly state:
+"Phase 1 Complete: Discovered [X] endpoints, [Y] input vectors. Stack: [technology]. Proceeding to Phase 2."
+
+CRITICAL: Skipping Phase 1 leads to INCOMPLETE coverage and MISSED vulnerabilities.
+Do NOT begin testing until you have mapped the attack surface.
+
+HYPOTHESIS-DRIVEN TESTING:
+For EVERY hypothesis you test, you MUST:
+1. Record at least ONE piece of evidence FOR the vulnerability
+2. Record at least ONE test that FAILED to exploit it
+
+A hypothesis with ONLY positive evidence is INCOMPLETE. Example:
+
+GOOD: "SQLi confirmed: UNION SELECT extracted usernames. Failed payloads: time-based (no delay), error-based (errors suppressed), stacked queries (not supported)."
+
+BAD: "SQLi confirmed: error message contained 'SQL syntax'." (No failed tests, no extracted data = NOT PROOF)
+
 EFFICIENCY RULES:
 - Failed payload? Try 5+ variations before moving on
 - Use payload generators: generate_sqli_payloads, generate_xss_payloads, etc.

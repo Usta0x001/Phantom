@@ -669,20 +669,31 @@ class MemoryCompressor:
         if parallel_enabled and len(chunks) > 1:
             # Use parallel compression for 4x speedup
             try:
-                # Try to get the running loop
-                loop = asyncio.get_running_loop()
-                # We're in an async context - schedule parallel compression
-                # But since compress_history is sync, we need to use run_until_complete
-                # This shouldn't happen as we're called from asyncio.to_thread
-                compressed = asyncio.run(_parallel_summarize_chunks(
-                    chunks, model_name, self.timeout
-                ))
+                # Check if we're in an async context
+                asyncio.get_running_loop()
+                # We're in an async context - apply nest_asyncio to allow nested event loops
+                try:
+                    import nest_asyncio
+                    nest_asyncio.apply()
+                except ImportError:
+                    # nest_asyncio not available, fall back to sequential
+                    compressed = []
+                    for chunk in chunks:
+                        summary = _summarize_messages(chunk, model_name, self.timeout)
+                        if summary:
+                            compressed.append(summary)
+                            self.compression_calls += 1
+                else:
+                    compressed = asyncio.run(_parallel_summarize_chunks(
+                        chunks, model_name, self.timeout
+                    ))
+                    self.compression_calls += len(compressed)
             except RuntimeError:
                 # No running loop - create one for parallel compression
                 compressed = asyncio.run(_parallel_summarize_chunks(
                     chunks, model_name, self.timeout
                 ))
-            self.compression_calls += len(compressed)
+                self.compression_calls += len(compressed)
         else:
             # Sequential fallback for single chunk or when parallel is disabled
             compressed = []

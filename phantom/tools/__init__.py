@@ -48,6 +48,16 @@ if not SANDBOX_MODE:
     from .todo import *  # noqa: F403
     if HAS_PERPLEXITY_API:
         from .web_search import *  # noqa: F403
+    
+    # Phase 1 Enhancement Tools - Passive OSINT, CVE correlation, WAF detection
+    from .osint import *  # noqa: F403
+    from .vuln_intel import *  # noqa: F403
+    from .waf import *  # noqa: F403
+    
+    # Phase 2 Enhancement Tools - Web App Pentesting
+    from .payload_gen import *  # noqa: F403
+    from .response_analysis import *  # noqa: F403
+    from .session_mgmt import *  # noqa: F403
 else:
     if not DISABLE_BROWSER:
         from .browser import *  # noqa: F403

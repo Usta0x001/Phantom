@@ -75,6 +75,16 @@ class Config:
     # Tool-level role-based access control
     phantom_rbac_enabled = "false"                 # PHANTOM_RBAC_ENABLED - off by default
     phantom_rbac_default_role = "senior_pentester" # PHANTOM_RBAC_DEFAULT_ROLE
+    # ════════════════════════════════════════════════════════════════════════════
+    # OSINT & Vulnerability Intelligence API Keys (Phase 1 Enhancements)
+    # ════════════════════════════════════════════════════════════════════════════
+    # All keys are OPTIONAL - tools degrade gracefully without them
+    phantom_shodan_api_key = None      # PHANTOM_SHODAN_API_KEY — for shodan_search tool
+    phantom_github_token = None        # PHANTOM_GITHUB_TOKEN — for github_dork tool (rate limits)
+    phantom_vulners_api_key = None     # PHANTOM_VULNERS_API_KEY — for exploit_search tool
+    phantom_whoisxml_api_key = None    # PHANTOM_WHOISXML_API_KEY — for whois_lookup tool
+    phantom_api_ninjas_key = None      # PHANTOM_API_NINJAS_KEY — fallback for whois_lookup
+    phantom_nvd_api_key = None         # PHANTOM_NVD_API_KEY — for cve_search (higher rate limits)
     # ────────────────────────────────────────────────────────────────────────────
     _LLM_CANONICAL_NAMES = (
         "phantom_llm",

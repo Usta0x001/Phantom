@@ -1,0 +1,232 @@
+<tools>
+  <tool name="generate_xss_payloads">
+    <description>Generate context-aware XSS (Cross-Site Scripting) payloads.
+    
+    Creates payloads optimized for specific injection contexts with
+    optional WAF bypass techniques and encoding options.
+    
+    Use this when you've identified a potential XSS injection point.</description>
+    <parameters>
+      <parameter name="context" type="string" required="false">
+        <description>Injection context:
+        - "html" (default) - Standard HTML body injection
+        - "attribute" - Inside HTML attribute values
+        - "javascript" - Inside JavaScript code
+        - "href" - Inside href/src attributes
+        - "template" - Inside template expressions
+        - "multi" - All contexts</description>
+      </parameter>
+      <parameter name="waf_type" type="string" required="false">
+        <description>WAF to bypass: "cloudflare", "akamai", "modsecurity", "imperva", "f5"</description>
+      </parameter>
+      <parameter name="encoding" type="string" required="false">
+        <description>Output encoding: "url", "html", "base64", "unicode"</description>
+      </parameter>
+      <parameter name="max_payloads" type="integer" required="false">
+        <description>Maximum payloads to return (default: 20)</description>
+      </parameter>
+    </parameters>
+    <returns type="Dict[str, Any]">
+      <description>Response containing:
+        - 'payloads': List of XSS payloads with metadata
+        - 'total_count': Number of payloads returned
+        - 'context': Injection context
+        - 'usage': Instructions for testing</description>
+    </returns>
+    <examples>
+  # Generate payloads for attribute injection
+  <function=generate_xss_payloads>
+  <parameter=context>attribute</parameter>
+  </function>
+
+  # Generate WAF bypass payloads
+  <function=generate_xss_payloads>
+  <parameter=waf_type>cloudflare</parameter>
+  <parameter=encoding>unicode</parameter>
+  </function>
+    </examples>
+  </tool>
+
+  <tool name="generate_sqli_payloads">
+    <description>Generate context-aware SQL injection payloads.
+    
+    Creates payloads for different database backends and injection types
+    including UNION, time-based blind, error-based, and stacked queries.
+    
+    Use after detecting potential SQLi injection points.</description>
+    <parameters>
+      <parameter name="db_type" type="string" required="false">
+        <description>Target database: "mysql", "postgresql", "mssql", "oracle", "all" (default)</description>
+      </parameter>
+      <parameter name="injection_type" type="string" required="false">
+        <description>Injection type: "detection", "union", "time_blind", "error_based", "stacked", "all"</description>
+      </parameter>
+      <parameter name="waf_type" type="string" required="false">
+        <description>WAF to bypass: "cloudflare", "akamai", "modsecurity"</description>
+      </parameter>
+      <parameter name="column_count" type="integer" required="false">
+        <description>Number of columns for UNION payloads (if known)</description>
+      </parameter>
+      <parameter name="max_payloads" type="integer" required="false">
+        <description>Maximum payloads to return (default: 25)</description>
+      </parameter>
+    </parameters>
+    <returns type="Dict[str, Any]">
+      <description>Response containing:
+        - 'payloads': List of SQLi payloads with metadata
+        - 'total_count': Number of payloads
+        - 'db_type': Target database
+        - 'usage': Testing instructions</description>
+    </returns>
+    <examples>
+  # Generate MySQL-specific payloads
+  <function=generate_sqli_payloads>
+  <parameter=db_type>mysql</parameter>
+  <parameter=injection_type>union</parameter>
+  </function>
+
+  # Generate time-based blind payloads
+  <function=generate_sqli_payloads>
+  <parameter=injection_type>time_blind</parameter>
+  </function>
+
+  # Generate UNION payloads for 5 columns
+  <function=generate_sqli_payloads>
+  <parameter=injection_type>union</parameter>
+  <parameter=column_count>5</parameter>
+  </function>
+    </examples>
+  </tool>
+
+  <tool name="generate_xxe_payloads">
+    <description>Generate XXE (XML External Entity) injection payloads.
+    
+    Creates payloads for file disclosure, SSRF via XXE, and blind XXE
+    data exfiltration attacks.
+    
+    Use when XML processing is detected (SOAP, XML APIs, file uploads).</description>
+    <parameters>
+      <parameter name="target_os" type="string" required="false">
+        <description>Target OS: "linux" (default), "windows", "all"</description>
+      </parameter>
+      <parameter name="xxe_type" type="string" required="false">
+        <description>XXE type: "file_disclosure", "ssrf", "blind_exfil", "parameter_entity", "xinclude", "all"</description>
+      </parameter>
+      <parameter name="target_file" type="string" required="false">
+        <description>Specific file to read (e.g., "/etc/passwd", "/app/config.php")</description>
+      </parameter>
+      <parameter name="callback_url" type="string" required="false">
+        <description>Attacker callback URL for blind XXE (e.g., "http://attacker.com")</description>
+      </parameter>
+      <parameter name="max_payloads" type="integer" required="false">
+        <description>Maximum payloads to return (default: 15)</description>
+      </parameter>
+    </parameters>
+    <returns type="Dict[str, Any]">
+      <description>Response containing:
+        - 'payloads': List of XXE payloads with metadata
+        - 'total_count': Number of payloads
+        - 'usage': Testing instructions</description>
+    </returns>
+    <examples>
+  # Generate Linux file reading payloads
+  <function=generate_xxe_payloads>
+  <parameter=target_os>linux</parameter>
+  <parameter=xxe_type>file_disclosure</parameter>
+  </function>
+
+  # Generate payload for specific file
+  <function=generate_xxe_payloads>
+  <parameter=target_file>/app/config.php</parameter>
+  </function>
+
+  # Generate blind XXE with callback
+  <function=generate_xxe_payloads>
+  <parameter=xxe_type>blind_exfil</parameter>
+  <parameter=callback_url>http://attacker.com</parameter>
+  </function>
+    </examples>
+  </tool>
+
+  <tool name="generate_ssti_payloads">
+    <description>Generate SSTI (Server-Side Template Injection) payloads.
+    
+    Creates payloads for various template engines: Jinja2, Twig,
+    Freemarker, Velocity, ERB, Smarty, Thymeleaf.
+    
+    Use when template engine rendering is detected.</description>
+    <parameters>
+      <parameter name="template_engine" type="string" required="false">
+        <description>Template engine: "jinja2", "twig", "freemarker", "velocity", "erb", "smarty", "all"</description>
+      </parameter>
+      <parameter name="payload_type" type="string" required="false">
+        <description>Payload type: "detection", "rce", "class_enum", "all"</description>
+      </parameter>
+      <parameter name="command" type="string" required="false">
+        <description>Custom command to execute (default: "id")</description>
+      </parameter>
+      <parameter name="max_payloads" type="integer" required="false">
+        <description>Maximum payloads to return (default: 20)</description>
+      </parameter>
+    </parameters>
+    <returns type="Dict[str, Any]">
+      <description>Response containing:
+        - 'payloads': List of SSTI payloads with metadata
+        - 'detection_tips': Tips for identifying SSTI</description>
+    </returns>
+    <examples>
+  # Generate detection payloads for all engines
+  <function=generate_ssti_payloads>
+  <parameter=payload_type>detection</parameter>
+  </function>
+
+  # Generate Jinja2 RCE payloads
+  <function=generate_ssti_payloads>
+  <parameter=template_engine>jinja2</parameter>
+  <parameter=payload_type>rce</parameter>
+  </function>
+    </examples>
+  </tool>
+
+  <tool name="generate_cmd_injection_payloads">
+    <description>Generate OS command injection payloads.
+    
+    Creates payloads for command chaining, time-based blind detection,
+    and out-of-band exfiltration.
+    
+    Use when application executes system commands with user input.</description>
+    <parameters>
+      <parameter name="target_os" type="string" required="false">
+        <description>Target OS: "linux" (default), "windows", "all"</description>
+      </parameter>
+      <parameter name="injection_type" type="string" required="false">
+        <description>Type: "chaining", "time_based", "oob", "bypass", "all"</description>
+      </parameter>
+      <parameter name="command" type="string" required="false">
+        <description>Custom command to execute</description>
+      </parameter>
+      <parameter name="callback_url" type="string" required="false">
+        <description>Attacker callback URL for OOB</description>
+      </parameter>
+      <parameter name="max_payloads" type="integer" required="false">
+        <description>Maximum payloads to return (default: 25)</description>
+      </parameter>
+    </parameters>
+    <returns type="Dict[str, Any]">
+      <description>Response containing:
+        - 'payloads': List of command injection payloads
+        - 'tips': Testing tips</description>
+    </returns>
+    <examples>
+  # Generate Linux command injection payloads
+  <function=generate_cmd_injection_payloads>
+  <parameter=target_os>linux</parameter>
+  </function>
+
+  # Generate time-based blind payloads
+  <function=generate_cmd_injection_payloads>
+  <parameter=injection_type>time_based</parameter>
+  </function>
+    </examples>
+  </tool>
+</tools>

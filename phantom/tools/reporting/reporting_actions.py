@@ -248,6 +248,13 @@ def calculate_cvss_and_severity(
 
 
 def _validate_required_fields(**kwargs: str | None) -> list[str]:
+    """
+    Validate required fields for vulnerability reports.
+    
+    P1.2 ENHANCEMENT: SUSPECTED findings now require minimum evidence.
+    Previously SUSPECTED could bypass all proof requirements, leading to
+    false positives. Now requires observed_behavior documentation.
+    """
     validation_errors: list[str] = []
 
     confidence = (kwargs.get("confidence") or "LIKELY").upper().strip()
@@ -258,8 +265,40 @@ def _validate_required_fields(**kwargs: str | None) -> list[str]:
         "target": "Target cannot be empty",
         "technical_analysis": "Technical analysis cannot be empty",
     }
-    if confidence != "SUSPECTED":
-        required_fields["poc_script_code"] = "PoC script/code is REQUIRED for LIKELY/VERIFIED confidence - provide the actual exploit/payload, or change confidence to SUSPECTED"
+    
+    # P1.2 FIX: SUSPECTED findings still need minimum evidence
+    if confidence == "SUSPECTED":
+        # Require technical_analysis to contain specific observational data
+        tech_analysis = kwargs.get("technical_analysis") or ""
+        if len(tech_analysis.strip()) < 50:
+            validation_errors.append(
+                "SUSPECTED findings require at least 50 characters of technical_analysis "
+                "describing what was observed (e.g., 'Sent payload X, received response Y')"
+            )
+        
+        # Check for vague language that indicates lack of evidence
+        _vague_phrases = (
+            "might be vulnerable",
+            "could be vulnerable", 
+            "possibly vulnerable",
+            "may be exploitable",
+            "appears vulnerable",
+            "seems vulnerable",
+            "potential vulnerability",
+        )
+        tech_lower = tech_analysis.lower()
+        if any(phrase in tech_lower for phrase in _vague_phrases):
+            validation_errors.append(
+                "SUSPECTED findings must describe SPECIFIC observations, not vague claims. "
+                "Replace phrases like 'might be vulnerable' with concrete observations: "
+                "'Sent [payload], observed [specific response behavior]'"
+            )
+    else:
+        # LIKELY/VERIFIED require PoC
+        required_fields["poc_script_code"] = (
+            "PoC script/code is REQUIRED for LIKELY/VERIFIED confidence - "
+            "provide the actual exploit/payload, or change confidence to SUSPECTED"
+        )
 
     for field_name, error_msg in required_fields.items():
         value = kwargs.get(field_name)
@@ -295,6 +334,141 @@ def _validate_cvss_parameters(**kwargs: str) -> list[str]:
 
 def _normalize_variant_field(value: str | None) -> str:
     return (value or "").strip().lower()
+
+
+# ============================================================================
+# P0.2 ENHANCEMENT: Exploit Success Validation Patterns
+# ============================================================================
+# These patterns validate that an exploit WORKED, not just that the PoC executed.
+# CORRECTED: Added Windows patterns, timing notes, and browser requirements.
+
+_EXPLOIT_SUCCESS_PATTERNS: dict[str, list[tuple[str, str]]] = {
+    "sqli": [
+        # Data extraction indicators
+        (r"information_schema", "SQL schema access detected"),
+        (r"table_name\s*[=:]", "Table enumeration detected"),
+        (r"column_name\s*[=:]", "Column enumeration detected"),
+        (r"mysql\.", "MySQL system database access"),
+        (r"pg_catalog", "PostgreSQL catalog access"),
+        (r"sqlite_master", "SQLite schema access"),
+        (r"sysobjects|syscolumns", "MSSQL system tables access"),
+        (r"\d+\s+(rows?|entries)\s+(returned|affected|in\s+set)", "Query returned rows/entries"),
+        (r"\[\d+\s+entries?\]", "Entries count detected"),
+        (r"UNION\s+SELECT.*FROM", "UNION-based extraction successful"),
+        # Error-based extraction
+        (r"extractvalue|updatexml|xmltype", "XML-based extraction"),
+        # Boolean/Time indicators (note: timing must be validated by caller)
+        # REMOVED: Time-based pattern returns false positives when PoC echoes payload text
+        # Time-based SQLi requires ACTUAL timing validation (differential analysis), not text matching
+        # Presence of sleep() string in output ≠ successful timing attack
+        # (r"sleep\s*\(\s*\d+\s*\)|waitfor\s+delay|pg_sleep", "Time-based payload present"),
+    ],
+    "xss": [
+        # Note: XSS requires browser execution - these are OUTPUT patterns only
+        # Real validation needs headless browser
+        (r"<script[^>]*>.*?</script>", "Script tags in response"),
+        (r"on(error|load|click|mouse\w+)\s*=", "Event handler in response"),
+        (r"javascript:", "JavaScript protocol in response"),
+        # These indicate the PoC CLAIMS success but need browser verification
+        (r"XSS_CONFIRMED|alert\s*\(\s*['\"]?(xss|1|document)", "XSS marker detected - REQUIRES BROWSER VERIFICATION"),
+    ],
+    "rce": [
+        # Linux/Unix indicators
+        (r"uid=\d+.*gid=\d+", "Unix id command output"),
+        (r"root:x?:0:0", "Unix /etc/passwd content"),
+        (r"/bin/(ba)?sh", "Shell path detected"),
+        (r"www-data|apache|nginx|nobody", "Web server user detected"),
+        (r"Linux\s+\w+\s+\d+\.\d+", "Linux uname output"),
+        (r"total\s+\d+.*drwx", "Directory listing output"),
+        # Windows indicators (CORRECTED: Added Windows patterns)
+        (r"(NT AUTHORITY|BUILTIN)\\", "Windows system user"),
+        (r"\\Users\\|\\Windows\\", "Windows path detected"),
+        (r"Volume\s+Serial\s+Number", "Windows dir output"),
+        (r"Microsoft\s+Windows\s+\[Version", "Windows cmd output"),
+        (r"whoami.*\\", "Windows whoami output"),
+        (r"ipconfig|systeminfo|hostname", "Windows command output"),
+        (r"COMPUTERNAME=|USERDOMAIN=", "Windows environment"),
+    ],
+    "ssrf": [
+        # Internal resource access indicators
+        (r"169\.254\.169\.254", "AWS metadata endpoint"),
+        (r"metadata\.google\.internal", "GCP metadata endpoint"),
+        (r"localhost|127\.0\.0\.1|::1", "Localhost access"),
+        (r"10\.\d+\.\d+\.\d+|172\.(1[6-9]|2\d|3[01])\.\d+\.\d+|192\.168\.\d+\.\d+", "Internal IP access"),
+        (r"iam/security-credentials", "AWS credentials endpoint"),
+        (r"computeMetadata/v1", "GCP metadata API"),
+    ],
+    "lfi": [
+        # File content indicators
+        (r"root:x?:0:0:", "/etc/passwd content"),
+        (r"\[boot\s*loader\]", "Windows boot.ini content"),
+        (r"<\?php", "PHP source code exposed"),
+        (r"#!/bin/(ba)?sh|#!/usr/bin/(env\s+)?(python|perl|ruby)", "Script shebang exposed"),
+        (r"DB_PASSWORD|DATABASE_URL|SECRET_KEY", "Config file content"),
+        (r"-----BEGIN\s+(RSA\s+)?PRIVATE\s+KEY-----", "Private key exposed"),
+    ],
+    "ssti": [
+        # Template injection success
+        (r"49(?!\d)", "7*7 calculation result (Jinja2/Twig)"),
+        (r"7777777", "7*'7' string multiplication (Python)"),
+        (r"class\s+'(str|int|list)", "Python type introspection"),
+        (r"__mro__|__class__|__subclasses__", "Python MRO access"),
+    ],
+    "xxe": [
+        # XXE success indicators
+        (r"root:x?:0:0", "XXE file read (/etc/passwd)"),
+        (r"ENTITY\s+\w+\s+SYSTEM", "XXE entity definition"),
+        (r"<!DOCTYPE", "DTD in response (potential XXE)"),
+    ],
+}
+
+
+def _validate_exploit_success(
+    vuln_type: str,
+    replay_output: str,
+) -> tuple[str, str]:
+    """
+    P0.2 FIX: Validate that exploit actually succeeded, not just execution.
+    
+    Returns:
+        (status, reason): 
+        - 'EXPLOIT_CONFIRMED': Exploit definitely worked
+        - 'EXECUTION_ONLY': PoC ran but no exploit indicators
+        - 'REQUIRES_BROWSER': XSS needs browser validation
+        - 'FAILED': Execution failed
+    """
+    vuln_lower = vuln_type.lower().strip()
+    output_clean = replay_output.strip()
+    
+    if not output_clean:
+        return ("FAILED", "No output from PoC execution")
+    
+    # Get patterns for this vuln type
+    patterns = _EXPLOIT_SUCCESS_PATTERNS.get(vuln_lower, [])
+    
+    # Also try without numbers/suffixes (e.g., "sqli_blind" -> "sqli")
+    if not patterns:
+        for key in _EXPLOIT_SUCCESS_PATTERNS:
+            if vuln_lower.startswith(key) or key in vuln_lower:
+                patterns = _EXPLOIT_SUCCESS_PATTERNS[key]
+                break
+    
+    for pattern, description in patterns:
+        if re.search(pattern, output_clean, re.IGNORECASE):
+            # Special case: XSS markers with script tags still need browser verification
+            if vuln_lower == "xss" and "<script" in pattern.lower():
+                return ("REQUIRES_BROWSER", "Script tags detected - requires browser verification")
+            # Special case: XSS markers indicate need for browser verification
+            if vuln_lower == "xss" and "REQUIRES BROWSER" in description:
+                return ("REQUIRES_BROWSER", description)
+            return ("EXPLOIT_CONFIRMED", description)
+    
+    # XSS special handling: always needs browser verification
+    if vuln_lower == "xss":
+        return ("REQUIRES_BROWSER", "XSS exploits require browser-based verification")
+    
+    # Execution succeeded but no exploit indicators
+    return ("EXECUTION_ONLY", "PoC executed but no exploitation indicators found")
 
 
 def _same_variant_surface(candidate: dict[str, Any], existing: dict[str, Any]) -> bool:
@@ -421,7 +595,7 @@ def create_vulnerability_report(  # noqa: PLR0912
     if confidence not in _VALID_CONFIDENCE:
         confidence = "LIKELY"  # safe fallback
 
-    _VALID_REPLAY_STATUS = {"PENDING", "SKIPPED", "PASSED", "FAILED"}
+    _VALID_REPLAY_STATUS = {"PENDING", "SKIPPED", "PASSED", "FAILED", "EXPLOIT_CONFIRMED", "EXECUTION_ONLY", "REQUIRES_BROWSER"}
 
     # Rec 5 (ER-005): PoC auto-replay — execute poc_script_code in the sandbox
     # before writing the report.  If replay succeeds, upgrade confidence to
@@ -435,10 +609,11 @@ def create_vulnerability_report(  # noqa: PLR0912
         import asyncio
 
         async def _background_replay(
-            _poc_code: str, _report_title: str, _confidence: str
+            _poc_code: str, _report_title: str, _confidence: str, _vuln_type: str
         ) -> None:
             """Run PoC in sandbox and update the tracer with the result."""
             _replay = "SKIPPED"
+            _replay_reason = ""
             try:
                 from phantom.tools.executor import execute_tool
 
@@ -457,33 +632,55 @@ def create_vulnerability_report(  # noqa: PLR0912
                     "modulenotfounderror:",
                     "segmentation fault",
                     "killed",
+                    "permission denied",  # Added
+                    "access is denied",   # Windows
+                    "not recognized as an internal or external command",  # Windows
                 )
                 if not replay_out.strip():
                     _replay = "FAILED"
+                    _replay_reason = "No output from PoC"
                 elif any(p in replay_out.lower() for p in _exec_failure_patterns):
                     _replay = "FAILED"
+                    _replay_reason = "Execution error detected"
                 else:
-                    _replay = "PASSED"
-            except Exception:  # noqa: BLE001
+                    # P0.2 ENHANCEMENT: Validate EXPLOIT success, not just execution
+                    _replay, _replay_reason = _validate_exploit_success(_vuln_type, replay_out)
+            except Exception as e:  # noqa: BLE001
                 _replay = "FAILED"
+                _replay_reason = f"Exception: {str(e)[:100]}"
 
             # Update the vulnerability report telemetry with replay outcome
             try:
                 from phantom.telemetry.tracer import get_global_tracer
                 _tracer = get_global_tracer()
                 if _tracer and hasattr(_tracer, "update_vulnerability_replay"):
+                    # Only upgrade to VERIFIED if exploit was actually confirmed
+                    new_confidence = _confidence
+                    if _replay == "EXPLOIT_CONFIRMED":
+                        new_confidence = "VERIFIED"
                     _tracer.update_vulnerability_replay(
                         title=_report_title,
                         replay_status=_replay,
-                        confidence="VERIFIED" if _replay == "PASSED" else _confidence,
+                        confidence=new_confidence,
                     )
             except Exception:  # noqa: BLE001
                 pass
 
+        # Extract vulnerability type from title or use generic
+        _detected_vuln_type = ""
+        title_lower = title.lower()
+        for vtype in ("sqli", "sql injection", "xss", "cross-site", "rce", "command injection", 
+                      "ssrf", "lfi", "file inclusion", "ssti", "template injection", "xxe"):
+            if vtype in title_lower:
+                _detected_vuln_type = vtype.split()[0]  # First word
+                break
+        if not _detected_vuln_type:
+            _detected_vuln_type = "unknown"
+
         try:
             loop = asyncio.get_running_loop()
             # Schedule non-blocking — does NOT block report creation
-            task = loop.create_task(_background_replay(poc_script_code, title, confidence))
+            task = loop.create_task(_background_replay(poc_script_code, title, confidence, _detected_vuln_type))
             _background_tasks.add(task)
             task.add_done_callback(lambda finished: _background_tasks.discard(finished))
             replay_status = "PENDING"  # will be updated async

@@ -122,8 +122,10 @@ class BaseAgent(metaclass=AgentMeta):
         try:
             from phantom.tools.hypothesis.hypothesis_actions import set_ledger
             set_ledger(self.hypothesis_ledger)
-        except ImportError:
-            pass  # Tool module not available in this environment
+        except ImportError as e:
+            # Tool module not available in this environment
+            logging.warning(f"Hypothesis ledger tool not available: {e}")
+            pass
 
         from phantom.telemetry.tracer import get_global_tracer
 
