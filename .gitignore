@@ -105,20 +105,17 @@ schema.graphql
 thesis/
 
 # Audit & Security Reports (local only -- never committed)
-AUDIT_REPORT*.md
-ACADEMIC_REPORT.md
-ARCHITECTURE.md
-PHANTOM_FULL_SPECTRUM_EVALUATION.md
-CONTINUATION_PROMPT.md
-CORE_AGENT_SYSTEM_AUDIT.md
-SANDBOX_DOCKER_RUNTIME_AUDIT.md
-SYSTEM_SCORECARD*.md
-docs/AUDIT_REPORT*.md
-docs/ACADEMIC_REPORT.md
-docs/CONTINUATION_PROMPT.md
-docs/CODEBASE_AUDIT.md
-docs/DEEP_SECURITY_AUDIT.md
-docs/SECURITY_AUDIT_REPORT*.md
+AUDIT*.md
+EFFICIENCY_AUDIT*.md
+COMPREHENSIVE_SECURITY_AUDIT.md
+ARCHITECTURE_AUDIT_REPORT.md
+SECURITY_AUDIT_1*.md
+AUDIT_SECTIONS_*.md
+AUDIT_*.md
+
+# Local audit Python files (never commit)
+phantom/logging/audit.py
+phantom/tests/test_hostile_audit.py
 
 # Session reports, audit logs, and comparison docs (local only)
 COMPARISON_*.md
