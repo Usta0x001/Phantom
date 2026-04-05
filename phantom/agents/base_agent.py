@@ -115,6 +115,16 @@ class BaseAgent(metaclass=AgentMeta):
             "correlation_engine"
         ) or CorrelationEngine()
 
+        # FIX 5: Attack Graph - visualizes vulnerability relationships and attack paths.
+        # Enables critical node identification and multi-step attack chain analysis.
+        # Root agents get a fresh graph; sub-agents share if passed via config.
+        try:
+            from phantom.core.attack_graph import AttackGraph
+            self.attack_graph: AttackGraph | None = config.get("attack_graph") or AttackGraph()
+        except ImportError:
+            # NetworkX not installed - attack graph unavailable
+            self.attack_graph = None
+
         # FEAT-001: Set scan mode for stealth rate limiting
         # This enables programmatic rate limiting in executor.py when scan_mode="stealth"
         try:
@@ -128,8 +138,10 @@ class BaseAgent(metaclass=AgentMeta):
 
         # C1: Wire hypothesis ledger to the tool so the LLM can interact with it
         try:
-            from phantom.tools.hypothesis.hypothesis_actions import set_ledger
+            from phantom.tools.hypothesis.hypothesis_actions import set_ledger, set_correlation_engine
             set_ledger(self.hypothesis_ledger)
+            # FIX 4: Wire correlation engine for automatic chain detection
+            set_correlation_engine(self.correlation_engine)
         except ImportError as e:
             # Tool module not available in this environment
             logging.warning(f"Hypothesis ledger tool not available: {e}")
@@ -142,6 +154,7 @@ class BaseAgent(metaclass=AgentMeta):
                 hypothesis_ledger=self.hypothesis_ledger,
                 coverage_tracker=self.coverage_tracker,
                 correlation_engine=self.correlation_engine,
+                attack_graph=self.attack_graph if hasattr(self, 'attack_graph') else None,  # FIX 5
                 agent_state=self.state,
             )
         except ImportError as e:

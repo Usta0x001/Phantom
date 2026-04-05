@@ -5,6 +5,9 @@ Hypothesis Ledger Tools — LLM-Accessible Interface
 Exposes the hypothesis ledger to the LLM via tool calls, allowing
 the agent to query, add, and update hypotheses during a scan.
 
+FIX 4: Integrated with correlation engine to enable automatic
+vulnerability chain detection when hypotheses are confirmed.
+
 This solves the import error in base_agent.py and provides a clean
 interface for hypothesis management.
 """
@@ -17,15 +20,25 @@ from phantom.tools.registry import register_tool
 
 if TYPE_CHECKING:
     from phantom.agents.hypothesis_ledger import HypothesisLedger
+    from phantom.agents.correlation_engine import CorrelationEngine
 
 # Global ledger instance (set by base_agent.py during initialization)
 _GLOBAL_LEDGER: HypothesisLedger | None = None
+
+# FIX 4: Global correlation engine instance for chain detection
+_GLOBAL_CORRELATION_ENGINE: CorrelationEngine | None = None
 
 
 def set_ledger(ledger: HypothesisLedger) -> None:
     """Set the global hypothesis ledger instance."""
     global _GLOBAL_LEDGER
     _GLOBAL_LEDGER = ledger
+
+
+def set_correlation_engine(engine: CorrelationEngine) -> None:
+    """FIX 4: Set the global correlation engine instance."""
+    global _GLOBAL_CORRELATION_ENGINE
+    _GLOBAL_CORRELATION_ENGINE = engine
 
 
 def get_ledger() -> HypothesisLedger | None:
@@ -147,19 +160,22 @@ async def record_payload_test(
 @register_tool
 async def confirm_hypothesis(hypothesis_id: str, evidence: str) -> dict[str, Any]:
     """
-    Mark a hypothesis as confirmed (vulnerability found).
+    Confirm a hypothesis as a valid vulnerability.
+    
+    FIX 4: Now automatically adds the finding to the correlation engine
+    to enable vulnerability chain detection (e.g., SSRF → cloud metadata).
     
     Args:
-        hypothesis_id: The hypothesis ID
-        evidence: Strong evidence of the vulnerability
+        hypothesis_id: The hypothesis ID (e.g., "H-0001")
+        evidence: Evidence confirming the vulnerability
     
     Returns:
-        Dictionary with success status and message.
+        Dictionary with success status, hypothesis ID, and any detected chains.
     
     Example:
         confirm_hypothesis(
-            hypothesis_id="H-0001",
-            evidence="Extracted database schema with UNION injection"
+            hypothesis_id="H-0042",
+            evidence="SQL error: 'You have an error in your SQL syntax near...' confirmed SQLi"
         )
     """
     if not _GLOBAL_LEDGER:
@@ -167,6 +183,54 @@ async def confirm_hypothesis(hypothesis_id: str, evidence: str) -> dict[str, Any
             "success": False,
             "error": "Hypothesis ledger not initialized",
         }
+    
+    await _GLOBAL_LEDGER.confirm(hypothesis_id, evidence)
+    
+    # FIX 4: Add finding to correlation engine for chain detection
+    new_chains = []
+    if _GLOBAL_CORRELATION_ENGINE:
+        hyp = _GLOBAL_LEDGER.get(hypothesis_id)
+        if hyp:
+            # Determine severity from vulnerability class
+            severity_map = {
+                "sqli": "high",
+                "rce": "critical",
+                "cmd_injection": "critical",
+                "ssti": "critical",
+                "ssrf": "high",
+                "xxe": "high",
+                "lfi": "high",
+                "xss": "medium",
+                "idor": "medium",
+                "auth_bypass": "critical",
+            }
+            severity = severity_map.get(hyp.vuln_class.lower(), "medium")
+            
+            result = _GLOBAL_CORRELATION_ENGINE.add_finding(
+                vuln_class=hyp.vuln_class.lower(),
+                surface=hyp.surface,
+                severity=severity,
+                details={
+                    "hypothesis_id": hypothesis_id,
+                    "evidence": evidence,
+                    "tested_at": hyp.tested_at,
+                }
+            )
+            new_chains = result.get("new_suggestions", [])
+    
+    response = {
+        "success": True,
+        "hypothesis_id": hypothesis_id,
+        "status": "confirmed",
+        "message": f"Confirmed {hypothesis_id} as valid vulnerability",
+    }
+    
+    # FIX 4: Include chain suggestions in response
+    if new_chains:
+        response["chain_opportunities"] = new_chains
+        response["message"] += f" | {len(new_chains)} vulnerability chain(s) detected!"
+    
+    return response
     
     await _GLOBAL_LEDGER.confirm(hypothesis_id, evidence)
     

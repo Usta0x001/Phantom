@@ -58,6 +58,9 @@ if not SANDBOX_MODE:
     from .payload_gen import *  # noqa: F403
     from .response_analysis import *  # noqa: F403
     from .session_mgmt import *  # noqa: F403
+    
+    # FIX 6: Detection module - pattern, error, timing, and differential analysis
+    from .detection import *  # noqa: F403
 else:
     if not DISABLE_BROWSER:
         from .browser import *  # noqa: F403

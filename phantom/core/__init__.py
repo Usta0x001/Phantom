@@ -1,4 +1,4 @@
-""phantom.core — shared data models and utilities used across CLI commands."
+"""phantom.core — shared data models and utilities used across CLI commands."""
 
 from .attack_graph import (
     AttackGraph,
@@ -16,4 +16,4 @@ __all__ = [
     "AttackNode",
     "AttackEdge",
     "build_attack_graph_from_vulnerabilities",
-]"
+]

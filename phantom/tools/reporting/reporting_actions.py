@@ -25,6 +25,51 @@ _TITLE_ATTEMPT_COUNTS: dict[str, int] = {}
 _MAX_ATTEMPTS_PER_TITLE = 3
 
 
+def _extract_vuln_class_from_report(title: str, cwe: str | None, description: str) -> str:
+    """FIX 4: Extract vulnerability class for correlation engine."""
+    title_lower = title.lower()
+    desc_lower = description.lower()
+    
+    # Map common vulnerability keywords to classes
+    vuln_patterns = {
+        "sqli": ["sql injection", "sqli", "union select", "sqlmap"],
+        "xss": ["cross-site scripting", "xss", "reflected xss", "stored xss"],
+        "rce": ["remote code execution", "rce", "command execution"],
+        "cmd_injection": ["command injection", "os command"],
+        "ssrf": ["server-side request forgery", "ssrf"],
+        "xxe": ["xml external entity", "xxe"],
+        "ssti": ["server-side template injection", "ssti", "template injection"],
+        "lfi": ["local file inclusion", "lfi", "path traversal", "directory traversal"],
+        "idor": ["insecure direct object reference", "idor", "authorization"],
+        "auth_bypass": ["authentication bypass", "auth bypass", "broken authentication"],
+        "csrf": ["cross-site request forgery", "csrf"],
+        "open_redirect": ["open redirect", "unvalidated redirect"],
+    }
+    
+    # Check title and description
+    for vuln_class, patterns in vuln_patterns.items():
+        if any(p in title_lower or p in desc_lower for p in patterns):
+            return vuln_class
+    
+    # Check CWE mapping
+    if cwe:
+        cwe_map = {
+            "CWE-89": "sqli",
+            "CWE-79": "xss",
+            "CWE-78": "cmd_injection",
+            "CWE-918": "ssrf",
+            "CWE-611": "xxe",
+            "CWE-94": "rce",
+            "CWE-22": "lfi",
+            "CWE-639": "auth_bypass",
+            "CWE-352": "csrf",
+            "CWE-601": "open_redirect",
+        }
+        return cwe_map.get(cwe, "")
+    
+    return ""  # Unknown vulnerability class
+
+
 def parse_cvss_xml(xml_str: str) -> dict[str, str] | None:
     """Parse CVSS breakdown from XML tags or plain CVSS vector string.
 
@@ -800,7 +845,30 @@ def create_vulnerability_report(  # noqa: PLR0912
         title_key = title.strip().lower()
         _TITLE_ATTEMPT_COUNTS.pop(title_key, None)
 
-        return {
+        # FIX 4: Add vulnerability to correlation engine for chain detection
+        chain_suggestions = []
+        try:
+            from phantom.tools.hypothesis.hypothesis_actions import _GLOBAL_CORRELATION_ENGINE
+            if _GLOBAL_CORRELATION_ENGINE:
+                # Extract vulnerability class from title/CWE
+                vuln_class = _extract_vuln_class_from_report(title, cwe, description)
+                if vuln_class:
+                    result = _GLOBAL_CORRELATION_ENGINE.add_finding(
+                        vuln_class=vuln_class,
+                        surface=endpoint or target,
+                        severity=cvss_severity.lower(),
+                        details={
+                            "report_id": report_id,
+                            "title": title,
+                            "cvss_score": cvss_score,
+                            "confidence": confidence,
+                        }
+                    )
+                    chain_suggestions = result.get("new_suggestions", [])
+        except Exception:  # noqa: BLE001
+            pass  # Non-critical - don't fail report creation
+
+        response = {
             "success": True,
             "message": f"Vulnerability report '{title}' created successfully",
             "report_id": report_id,
@@ -811,6 +879,13 @@ def create_vulnerability_report(  # noqa: PLR0912
             "replay_status": replay_status,
             "attempt_count": 0,
         }
+        
+        # FIX 4: Include chain detection results
+        if chain_suggestions:
+            response["chain_opportunities"] = chain_suggestions
+            response["message"] += f" | {len(chain_suggestions)} attack chain(s) identified!"
+        
+        return response
 
     except (ImportError, AttributeError) as e:
         return {"success": False, "message": f"Failed to create vulnerability report: {e!s}"}

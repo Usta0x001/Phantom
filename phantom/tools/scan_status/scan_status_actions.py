@@ -1,6 +1,8 @@
 """
 Unified scan status tool - gives LLM a single compressed picture of scan state.
 This is THE MOST IMPORTANT tool for LLM reasoning quality.
+
+FIX 5: Now includes attack graph analysis for vulnerability chain visualization.
 """
 
 from __future__ import annotations
@@ -13,12 +15,14 @@ if TYPE_CHECKING:
     from phantom.agents.hypothesis_ledger import HypothesisLedger
     from phantom.agents.coverage_tracker import CoverageTracker
     from phantom.agents.correlation_engine import CorrelationEngine
+    from phantom.core.attack_graph import AttackGraph
 
 
 # Global references (set by base_agent.py during initialization)
 _GLOBAL_HYPOTHESIS_LEDGER: HypothesisLedger | None = None
 _GLOBAL_COVERAGE_TRACKER: CoverageTracker | None = None
 _GLOBAL_CORRELATION_ENGINE: CorrelationEngine | None = None
+_GLOBAL_ATTACK_GRAPH: AttackGraph | None = None  # FIX 5
 _GLOBAL_AGENT_STATE: Any | None = None
 
 
@@ -26,16 +30,19 @@ def set_scan_status_context(
     hypothesis_ledger: HypothesisLedger | None = None,
     coverage_tracker: CoverageTracker | None = None,
     correlation_engine: CorrelationEngine | None = None,
+    attack_graph: Any | None = None,  # FIX 5: AttackGraph
     agent_state: Any | None = None,
 ) -> None:
     """Set the global context for scan status queries."""
-    global _GLOBAL_HYPOTHESIS_LEDGER, _GLOBAL_COVERAGE_TRACKER, _GLOBAL_CORRELATION_ENGINE, _GLOBAL_AGENT_STATE
+    global _GLOBAL_HYPOTHESIS_LEDGER, _GLOBAL_COVERAGE_TRACKER, _GLOBAL_CORRELATION_ENGINE, _GLOBAL_ATTACK_GRAPH, _GLOBAL_AGENT_STATE
     if hypothesis_ledger is not None:
         _GLOBAL_HYPOTHESIS_LEDGER = hypothesis_ledger
     if coverage_tracker is not None:
         _GLOBAL_COVERAGE_TRACKER = coverage_tracker
     if correlation_engine is not None:
         _GLOBAL_CORRELATION_ENGINE = correlation_engine
+    if attack_graph is not None:
+        _GLOBAL_ATTACK_GRAPH = attack_graph
     if agent_state is not None:
         _GLOBAL_AGENT_STATE = agent_state
 
@@ -57,6 +64,7 @@ def get_scan_status(include_recommendations: bool = True) -> dict[str, Any]:
         - findings: Confirmed vulnerabilities, actively testing, pending hypotheses
         - coverage: Surfaces tested vs remaining
         - chain_opportunities: Active vulnerability chains to explore
+        - attack_graph: FIX 5 - Attack graph metrics and critical vulnerabilities
         - recommended_next_action: Suggested next step
         - warnings: Critical alerts (running out of iterations, etc.)
     
@@ -67,6 +75,7 @@ def get_scan_status(include_recommendations: bool = True) -> dict[str, Any]:
     hypothesis_ledger = _GLOBAL_HYPOTHESIS_LEDGER
     coverage_tracker = _GLOBAL_COVERAGE_TRACKER
     correlation_engine = _GLOBAL_CORRELATION_ENGINE
+    attack_graph = _GLOBAL_ATTACK_GRAPH
     state = _GLOBAL_AGENT_STATE
     
     # Compute phase
@@ -106,6 +115,25 @@ def get_scan_status(include_recommendations: bool = True) -> dict[str, Any]:
             for s in active[:3]
         ]
     
+    # FIX 5: Get attack graph metrics
+    attack_graph_summary = None
+    if attack_graph:
+        try:
+            surface = attack_graph.get_attack_surface()
+            critical = attack_graph.get_critical_vulnerabilities(top_n=3)
+            attack_graph_summary = {
+                "total_nodes": surface.get("total_nodes", 0),
+                "total_vulnerabilities": surface.get("total_vulnerabilities", 0),
+                "total_edges": surface.get("total_edges", 0),
+                "density": round(surface.get("density", 0), 3),
+                "critical_vulns": [
+                    {"id": v[0], "centrality": round(v[1], 4)} 
+                    for v in critical
+                ],
+            }
+        except Exception:  # noqa: BLE001
+            pass  # Attack graph analysis failed - continue without it
+    
     # Compute recommendation
     recommendation = None
     if include_recommendations:
@@ -113,7 +141,7 @@ def get_scan_status(include_recommendations: bool = True) -> dict[str, Any]:
             hypothesis_ledger, coverage_tracker, correlation_engine, phase
         )
     
-    return {
+    result = {
         "scan_progress": {
             "iteration": iteration,
             "max_iterations": max_iter,
@@ -134,6 +162,12 @@ def get_scan_status(include_recommendations: bool = True) -> dict[str, Any]:
         "recommended_next_action": recommendation,
         "warnings": _get_warnings(iteration, max_iter, pending, chains)
     }
+    
+    # FIX 5: Include attack graph if available
+    if attack_graph_summary:
+        result["attack_graph"] = attack_graph_summary
+    
+    return result
 
 
 def _compute_phase(iteration: int, max_iter: int) -> str:

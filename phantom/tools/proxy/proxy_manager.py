@@ -1,5 +1,6 @@
 import base64
 import ipaddress
+import logging
 import os
 import re
 import socket
@@ -9,6 +10,8 @@ from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
 import requests
 from requests.exceptions import ProxyError, RequestException, Timeout
+
+logger = logging.getLogger(__name__)
 
 try:
     from gql import Client, gql
@@ -586,6 +589,9 @@ class ProxyManager:
             headers = {}
         if not _is_ssrf_safe(url):
             return {"error": f"Blocked: URL targets a private/internal address: {url}"}
+        
+        # FIX 1-2: Try proxy first, fallback to direct on failure
+        proxy_error = None
         try:
             start_time = time.time()
             response = requests.request(
@@ -613,8 +619,52 @@ class ProxyManager:
                     "Request sent through proxy - check list_requests() for captured traffic"
                 ),
             }
-        except (RequestException, ProxyError, Timeout) as e:
+        except (ProxyError, ConnectionError) as e:
+            # Proxy connection failed - try direct fallback
+            proxy_error = f"{type(e).__name__}: {str(e)}"
+            logger.warning(f"Caido proxy unavailable ({proxy_error}), falling back to direct HTTP")
+        except (RequestException, Timeout) as e:
+            # Other request errors - return immediately (not proxy-related)
             return {"error": f"Request failed: {type(e).__name__}", "details": str(e), "url": url}
+        
+        # FALLBACK: Send request directly without proxy
+        try:
+            start_time = time.time()
+            response = requests.request(
+                method=method,
+                url=url,
+                headers=headers,
+                data=body or None,
+                proxies=None,  # No proxy
+                timeout=timeout,
+                verify=False,
+            )
+            response_time = int((time.time() - start_time) * 1000)
+
+            body_content = response.text
+            if len(body_content) > 10000:
+                body_content = body_content[:10000] + "\n... [truncated]"
+
+            return {
+                "status_code": response.status_code,
+                "headers": dict(response.headers),
+                "body": body_content,
+                "response_time_ms": response_time,
+                "url": response.url,
+                "message": (
+                    f"Request sent DIRECTLY (proxy unavailable: {proxy_error}). "
+                    "Traffic NOT captured in Caido. Consider starting Caido proxy."
+                ),
+                "used_fallback": True,
+                "proxy_error": proxy_error,
+            }
+        except (RequestException, Timeout) as e:
+            return {
+                "error": f"Request failed (both proxy and direct): {type(e).__name__}",
+                "details": str(e),
+                "url": url,
+                "proxy_error": proxy_error
+            }
 
     def repeat_request(
         self, request_id: str, modifications: dict[str, Any] | None = None

@@ -741,12 +741,14 @@ def _extract_nuclei_findings(text: str, limit: int) -> str | None:
 def _extract_sqlmap_findings(text: str, limit: int) -> str | None:
     """Extract injection confirmations and database info from sqlmap output.
 
+    FIX 3: Enhanced to preserve MORE database dumps, credentials, and extracted data.
     Keeps lines indicating confirmed injections, extracted data, and
     database/table/column information.
     Returns None if no finding lines were found.
     """
     lines = text.splitlines()
     finding_lines: list[str] = []
+    # FIX 3: Expanded signal markers to capture more evidence
     _signal_markers = (
         "parameter '",
         "is vulnerable",
@@ -759,11 +761,23 @@ def _extract_sqlmap_findings(text: str, limit: int) -> str | None:
         "column:",
         "[warning]",
         "[critical]",
+        "[error]",  # FIX: capture errors that reveal DB type
         "fetched data",
         "available databases",
         "entries",
         "dumped",
         "back-end dbms",
+        "password",  # FIX: capture password fields
+        "username",  # FIX: capture username fields
+        "admin",     # FIX: capture admin credentials
+        "user:",     # FIX: capture user data
+        "hash:",     # FIX: capture password hashes
+        "retrieved",  # FIX: capture retrieved data
+        "current user",  # FIX: capture DB user info
+        "current database",  # FIX: capture current DB
+        "privileges",  # FIX: capture privilege escalation info
+        "banner:",    # FIX: capture DB version banner
+        "| ",         # FIX: capture table-formatted output from --dump
     )
 
     for line in lines:
@@ -776,10 +790,12 @@ def _extract_sqlmap_findings(text: str, limit: int) -> str | None:
     if not finding_lines:
         return None
 
-    result_lines = [f"[sqlmap findings: {len(finding_lines)} signal lines]"] + finding_lines
+    result_lines = [f"[sqlmap findings: {len(finding_lines)} signal lines extracted]"] + finding_lines
     result = "\n".join(result_lines)
     if len(result) > limit:
-        result = result[:limit] + "\n... [additional findings truncated] ..."
+        # FIX 3: Even when truncating, preserve first 90% (more than before)
+        keep_amount = int(limit * 0.9)
+        result = result[:keep_amount] + f"\n... [truncated {len(result) - keep_amount} chars] ..."
     return result
 
 
@@ -836,6 +852,9 @@ def _get_truncation_limit(tool_name: str) -> int:
         PHANTOM_TOOL_TRUNCATION_OVERRIDES=nuclei=10000,grep=3000
     """
     # ── Built-in per-tool defaults ────────────────────────────────────────────
+    # FIX 3: MASSIVELY increased limits to preserve critical evidence
+    # Previous: sqlmap/nuclei = 6000 chars (90% evidence lost)
+    # New: sqlmap/nuclei = 50000 chars (preserves database dumps, POCs)
     _BUILT_IN_TOOL_LIMITS: dict[str, int] = {
         "naabu":                    3000,   # port scan: increased from 1500
         "nmap":                     3000,   # nmap: decreased from 6000
@@ -843,10 +862,14 @@ def _get_truncation_limit(tool_name: str) -> int:
         "curl":                     3000,   # curl: increased from 2000
         "ffuf":                     5000,   # directory fuzzer: increased from 3000
         "nikto":                    6000,   # nikto: increased from 4000
-        "terminal_execute":        32000,   # generic terminal: increased from 5000 for full page capture
+        "terminal_execute":       100000,   # FIX: increased from 32000 (was 5000)
+        "exec_terminal":          100000,   # FIX: match terminal_execute
+        "terminal":               100000,   # FIX: match terminal_execute
         "browser_action":         12000,   # browser: increased from 6000
-        "nuclei":                   6000,   # vuln scanner: decreased from 10000
-        "sqlmap":                   6000,   # SQL injection: decreased from 10000
+        "nuclei":                  50000,   # FIX: increased from 6000 (was 10000) - preserve full POCs
+        "run_nuclei":              50000,   # FIX: match nuclei
+        "sqlmap":                  50000,   # FIX: increased from 6000 (was 10000) - preserve DB dumps
+        "run_sqlmap":              50000,   # FIX: match sqlmap
         "create_vulnerability_report": 12000,  # reports: keep full detail
     }
     # ─────────────────────────────────────────────────────────────────────────

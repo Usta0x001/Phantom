@@ -85,7 +85,7 @@ _GLOBAL_RATE_LIMIT_UNTIL: float = 0.0
 
 from enum import Enum
 
-@dataclass
+
 class CircuitState(Enum):
     CLOSED = "closed"      # Normal operation
     OPEN = "open"          # Blocking requests (failure threshold exceeded)
@@ -98,7 +98,7 @@ class CircuitBreaker:
     
     Tracks failure rate and temporarily blocks requests when threshold is exceeded.
     """
-    failure_threshold: int = 5      # Consecutive failures before opening
+    failure_threshold: int | None = None  # None = use default, otherwise use this value
     timeout_seconds: float = 60.0   # How long to wait before testing recovery
     _state: CircuitState = field(default_factory=lambda: CircuitState.CLOSED)
     _failure_count: int = 0
@@ -106,17 +106,16 @@ class CircuitBreaker:
     
     def __post_init__(self) -> None:
         """Initialize from config if available."""
-        enabled = (Config.get("phantom_circuit_breaker_enabled") or "").lower()
-        if enabled != "true":
-            # If disabled via config, set threshold to very high (essentially no-op)
-            self.failure_threshold = 999999
-        
-        threshold = Config.get("phantom_circuit_breaker_threshold")
-        if threshold:
-            try:
-                self.failure_threshold = max(1, int(threshold))
-            except ValueError:
-                pass
+        # Use explicit value if provided, otherwise fall back to config, then default of 5
+        if self.failure_threshold is None:
+            threshold = Config.get("phantom_circuit_breaker_threshold")
+            if threshold:
+                try:
+                    self.failure_threshold = max(1, int(threshold))
+                except ValueError:
+                    self.failure_threshold = 5
+            else:
+                self.failure_threshold = 5
         
         timeout = Config.get("phantom_circuit_breaker_timeout")
         if timeout:

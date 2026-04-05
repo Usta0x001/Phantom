@@ -365,6 +365,11 @@ class VulnerabilityDetector:
 _detector = VulnerabilityDetector()
 
 
+# FIX 6: Import register_tool for LLM accessibility
+from phantom.tools.registry import register_tool
+
+
+@register_tool
 def detect_pattern(
     response_body: str,
     patterns: list[str] | None = None,
@@ -374,14 +379,27 @@ def detect_pattern(
     """
     Detect vulnerability based on response patterns.
     
+    Use this to analyze HTTP response bodies for vulnerability indicators.
+    Supports both custom regex patterns and built-in patterns for common vuln classes.
+    
     Args:
-        response_body: HTTP response body
-        patterns: Custom patterns (optional)
-        vuln_class: Vulnerability class for built-in patterns
-        case_sensitive: Pattern matching mode
+        response_body: HTTP response body to analyze
+        patterns: Custom regex patterns to search for (optional)
+        vuln_class: Use built-in patterns for this vuln class: sqli, xss, cmd_injection, lfi, ssrf
+        case_sensitive: Whether pattern matching is case-sensitive (default: False)
         
     Returns:
-        Detection result dict
+        Detection result with:
+        - detected: Boolean indicating if vulnerability was detected
+        - confidence: Float 0.0-1.0 confidence level
+        - detection_type: "pattern"
+        - evidence: List of matched patterns
+        
+    Example:
+        detect_pattern(
+            response_body="Error: You have an error in your SQL syntax near...",
+            vuln_class="sqli"
+        )
     """
     result = _detector.detect_pattern(
         response_body=response_body,
@@ -392,19 +410,33 @@ def detect_pattern(
     return result.to_dict()
 
 
+@register_tool
 def detect_error_based(
     response_body: str,
     vuln_class: str,
 ) -> dict[str, Any]:
     """
-    Detect vulnerability based on error messages.
+    Detect vulnerability based on error messages in response.
+    
+    Specialized for detecting database errors, stack traces, and other
+    error-based vulnerability indicators. High confidence detection.
     
     Args:
-        response_body: HTTP response body
-        vuln_class: Vulnerability class
+        response_body: HTTP response body to analyze
+        vuln_class: Vulnerability class to detect errors for (sqli recommended)
         
     Returns:
-        Detection result dict
+        Detection result with:
+        - detected: Boolean indicating if vulnerability was detected
+        - confidence: Float 0.0-1.0 (error-based is typically 0.9 when detected)
+        - detection_type: "error"
+        - evidence: List of error messages found
+        
+    Example:
+        detect_error_based(
+            response_body="MySQL error: Unknown column 'test' in 'where clause'",
+            vuln_class="sqli"
+        )
     """
     result = _detector.detect_error_based(
         response_body=response_body,
@@ -413,6 +445,7 @@ def detect_error_based(
     return result.to_dict()
 
 
+@register_tool
 def detect_timing_based(
     baseline_time: float,
     test_time: float,
@@ -422,14 +455,30 @@ def detect_timing_based(
     """
     Detect blind vulnerabilities using timing analysis.
     
+    Essential for detecting time-based blind SQL injection, command injection,
+    and other blind vulnerabilities where the only signal is response time.
+    
     Args:
-        baseline_time: Baseline response time (seconds)
-        test_time: Test response time (seconds)
-        delay_expected: Expected delay (seconds)
-        tolerance: Acceptable deviation (seconds)
+        baseline_time: Response time for normal request (seconds)
+        test_time: Response time for payload request (seconds)
+        delay_expected: Expected delay from payload like SLEEP(5) (default: 5.0 seconds)
+        tolerance: Acceptable deviation from expected delay (default: 2.0 seconds)
         
     Returns:
-        Detection result dict
+        Detection result with:
+        - detected: Boolean indicating if timing-based vulnerability was detected
+        - confidence: Float 0.0-1.0 based on how close delay matches expected
+        - detection_type: "timing"
+        - evidence: List of timing measurements
+        
+    Example:
+        # For time-based blind SQLi with SLEEP(5)
+        detect_timing_based(
+            baseline_time=0.3,  # Normal request took 0.3s
+            test_time=5.4,      # Payload request took 5.4s  
+            delay_expected=5.0,  # We injected SLEEP(5)
+            tolerance=2.0
+        )
     """
     result = _detector.detect_timing_based(
         baseline_time=baseline_time,
@@ -440,21 +489,37 @@ def detect_timing_based(
     return result.to_dict()
 
 
+@register_tool
 def detect_differential(
     baseline_response: dict[str, Any],
     test_response: dict[str, Any],
     vuln_class: str,
 ) -> dict[str, Any]:
     """
-    Detect vulnerabilities through differential analysis.
+    Detect vulnerabilities through differential (boolean-based) analysis.
+    
+    Compares two responses to identify behavioral differences indicating
+    a vulnerability. Essential for boolean-based blind SQL injection
+    where true/false conditions produce different responses.
     
     Args:
-        baseline_response: Baseline response dict
-        test_response: Test response dict
-        vuln_class: Vulnerability class
+        baseline_response: Dict with response data (status_code, body, headers)
+        test_response: Dict with payload response data
+        vuln_class: Vulnerability class (e.g., "sqli" for boolean-based SQLi)
         
     Returns:
-        Detection result dict
+        Detection result with:
+        - detected: Boolean indicating if differential vulnerability was detected
+        - confidence: Float 0.0-1.0 based on significance of differences
+        - detection_type: "behavior"
+        - evidence: List of differences found
+        
+    Example:
+        detect_differential(
+            baseline_response={"status_code": 200, "body": "Welcome admin"},
+            test_response={"status_code": 200, "body": "Login failed"},
+            vuln_class="sqli"
+        )
     """
     result = _detector.detect_differential(
         baseline_response=baseline_response,

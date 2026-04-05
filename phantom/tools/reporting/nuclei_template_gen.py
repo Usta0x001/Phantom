@@ -401,6 +401,94 @@ def generate_nuclei_templates_from_scan(
     return saved_files
 
 
+def _consolidate_templates(template_files: list[Path], output_dir: Path) -> Path | None:
+    """
+    FIX 7: Consolidate multiple templates into a single file for batch scanning.
+    
+    Creates a consolidated YAML file that can be used with:
+        nuclei -t consolidated-templates.yaml -l targets.txt
+    
+    Args:
+        template_files: List of individual template file paths
+        output_dir: Directory to save consolidated file
+        
+    Returns:
+        Path to consolidated file, or None on failure
+    """
+    if not template_files:
+        return None
+    
+    try:
+        consolidated_templates = []
+        for template_file in template_files:
+            with open(template_file, 'r', encoding='utf-8') as f:
+                template_content = yaml.safe_load(f)
+                if template_content:
+                    consolidated_templates.append(template_content)
+        
+        if not consolidated_templates:
+            return None
+        
+        # Write consolidated file
+        consolidated_path = output_dir / "consolidated-templates.yaml"
+        with open(consolidated_path, 'w', encoding='utf-8') as f:
+            # Use dump_all for multiple YAML documents in one file
+            yaml.dump_all(consolidated_templates, f, default_flow_style=False, sort_keys=False)
+        
+        return consolidated_path
+    except Exception:
+        return None
+
+
+def _validate_template(template_path: Path) -> dict[str, Any]:
+    """
+    FIX 7: Validate a Nuclei template for syntax errors.
+    
+    Args:
+        template_path: Path to template file
+        
+    Returns:
+        Dict with validation results
+    """
+    try:
+        with open(template_path, 'r', encoding='utf-8') as f:
+            template = yaml.safe_load(f)
+        
+        errors = []
+        
+        # Required fields
+        if not template.get('id'):
+            errors.append("Missing required field: id")
+        if not template.get('info'):
+            errors.append("Missing required field: info")
+        elif not template['info'].get('name'):
+            errors.append("Missing required field: info.name")
+        
+        # Must have at least one protocol block
+        protocols = ['http', 'dns', 'file', 'network', 'headless', 'ssl', 'websocket', 'whois', 'code', 'javascript']
+        has_protocol = any(template.get(p) for p in protocols)
+        if not has_protocol:
+            errors.append(f"Missing protocol block (one of: {', '.join(protocols[:5])}...)")
+        
+        return {
+            "path": str(template_path),
+            "valid": len(errors) == 0,
+            "errors": errors,
+        }
+    except yaml.YAMLError as e:
+        return {
+            "path": str(template_path),
+            "valid": False,
+            "errors": [f"YAML syntax error: {str(e)[:100]}"],
+        }
+    except Exception as e:
+        return {
+            "path": str(template_path),
+            "valid": False,
+            "errors": [f"Validation error: {str(e)[:100]}"],
+        }
+
+
 def integrate_with_finish_scan(
     vulnerabilities: list[Any],
     run_dir: Path,
@@ -408,12 +496,14 @@ def integrate_with_finish_scan(
     """
     Generate Nuclei templates as part of scan finalization.
     
+    FIX 7: Now includes template consolidation and validation.
+    
     Args:
         vulnerabilities: List of vulnerabilities from the scan
         run_dir: Run directory (phantom_runs/<run_name>/)
         
     Returns:
-        Dict with status and generated template paths
+        Dict with status, generated template paths, consolidated file, and validation
     """
     if not vulnerabilities:
         return {
@@ -428,12 +518,37 @@ def integrate_with_finish_scan(
             output_dir=output_dir,
         )
         
-        return {
+        # FIX 7: Consolidate templates
+        consolidated_path = _consolidate_templates(template_files, output_dir)
+        
+        # FIX 7: Validate all templates
+        validation_results = []
+        all_valid = True
+        for template_file in template_files:
+            result = _validate_template(template_file)
+            validation_results.append(result)
+            if not result["valid"]:
+                all_valid = False
+        
+        response = {
             "nuclei_templates_generated": True,
             "template_count": len(template_files),
             "output_directory": str(output_dir),
             "template_files": [str(f) for f in template_files],
+            "all_templates_valid": all_valid,
         }
+        
+        # FIX 7: Include consolidated file path
+        if consolidated_path:
+            response["consolidated_file"] = str(consolidated_path)
+            response["usage_hint"] = f"Run: nuclei -t {consolidated_path} -l targets.txt"
+        
+        # Include validation errors if any
+        invalid_templates = [v for v in validation_results if not v["valid"]]
+        if invalid_templates:
+            response["validation_errors"] = invalid_templates
+        
+        return response
     except Exception as e:
         return {
             "nuclei_templates_generated": False,
