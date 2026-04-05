@@ -12,7 +12,7 @@ from __future__ import annotations
 import threading
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, Callable
 
 
 _VALID_STATUSES = frozenset({"open", "testing", "confirmed", "rejected"})
@@ -32,6 +32,7 @@ class Hypothesis:
     last_updated: str = field(default_factory=lambda: datetime.now(UTC).isoformat())
     # P3.2: Payload Learning - Track successful payloads
     successful_payloads: list[str] = field(default_factory=list)  # Payloads that confirmed vuln
+    details: dict[str, Any] = field(default_factory=dict)  # Additional details (exploitation, etc.)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -46,6 +47,7 @@ class Hypothesis:
             "created_at": self.created_at,
             "last_updated": self.last_updated,
             "successful_payloads": self.successful_payloads,  # P3.2
+            "details": self.details,  # Exploitation details
         }
 
     @classmethod
@@ -68,6 +70,7 @@ class HypothesisLedger:
         self._lock = threading.RLock()
         self._hypotheses: dict[str, Hypothesis] = {}
         self._counter: int = 0
+        self._confirmation_callbacks: list[Callable[[str, Hypothesis], None]] = []
 
     # ── Mutations ─────────────────────────────────────────────────────────────
 
@@ -338,6 +341,310 @@ class HypothesisLedger:
         scored.sort(key=lambda x: x["priority_score"], reverse=True)
 
         return scored
+
+    # ── NEW METHODS FOR HYPOTHESIS_ACTIONS.PY ─────────────────────────────────
+
+    def get_all(self) -> dict[str, Hypothesis]:
+        """Return all hypotheses as a dictionary {id: Hypothesis}."""
+        with self._lock:
+            return dict(self._hypotheses)
+
+    def get_summary(self) -> dict[str, Any]:
+        """
+        Return a token-efficient summary of the hypothesis ledger.
+        
+        Guaranteed to be < 500 tokens regardless of ledger size.
+        Returns statistics and top items only.
+        """
+        with self._lock:
+            hypotheses_list = list(self._hypotheses.values())
+        
+        if not hypotheses_list:
+            return {
+                "total": 0,
+                "by_status": {},
+                "by_class": {},
+                "message": "No hypotheses in ledger"
+            }
+        
+        # Count by status
+        by_status: dict[str, int] = {}
+        for h in hypotheses_list:
+            by_status[h.status] = by_status.get(h.status, 0) + 1
+        
+        # Count by vulnerability class
+        by_class: dict[str, int] = {}
+        for h in hypotheses_list:
+            by_class[h.vuln_class] = by_class.get(h.vuln_class, 0) + 1
+        
+        # Get top 5 confirmed (most evidence)
+        confirmed = [h for h in hypotheses_list if h.status == "confirmed"]
+        confirmed_sorted = sorted(
+            confirmed,
+            key=lambda h: len(h.evidence_for),
+            reverse=True
+        )[:5]
+        
+        # Get top 5 open by score
+        scored = self.get_scored_hypotheses()
+        top_open = scored[:5]
+        
+        return {
+            "total": len(hypotheses_list),
+            "by_status": by_status,
+            "by_class": by_class,
+            "confirmed_count": len(confirmed),
+            "top_confirmed": [
+                {
+                    "id": h.id,
+                    "vuln_class": h.vuln_class,
+                    "surface": h.surface[:50],
+                    "evidence_count": len(h.evidence_for)
+                }
+                for h in confirmed_sorted
+            ],
+            "top_open": [
+                {
+                    "id": entry["hypothesis_id"],
+                    "vuln_class": entry["vuln_class"],
+                    "surface": entry["surface"][:50],
+                    "score": entry["priority_score"]
+                }
+                for entry in top_open
+            ]
+        }
+
+    def find_by_surface_and_class(self, surface: str, vuln_class: str) -> Hypothesis | None:
+        """
+        Find a hypothesis by surface and vulnerability class.
+        
+        Returns:
+            The matching hypothesis, or None if not found.
+        """
+        with self._lock:
+            for hyp in self._hypotheses.values():
+                if hyp.surface == surface and hyp.vuln_class == vuln_class:
+                    return hyp
+            return None
+
+    def get(self, hypothesis_id: str) -> Hypothesis | None:
+        """
+        Get a specific hypothesis by ID.
+        
+        Args:
+            hypothesis_id: The hypothesis ID (e.g., "H-0001")
+        
+        Returns:
+            The hypothesis, or None if not found.
+        """
+        with self._lock:
+            return self._hypotheses.get(hypothesis_id)
+
+    def register_confirmation_callback(
+        self, callback: Callable[[str, Hypothesis], None]
+    ) -> None:
+        """
+        Register a callback to be called when a hypothesis is confirmed.
+        
+        This allows correlation_engine and other components to listen
+        for confirmation events.
+        
+        Args:
+            callback: Function that takes (hypothesis_id, hypothesis)
+        """
+        with self._lock:
+            self._confirmation_callbacks.append(callback)
+
+    async def confirm(
+        self,
+        hypothesis_id: str,
+        evidence: str,
+        exploitation_details: dict[str, Any] | None = None
+    ) -> bool:
+        """
+        Mark a hypothesis as confirmed with evidence.
+        
+        This method:
+        - Updates the hypothesis status to "confirmed"
+        - Stores the evidence
+        - Triggers callbacks for correlation_engine
+        - Updates priority scores of related hypotheses
+        
+        Args:
+            hypothesis_id: The hypothesis ID
+            evidence: Evidence supporting the confirmation
+            exploitation_details: Optional dict with exploitation details
+        
+        Returns:
+            True if confirmed, False if hypothesis not found
+        """
+        with self._lock:
+            hyp = self._hypotheses.get(hypothesis_id)
+            if not hyp:
+                return False
+            
+            # Update status and evidence
+            hyp.status = "confirmed"
+            
+            # Validate and add evidence
+            _, validated_evidence = self._validate_evidence_quality(evidence, "confirmed")
+            hyp.evidence_for.append(validated_evidence)
+            
+            # Store exploitation details if provided
+            if exploitation_details:
+                hyp.details = exploitation_details  # type: ignore
+            
+            hyp.last_updated = datetime.now(UTC).isoformat()
+            
+            # Update priority scores of related hypotheses
+            # Related = same surface or same vuln_class
+            self._update_related_priorities(hyp.surface, hyp.vuln_class, "confirmed")
+            
+            # Store reference for callbacks (outside lock)
+            callbacks = list(self._confirmation_callbacks)
+            hyp_copy = hyp
+        
+        # Trigger callbacks outside of lock to avoid deadlock
+        for callback in callbacks:
+            try:
+                callback(hypothesis_id, hyp_copy)
+            except Exception:
+                # Don't let callback errors break the confirmation
+                pass
+        
+        return True
+
+    async def reject(
+        self,
+        hypothesis_id: str,
+        reason: str
+    ) -> bool:
+        """
+        Mark a hypothesis as rejected with a reason.
+        
+        This method:
+        - Updates the hypothesis status to "rejected"
+        - Stores the rejection reason
+        - Updates priority scores of related hypotheses
+        
+        Args:
+            hypothesis_id: The hypothesis ID
+            reason: Reason for rejection
+        
+        Returns:
+            True if rejected, False if hypothesis not found
+        """
+        with self._lock:
+            hyp = self._hypotheses.get(hypothesis_id)
+            if not hyp:
+                return False
+            
+            # Update status and add rejection reason
+            hyp.status = "rejected"
+            
+            # Validate and add reason as evidence_against
+            _, validated_reason = self._validate_evidence_quality(reason, "rejected")
+            hyp.evidence_against.append(validated_reason)
+            
+            hyp.last_updated = datetime.now(UTC).isoformat()
+            
+            # Update priority scores of related hypotheses
+            self._update_related_priorities(hyp.surface, hyp.vuln_class, "rejected")
+            
+            return True
+
+    async def add_evidence_for(
+        self,
+        hypothesis_id: str,
+        evidence: str,
+        outcome: str = "testing"
+    ) -> bool:
+        """
+        Add supporting evidence for a hypothesis.
+        
+        Args:
+            hypothesis_id: The hypothesis ID
+            evidence: Evidence supporting the hypothesis
+            outcome: Current outcome status (default: "testing")
+        
+        Returns:
+            True if added, False if hypothesis not found
+        """
+        with self._lock:
+            hyp = self._hypotheses.get(hypothesis_id)
+            if not hyp:
+                return False
+            
+            # Validate and add evidence
+            _, validated_evidence = self._validate_evidence_quality(evidence, outcome)
+            hyp.evidence_for.append(validated_evidence)
+            hyp.last_updated = datetime.now(UTC).isoformat()
+            
+            # Update status to testing if still open
+            if hyp.status == "open":
+                hyp.status = "testing"
+            
+            return True
+
+    async def add_evidence_against(
+        self,
+        hypothesis_id: str,
+        evidence: str,
+        outcome: str = "testing"
+    ) -> bool:
+        """
+        Add counter-evidence against a hypothesis.
+        
+        Args:
+            hypothesis_id: The hypothesis ID
+            evidence: Evidence against the hypothesis
+            outcome: Current outcome status (default: "testing")
+        
+        Returns:
+            True if added, False if hypothesis not found
+        """
+        with self._lock:
+            hyp = self._hypotheses.get(hypothesis_id)
+            if not hyp:
+                return False
+            
+            # Validate and add counter-evidence
+            _, validated_evidence = self._validate_evidence_quality(evidence, outcome)
+            hyp.evidence_against.append(validated_evidence)
+            hyp.last_updated = datetime.now(UTC).isoformat()
+            
+            # Update status to testing if still open
+            if hyp.status == "open":
+                hyp.status = "testing"
+            
+            return True
+
+    def _update_related_priorities(
+        self,
+        surface: str,
+        vuln_class: str,
+        outcome: str
+    ) -> None:
+        """
+        Update priority scores of hypotheses related to a confirmed/rejected one.
+        
+        This is called internally when a hypothesis is confirmed or rejected.
+        Related hypotheses are those with the same surface or same vuln_class.
+        
+        Args:
+            surface: The surface of the hypothesis
+            vuln_class: The vulnerability class
+            outcome: "confirmed" or "rejected"
+        """
+        # This is a no-op for now as priority scores are computed dynamically
+        # by get_scored_hypotheses(). The scores will automatically reflect
+        # the new status when recalculated.
+        # 
+        # If we wanted to implement static priority adjustment, we would:
+        # - Boost priorities of same-surface hypotheses if confirmed
+        # - Lower priorities of same-class hypotheses if rejected
+        # But dynamic scoring is better as it's always fresh.
+        pass
 
     # ── P3.2: Payload Learning ───────────────────────────────────────────────
 

@@ -49,3 +49,19 @@ class CheckpointData(BaseModel):
 
     # ISO timestamp of when this checkpoint was saved.
     saved_at: str | None = None
+    
+    # P4 ENHANCEMENT: Hypothesis Ledger and Correlation Engine state
+    # These critical components track testing progress and vulnerability chains.
+    # Without checkpointing them, scan resume would lose:
+    # - Which hypotheses have been tested (causes redundant fuzzing)
+    # - Which payloads confirmed vulnerabilities (loses validation state)
+    # - Detected vulnerability chains (SSRF→cloud metadata, SQLi→RCE)
+    
+    # Hypothesis ledger state (dict of hypothesis_id -> Hypothesis.to_dict())
+    hypothesis_ledger_state: dict[str, dict[str, Any]] = Field(default_factory=dict)
+    
+    # Coverage tracker state (attack surfaces tested per vuln class)
+    coverage_tracker_state: dict[str, Any] = Field(default_factory=dict)
+    
+    # Correlation engine state (detected vuln chains and relationships)
+    correlation_engine_state: dict[str, Any] = Field(default_factory=dict)

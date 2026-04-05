@@ -212,6 +212,9 @@ class CheckpointManager:
         scan_config: dict[str, Any],
         status: str = "in_progress",
         interruption_reason: str | None = None,
+        hypothesis_ledger: Any = None,  # P4: Add hypothesis ledger parameter
+        coverage_tracker: Any = None,   # P4: Add coverage tracker parameter
+        correlation_engine: Any = None,  # P4: Add correlation engine parameter
     ) -> CheckpointData:
         vulns: list[dict[str, Any]] = []
         llm_stats: dict[str, Any] = {}
@@ -253,6 +256,36 @@ class CheckpointManager:
 
         import datetime
         _saved_at = datetime.datetime.now(tz=datetime.timezone.utc).isoformat()
+        
+        # P4: Serialize hypothesis ledger, coverage tracker, and correlation engine state
+        hypothesis_ledger_state: dict[str, dict[str, Any]] = {}
+        coverage_tracker_state: dict[str, Any] = {}
+        correlation_engine_state: dict[str, Any] = {}
+        
+        if hypothesis_ledger:
+            # Hypothesis ledger has get_all() returning dict[str, Hypothesis]
+            # Each Hypothesis has a to_dict() method
+            try:
+                hypothesis_ledger_state = {
+                    hyp_id: hyp.to_dict()
+                    for hyp_id, hyp in hypothesis_ledger.get_all().items()
+                }
+            except Exception:
+                logger.debug("Failed to serialize hypothesis ledger state", exc_info=True)
+        
+        if coverage_tracker:
+            # Coverage tracker should have a method to export state
+            try:
+                coverage_tracker_state = coverage_tracker.to_dict() if hasattr(coverage_tracker, 'to_dict') else {}
+            except Exception:
+                logger.debug("Failed to serialize coverage tracker state", exc_info=True)
+        
+        if correlation_engine:
+            # Correlation engine should have a method to export state
+            try:
+                correlation_engine_state = correlation_engine.to_dict() if hasattr(correlation_engine, 'to_dict') else {}
+            except Exception:
+                logger.debug("Failed to serialize correlation engine state", exc_info=True)
 
         return CheckpointData(
             run_name=run_name,
@@ -271,4 +304,8 @@ class CheckpointManager:
             error_calls=error_calls,
             conversation_summary=_conv_summary,
             saved_at=_saved_at,
+            # P4: Include hypothesis ledger, coverage tracker, and correlation engine state
+            hypothesis_ledger_state=hypothesis_ledger_state,
+            coverage_tracker_state=coverage_tracker_state,
+            correlation_engine_state=correlation_engine_state,
         )

@@ -148,12 +148,39 @@ def finish_scan(
         if vulnerability_count == 0:
             logger.warning("Scan completing with no vulnerabilities found - target appears secure or testing was incomplete")
 
-        return {
+        # P2.2: Generate Nuclei templates for reproducibility
+        nuclei_result = {}
+        if vulnerability_count > 0 and agent_state:
+            try:
+                from pathlib import Path
+                from phantom.tools.reporting.nuclei_template_gen import integrate_with_finish_scan
+                
+                run_name = getattr(agent_state, "run_name", None)
+                if run_name:
+                    run_dir = Path("phantom_runs") / run_name
+                    nuclei_result = integrate_with_finish_scan(
+                        vulnerabilities=tracer.vulnerability_reports,
+                        run_dir=run_dir,
+                    )
+            except Exception as e:  # noqa: BLE001
+                logger.warning(f"Failed to generate Nuclei templates: {e}")
+                nuclei_result = {
+                    "nuclei_templates_generated": False,
+                    "error": str(e),
+                }
+
+        result = {
             "success": True,
             "scan_completed": True,
             "message": "Scan completed successfully" if vulnerability_count > 0 else "Scan completed - no vulnerabilities found",
             "vulnerabilities_found": vulnerability_count,
         }
+        
+        # Add Nuclei template info if generated
+        if nuclei_result:
+            result.update(nuclei_result)
+        
+        return result
 
     except (ImportError, AttributeError) as e:
         return {

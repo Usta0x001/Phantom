@@ -627,7 +627,16 @@ class DockerRuntime(AbstractRuntime):
         except (NotFound, DockerException):
             pass
 
-    def cleanup(self) -> None:
+    def cleanup(self, wait: bool = False) -> None:
+        """
+        Clean up Docker containers.
+        
+        P1.3 CRITICAL FIX: Properly clean up containers on Ctrl+C/signal.
+        
+        Args:
+            wait: If True, wait for cleanup to complete (blocking).
+                  If False, cleanup runs async (for normal exit).
+        """
         if self._scan_container is not None:
             container_name = self._scan_container.name
             self._scan_container = None
@@ -644,9 +653,61 @@ class DockerRuntime(AbstractRuntime):
 
             import subprocess
 
-            subprocess.Popen(  # noqa: S603
-                ["docker", "rm", "-f", container_name],  # noqa: S607
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                start_new_session=True,
+            if wait:
+                # P1.3: Blocking cleanup for signal handlers - ensure container is killed
+                try:
+                    subprocess.run(
+                        ["docker", "rm", "-f", container_name],  # noqa: S603, S607
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                        timeout=10,  # Don't hang forever
+                    )
+                except (subprocess.TimeoutExpired, OSError):
+                    pass  # Best effort
+            else:
+                # Non-blocking cleanup for normal exit
+                subprocess.Popen(  # noqa: S603
+                    ["docker", "rm", "-f", container_name],  # noqa: S607
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    start_new_session=True,
+                )
+    
+    def cleanup_all_phantom_containers(self) -> int:
+        """
+        P1.3: Clean up ALL phantom containers, not just the current one.
+        
+        This handles zombie containers from crashed scans.
+        Returns the number of containers cleaned up.
+        """
+        import subprocess
+        
+        cleaned = 0
+        try:
+            # Find all phantom containers (running or stopped)
+            result = subprocess.run(
+                ["docker", "ps", "-a", "--filter", "name=phantom-scan-", "--format", "{{.Names}}"],
+                capture_output=True,
+                text=True,
+                timeout=10,
             )
+            
+            if result.returncode == 0:
+                container_names = result.stdout.strip().split("\n")
+                for name in container_names:
+                    if name and _CONTAINER_NAME_RE.match(name):
+                        try:
+                            subprocess.run(
+                                ["docker", "rm", "-f", name],
+                                stdout=subprocess.DEVNULL,
+                                stderr=subprocess.DEVNULL,
+                                timeout=10,
+                            )
+                            cleaned += 1
+                            logger.info("Cleaned up zombie container: %s", name)
+                        except (subprocess.TimeoutExpired, OSError):
+                            pass
+        except Exception as e:
+            logger.warning("Failed to clean up phantom containers: %s", e)
+        
+        return cleaned

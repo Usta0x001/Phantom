@@ -153,18 +153,18 @@
         - 'context': Injection context
         - 'usage': Instructions for testing</description>
     </returns>
-    <example>
+    <examples>
   # Generate payloads for attribute injection
-  <!-- generate_xss_payloads>
-    context>attribute</parameter>
-  -->
+  <function=generate_xss_payloads>
+  <parameter=context>attribute</parameter>
+  </function>
 
   # Generate WAF bypass payloads
-  <!-- generate_xss_payloads>
-    waf_type>cloudflare</parameter>
-    encoding>unicode</parameter>
-  -->
-    </example>
+  <function=generate_xss_payloads>
+  <parameter=waf_type>cloudflare</parameter>
+  <parameter=encoding>unicode</parameter>
+  </function>
+    </examples>
   </tool>
 
   <tool name="generate_sqli_payloads">
@@ -198,24 +198,24 @@
         - 'db_type': Target database
         - 'usage': Testing instructions</description>
     </returns>
-    <example>
+    <examples>
   # Generate MySQL-specific payloads
-  <!-- generate_sqli_payloads>
-    db_type>mysql</parameter>
-    injection_type>union</parameter>
-  -->
+  <function=generate_sqli_payloads>
+  <parameter=db_type>mysql</parameter>
+  <parameter=injection_type>union</parameter>
+  </function>
 
   # Generate time-based blind payloads
-  <!-- generate_sqli_payloads>
-    injection_type>time_blind</parameter>
-  -->
+  <function=generate_sqli_payloads>
+  <parameter=injection_type>time_blind</parameter>
+  </function>
 
   # Generate UNION payloads for 5 columns
-  <!-- generate_sqli_payloads>
-    injection_type>union</parameter>
-    column_count>5</parameter>
-  -->
-    </example>
+  <function=generate_sqli_payloads>
+  <parameter=injection_type>union</parameter>
+  <parameter=column_count>5</parameter>
+  </function>
+    </examples>
   </tool>
 
   <tool name="generate_xxe_payloads">
@@ -248,24 +248,24 @@
         - 'total_count': Number of payloads
         - 'usage': Testing instructions</description>
     </returns>
-    <example>
+    <examples>
   # Generate Linux file reading payloads
-  <!-- generate_xxe_payloads>
-    target_os>linux</parameter>
-    xxe_type>file_disclosure</parameter>
-  -->
+  <function=generate_xxe_payloads>
+  <parameter=target_os>linux</parameter>
+  <parameter=xxe_type>file_disclosure</parameter>
+  </function>
 
   # Generate payload for specific file
-  <!-- generate_xxe_payloads>
-    target_file>/app/config.php</parameter>
-  -->
+  <function=generate_xxe_payloads>
+  <parameter=target_file>/app/config.php</parameter>
+  </function>
 
   # Generate blind XXE with callback
-  <!-- generate_xxe_payloads>
-    xxe_type>blind_exfil</parameter>
-    callback_url>http://attacker.com</parameter>
-  -->
-    </example>
+  <function=generate_xxe_payloads>
+  <parameter=xxe_type>blind_exfil</parameter>
+  <parameter=callback_url>http://attacker.com</parameter>
+  </function>
+    </examples>
   </tool>
 
   <tool name="generate_ssti_payloads">
@@ -294,18 +294,18 @@
         - 'payloads': List of SSTI payloads with metadata
         - 'detection_tips': Tips for identifying SSTI</description>
     </returns>
-    <example>
+    <examples>
   # Generate detection payloads for all engines
-  <!-- generate_ssti_payloads>
-    payload_type>detection</parameter>
-  -->
+  <function=generate_ssti_payloads>
+  <parameter=payload_type>detection</parameter>
+  </function>
 
   # Generate Jinja2 RCE payloads
-  <!-- generate_ssti_payloads>
-    template_engine>jinja2</parameter>
-    payload_type>rce</parameter>
-  -->
-    </example>
+  <function=generate_ssti_payloads>
+  <parameter=template_engine>jinja2</parameter>
+  <parameter=payload_type>rce</parameter>
+  </function>
+    </examples>
   </tool>
 
   <tool name="generate_cmd_injection_payloads">
@@ -337,16 +337,16 @@
         - 'payloads': List of command injection payloads
         - 'tips': Testing tips</description>
     </returns>
-    <example>
+    <examples>
   # Generate Linux command injection payloads
-  <!-- generate_cmd_injection_payloads>
-    target_os>linux</parameter>
-  -->
+  <function=generate_cmd_injection_payloads>
+  <parameter=target_os>linux</parameter>
+  </function>
 
   # Generate time-based blind payloads
-  <!-- generate_cmd_injection_payloads>
-    injection_type>time_based</parameter>
-  -->
-    </example>
+  <function=generate_cmd_injection_payloads>
+  <parameter=injection_type>time_based</parameter>
+  </function>
+    </examples>
   </tool>
 </tools>

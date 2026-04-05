@@ -965,6 +965,9 @@ class PhantomTUIApp(App):  # type: ignore[misc]
         def signal_handler(_signum: int, _frame: Any) -> None:
             self._save_interrupted_checkpoint("signal")
             self.tracer.cleanup()
+            # BUG FIX: Use blocking cleanup to ensure containers are stopped before exit
+            from phantom.runtime import cleanup_runtime
+            cleanup_runtime(wait=True)
             sys.exit(0)
 
         atexit.register(cleanup_on_exit)

@@ -32,11 +32,16 @@ def get_runtime() -> AbstractRuntime:
     )
 
 
-def cleanup_runtime() -> None:
+def cleanup_runtime(wait: bool = False) -> None:
+    """Clean up the global runtime instance.
+    
+    Args:
+        wait: If True, block until cleanup completes (useful for signal handlers).
+    """
     global _global_runtime  # noqa: PLW0603
 
     if _global_runtime is not None:
-        _global_runtime.cleanup()
+        _global_runtime.cleanup(wait=wait)
         _global_runtime = None
 
 

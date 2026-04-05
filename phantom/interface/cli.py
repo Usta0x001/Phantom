@@ -1,4 +1,5 @@
 import atexit
+import logging
 import signal
 import sys
 import threading
@@ -19,6 +20,8 @@ from .utils import (
     build_live_stats_text,
     format_vulnerability_report,
 )
+
+logger = logging.getLogger(__name__)
 
 
 def _build_resume_diff_text(cp: Any) -> str:
@@ -94,6 +97,45 @@ async def run_cli(args: Any) -> None:  # noqa: PLR0912, PLR0915
         # BUG FIX 1: clear stale sandbox container fields so the resumed scan
         # creates a fresh container instead of trying to connect to a dead one.
         restored_state.clear_sandbox()
+        
+        # P1.2 CRITICAL FIX: Restore hypothesis ledger, coverage tracker, and correlation engine
+        # Without this, resumed scans lose all testing progress and vulnerability chains
+        restored_hypothesis_ledger = None
+        restored_coverage_tracker = None
+        restored_correlation_engine = None
+        
+        if cp.hypothesis_ledger_state:
+            try:
+                from phantom.agents.hypothesis_ledger import HypothesisLedger
+                restored_hypothesis_ledger = HypothesisLedger.from_dict({
+                    "counter": max(int(k.split("-")[1]) for k in cp.hypothesis_ledger_state.keys()) if cp.hypothesis_ledger_state else 0,
+                    "hypotheses": cp.hypothesis_ledger_state,
+                })
+                logger.info("Restored %d hypotheses from checkpoint", len(cp.hypothesis_ledger_state))
+            except Exception as e:
+                logger.warning("Failed to restore hypothesis ledger: %s", e)
+        
+        if cp.coverage_tracker_state:
+            try:
+                from phantom.agents.coverage_tracker import CoverageTracker
+                restored_coverage_tracker = CoverageTracker.from_dict(cp.coverage_tracker_state)
+                logger.info("Restored coverage tracker from checkpoint")
+            except Exception as e:
+                logger.warning("Failed to restore coverage tracker: %s", e)
+        
+        if cp.correlation_engine_state:
+            try:
+                from phantom.agents.correlation_engine import CorrelationEngine
+                restored_correlation_engine = CorrelationEngine.from_dict(cp.correlation_engine_state)
+                logger.info("Restored correlation engine from checkpoint")
+            except Exception as e:
+                logger.warning("Failed to restore correlation engine: %s", e)
+        
+        # Store restored components in args to pass to agent config
+        args._restored_hypothesis_ledger = restored_hypothesis_ledger  # type: ignore[attr-defined]
+        args._restored_coverage_tracker = restored_coverage_tracker  # type: ignore[attr-defined]
+        args._restored_correlation_engine = restored_correlation_engine  # type: ignore[attr-defined]
+        
         # Inject resume notice so agent knows context was restored
         restored_state.add_message(
             "user",
@@ -190,6 +232,14 @@ async def run_cli(args: Any) -> None:  # noqa: PLR0912, PLR0915
 
     if getattr(args, "local_sources", None):
         agent_config["local_sources"] = args.local_sources
+    
+    # P1.2 CRITICAL FIX: Pass restored components to agent config
+    if getattr(args, "_restored_hypothesis_ledger", None):
+        agent_config["hypothesis_ledger"] = args._restored_hypothesis_ledger
+    if getattr(args, "_restored_coverage_tracker", None):
+        agent_config["coverage_tracker"] = args._restored_coverage_tracker
+    if getattr(args, "_restored_correlation_engine", None):
+        agent_config["correlation_engine"] = args._restored_correlation_engine
 
     # Attach checkpoint manager to agent config so BaseAgent can save periodically
     if checkpoint_mgr is None:
@@ -268,6 +318,9 @@ async def run_cli(args: Any) -> None:  # noqa: PLR0912, PLR0915
     def signal_handler(_signum: int, _frame: Any) -> None:
         _save_interrupt_checkpoint("SIGINT/SIGTERM")
         tracer.cleanup()
+        # BUG FIX: Use blocking cleanup to ensure containers are stopped before exit
+        from phantom.runtime import cleanup_runtime
+        cleanup_runtime(wait=True)
         sys.exit(1)
 
     atexit.register(cleanup_on_exit)

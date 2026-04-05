@@ -135,6 +135,20 @@ class BaseAgent(metaclass=AgentMeta):
             logging.warning(f"Hypothesis ledger tool not available: {e}")
             pass
 
+        # AUDIT-FIX: Wire scan_status tool with all context
+        try:
+            from phantom.tools.scan_status.scan_status_actions import set_scan_status_context
+            set_scan_status_context(
+                hypothesis_ledger=self.hypothesis_ledger,
+                coverage_tracker=self.coverage_tracker,
+                correlation_engine=self.correlation_engine,
+                agent_state=self.state,
+            )
+        except ImportError as e:
+            # Tool module not available in this environment
+            logging.warning(f"Scan status tool not available: {e}")
+            pass
+
         from phantom.telemetry.tracer import get_global_tracer
 
         tracer = get_global_tracer()
@@ -587,6 +601,23 @@ class BaseAgent(metaclass=AgentMeta):
         self._last_iteration_action_count = 0
         use_reflector = os.environ.get("PHANTOM_USE_REFLECTOR", "false").lower() == "true"
 
+        # AUDIT-FIX: Auto-inject scan_status every 10 iterations OR when message count > 50
+        message_count = len(self.state.get_conversation_history())
+        should_inject_status = (
+            (self.state.iteration > 0 and self.state.iteration % 10 == 0) or
+            (message_count > 50)
+        )
+        if should_inject_status:
+            try:
+                from phantom.tools.scan_status.scan_status_actions import get_scan_status
+                status = get_scan_status(include_recommendations=True)
+                
+                # Format as compact message
+                status_msg = self._format_scan_status(status)
+                self.state.add_message("user", status_msg)
+            except Exception as e:
+                logging.debug(f"Failed to inject scan status: {e}")
+
         # Rec 6 (SF-005): Inject Hypothesis Ledger summary every 10 iterations.
         # AUDIT-FIX-08: Only inject unresolved hypotheses (PROPOSED/TESTING).
         # Resolved hypotheses waste tokens by re-injecting closed items.
@@ -869,6 +900,10 @@ class BaseAgent(metaclass=AgentMeta):
                 state=self.state,
                 tracer=tracer,
                 scan_config=tracer.scan_config or {} if tracer else {},
+                # P4: Include hypothesis ledger, coverage tracker, and correlation engine
+                hypothesis_ledger=self.hypothesis_ledger,
+                coverage_tracker=self.coverage_tracker,
+                correlation_engine=self.correlation_engine,
             )
             checkpoint_mgr.save(cp)
             # ── Audit: log checkpoint saved ──────────────────────────────
@@ -883,6 +918,47 @@ class BaseAgent(metaclass=AgentMeta):
             # ────────────────────────────────────────────────────────────
         except Exception:  # noqa: BLE001
             logger.warning("Checkpoint save failed", exc_info=True)
+
+    def _format_scan_status(self, status: dict[str, Any]) -> str:
+        """Format scan status into a compact message for LLM injection."""
+        progress = status.get("scan_progress", {})
+        findings = status.get("findings", {})
+        coverage = status.get("coverage", {})
+        chains = status.get("chain_opportunities", [])
+        recommendation = status.get("recommended_next_action")
+        warnings = status.get("warnings", [])
+        
+        lines = ["[AUTO-STATUS — Scan Progress Update]"]
+        lines.append(
+            f"Phase: {progress.get('phase')} | "
+            f"Iteration {progress.get('iteration')}/{progress.get('max_iterations')} "
+            f"({progress.get('percent_complete')}%)"
+        )
+        lines.append(
+            f"Findings: {findings.get('confirmed_vulnerabilities')} confirmed, "
+            f"{findings.get('actively_testing')} testing, "
+            f"{findings.get('pending_hypotheses')} pending"
+        )
+        lines.append(
+            f"Coverage: {coverage.get('surfaces_tested')} tested, "
+            f"{coverage.get('surfaces_remaining')} remaining "
+            f"({coverage.get('coverage_percent')}%)"
+        )
+        
+        if chains:
+            lines.append(f"Chain Opportunities: {len(chains)}")
+            for chain in chains[:2]:
+                lines.append(f"  - {chain.get('chain')}: {chain.get('description', '')[:50]}")
+        
+        if recommendation:
+            lines.append(f"Recommended: {recommendation}")
+        
+        if warnings:
+            for warning in warnings:
+                lines.append(f"[!] {warning}")
+        
+        lines.append("[END STATUS]")
+        return "\n".join(lines)
 
     def _handle_sandbox_error(
         self,
