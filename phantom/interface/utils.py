@@ -484,50 +484,7 @@ def build_tui_stats_text(tracer: Any, agent_config: dict[str, Any] | None = None
     else:
         stats_text.append("0", style="dim #22c55e")
 
-    caido_url = getattr(tracer, "caido_url", None)
-    if caido_url:
-        stats_text.append("\n")
-        stats_text.append("Caido: ", style="bold white")
-        stats_text.append(caido_url, style="white")
-        
-        # FIX: Add health indicator with HTTP ping
-        health_status = _check_caido_health(caido_url)
-        if health_status == "connected":
-            stats_text.append(" ● ", style="bold #22c55e")  # Green dot
-            stats_text.append("connected", style="#22c55e")
-        else:
-            stats_text.append(" ● ", style="bold #ef4444")  # Red dot
-            stats_text.append("disconnected", style="#ef4444")
-
     return stats_text
-
-
-def _check_caido_health(caido_url: str) -> str:
-    """FIX: Check if Caido proxy is reachable via HTTP ping"""
-    try:
-        # Try /graphql endpoint first (Caido's API)
-        url = f"http://{caido_url}/graphql"
-        req = Request(url, method="POST")
-        req.add_header("Content-Type", "application/json")
-        req.add_header("Authorization", "Bearer fake")  # Will fail auth but proves server is up
-        
-        with urlopen(req, timeout=2) as response:
-            # 401 means Caido is up (auth failed but server responded)
-            if response.status in (200, 401, 403):
-                return "connected"
-    except (URLError, HTTPError, OSError, TimeoutError):
-        pass
-    
-    # Fallback: try root URL
-    try:
-        url = f"http://{caido_url}/"
-        with urlopen(url, timeout=2) as response:
-            if response.status in (200, 301, 302, 401, 403):
-                return "connected"
-    except (URLError, HTTPError, OSError, TimeoutError):
-        pass
-    
-    return "disconnected"
 
 
 # Name generation utilities
