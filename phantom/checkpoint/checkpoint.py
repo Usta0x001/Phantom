@@ -121,8 +121,12 @@ class CheckpointManager:
     # ── Public API ────────────────────────────────────────────────────────────
 
     def should_save(self, iteration: int) -> bool:
-        """True when it's time to write a checkpoint (iteration must be > 0)."""
-        return iteration > 0 and (iteration == 1 or iteration % self._interval == 0)
+        """True when it's time to write a checkpoint (iteration must be > 0).
+        
+        Saves at intervals: 5, 10, 15, 20... (not at iteration 1).
+        FIX: Removed special-case 'iteration == 1' that caused off-by-one bug.
+        """
+        return iteration > 0 and iteration % self._interval == 0
 
     def _compute_hmac(self, data: bytes) -> str:
         return hmac.new(_get_hmac_key(), data, hashlib.sha256).hexdigest()

@@ -181,6 +181,7 @@ class Config:
 
     # Telemetry
     phantom_telemetry = "1"
+    phantom_audit_log = None  # Set via env var PHANTOM_AUDIT_LOG or config
     phantom_otel_telemetry = None
     traceloop_base_url = None
     traceloop_api_key = None
@@ -223,16 +224,6 @@ class Config:
         env_value = os.getenv(env_name)
         if env_value is not None:
             return env_value
-        
-        # P1.1: For sensitive keys, check secure storage
-        try:
-            from phantom.config.secrets import is_sensitive_key, get_secret
-            if is_sensitive_key(env_name):
-                secure_value = get_secret(env_name)
-                if secure_value:
-                    return secure_value
-        except ImportError:
-            pass  # Secrets module not available
         
         # Fall back to class default
         default = getattr(cls, name, None)
@@ -333,9 +324,6 @@ class Config:
     def save_current(cls) -> bool:
         existing = cls.load().get("env", {})
         merged: dict[str, str] = dict(existing) if isinstance(existing, dict) else {}
-        
-        # P1.1: Track which keys should be stored securely
-        sensitive_to_store: dict[str, str] = {}
 
         for var_name in cls.tracked_vars():
             value = os.getenv(var_name)
@@ -344,30 +332,7 @@ class Config:
             elif value == "":
                 merged.pop(var_name, None)
             else:
-                # P1.1: Check if this is a sensitive key
-                try:
-                    from phantom.config.secrets import is_sensitive_key
-                    if is_sensitive_key(var_name):
-                        sensitive_to_store[var_name] = value
-                        # Mark as securely stored in the config file
-                        merged[var_name] = "[ENCRYPTED]"
-                        continue
-                except ImportError:
-                    pass  # Fall back to plaintext if secrets module unavailable
-                
                 merged[var_name] = value
-        
-        # P1.1: Store sensitive values securely
-        if sensitive_to_store:
-            try:
-                from phantom.config.secrets import store_secret
-                for key, value in sensitive_to_store.items():
-                    store_secret(key, value)
-            except ImportError:
-                # Fall back to plaintext storage
-                for key, value in sensitive_to_store.items():
-                    merged[key] = value
-                logger.warning("Secrets module unavailable; storing API keys in plaintext")
 
         return cls.save({"env": merged})
 
