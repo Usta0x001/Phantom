@@ -61,6 +61,9 @@ if not SANDBOX_MODE:
     
     # FIX 6: Detection module - pattern, error, timing, and differential analysis
     from .detection import *  # noqa: F403
+    
+    # Scan status - critical for LLM reasoning
+    from .scan_status import *  # noqa: F403
 else:
     if not DISABLE_BROWSER:
         from .browser import *  # noqa: F403
@@ -70,6 +73,9 @@ else:
     from .proxy import *  # noqa: F403
     from .python import *  # noqa: F403
     from .terminal import *  # noqa: F403
+    
+    # Scan status - critical for LLM reasoning
+    from .scan_status import *  # noqa: F403
 
 __all__ = [
     "ImplementedInClientSideOnlyError",

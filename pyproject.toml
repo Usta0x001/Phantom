@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "phantom-agent"
-version = "0.9.138"
+version = "0.9.142"
 description = "Autonomous Offensive Security Intelligence - AI-powered penetration testing"
 authors = ["Usta0x001 <r_gadouri@estin.dz>"]
 readme = "README.md"
@@ -39,7 +39,8 @@ include = [
   "phantom/agents/**/*.jinja",
   "phantom/skills/**/*.md",
   "phantom/**/*.xml",
-  "phantom/**/*.tcss"
+  "phantom/**/*.tcss",
+  "phantom/logging/*.py",
 ]
 
 [tool.poetry.scripts]

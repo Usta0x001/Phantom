@@ -505,13 +505,24 @@ def build_tui_stats_text(tracer: Any, agent_config: dict[str, Any] | None = None
 def _check_caido_health(caido_url: str) -> str:
     """FIX: Check if Caido proxy is reachable via HTTP ping"""
     try:
-        # Quick health check with 2s timeout
-        # Caido typically runs a web UI on the proxy port
-        url = f"http://{caido_url}"
-        req = Request(url, method="HEAD")
+        # Try /graphql endpoint first (Caido's API)
+        url = f"http://{caido_url}/graphql"
+        req = Request(url, method="POST")
+        req.add_header("Content-Type", "application/json")
+        req.add_header("Authorization", "Bearer fake")  # Will fail auth but proves server is up
         
         with urlopen(req, timeout=2) as response:
-            if response.status in (200, 301, 302, 401, 403):  # Any response means it's alive
+            # 401 means Caido is up (auth failed but server responded)
+            if response.status in (200, 401, 403):
+                return "connected"
+    except (URLError, HTTPError, OSError, TimeoutError):
+        pass
+    
+    # Fallback: try root URL
+    try:
+        url = f"http://{caido_url}/"
+        with urlopen(url, timeout=2) as response:
+            if response.status in (200, 301, 302, 401, 403):
                 return "connected"
     except (URLError, HTTPError, OSError, TimeoutError):
         pass
