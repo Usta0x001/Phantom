@@ -113,10 +113,6 @@ SECURITY_AUDIT_1*.md
 AUDIT_SECTIONS_*.md
 AUDIT_*.md
 
-# Local audit Python files (never commit)
-phantom/logging/audit.py
-phantom/tests/test_hostile_audit.py
-
 # Session reports, audit logs, and comparison docs (local only)
 COMPARISON_*.md
 PHANTOM_ADVERSARIAL*.md
