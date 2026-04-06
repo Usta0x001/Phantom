@@ -47,7 +47,7 @@ def set_scan_status_context(
         _GLOBAL_AGENT_STATE = agent_state
 
 
-@register_tool
+@register_tool(sandbox_execution=False)
 def get_scan_status(include_recommendations: bool = True) -> dict[str, Any]:
     """
     Get a compressed summary of the entire scan state.
