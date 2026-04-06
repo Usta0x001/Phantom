@@ -505,7 +505,6 @@ AVAILABLE TOOLS:
 - Fuzzing: ffuf, gobuster, dirb, arjun
 - Exploitation: sqlmap, nuclei, hydra
 - Programming: python3, node, php, bash
-- Proxy: Caido proxy running inside container (captures all HTTP traffic)
 - Browser: Chromium via browser_action tool
 
 INVOKING CLI TOOLS:
@@ -529,11 +528,12 @@ PASSIVE RECON (query external DBs, not target):
 - cve_search: Search NVD for CVEs
 - detect_waf: Identify WAF before exploitation
 
-HTTP PROXY (Traffic Capture):
-- send_request(method, url, headers, body) - Send HTTP request through Caido proxy
-- list_requests() - View captured traffic in proxy
-- view_request(request_id) - View specific request details
-- repeat_request(request_id) - Replay request with modifications
+PROXY & INTERCEPTION:
+- Caido CLI - Modern web proxy (already running inside container). Used with proxy tool or send_request.
+- All HTTP traffic is captured automatically by Caido proxy.
+- Proxy tools: send_request, list_requests, view_request, repeat_request
+- NOTE: If seeing proxy errors when sending requests, usually means incorrect url/host/port
+- Ignore Caido proxy-generated 50x HTML error pages; these are proxy issues
 
 PAYLOAD GENERATORS (Phantom's advantage over other tools):
 - generate_sqli_payloads(context, db_type, waf_bypass)
