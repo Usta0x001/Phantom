@@ -166,7 +166,12 @@ async def crtsh_search(domain: str, include_expired: bool = False) -> dict[str, 
         if not include_expired:
             url += "&exclude=expired"
         
-        async with httpx.AsyncClient(trust_env=False, timeout=60.0) as client:
+        async with httpx.AsyncClient(
+            trust_env=False, 
+            timeout=60.0,
+            headers={"User-Agent": "Phantom-OSINT/1.0"},
+            follow_redirects=True,
+        ) as client:
             response = await client.get(url)
             
             if response.status_code == 404:
@@ -174,6 +179,7 @@ async def crtsh_search(domain: str, include_expired: bool = False) -> dict[str, 
                     "success": True,
                     "domain": domain,
                     "subdomains": [],
+                    "subdomain_count": 0,
                     "certificates": [],
                     "total_certs": 0,
                     "message": "No certificates found for this domain",
@@ -183,12 +189,14 @@ async def crtsh_search(domain: str, include_expired: bool = False) -> dict[str, 
             
             try:
                 certs = response.json()
-            except Exception:
+            except Exception as e:
                 # crt.sh sometimes returns HTML on overload
+                logger.warning("crt.sh returned invalid JSON: %s", str(e)[:200])
                 return {
                     "success": False,
                     "error": "crt.sh returned invalid JSON (service may be overloaded)",
                     "subdomains": [],
+                    "subdomain_count": 0,
                 }
         
         # Extract unique subdomains
