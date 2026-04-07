@@ -589,7 +589,7 @@ RULES:
 CORRECT FORMAT:
 <function=tool_name>
 <parameter=param_name>value
-</function>
+
 
 RULES:
 - Use exact format above
@@ -604,6 +604,21 @@ WRONG (never use):
 - {"tool": {}}
 - <function_calls>
 - Multiple tool calls in one message
+
+EXAMPLES:
+<function=terminal_execute>
+<parameter=command>nmap -sV target.com</parameter>
+</function>
+
+<function=send_request>
+<parameter=method>GET</parameter>
+<parameter=url>https://target.com</parameter>
+</function>
+
+<function=browser_action>
+<parameter=action>launch</parameter>
+<parameter=url>https://target.com</parameter>
+</function>
 
 SPRAYING NOTE:
 - Large payload sprays: encapsulate in single python/terminal call
