@@ -22,8 +22,14 @@ class CheckpointData(BaseModel):
     scan_config: dict[str, Any] = Field(default_factory=dict)
 
     # Full AgentState dump — contains the entire message history for the root agent.
-    # Sub-agents are ephemeral; their output is already embedded in the root history.
     root_agent_state: dict[str, Any] = Field(default_factory=dict)
+    
+    # FIX ISSUE#6: Sub-agent states for active sub-agents at checkpoint time
+    # Previously, sub-agents were considered ephemeral and their state was lost on crash.
+    # This caused massive token waste when resuming - all sub-agent work had to be redone.
+    # Now we save active sub-agent states so they can be resumed from where they left off.
+    # Format: {agent_id: {state_dict, status: "active"|"completed", parent_id: str}}
+    sub_agent_states: dict[str, dict[str, Any]] = Field(default_factory=dict)
 
     # ── Findings already discovered ─────────────────────────────────────────
     vulnerability_reports: list[dict[str, Any]] = Field(default_factory=list)

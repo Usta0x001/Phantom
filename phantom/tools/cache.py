@@ -40,6 +40,7 @@ CACHEABLE_TOOLS: frozenset[str] = frozenset({
     "glob_files",
     "search_files",
     "file_search",
+    "list_files",
     
     # Read-only registry/state queries
     "get_scope_rules",
@@ -48,14 +49,17 @@ CACHEABLE_TOOLS: frozenset[str] = frozenset({
     "get_scan_notes",
     "list_todos",
     "get_todos",
+    "list_notes",
     
     # Read-only proxy queries
     "get_proxy_history",
     "proxy_history",
     "get_request_details",
+    "list_requests",
+    "view_request",
     
     # Static web requests (same URL = same response within TTL)
-    # NOTE: These may need shorter TTL if target state changes rapidly
+    # NOTE: Caching is conservative - only for GET requests with same params
     "send_request",
     
     # Documentation/help queries
@@ -170,6 +174,9 @@ class ToolResultCache:
             "ToolResultCache initialized: enabled=%s max_size=%d ttl=%.0fs",
             self._enabled, self._max_size, self._ttl
         )
+        
+        if not self._enabled:
+            logger.warning("ToolResultCache is DISABLED - all calls will be cache misses")
     
     @property
     def enabled(self) -> bool:
@@ -185,18 +192,46 @@ class ToolResultCache:
         """Generate a deterministic cache key from tool name and arguments.
         
         Uses SHA-256 hash of canonical JSON representation for consistency.
+        For send_request, normalizes ephemeral parameters that don't affect cacheability.
         """
+        # Normalize kwargs for cacheability
+        normalized = kwargs.copy()
+        
+        # For send_request: ignore headers that change per request but don't affect result
+        if tool_name == "send_request" and "headers" in normalized:
+            headers = normalized["headers"]
+            if isinstance(headers, dict):
+                # Remove ephemeral headers that don't affect cacheable responses
+                ephemeral_headers = {
+                    "User-Agent", "Accept-Encoding", "Accept-Language",
+                    "Cache-Control", "Pragma", "Date", "X-Request-ID",
+                    "Cookie",  # Cookies change per session
+                }
+                normalized_headers = {
+                    k: v for k, v in headers.items()
+                    if k not in ephemeral_headers
+                }
+                # Only include headers if non-empty after filtering
+                if normalized_headers:
+                    normalized["headers"] = normalized_headers
+                else:
+                    normalized.pop("headers", None)
+        
+        # For send_request: normalize method (GET vs get)
+        if tool_name == "send_request" and "method" in normalized:
+            normalized["method"] = normalized["method"].upper()
+        
         # Sort keys for deterministic ordering
         try:
             canonical = json.dumps(
-                {"tool": tool_name, "args": kwargs},
+                {"tool": tool_name, "args": normalized},
                 sort_keys=True,
                 ensure_ascii=True,
                 default=str,  # Handle non-serializable types
             )
         except (TypeError, ValueError):
             # Fallback for complex types
-            canonical = f"{tool_name}:{repr(sorted(kwargs.items()))}"
+            canonical = f"{tool_name}:{repr(sorted(normalized.items()))}"
         
         return hashlib.sha256(canonical.encode()).hexdigest()[:32]
     
@@ -221,7 +256,11 @@ class ToolResultCache:
         Returns:
             Cached result if hit, None if miss or expired
         """
-        if not self._enabled or not self.is_cacheable(tool_name):
+        if not self._enabled:
+            return None
+            
+        if not self.is_cacheable(tool_name):
+            # Not cacheable - this is expected for most tools
             return None
         
         key = self._make_key(tool_name, kwargs)
@@ -229,6 +268,7 @@ class ToolResultCache:
         
         if entry is None:
             self._stats.misses += 1
+            logger.debug("Cache miss: %s (not in cache)", tool_name)
             return None
         
         # Check TTL expiration
@@ -246,9 +286,9 @@ class ToolResultCache:
         self._stats.hits += 1
         self._stats.total_saved_ms += self.ESTIMATED_EXEC_TIME_MS
         
-        logger.debug(
-            "Cache hit: %s (age=%.1fs, hits=%d)",
-            tool_name, age, entry.hits
+        logger.info(
+            "✅ Cache HIT: %s (age=%.1fs, total_hits=%d, saved_ms=%.0f)",
+            tool_name, age, entry.hits, self._stats.total_saved_ms
         )
         return entry.result
     

@@ -219,6 +219,7 @@ class CheckpointManager:
         hypothesis_ledger: Any = None,  # P4: Add hypothesis ledger parameter
         coverage_tracker: Any = None,   # P4: Add coverage tracker parameter
         correlation_engine: Any = None,  # P4: Add correlation engine parameter
+        active_sub_agents: dict[str, Any] | None = None,  # FIX ISSUE#6: Sub-agent states
     ) -> CheckpointData:
         vulns: list[dict[str, Any]] = []
         llm_stats: dict[str, Any] = {}
@@ -290,6 +291,30 @@ class CheckpointManager:
                 correlation_engine_state = correlation_engine.to_dict() if hasattr(correlation_engine, 'to_dict') else {}
             except Exception:
                 logger.debug("Failed to serialize correlation engine state", exc_info=True)
+        
+        # FIX ISSUE#6: Capture active sub-agent states
+        # This allows resuming scans without losing sub-agent work
+        sub_agent_states_dict: dict[str, dict[str, Any]] = {}
+        if active_sub_agents:
+            try:
+                for agent_id, agent_info in active_sub_agents.items():
+                    # agent_info should contain: {state: AgentState, status: str, parent_id: str}
+                    if isinstance(agent_info, dict) and "state" in agent_info:
+                        agent_state_obj = agent_info["state"]
+                        # Serialize the agent state
+                        serialized_state = agent_state_obj.model_dump() if hasattr(agent_state_obj, "model_dump") else {}
+                        # Redact sensitive fields from sub-agents too
+                        serialized_state["sandbox_token"] = None
+                        serialized_state["sandbox_id"] = None
+                        serialized_state["sandbox_info"] = None
+                        sub_agent_states_dict[agent_id] = {
+                            "state": serialized_state,
+                            "status": agent_info.get("status", "active"),
+                            "parent_id": agent_info.get("parent_id", state.agent_id),
+                        }
+                logger.debug("Captured %d sub-agent states for checkpoint", len(sub_agent_states_dict))
+            except Exception:
+                logger.warning("Failed to serialize sub-agent states", exc_info=True)
 
         return CheckpointData(
             run_name=run_name,
@@ -312,4 +337,6 @@ class CheckpointManager:
             hypothesis_ledger_state=hypothesis_ledger_state,
             coverage_tracker_state=coverage_tracker_state,
             correlation_engine_state=correlation_engine_state,
+            # FIX ISSUE#6: Include sub-agent states to avoid losing work on resume
+            sub_agent_states=sub_agent_states_dict,
         )
