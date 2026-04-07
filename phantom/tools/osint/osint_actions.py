@@ -169,7 +169,7 @@ async def crtsh_search(domain: str, include_expired: bool = False) -> dict[str, 
         async with httpx.AsyncClient(
             trust_env=False, 
             timeout=60.0,
-            headers={"User-Agent": "Phantom-OSINT/1.0"},
+            headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"},
             follow_redirects=True,
         ) as client:
             response = await client.get(url)
