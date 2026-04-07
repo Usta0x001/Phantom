@@ -453,6 +453,7 @@ class BaseAgent(metaclass=AgentMeta):
                             _audit_rla.log_agent_failed(
                                 agent_id=self.state.agent_id,
                                 name=self.state.agent_name,
+                                agent_type=self.__class__.__name__,
                                 error=_abort_msg,
                                 iterations=_rl_consecutive,
                                 duration_ms=(_time_mod.monotonic() - self._agent_start_time) * 1000,
@@ -502,6 +503,7 @@ class BaseAgent(metaclass=AgentMeta):
                             _audit_err.log_agent_failed(
                                 agent_id=self.state.agent_id,
                                 name=self.state.agent_name,
+                                agent_type=self.__class__.__name__,
                                 error=str(e),
                                 iterations=self.state.iteration,
                                 duration_ms=(_time_mod.monotonic() - self._agent_start_time) * 1000,
@@ -1000,6 +1002,7 @@ class BaseAgent(metaclass=AgentMeta):
                 _audit_sb.log_agent_failed(
                     agent_id=self.state.agent_id,
                     name=self.state.agent_name,
+                    agent_type=self.__class__.__name__,
                     error=error_msg,
                     iterations=self.state.iteration,
                     duration_ms=(__import__('time').monotonic() - getattr(self, '_agent_start_time', __import__('time').monotonic())) * 1000,
@@ -1047,6 +1050,7 @@ class BaseAgent(metaclass=AgentMeta):
                 _audit_llme.log_agent_failed(
                     agent_id=self.state.agent_id,
                     name=self.state.agent_name,
+                    agent_type=self.__class__.__name__,
                     error=error_msg,
                     iterations=self.state.iteration,
                     duration_ms=(__import__('time').monotonic() - getattr(self, '_agent_start_time', __import__('time').monotonic())) * 1000,

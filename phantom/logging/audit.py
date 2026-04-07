@@ -600,6 +600,7 @@ class AuditLogger:
         self,
         agent_id: str,
         name: str,
+        agent_type: str,
         error: str,
         iterations: int,
         duration_ms: float,
@@ -610,6 +611,7 @@ class AuditLogger:
             "actor": {"agent_id": agent_id},
             "payload": {
                 "name": name,
+                "agent_type": agent_type,
                 "error": error[:500],
                 "iterations": iterations,
                 "duration_ms": round(duration_ms, 1),

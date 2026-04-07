@@ -160,6 +160,18 @@ def _extract_anchors_from_chunk(
 
 def _get_model_context_window(model: str) -> int:
     """Return the model's context window size, or MAX_TOTAL_TOKENS if unknown."""
+    # First check for explicit Ollama context length config
+    from phantom.config.config import Config
+    ollama_ctx = Config.get("phantom_ollama_context_length")
+    if ollama_ctx:
+        try:
+            ctx = int(ollama_ctx)
+            if ctx > 0:
+                return ctx
+        except ValueError:
+            pass
+    
+    # Try to get from litellm
     try:
         info = litellm.get_model_info(model)
         # litellm returns max_tokens (context window) or max_input_tokens
@@ -537,8 +549,9 @@ class MemoryCompressor:
         )
         self.model_name = model_name or Config.get("phantom_llm")
         # R-04 regression fix: Strix used 120s timeout; Phantom reduced to 30s,
-        # causing compression failures on slow models.
-        self.timeout = timeout or int(Config.get("phantom_memory_compressor_timeout") or "120")
+        # but this is too short for local models (Ollama). Increased to 180s
+        # to accommodate slower local inference.
+        self.timeout = timeout or int(Config.get("phantom_memory_compressor_timeout") or "180")
 
         if not self.model_name:
             raise ValueError("PHANTOM_LLM environment variable must be set and not empty")

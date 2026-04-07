@@ -698,7 +698,7 @@ class LLM:
     ) -> list[dict[str, Any]]:
         max_request_chars = int(Config.get("phantom_max_request_chars") or "900000")
         max_request_tokens = int(
-            Config.get("phantom_max_request_estimated_tokens") or "220000"
+            Config.get("phantom_max_request_estimated_tokens") or Config.get("phantom_ollama_context_length") or "220000"
         )
         from phantom.logging.audit import get_audit_logger as _get_audit
 
@@ -1093,10 +1093,27 @@ class LLM:
 
                 cost = self._extract_cost(response)
             else:
-                input_tokens = 0
+                # CRITICAL FIX: Some API providers (OpenRouter, cached responses) don't return usage
+                # Estimate tokens to avoid reporting 0 which breaks cost tracking
+                logger.warning(
+                    "API response missing usage stats - estimating tokens (model=%s)",
+                    self.config.litellm_model
+                )
+                input_tokens = 0  # Can't estimate input without message history
                 output_tokens = 0
                 cached_tokens = 0
                 cost = 0.0
+                
+                # Try to estimate output tokens from response content
+                if hasattr(response, "choices") and response.choices:
+                    first_choice = response.choices[0]
+                    if hasattr(first_choice, "message") and first_choice.message:
+                        content = getattr(first_choice.message, "content", "") or ""
+                        # Rough estimate: 1 token ≈ 4 characters for English text
+                        output_tokens = max(1, len(content) // 4)
+                        logger.debug("Estimated output_tokens=%d from content length", output_tokens)
+
+                cost = self._extract_cost(response)
 
             self._total_stats.input_tokens += input_tokens
             self._total_stats.output_tokens += output_tokens

@@ -337,6 +337,33 @@ class EnhancedAgentState(AgentState):
         
         return summary
     
+    def _compute_status(self) -> str:
+        """Compute the actual scan status based on multiple conditions.
+        
+        Returns:
+            - "completed": Scan finished successfully
+            - "failed": Scan failed with errors
+            - "interrupted": Scan was stopped by user
+            - "in_progress": Scan is still running
+        """
+        # If explicitly marked as completed, use that
+        if self.completed:
+            # Check if it was a failure
+            if self.final_result and not self.final_result.get("success", True):
+                return "failed"
+            return "completed"
+        
+        # Check for errors that indicate failure
+        if self.llm_failed:
+            return "failed"
+        
+        # Check if stop was requested
+        if self.stop_requested:
+            return "interrupted"
+        
+        # Default to in_progress
+        return "in_progress"
+    
     def get_scan_summary(self) -> dict[str, Any]:
         """Get current scan summary."""
         return {
@@ -366,7 +393,7 @@ class EnhancedAgentState(AgentState):
             "target": self.context.get("target", "unknown"),
             "started_at": self.start_time,
             "completed_at": self.last_updated,
-            "status": "completed" if self.completed else "in_progress",
+            "status": self._compute_status(),
             "phase": self.current_phase.value,
             "summary": self.get_scan_summary(),
             "hosts": [h.to_summary() for h in self.hosts.values()],

@@ -866,6 +866,28 @@ class Tracer:
                 logger.info("Updated vulnerability index: %s", vuln_csv_file)
 
             logger.info("📊 Essential scan data saved to: %s", run_dir)
+            
+            # FIX: Always generate scan_stats.json regardless of completion status
+            scan_stats_file = run_dir / "scan_stats.json"
+            try:
+                stats_data = {
+                    "status": self.run_metadata.get("status", "unknown"),
+                    "scan_id": self.scan_id,
+                    "target": self.target,
+                    "start_time": self.start_time,
+                    "end_time": self.end_time,
+                    "duration_seconds": self._calculate_duration(),
+                    "llm_stats": self.get_total_llm_stats(),
+                    "vulnerability_count": len(self.vulnerability_reports),
+                    "vulnerabilities_by_severity": self._get_vuln_severity_counts(),
+                }
+                with scan_stats_file.open("w", encoding="utf-8") as f:
+                    import json
+                    json.dump(stats_data, f, indent=2, default=str)
+                logger.info("Saved scan stats to: %s", scan_stats_file)
+            except Exception as e:
+                logger.warning("Failed to save scan_stats.json: %s", e)
+            
             if mark_complete and not self._run_completed_emitted:
                 self._emit_event(
                     "run.completed",
@@ -922,6 +944,17 @@ class Tracer:
             "total": total_stats,
             "total_tokens": total_stats["input_tokens"] + total_stats["output_tokens"],
         }
+
+    def _get_vuln_severity_counts(self) -> dict[str, int]:
+        """Count vulnerabilities by severity level."""
+        counts = {"critical": 0, "high": 0, "medium": 0, "low": 0, "info": 0}
+        for vuln in self.vulnerability_reports:
+            severity = vuln.get("severity", "unknown")
+            if severity in counts:
+                counts[severity] += 1
+            else:
+                counts["unknown"] = counts.get("unknown", 0) + 1
+        return counts
 
     def get_per_model_stats(self) -> dict[str, dict[str, Any]]:
         """Aggregate per-model RequestStats, deduplicating shared RequestStats objects."""

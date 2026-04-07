@@ -47,6 +47,7 @@ class Config:
     phantom_per_request_ceiling = None
     phantom_tool_truncation_overrides = None
     phantom_max_input_tokens = None
+    phantom_ollama_context_length = None  # PHANTOM_OLLAMA_CONTEXT_LENGTH — set context window for local Ollama models
     # Cost rates for Azure/custom endpoints that don't return billing metadata
     phantom_cost_per_1m_input = None   # PHANTOM_COST_PER_1M_INPUT (USD per 1M input tokens)
     phantom_cost_per_1m_output = None  # PHANTOM_COST_PER_1M_OUTPUT (USD per 1M output tokens)

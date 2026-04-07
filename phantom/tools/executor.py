@@ -359,16 +359,16 @@ def _cleanup_screenshot_artifacts(path: str | Path | None = None) -> None:
 
 
 async def execute_tool(tool_name: str, agent_state: Any | None = None, **kwargs: Any) -> Any:
-    # ════════════════════════════════════════════════════════════════════════════
+    # ════════════════════════════════════════════════════════════════════════
     # FEAT-001: Stealth Rate Limiting
-    # ════════════════════════════════════════════════════════════════════════════
+    # ════════════════════════════════════════════════════════════════════════
     # Apply rate limiting before execution for stealth mode
     _apply_stealth_rate_limit(tool_name)
     # ─────────────────────────────────────────────────────────────────────────────
     
-    # ════════════════════════════════════════════════════════════════════════════
+    # ════════════════════════════════════════════════════════════════════════
     # SECURITY REC LOW-7: Tool-Level RBAC Permission Check
-    # ════════════════════════════════════════════════════════════════════════════
+    # ════════════════════════════════════════════════════════════════════════
     # Check RBAC permissions before executing any tool.
     # This ensures only authorized agents can execute sensitive tools.
     try:
@@ -381,13 +381,22 @@ async def execute_tool(tool_name: str, agent_state: Any | None = None, **kwargs:
         pass  # RBAC module not available - allow execution
     # ─────────────────────────────────────────────────────────────────────────────
     
+    # FIX: Ensure agent_id is always captured - even if agent_state is None
+    _agent_id = None
+    if agent_state is not None:
+        _agent_id = getattr(agent_state, "agent_id", None)
+    if not _agent_id:
+        # Try to get from kwargs as fallback
+        _agent_id = kwargs.get("agent_id", "unknown")
+    if not _agent_id or _agent_id == "unknown":
+        _agent_id = "unknown"
+    
     execute_in_sandbox = should_execute_in_sandbox(tool_name)
     sandbox_mode = os.getenv("PHANTOM_SANDBOX_MODE", "false").lower() == "true"
 
     # ── Audit: log tool invocation ─────────────────────────────────────────
     from phantom.logging.audit import get_audit_logger as _get_audit
     _audit = _get_audit()
-    _agent_id = getattr(agent_state, "agent_id", "unknown") or "unknown"
     _exec_id = _audit.log_tool_start(_agent_id, tool_name, kwargs) if _audit else None
     _t0 = time.monotonic()
     # ──────────────────────────────────────────────────────────────────
@@ -1060,20 +1069,42 @@ def _extract_vuln_signals(tool_name: str, output: str) -> list[str]:
             signals.append(f"{signal_type}: Pattern '{pattern}' detected in response")
             break
 
-    # RCE signals
-    _rce_keywords = ["uid=", "root:", "/bin/", "whoami", "id=", "www-data"]
-    for kw in _rce_keywords:
-        if kw in lower:
-            signals.append(f"RCE_POTENTIAL: '{kw}' found in output")
-            break
+    # RCE signals - Context-aware detection to avoid false positives
+    # Only trigger on command output patterns, not HTML/CSS/text content
+    _rce_patterns = [
+        # Match actual command output, not substrings in HTML/CSS
+        (r"uid=\d+\([a-z0-9_-]+\)", "RCE_CONFIRMED"),  # uid=1000(user)
+        (r"^root:[^:]*:\d+:\d+:", "RCE_CONFIRMED"),    # /etc/passwd format at line start
+        (r"\b(bash|sh|zsh|dash)\s+-c\b", "RCE_POTENTIAL"),  # shell invocation
+        (r"^total\s+\d+\s*$", "RCE_POTENTIAL"),        # ls -l output
+        (r"^\s*(drwx|lrwx|-rwx)", "RCE_POTENTIAL"),    # file permissions at line start
+    ]
+    for pattern, signal_type in _rce_patterns:
+        if _re_sig.search(pattern, lower, _re_sig.MULTILINE):
+            # Find matching line for context
+            for line in output.splitlines():
+                if _re_sig.search(pattern, line.lower()):
+                    signals.append(f"{signal_type}: {line.strip()[:200]}")
+                    break
 
-    # SSRF signals
-    _ssrf_keywords = ["internal", "127.0.0.1", "localhost", "169.254.169.254", "metadata"]
+    # SSRF signals - Context-aware detection to avoid false positives
+    # Only trigger on actual network responses, not HTML content mentioning "internal"
     if tool_name in {"send_request", "terminal_execute"}:
-        for kw in _ssrf_keywords:
-            if kw in lower:
-                signals.append(f"SSRF_POTENTIAL: '{kw}' found in response")
-                break
+        _ssrf_patterns = [
+            # Match actual private IPs in responses, not just anywhere
+            (r"(?:^|[^\d])127\.0\.0\.1(?:[^\d]|$)", "SSRF_LOCALHOST"),
+            (r"(?:^|[^\d])169\.254\.169\.254(?:[^\d]|$)", "SSRF_METADATA"),  # AWS metadata
+            (r"169\.254\.169\.254/latest/meta-data", "SSRF_CONFIRMED"),     # AWS metadata access
+            (r"metadata\.google\.internal", "SSRF_CONFIRMED"),              # GCP metadata
+            # Only flag "internal" if it appears in suspicious contexts
+            (r"internal.*(?:server|api|admin|backend|database)", "SSRF_POTENTIAL"),
+        ]
+        for pattern, signal_type in _ssrf_patterns:
+            if _re_sig.search(pattern, lower):
+                for line in output.splitlines():
+                    if _re_sig.search(pattern, line.lower()):
+                        signals.append(f"{signal_type}: {line.strip()[:200]}")
+                        break
 
     # Nuclei/scanner severity signals
     for severity in ["critical", "high"]:
