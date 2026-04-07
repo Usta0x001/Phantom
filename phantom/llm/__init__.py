@@ -75,3 +75,4 @@ for _model_name, _model_info in _PHANTOM_EXTRA_MODELS.items():
 logging.getLogger("asyncio").setLevel(logging.CRITICAL)
 logging.getLogger("asyncio").propagate = False
 warnings.filterwarnings("ignore", category=RuntimeWarning, module="asyncio")
+warnings.filterwarnings("ignore", category=RuntimeWarning, module="litellm")
