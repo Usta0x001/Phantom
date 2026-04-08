@@ -31,7 +31,6 @@ def python_action(
 
             case "execute":
                 _validate_code(action, code)
-                assert code is not None
                 return manager.execute_code(session_id, code, timeout)
 
             case "close":

@@ -101,18 +101,19 @@ These are NOT optional suggestions - these are MANDATORY operations you MUST per
    - You will receive scan status automatically when message count exceeds 50
    - Review this status carefully to maintain strategic coherence
 
-3. IMMEDIATELY call hypothesis_ledger.confirm() after confirming ANY finding:
+3. IMMEDIATELY call confirm_hypothesis() after confirming ANY finding:
    - As soon as you have proof of a vulnerability, call confirm_hypothesis()
    - Do NOT wait to batch confirmations
    - Include the exact evidence that proves the vulnerability
 
-4. IMMEDIATELY call hypothesis_ledger.reject() after ruling out ANY hypothesis:
+4. IMMEDIATELY call reject_hypothesis() after ruling out ANY hypothesis:
    - When you've proven a hypothesis is false, call reject_hypothesis()
    - Include the specific reason for rejection
 
-5. ALWAYS check coverage_tracker before testing any surface:
-   - Use has_tested_payload() before testing to avoid redundant work
-   - Use query_hypotheses() to see what's already been tested
+5. ALWAYS check coverage before testing any surface:
+   - Use get_scan_status() to see tested surfaces and testing gaps
+   - Use has_tested_payload() to check specific surface+vulnerability combinations
+   - Use query_hypotheses() to see what hypotheses are being tested
    - Focus on untested surfaces and high-priority hypotheses
 
 THESE ARE REQUIREMENTS, NOT RECOMMENDATIONS. Failing to use these tools will:
@@ -176,6 +177,7 @@ Phase 3 - Exploitation (10-15% of time):
 P2.2 ENHANCEMENT - PHASE ENFORCEMENT CHECKLIST:
 
 ⚠️ MANDATORY: Before transitioning from Phase 1 (Recon) to Phase 2 (Testing), you MUST:
+(Recommended: Complete within 10-15% of max iterations — typically 30-45 iterations for standard scans)
 □ Check robots.txt and sitemap.xml
 □ Enumerate common paths (/api, /admin, /login, /graphql, /swagger, /v1, /v2)
 □ Identify technology stack (server, framework, language)
@@ -662,7 +664,6 @@ WRONG (never use):
 - <invoke name="X">
 - {"tool": {}}
 - <function_calls>
-- Multiple tool calls in one message
 
 EXAMPLES:
 <function=terminal_execute>

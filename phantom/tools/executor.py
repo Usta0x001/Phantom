@@ -587,8 +587,6 @@ async def execute_tool_with_validation(
     if not is_valid:
         return f"Error: {error_msg}"
 
-    assert tool_name is not None
-
     arg_error = _validate_tool_arguments(tool_name, kwargs)
     if arg_error:
         return f"Error: {arg_error}"

@@ -75,13 +75,15 @@ async def _create_browser() -> Browser:
 def _get_browser() -> tuple[asyncio.AbstractEventLoop, Browser]:
     with _state.lock:
         _ensure_event_loop()
-        assert _state.event_loop is not None
+        if _state.event_loop is None:
+            raise RuntimeError("Failed to initialize browser event loop")
 
         if _state.browser is None or not _state.browser.is_connected():
             future = asyncio.run_coroutine_threadsafe(_create_browser(), _state.event_loop)
             future.result(timeout=30)
 
-        assert _state.browser is not None
+        if _state.browser is None:
+            raise RuntimeError("Failed to initialize browser instance")
         return _state.event_loop, _state.browser
 
 
@@ -130,7 +132,8 @@ class BrowserInstance:
         page.on("console", handle_console)
 
     async def _create_context(self, url: str | None = None) -> dict[str, Any]:
-        assert self._browser is not None
+        if self._browser is None:
+            raise RuntimeError("Browser instance not initialized")
 
         self.context = await self._browser.new_context(
             viewport={"width": 1280, "height": 720},

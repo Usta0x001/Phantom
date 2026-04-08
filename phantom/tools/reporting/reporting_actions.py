@@ -737,7 +737,8 @@ def create_vulnerability_report(  # noqa: PLR0912
     if replay_status not in _VALID_REPLAY_STATUS:
         replay_status = "SKIPPED"
 
-    assert parsed_cvss is not None
+    if parsed_cvss is None:
+        raise RuntimeError("CVSS parsing failed - should have been caught by validation")
     cvss_score, cvss_severity, cvss_vector = calculate_cvss_and_severity(**parsed_cvss)
 
     try:

@@ -736,7 +736,6 @@ async def extract_endpoints(
         }
     
     # Fetch content if URL provided
-    base_url = None
     if url and not content:
         content, meta = await _fetch_url(url)
         if not content:
@@ -748,7 +747,12 @@ async def extract_endpoints(
             }
         base_url = url
     
-    assert content is not None
+    if not content:
+        return {
+            "success": False,
+            "error": "No content available to analyze",
+            "endpoints": [],
+        }
     
     # Extract endpoints
     endpoints = _extract_endpoints_from_content(content, base_url)
@@ -828,7 +832,12 @@ async def extract_secrets(
                 "secrets": [],
             }
     
-    assert content is not None
+    if not content:
+        return {
+            "success": False,
+            "error": "No content available to analyze",
+            "secrets": [],
+        }
     
     # Extract secrets
     secrets = _extract_secrets_from_content(content)
@@ -903,7 +912,12 @@ async def analyze_js_frameworks(
                 "frameworks": [],
             }
     
-    assert content is not None
+    if not content:
+        return {
+            "success": False,
+            "error": "No content available to analyze",
+            "frameworks": [],
+        }
     
     # Detect frameworks
     frameworks = _detect_frameworks(content)

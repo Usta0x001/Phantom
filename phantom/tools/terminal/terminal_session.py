@@ -95,10 +95,14 @@ class TerminalSession:
         self._cwd = str(Path(self.work_dir).resolve())
         self._initialized = True
 
-        assert self.server is not None
-        assert self.session is not None
-        assert self.window is not None
-        assert self.pane is not None
+        if self.server is None:
+            raise RuntimeError("Failed to initialize tmux server")
+        if self.session is None:
+            raise RuntimeError("Failed to create tmux session")
+        if self.window is None:
+            raise RuntimeError("Failed to create tmux window")
+        if self.pane is None:
+            raise RuntimeError("Failed to create tmux pane")
 
     def _get_pane_content(self) -> str:
         if not self.pane:

@@ -92,7 +92,6 @@ def _handle_navigation_actions(
         return manager.launch_browser(url)
     if action == "goto":
         _validate_url(action, url)
-        assert url is not None
         return manager.goto_url(url, tab_id)
     if action == "back":
         return manager.back(tab_id)
@@ -111,7 +110,6 @@ def _handle_interaction_actions(
 ) -> dict[str, Any]:
     if action in {"click", "double_click", "hover"}:
         _validate_coordinate(action, coordinate)
-        assert coordinate is not None
         action_map = {
             "click": manager.click,
             "double_click": manager.double_click,
@@ -125,11 +123,9 @@ def _handle_interaction_actions(
 
     if action == "type":
         _validate_text(action, text)
-        assert text is not None
         return manager.type_text(text, tab_id)
     if action == "press_key":
         _validate_key(action, key)
-        assert key is not None
         return manager.press_key(key, tab_id)
 
     raise ValueError(f"Unknown interaction action: {action}")
@@ -149,11 +145,9 @@ def _handle_tab_actions(
         return manager.new_tab(url)
     if action == "switch_tab":
         _validate_tab_id(action, tab_id)
-        assert tab_id is not None
         return manager.switch_tab(tab_id)
     if action == "close_tab":
         _validate_tab_id(action, tab_id)
-        assert tab_id is not None
         return manager.close_tab(tab_id)
     if action == "list_tabs":
         return manager.list_tabs()
@@ -171,15 +165,12 @@ def _handle_utility_actions(
 ) -> dict[str, Any]:
     if action == "wait":
         _validate_duration(action, duration)
-        assert duration is not None
         return manager.wait_browser(duration, tab_id)
     if action == "execute_js":
         _validate_js_code(action, js_code)
-        assert js_code is not None
         return manager.execute_js(js_code, tab_id)
     if action == "save_pdf":
         _validate_file_path(action, file_path)
-        assert file_path is not None
         return manager.save_pdf(file_path, tab_id)
     if action == "get_console_logs":
         return manager.get_console_logs(tab_id, clear)
@@ -201,7 +192,6 @@ def _handle_selector_actions(
 ) -> dict[str, Any]:
     """Handle CSS selector-based browser actions."""
     _validate_selector(action, selector)
-    assert selector is not None
 
     # Default timeout is 5 seconds for most actions, 10 for wait_for_selector
     default_timeout = 10.0 if action == "wait_for_selector" else 5.0
@@ -212,7 +202,6 @@ def _handle_selector_actions(
 
     if action == "fill_selector":
         _validate_text(action, text)
-        assert text is not None
         return manager.fill_selector(selector, text, tab_id, effective_timeout)
 
     if action == "wait_for_selector":
