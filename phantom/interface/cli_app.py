@@ -1117,12 +1117,23 @@ def config_set(
 
 
 @config_app.command("reset")
-def config_reset() -> None:
-    """Reset all saved configuration."""
+def config_reset(
+    var_name: str | None = typer.Argument(None, help="Specific variable to reset. If not provided, resets all config.")
+) -> None:
+    """Reset all saved configuration or a specific variable."""
     from phantom.config import Config
 
-    Config.save({"env": {}})
-    console.print("[green]Configuration reset to defaults.[/]")
+    if var_name:
+        success = Config.reset_var(var_name)
+        if success:
+            console.print(f"[green]Reset variable: {var_name.upper()}[/]")
+        else:
+            console.print(f"[red]Error: {var_name} is not a tracked config variable.[/]")
+            tracked = Config.tracked_vars()
+            console.print(f"[dim]Valid variables: {', '.join(sorted(tracked)[:10])}...[/]")
+    else:
+        Config.reset_var(None)
+        console.print("[green]Configuration reset to defaults.[/]")
 
 
 # ──────────────────────────── report ────────────────────────────

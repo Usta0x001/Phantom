@@ -22,7 +22,18 @@ MAX_TOTAL_TOKENS = 128_000
 MIN_RECENT_MESSAGES = 10
 # Hard ceiling on compression threshold regardless of model context window size.
 # Prevents runaway context growth on models with very large windows (e.g. 200k+).
-MAX_CONTEXT_CEILING = 80_000
+# FIX #2: Now configurable via PHANTOM_MAX_CONTEXT_CEILING environment variable
+def _get_max_context_ceiling() -> int:
+    from phantom.config.config import Config
+    ceiling_str = Config.get("phantom_max_context_ceiling")
+    if ceiling_str:
+        try:
+            return int(ceiling_str)
+        except ValueError:
+            pass
+    return 80_000
+
+MAX_CONTEXT_CEILING = _get_max_context_ceiling()
 
 # Max tokens for the compressor's own summarization call (cheap, non-thinking)
 # AUDIT-FIX-03: Increased from 3000 to 8000 so summaries preserve exploit detail.

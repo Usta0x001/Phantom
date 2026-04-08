@@ -13,7 +13,10 @@ __all__ = [
     "LLMRequestFailedError",
 ]
 
+# FIX #4: Suppress LiteLLM warnings and provider list messages
 litellm._logging._disable_debugging()
+litellm.suppress_debug_info = True
+litellm.drop_params = True  # Drop unknown parameters silently
 
 # ── Register models not in litellm's built-in registry ─────────────────────
 # Without this, litellm.get_model_info() throws an exception for these models,

@@ -54,6 +54,7 @@ class Config:
     # Memory compressor configuration
     phantom_compressor_llm = None          # PHANTOM_COMPRESSOR_LLM — cheaper model for summarization
     phantom_compressor_chunk_size = None   # PHANTOM_COMPRESSOR_CHUNK_SIZE — msgs per compression call
+    phantom_max_context_ceiling = None     # PHANTOM_MAX_CONTEXT_CEILING — hard limit on context tokens (default 80000)
     # Resume / checkpoint feature
     phantom_checkpoint_interval = "5"      # save checkpoint every N agent iterations
     # LLM fallback on persistent failure
@@ -148,8 +149,8 @@ class Config:
     phantom_browser_image_full_max_bytes = "250000"
     phantom_browser_image_max_per_turn = "1"
     phantom_adaptive_truncation = "true"
-    phantom_browser_truncation_burst_limit = "16000"
-    phantom_terminal_truncation_burst_limit = "32000"
+    phantom_browser_truncation_burst_limit = "32000"  # FIX #5: Increased from 16K to 32K to match terminal
+    phantom_terminal_truncation_burst_limit = "100000"  # Terminal default is 100K (higher due to tool output volume)
     phantom_footer_brand = "phantom-agent"
     phantom_footer_discord = "phantom-agent"
     phantom_max_total_image_bytes = "300000"
@@ -277,6 +278,40 @@ class Config:
             return False
         with contextlib.suppress(OSError):
             config_path.chmod(0o600)  # may fail on Windows
+        return True
+
+    @classmethod
+    def reset_var(cls, var_name: str | None = None) -> bool:
+        """Reset specific config variable or all if var_name is None.
+        
+        Args:
+            var_name: Optional specific variable name to reset.
+                     If None, resets all saved configuration.
+        
+        Returns:
+            True if reset successful, False otherwise.
+        """
+        current_config = cls.load()
+        env_vars = current_config.get("env", {})
+        
+        if not isinstance(env_vars, dict):
+            env_vars = {}
+        
+        if var_name is None:
+            # Reset all - clear entire env section
+            env_vars = {}
+        else:
+            # Reset specific variable
+            var_upper = var_name.upper()
+            tracked = cls.tracked_vars()
+            
+            if var_upper not in tracked:
+                logger.warning(f"Variable {var_upper} is not a tracked config variable")
+                return False
+            
+            env_vars.pop(var_upper, None)
+        
+        cls.save({"env": env_vars})
         return True
 
     @classmethod
