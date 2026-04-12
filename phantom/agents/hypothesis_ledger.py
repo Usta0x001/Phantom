@@ -440,6 +440,24 @@ class HypothesisLedger:
         with self._lock:
             return self._hypotheses.get(hypothesis_id)
 
+    def update_status(self, hypothesis_id: str, status: str, evidence: str = "") -> bool:
+        """Backward-compatible status updater used by older integration tests."""
+        if status not in _VALID_STATUSES:
+            return False
+        with self._lock:
+            hyp = self._hypotheses.get(hypothesis_id)
+            if not hyp:
+                return False
+            hyp.status = status
+            if evidence:
+                _, validated_evidence = self._validate_evidence_quality(evidence, status)
+                if status == "rejected":
+                    hyp.evidence_against.append(validated_evidence)
+                else:
+                    hyp.evidence_for.append(validated_evidence)
+            hyp.last_updated = datetime.now(UTC).isoformat()
+            return True
+
     def register_confirmation_callback(
         self, callback: Callable[[str, Hypothesis], None]
     ) -> None:

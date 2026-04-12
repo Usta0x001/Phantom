@@ -98,8 +98,12 @@ def finish_scan(
     methodology: str,
     technical_analysis: str,
     recommendations: str,
+    state: Any = None,
     agent_state: Any = None,
 ) -> dict[str, Any]:
+    if agent_state is None and state is not None:
+        agent_state = state
+
     validation_error = _validate_root_agent(agent_state)
     if validation_error:
         return validation_error

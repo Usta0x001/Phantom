@@ -87,6 +87,23 @@ _PROFILES: dict[str, ScanProfile] = {
     ),
 }
 
+# Backward-compatible dict view used by legacy tests/tools.
+SCAN_PROFILES: dict[str, dict[str, object]] = {
+    name: {
+        "name": profile.name,
+        "description": profile.description,
+        "scan_mode": profile.scan_mode,
+        "max_iterations": profile.max_iterations,
+        "sandbox_timeout_s": profile.sandbox_timeout_s,
+        "reasoning_effort": profile.reasoning_effort,
+        "max_agents": profile.max_agents,
+        "enable_browser": profile.enable_browser,
+        "priority_tools": list(profile.priority_tools),
+        "skip_tools": list(profile.skip_tools),
+    }
+    for name, profile in _PROFILES.items()
+}
+
 
 def list_profiles() -> list[dict[str, str]]:
     """Return a list of profile descriptors (name + description)."""

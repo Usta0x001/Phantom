@@ -9,13 +9,14 @@ class LLMConfig:
     def __init__(
         self,
         model_name: str | None = None,
+        litellm_model: str | None = None,
         enable_prompt_caching: bool = True,
         skills: list[str] | None = None,
         timeout: int | None = None,
         scan_mode: str = "deep",
     ):
         resolved_model, self.api_key, self.api_base = resolve_llm_config()
-        self.model_name = model_name or resolved_model
+        self.model_name = model_name or litellm_model or resolved_model
 
         if not self.model_name:
             raise ValueError("PHANTOM_LLM environment variable must be set and not empty")

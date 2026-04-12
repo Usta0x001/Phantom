@@ -31,6 +31,7 @@ class AgentState(BaseModel):
     task: str = ""
     iteration: int = 0
     max_iterations: int = 300
+    scan_mode: str = "deep"
     completed: bool = False
     stop_requested: bool = False
     waiting_for_input: bool = False
@@ -54,15 +55,80 @@ class AgentState(BaseModel):
     # so they survive memory compression and can be re-injected at report time.
     finding_anchors: list[dict[str, Any]] = Field(default_factory=list)
 
+    # Maximum anchors to store (matches injection limit in llm.py)
+    MAX_FINDING_ANCHORS: int = 15
+    
+    # FIX BUG-7: Anchor expiration after 3 compression cycles
+    MAX_ANCHOR_AGE_CYCLES: int = 3
+    
+    # PLAN FIX: Message expiration
+    MAX_MESSAGES_BEFORE_CLEANUP: int = 50  # Keep last 50 messages, archive rest
+    
+    def cleanup_old_messages(self) -> int:
+        """PLAN FIX: Remove old messages beyond MAX_MESSAGES_BEFORE_CLEANUP.
+        
+        Keeps recent messages for context, archives older ones.
+        Returns number of messages removed.
+        """
+        if len(self.messages) <= self.MAX_MESSAGES_BEFORE_CLEANUP:
+            return 0
+        
+        removed_count = len(self.messages) - self.MAX_MESSAGES_BEFORE_CLEANUP
+        # Keep recent messages
+        self.messages = self.messages[-self.MAX_MESSAGES_BEFORE_CLEANUP:]
+        self.last_updated = datetime.now(UTC).isoformat()
+        return removed_count
+    
+    # Track compression cycles for anchor expiration
+    _compression_cycle: int = 0
+    
     def add_finding_anchor(self, anchor: dict[str, Any]) -> None:
         """Store a high-signal finding so it survives memory compression."""
+        # FIX BUG 1: Validate anchor text is not empty, None, or whitespace
+        anchor_text = anchor.get("text")
+        if not anchor_text or not isinstance(anchor_text, str):
+            return  # Reject None or non-string
+        anchor_text = anchor_text.strip()
+        if not anchor_text:
+            return  # Reject empty or whitespace-only anchors
+        
         # Deduplicate by key if present
-        key = anchor.get("key") or anchor.get("text", "")[:80]
+        key = anchor.get("key") or anchor_text[:80]
         for existing in self.finding_anchors:
             if (existing.get("key") or existing.get("text", "")[:80]) == key:
                 return  # already anchored
+        
+        # FIX BUG 2: Enforce maximum anchor limit
+        if len(self.finding_anchors) >= self.MAX_FINDING_ANCHORS:
+            return  # Reject if at limit
+        
+        # Store the anchor with cleaned text and compression cycle
+        anchor["text"] = anchor_text
+        anchor["added_cycle"] = self._compression_cycle
         self.finding_anchors.append(anchor)
         self.last_updated = datetime.now(UTC).isoformat()
+    
+    def expire_stale_anchors(self) -> int:
+        """FIX BUG-7: Remove anchors older than MAX_ANCHOR_AGE_CYCLES compression cycles.
+        
+        Returns number of anchors removed.
+        """
+        expired = 0
+        retained = []
+        for anchor in self.finding_anchors:
+            added_cycle = anchor.get("added_cycle", 0)
+            age = self._compression_cycle - added_cycle
+            if age < self.MAX_ANCHOR_AGE_CYCLES:
+                retained.append(anchor)
+            else:
+                expired += 1
+        self.finding_anchors = retained
+        return expired
+    
+    def increment_compression_cycle(self) -> None:
+        """FIX BUG-7: Track compression cycles for anchor expiration."""
+        self._compression_cycle += 1
+        self.expire_stale_anchors()
 
     def increment_iteration(self) -> None:
         self.iteration += 1
@@ -186,6 +252,16 @@ class AgentState(BaseModel):
 
     def get_conversation_history(self) -> list[dict[str, Any]]:
         return self.messages
+
+    @property
+    def conversation_history(self) -> list[dict[str, Any]]:
+        """Backward-compatible alias for message history."""
+        return self.messages
+
+    @property
+    def current_iteration(self) -> int:
+        """Backward-compatible alias for iteration counter."""
+        return self.iteration
 
     def get_execution_summary(self) -> dict[str, Any]:
         return {

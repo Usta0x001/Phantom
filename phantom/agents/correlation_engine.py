@@ -218,6 +218,22 @@ class CorrelationEngine:
                 "total_suggestions": len(self._suggestions),
             }
 
+    def record_finding(
+        self,
+        vuln_class: str,
+        surface: str,
+        severity: str = "medium",
+        details: dict[str, Any] | None = None,
+    ) -> str:
+        """Backward-compatible wrapper that returns only the finding ID."""
+        result = self.add_finding(
+            vuln_class=vuln_class,
+            surface=surface,
+            severity=severity,
+            details=details,
+        )
+        return str(result["finding_id"])
+
     def _identify_chains(self, finding_id: str, vuln_class: str) -> list[ChainSuggestion]:
         """Identify potential chains based on a new finding."""
         new_suggestions: list[ChainSuggestion] = []
@@ -291,6 +307,10 @@ class CorrelationEngine:
         """Return all chain suggestions."""
         with self._lock:
             return list(self._suggestions.values())
+
+    def get_chain_suggestions(self) -> list[ChainSuggestion]:
+        """Backward-compatible alias used by older integration tests."""
+        return self.get_all_suggestions()
 
     def get_findings(self) -> list[Finding]:
         """Return all recorded findings."""

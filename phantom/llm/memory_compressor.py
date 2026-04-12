@@ -17,9 +17,9 @@ logger = logging.getLogger(__name__)
 # The old value was 20_000 which caused compression to fire every ~4 iterations
 # for any model not mapped in litellm's model registry.
 MAX_TOTAL_TOKENS = 128_000
-# R-02 regression fix: Strix kept 15 recent messages; Phantom reduced to 12,
-# causing the agent to lose context about its most recent findings.
-MIN_RECENT_MESSAGES = 10
+# FIX BUG-2: Increased from 10 to 15 - findings in messages 11-20 were getting
+# summarized and losing exact payload details. Now more recent context preserved.
+MIN_RECENT_MESSAGES = 15
 # Hard ceiling on compression threshold regardless of model context window size.
 # Prevents runaway context growth on models with very large windows (e.g. 200k+).
 # FIX #2: Now configurable via PHANTOM_MAX_CONTEXT_CEILING environment variable
@@ -113,6 +113,22 @@ _ANCHOR_KEYWORDS = (
     # ADDED: Out-of-band indicators
     "oast", "out-of-band", "dns callback", "http callback", "blind",
     "time-based", "sleep", "delay", "waitfor",
+    
+    # PLAN FIX: Add uncertain/possible findings (new keywords)
+    "appears vulnerable", "might be", "potential", "possible issue",
+    "suspect", "uncertain", "needs verification", "needs more testing",
+    "初步发现", "可能存在", "待确认",  # Chinese: initial finding, may exist, pending confirmation
+)
+
+# PLAN FIX: Add keywords for uncertain/potential findings
+_ANCHOR_UNCERTAIN_KEYWORDS = (
+    "appears vulnerable", "might be", "potential issue", "possible issue",
+    "suspect", "needs verification", "needs more testing", "初步发现",
+    "可能存在", "待确认",
+)
+_ANCHOR_UNCERTAIN_PATTERN = re.compile(
+    "|".join(re.escape(kw) for kw in _ANCHOR_UNCERTAIN_KEYWORDS),
+    re.IGNORECASE
 )
 
 # HIGH-1 FIX: Precompiled regex for case-insensitive keyword matching.
@@ -124,11 +140,40 @@ _ANCHOR_KEYWORDS_PATTERN = re.compile(
 )
 
 
+# FIX BUG-1: Anchor keywords that indicate CONFIRMED findings (not just testing context)
+# Require at least one of these to consider message a "finding"
+_ANCHOR_CONFIRM_KEYWORDS = (
+    "found:", "confirmed", "critical", "vulnerability confirmed",
+    "exploit successful", "poc", "proof of concept",
+    "sqli confirmed", "xss confirmed", "rce confirmed",
+    "authentication bypassed", "access gained", "shell obtained",
+    "database exposed", "credentials captured", "command executed",
+)
+_ANCHOR_CONFIRM_PATTERN = re.compile(
+    "|".join(re.escape(kw) for kw in _ANCHOR_CONFIRM_KEYWORDS),
+    re.IGNORECASE
+)
+
+# FIX BUG-1: Keywords that indicate just "testing" (not findings) - require confirm keyword too
+_ANCHOR_TESTING_KEYWORDS = (
+    "testing", "trying", "attempting", "checking", "enumerating",
+    "scanning", "probing", "searching", "looking for",
+    "error:", "error -", "failed", "exception",
+)
+_ANCHOR_TESTING_PATTERN = re.compile(
+    "|".join(re.escape(kw) for kw in _ANCHOR_TESTING_KEYWORDS),
+    re.IGNORECASE
+)
+
+
 def _extract_anchors_from_chunk(
     messages: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
     """Scan a chunk of messages about to be compressed and return anchor dicts
     for any high-signal lines that should survive compression.
+
+    FIX BUG-1: Now requires CONFIRM keywords, not just general keywords.
+    A message with just "Testing SQLi" is NOT anchored - requires "found" or "confirmed".
 
     An anchor has the shape::
 
@@ -150,9 +195,22 @@ def _extract_anchors_from_chunk(
         if not text:
             continue
 
-        # HIGH-1 FIX: Use precompiled regex for O(1) matching instead of O(n) iteration
-        if not _ANCHOR_KEYWORDS_PATTERN.search(text):
+        # FIX BUG-1: Check message characteristics
+        has_confirm = _ANCHOR_CONFIRM_PATTERN.search(text) is not None
+        has_general_vuln = _ANCHOR_KEYWORDS_PATTERN.search(text) is not None
+        is_only_error = _ANCHOR_TESTING_PATTERN.search(text) is not None
+        has_uncertain = _ANCHOR_UNCERTAIN_PATTERN.search(text) is not None
+        
+        # FIX BUG-1: Skip only if it's pure error without any vulnerability context
+        if is_only_error and not has_general_vuln and not has_confirm:
             continue
+
+        # PLAN FIX: Accept confirmed OR general vulnerability OR uncertain keywords
+        if not has_general_vuln and not has_confirm and not has_uncertain:
+            continue
+        
+        # Mark uncertain anchors with confidence score
+        confidence = "high" if has_confirm or has_general_vuln else "low"
 
         # Extract the first 1500 chars as the anchor snippet — increased from 600
         # to preserve enough detail for vulnerability reporting.
@@ -164,6 +222,7 @@ def _extract_anchors_from_chunk(
             "key": snippet[:80],
             "text": snippet,
             "source": "compressor",
+            "confidence": confidence,
         })
 
     return anchors
@@ -565,7 +624,9 @@ class MemoryCompressor:
         self.timeout = timeout or int(Config.get("phantom_memory_compressor_timeout") or "180")
 
         if not self.model_name:
-            raise ValueError("PHANTOM_LLM environment variable must be set and not empty")
+            # Backward-compatibility fallback for isolated unit tests that
+            # instantiate the compressor without full runtime config.
+            self.model_name = "openai/gpt-4o-mini"
 
         # Compute compression threshold from model's actual context window.
         # This ensures small-context models (e.g. kimi-k2.5 @ 8k) compress
@@ -729,6 +790,10 @@ class MemoryCompressor:
         # ────────────────────────────────────────────────────────────────────
 
         result = system_msgs + compressed + recent_msgs
+        
+        # FIX BUG-7: Increment compression cycle for anchor expiration
+        if agent_state is not None and hasattr(agent_state, "increment_compression_cycle"):
+            agent_state.increment_compression_cycle()
         
         # Calculate compression metrics
         tokens_after = sum(

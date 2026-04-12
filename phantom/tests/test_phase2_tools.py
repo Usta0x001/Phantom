@@ -741,7 +741,7 @@ class TestIntegration(unittest.TestCase):
             "agents", "PhantomAgent", "system_prompt.jinja"
         )
         
-        with open(prompt_path, "r") as f:
+        with open(prompt_path, "r", encoding="utf-8") as f:
             content = f.read()
         
         # Should reference payload tools
@@ -754,8 +754,8 @@ class TestIntegration(unittest.TestCase):
         # Should reference session tools
         self.assertIn("create_session", content)
         
-        # Should have webapp pentest section
-        self.assertIn("webapp_pentest_tools", content)
+        # Should have payload generators section
+        self.assertIn("PAYLOAD GENERATORS (Phantom's advantage over other tools):", content)
 
 
 class TestSecurityProperties(unittest.TestCase):

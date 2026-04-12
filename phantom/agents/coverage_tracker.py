@@ -295,6 +295,10 @@ class CoverageTracker:
         with self._lock:
             return list(self._tested.values())
 
+    def get_discovered_surfaces(self) -> list[DiscoveredSurface]:
+        """Backward-compatible alias for discovered untested surfaces."""
+        return self.get_untested_surfaces()
+
     def get_coverage_by_vuln_class(self, vuln_class: str) -> dict[str, Any]:
         """
         Return coverage statistics for a specific vulnerability class.

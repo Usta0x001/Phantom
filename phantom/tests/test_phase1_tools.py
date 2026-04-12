@@ -419,7 +419,7 @@ class TestIntegration(unittest.TestCase):
             "agents", "PhantomAgent", "system_prompt.jinja"
         )
         
-        with open(prompt_path, "r") as f:
+        with open(prompt_path, "r", encoding="utf-8") as f:
             content = f.read()
         
         # Should reference OSINT tools
@@ -430,7 +430,7 @@ class TestIntegration(unittest.TestCase):
         self.assertIn("detect_waf", content)
         
         # Should have passive recon section
-        self.assertIn("passive_recon_tools", content)
+        self.assertIn("PASSIVE RECON (query external DBs, not target):", content)
 
 
 class TestSecurityProperties(unittest.TestCase):

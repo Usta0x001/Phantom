@@ -301,7 +301,7 @@ async def shodan_search(
         - ssl.cert.subject.cn:example.com - Find by SSL certificate CN
     """
     api_key = Config.get("phantom_shodan_api_key")
-    if not api_key:
+    if not api_key or str(api_key).strip() == "" or str(api_key).upper() == "NOT_SET":
         return {
             "success": False,
             "error": "PHANTOM_SHODAN_API_KEY not set. "

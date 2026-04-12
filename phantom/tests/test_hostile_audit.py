@@ -16,6 +16,7 @@ A SECURE system should REJECT all these cases or mark them as non-exploitable.
 import unittest
 import sys
 import os
+import asyncio
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -60,7 +61,7 @@ class TestDetectionNoise(unittest.TestCase):
         # Generic error message mentioning SQL
         response = "Error: The SQL database is currently unavailable. Please try again later."
         
-        errors = detect_errors(response)
+        errors = asyncio.run(detect_errors(response))
         
         # Should detect an error, but NOT as SQLi vulnerability
         # This is just a database availability error
@@ -75,18 +76,23 @@ class TestDetectionNoise(unittest.TestCase):
         # Response that LOOKS like /etc/passwd but isn't
         response_body = "Welcome root:admin! Your privilege level is administrator."
         
-        result = analyze_response(
-            url="http://test.com/welcome",
-            status_code=200,
-            headers={"Content-Type": "text/html"},
-            body=response_body
+        result = asyncio.run(
+            analyze_response(
+                response_body=response_body,
+                response_headers={"Content-Type": "text/html"},
+                status_code=200,
+            )
         )
         
         # Should NOT flag this as file disclosure
         # It's just a username display
-        vulns = result.get('vulnerabilities', [])
-        lfi_vulns = [v for v in vulns if 'file' in v.get('type', '').lower() or 
-                     'disclosure' in v.get('type', '').lower()]
+        findings = result.get('findings', [])
+        lfi_vulns = [
+            v
+            for v in findings
+            if 'file' in v.get('vuln_type', '').lower()
+            or 'disclosure' in v.get('vuln_type', '').lower()
+        ]
         
         self.assertEqual(len(lfi_vulns), 0,
                         f"FAILURE: False positive LFI detection. Found: {lfi_vulns}")
@@ -319,16 +325,17 @@ class TestContextUnderstanding(unittest.TestCase):
         """ATTACK: <script> in JSON response"""
         from phantom.tools.response_analysis.response_analysis_actions import analyze_response
         
-        result = analyze_response(
-            url="http://api.test.com/data",
-            status_code=200,
-            headers={"Content-Type": "application/json"},
-            body='{"error": "Script tag <script> not allowed"}'
+        result = asyncio.run(
+            analyze_response(
+                response_body='{"error": "Script tag <script> not allowed"}',
+                response_headers={"Content-Type": "application/json"},
+                status_code=200,
+            )
         )
         
         # With Content-Type: application/json, this should NOT be XSS
-        vulns = result.get('vulnerabilities', [])
-        xss_vulns = [v for v in vulns if 'xss' in v.get('type', '').lower()]
+        findings = result.get('findings', [])
+        xss_vulns = [v for v in findings if 'xss' in v.get('vuln_type', '').lower()]
         
         # If it reports XSS in JSON, that's a false positive
         for vuln in xss_vulns:
@@ -362,7 +369,7 @@ class TestSystemPromptEnforcement(unittest.TestCase):
         if not prompt_path.exists():
             self.skipTest("System prompt not found")
         
-        content = prompt_path.read_text()
+        content = prompt_path.read_text(encoding="utf-8")
         
         # Should explicitly forbid these words
         forbidden = ["potential", "possible", "suspected", "might", "could", "appears to be"]
@@ -384,7 +391,7 @@ class TestSystemPromptEnforcement(unittest.TestCase):
         if not prompt_path.exists():
             self.skipTest("System prompt not found")
         
-        content = prompt_path.read_text()
+        content = prompt_path.read_text(encoding="utf-8")
         
         # Should have clear proof requirement
         self.assertIn("PROOF OR NO REPORT", content,
