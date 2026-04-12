@@ -154,6 +154,29 @@ _ANCHOR_CONFIRM_PATTERN = re.compile(
     re.IGNORECASE
 )
 
+# Additional concrete-evidence markers so anchors prefer actionable findings
+# over generic testing chatter.
+_ANCHOR_EVIDENCE_KEYWORDS = (
+    "status code:",
+    "status=",
+    "returned:",
+    "received:",
+    "response:",
+    "extracted:",
+    "sql error",
+    "syntax error",
+    "<script",
+    "alert(",
+    "token",
+    "uid=",
+    "admin@",
+    "200",
+)
+_ANCHOR_EVIDENCE_PATTERN = re.compile(
+    "|".join(re.escape(kw) for kw in _ANCHOR_EVIDENCE_KEYWORDS),
+    re.IGNORECASE,
+)
+
 # FIX BUG-1: Keywords that indicate just "testing" (not findings) - require confirm keyword too
 _ANCHOR_TESTING_KEYWORDS = (
     "testing", "trying", "attempting", "checking", "enumerating",
@@ -198,19 +221,26 @@ def _extract_anchors_from_chunk(
         # FIX BUG-1: Check message characteristics
         has_confirm = _ANCHOR_CONFIRM_PATTERN.search(text) is not None
         has_general_vuln = _ANCHOR_KEYWORDS_PATTERN.search(text) is not None
-        is_only_error = _ANCHOR_TESTING_PATTERN.search(text) is not None
+        has_testing_language = _ANCHOR_TESTING_PATTERN.search(text) is not None
         has_uncertain = _ANCHOR_UNCERTAIN_PATTERN.search(text) is not None
+        has_concrete_evidence = _ANCHOR_EVIDENCE_PATTERN.search(text) is not None
         
         # FIX BUG-1: Skip only if it's pure error without any vulnerability context
-        if is_only_error and not has_general_vuln and not has_confirm:
+        if has_testing_language and not has_general_vuln and not has_confirm:
             continue
 
-        # PLAN FIX: Accept confirmed OR general vulnerability OR uncertain keywords
-        if not has_general_vuln and not has_confirm and not has_uncertain:
+        # Prefer high-signal anchors:
+        # - confirmed findings, or
+        # - explicitly uncertain findings, or
+        # - vulnerability indicators with concrete evidence.
+        if has_confirm:
+            confidence = "high"
+        elif has_uncertain:
+            confidence = "low"
+        elif has_general_vuln and has_concrete_evidence:
+            confidence = "medium"
+        else:
             continue
-        
-        # Mark uncertain anchors with confidence score
-        confidence = "high" if has_confirm or has_general_vuln else "low"
 
         # Extract the first 1500 chars as the anchor snippet — increased from 600
         # to preserve enough detail for vulnerability reporting.
@@ -708,7 +738,21 @@ class MemoryCompressor:
 
         image_pressure = image_payload_before > self.max_total_image_bytes
 
-        if total_tokens <= self._max_total_tokens * 0.9 and not image_pressure and evicted_images == 0:
+        # Force compression once message count is very high, even if token
+        # estimation says we're below threshold. This prevents long-chat drift
+        # and ensures anchor extraction is exercised on extended runs.
+        try:
+            msg_trigger = int(Config.get("phantom_compressor_message_trigger") or "80")
+        except ValueError:
+            msg_trigger = 80
+        message_pressure = len(regular_msgs) >= max(20, msg_trigger)
+
+        if (
+            total_tokens <= self._max_total_tokens * 0.9
+            and not image_pressure
+            and evicted_images == 0
+            and not message_pressure
+        ):
             return messages
 
         # Pentager ChainSummarizer was here, but removed due to catastrophic forgetting

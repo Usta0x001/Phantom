@@ -26,7 +26,11 @@ from phantom.llm.utils import (
 )
 from phantom.skills import load_skills
 from phantom.tools import get_tools_prompt
-from phantom.tools.dynamic_tools import get_tools_prompt_subset, TOOL_CATEGORIES
+from phantom.tools.dynamic_tools import (
+    get_tool_subset_categories,
+    get_tools_for_subset_mode,
+    get_tools_prompt_subset,
+)
 from phantom.utils.resource_paths import get_phantom_resource_path
 
 
@@ -180,6 +184,11 @@ class CircuitBreaker:
 # Global circuit breaker instance (per-process singleton)
 _CIRCUIT_BREAKER = CircuitBreaker()
 
+
+def _is_circuit_breaker_enabled() -> bool:
+    raw = (Config.get("phantom_circuit_breaker_enabled") or "true").strip().lower()
+    return raw in {"1", "true", "yes", "on"}
+
 # ──────────────────────────────────────────────────────────────────────────────
 
 
@@ -224,6 +233,7 @@ class LLM:
         self._agent_calls: int = 0    # LLM calls during agent loop iterations
         self._error_calls: int = 0    # LLM calls that ended in an error (after retries)
         self.memory_compressor = MemoryCompressor(model_name=config.litellm_model)
+        self.runtime_allowed_tools = self._resolve_runtime_allowed_tools()
         self.system_prompt = self._load_system_prompt(agent_name)
 
         reasoning = Config.get("phantom_reasoning_effort")
@@ -235,6 +245,12 @@ class LLM:
             self._reasoning_effort = "low"
         else:
             self._reasoning_effort = "high"
+
+        # FIX BUG-1: Budget warning flags must be instance variables, not class variables
+        # Class-level variables caused shared state across all LLM instances, where
+        # budget warnings fired once per process instead of once per agent
+        self._budget_warning_80_emitted: bool = False
+        self._budget_warning_90_emitted: bool = False
 
         # Fallback model: used when primary exhausts all retries
         self._fallback_llm_name = Config.get("phantom_fallback_llm") or None
@@ -272,11 +288,9 @@ class LLM:
             if subset_mode == "full":
                 tools_prompt_fn = get_tools_prompt
             else:
-                subset_cats = self._get_tool_subset_categories(subset_mode)
+                subset_cats = get_tool_subset_categories(subset_mode)
                 if subset_cats:
-                    needed_tools = set()
-                    for cat in subset_cats:
-                        needed_tools.update(TOOL_CATEGORIES.get(cat, []))
+                    needed_tools = set(get_tools_for_subset_mode(subset_mode))
                     tools_prompt_fn = lambda: get_tools_prompt_subset(list(needed_tools))
                 else:
                     tools_prompt_fn = get_tools_prompt
@@ -304,15 +318,13 @@ class LLM:
             logger.error("Failed to load system prompt for agent %s", agent_name, exc_info=True)
             return ""
 
-    def _get_tool_subset_categories(self, mode: str) -> list[str]:
-        """Return list of tool categories for the given subset mode."""
-        subsets = {
-            "minimal": ["web_testing", "terminal", "reporting", "python"],
-            "core": ["web_testing", "terminal", "browser", "reporting", "agent_management", "files", "thinking", "python"],
-            "core-fast": ["web_testing", "terminal", "browser", "reporting", "agent_management", "files", "python"],
-            "web": ["web_testing", "terminal", "browser", "reporting", "agent_management", "files", "thinking", "python", "web_search"],
-        }
-        return subsets.get(mode, [])
+    def _resolve_runtime_allowed_tools(self) -> set[str] | None:
+        subset_mode = (Config.get("phantom_tool_subset") or "full").lower()
+        if subset_mode == "full":
+            return None
+
+        subset_tools = get_tools_for_subset_mode(subset_mode)
+        return set(subset_tools)
 
     def set_agent_identity(self, agent_name: str | None, agent_id: str | None) -> None:
         if agent_name:
@@ -323,6 +335,7 @@ class LLM:
     def set_agent_state(self, agent_state: Any) -> None:
         """Attach the agent state so compress_history and anchor injection can use it."""
         self._agent_state = agent_state
+        setattr(agent_state, "_runtime_llm", self)
 
     async def generate(
         self, conversation_history: list[dict[str, Any]]
@@ -335,7 +348,7 @@ class LLM:
             await asyncio.sleep(wait_time)
 
         # RELIABILITY REC MED-5: Check circuit breaker before making request
-        if not _CIRCUIT_BREAKER.allow_request():
+        if _is_circuit_breaker_enabled() and not _CIRCUIT_BREAKER.allow_request():
             raise LLMRequestFailedError(
                 message="LLM circuit breaker is OPEN - too many consecutive failures",
                 details=f"Circuit state: {_CIRCUIT_BREAKER.get_state().value}. Wait before retrying."
@@ -537,7 +550,8 @@ class LLM:
             self._check_per_request_budget(cost_before)
 
         # RELIABILITY REC MED-5: Record successful LLM call - close circuit
-        _CIRCUIT_BREAKER.record_success()
+        if _is_circuit_breaker_enabled():
+            _CIRCUIT_BREAKER.record_success()
 
         accumulated = normalize_tool_format(accumulated)
         accumulated = fix_incomplete_tool_call(_truncate_to_first_function(accumulated))
@@ -799,12 +813,6 @@ class LLM:
         if env_val:
             return int(env_val)
         return None  # let the model use its full output budget (Strix behaviour)
-
-    # ════════════════════════════════════════════════════════════════════════════
-    # EFFICIENCY FIX SCALE-P1.1: Budget threshold tracking for graceful degradation
-    # ════════════════════════════════════════════════════════════════════════════
-    _budget_warning_80_emitted: bool = False
-    _budget_warning_90_emitted: bool = False
 
     def _check_budget(self) -> None:
         """Check budget and apply graceful degradation at thresholds.
@@ -1283,7 +1291,8 @@ class LLM:
 
     def _raise_error(self, e: Exception) -> None:
         # RELIABILITY REC MED-5: Record LLM failure for circuit breaker
-        _CIRCUIT_BREAKER.record_failure()
+        if _is_circuit_breaker_enabled():
+            _CIRCUIT_BREAKER.record_failure()
         raise LLMRequestFailedError(f"LLM request failed: {type(e).__name__}", str(e)) from e
 
     def _is_anthropic(self) -> bool:

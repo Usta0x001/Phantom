@@ -63,6 +63,19 @@ class AgentState(BaseModel):
     
     # PLAN FIX: Message expiration
     MAX_MESSAGES_BEFORE_CLEANUP: int = 50  # Keep last 50 messages, archive rest
+
+    def model_post_init(self, __context: Any) -> None:  # noqa: ANN401
+        """Rebuild private dedup hashes after model restore.
+
+        PrivateAttrs are not serialized by pydantic; after checkpoint resume we
+        rebuild hash memory from loaded messages so duplicate suppression remains
+        effective.
+        """
+        self._message_hashes.clear()
+        for msg in self.messages:
+            content = msg.get("content", "")
+            if isinstance(content, str):
+                self._message_hashes.add(hashlib.sha256(content.encode("utf-8")).hexdigest())
     
     def cleanup_old_messages(self) -> int:
         """PLAN FIX: Remove old messages beyond MAX_MESSAGES_BEFORE_CLEANUP.

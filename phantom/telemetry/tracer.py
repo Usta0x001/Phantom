@@ -272,6 +272,50 @@ class Tracer:
             record["run_metadata"] = self._sanitize_data(self.run_metadata)
         self._append_event_record(record)
 
+    def record_runtime_event(
+        self,
+        event_type: str,
+        actor: dict[str, Any] | None = None,
+        payload: Any | None = None,
+        status: str | None = None,
+        error: Any | None = None,
+        source: str = "phantom.runtime",
+    ) -> None:
+        """Record an event even when OTEL telemetry is disabled.
+
+        This is for operational/runtime signals that must remain visible in
+        `events.jsonl` regardless of remote telemetry settings.
+        """
+        if self._telemetry_enabled:
+            self._emit_event(
+                event_type=event_type,
+                actor=actor,
+                payload=payload,
+                status=status,
+                error=error,
+                source=source,
+            )
+            return
+
+        sanitized_actor = self._sanitize_data(self._enrich_actor(actor)) if actor else None
+        sanitized_payload = self._sanitize_data(payload) if payload is not None else None
+        sanitized_error = self._sanitize_data(error) if error is not None else None
+
+        record = {
+            "timestamp": datetime.now(UTC).isoformat(),
+            "event_type": event_type,
+            "run_id": self.run_id,
+            "trace_id": uuid4().hex,
+            "span_id": uuid4().hex[:16],
+            "parent_span_id": None,
+            "actor": sanitized_actor,
+            "payload": sanitized_payload,
+            "status": status,
+            "error": sanitized_error,
+            "source": source,
+        }
+        self._append_event_record(record)
+
     def set_run_name(self, run_name: str) -> None:
         self.run_name = run_name
         self.run_id = run_name
@@ -423,7 +467,16 @@ class Tracer:
             return
         
         # Validate replay_status against allowed values
-        valid_statuses = {"PASSED", "FAILED", "ERROR", "SKIPPED", "PENDING"}
+        valid_statuses = {
+            "PASSED",
+            "FAILED",
+            "ERROR",
+            "SKIPPED",
+            "PENDING",
+            "EXPLOIT_CONFIRMED",
+            "EXECUTION_ONLY",
+            "REQUIRES_BROWSER",
+        }
         if replay_status.upper() not in valid_statuses:
             logger.warning(
                 f"Replay status '{replay_status}' not in valid set: {valid_statuses}. "

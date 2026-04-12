@@ -22,28 +22,66 @@ if TYPE_CHECKING:
     from phantom.agents.hypothesis_ledger import HypothesisLedger
     from phantom.agents.correlation_engine import CorrelationEngine
 
-# Global ledger instance (set by base_agent.py during initialization)
-_GLOBAL_LEDGER: HypothesisLedger | None = None
+# FIX Bug #3: Use dict keyed by agent_id instead of single global
+# This prevents sub-agents from overwriting each other's ledgers
+_LEDGERS_BY_AGENT: dict[str, HypothesisLedger] = {}
 
 # FIX 4: Global correlation engine instance for chain detection
 _GLOBAL_CORRELATION_ENGINE: CorrelationEngine | None = None
 
 
-def set_ledger(ledger: HypothesisLedger) -> None:
-    """Set the global hypothesis ledger instance."""
-    global _GLOBAL_LEDGER
-    _GLOBAL_LEDGER = ledger
-
-
 def set_correlation_engine(engine: CorrelationEngine) -> None:
-    """FIX 4: Set the global correlation engine instance."""
+    """Set the global correlation engine instance."""
     global _GLOBAL_CORRELATION_ENGINE
     _GLOBAL_CORRELATION_ENGINE = engine
 
 
-def get_ledger() -> HypothesisLedger | None:
-    """Get the global hypothesis ledger instance."""
-    return _GLOBAL_LEDGER
+def set_ledger(ledger: HypothesisLedger, agent_id: str = "default") -> None:
+    """Set the hypothesis ledger instance for a specific agent.
+    
+    Args:
+        ledger: The HypothesisLedger instance
+        agent_id: The agent ID to associate with this ledger (default: "default")
+    """
+    global _LEDGERS_BY_AGENT
+    _LEDGERS_BY_AGENT[agent_id] = ledger
+
+
+def get_ledger(agent_id: str = "default") -> HypothesisLedger | None:
+    """Get the hypothesis ledger instance for a specific agent.
+    
+    Args:
+        agent_id: The agent ID to get ledger for (default: "default")
+    
+    Returns:
+        The HypothesisLedger instance or None
+    """
+    return _LEDGERS_BY_AGENT.get(agent_id)
+
+
+def _get_active_ledger() -> HypothesisLedger | None:
+    """Get the active ledger - tries new dict-based approach first, falls back to global."""
+    # Try dict-based approach first (new fix for Bug #3)
+    ledger = get_ledger("default")
+    if ledger is not None:
+        return ledger
+    
+    # Try global for backward compatibility
+    if _GLOBAL_LEDGER is not None:
+        return _GLOBAL_LEDGER
+    
+    return None
+
+
+# Backward compatibility alias - for setting global when not using agent_id
+def set_global_ledger(ledger: HypothesisLedger) -> None:
+    """Set the global hypothesis ledger instance (backward compatibility)."""
+    global _GLOBAL_LEDGER
+    _GLOBAL_LEDGER = ledger
+
+
+# Global ledger instance (for backward compatibility)
+_GLOBAL_LEDGER: HypothesisLedger | None = None
 
 
 @register_tool
@@ -71,7 +109,9 @@ def add_hypothesis(surface: str, vuln_class: str) -> dict[str, Any]:
             vuln_class="idor"
         )
     """
-    if not _GLOBAL_LEDGER:
+    # FIX Bug #3 & #4: Use _get_active_ledger() with proper validation
+    _ledger = _get_active_ledger()
+    if _ledger is None:
         return {
             "success": False,
             "error": "Hypothesis ledger not initialized",
@@ -79,11 +119,11 @@ def add_hypothesis(surface: str, vuln_class: str) -> dict[str, Any]:
         }
     
     # Check if already exists
-    existing = _GLOBAL_LEDGER.find_by_surface_and_class(surface, vuln_class)
+    existing = _ledger.find_by_surface_and_class(surface, vuln_class)
     is_new = existing is None
     
     # Add (will dedupe internally)
-    hyp_id = _GLOBAL_LEDGER.add(surface, vuln_class)
+    hyp_id = _ledger.add(surface, vuln_class)
     
     return {
         "success": True,
@@ -128,23 +168,33 @@ async def record_payload_test(
             evidence="SQL error: syntax error near OR"
         )
     """
-    if not _GLOBAL_LEDGER:
+    # FIX Bug #4: Use _get_active_ledger() with proper validation
+    _ledger = _get_active_ledger()
+    if _ledger is None:
         return {
             "success": False,
             "error": "Hypothesis ledger not initialized",
         }
     
+    # FIX Bug #4: Validate hypothesis_id exists before recording
+    hyp = _ledger.get(hypothesis_id)
+    if not hyp:
+        return {
+            "success": False,
+            "error": f"Invalid hypothesis_id: {hypothesis_id}. Hypothesis not found.",
+        }
+    
     # Record the payload
-    _GLOBAL_LEDGER.record_payload(hypothesis_id, payload)
+    _ledger.record_payload(hypothesis_id, payload)
     
     # Add evidence
     if outcome == "success" and evidence:
-        await _GLOBAL_LEDGER.add_evidence_for(hypothesis_id, evidence, outcome)
+        await _ledger.add_evidence_for(hypothesis_id, evidence, outcome)
     elif outcome == "failure" and evidence:
-        await _GLOBAL_LEDGER.add_evidence_against(hypothesis_id, evidence, outcome)
+        await _ledger.add_evidence_against(hypothesis_id, evidence, outcome)
     
     # Get current status
-    hyp = _GLOBAL_LEDGER.get(hypothesis_id)
+    hyp = _ledger.get(hypothesis_id)
     status = hyp.status if hyp else "unknown"
     
     return {
@@ -178,18 +228,28 @@ async def confirm_hypothesis(hypothesis_id: str, evidence: str) -> dict[str, Any
             evidence="SQL error: 'You have an error in your SQL syntax near...' confirmed SQLi"
         )
     """
-    if not _GLOBAL_LEDGER:
+    # FIX Bug #3 & #4: Use _get_active_ledger() with proper validation
+    _ledger = _get_active_ledger()
+    if _ledger is None:
         return {
             "success": False,
             "error": "Hypothesis ledger not initialized",
         }
     
-    await _GLOBAL_LEDGER.confirm(hypothesis_id, evidence)
+    # FIX Bug #4: Validate hypothesis_id exists
+    hyp = _ledger.get(hypothesis_id)
+    if not hyp:
+        return {
+            "success": False,
+            "error": f"Invalid hypothesis_id: {hypothesis_id}. Hypothesis not found.",
+        }
+    
+    await _ledger.confirm(hypothesis_id, evidence)
     
     # FIX 4: Add finding to correlation engine for chain detection
     new_chains = []
     if _GLOBAL_CORRELATION_ENGINE:
-        hyp = _GLOBAL_LEDGER.get(hypothesis_id)
+        hyp = _ledger.get(hypothesis_id)
         if hyp:
             # Determine severity from vulnerability class
             severity_map = {
@@ -213,7 +273,7 @@ async def confirm_hypothesis(hypothesis_id: str, evidence: str) -> dict[str, Any
                 details={
                     "hypothesis_id": hypothesis_id,
                     "evidence": evidence,
-                    "tested_at": hyp.tested_at,
+                    "tested_at": hyp.last_updated,  # FIX Bug #2: Use last_updated instead of non-existent tested_at
                 }
             )
             new_chains = result.get("new_suggestions", [])
@@ -231,15 +291,8 @@ async def confirm_hypothesis(hypothesis_id: str, evidence: str) -> dict[str, Any
         response["message"] += f" | {len(new_chains)} vulnerability chain(s) detected!"
     
     return response
-    
-    await _GLOBAL_LEDGER.confirm(hypothesis_id, evidence)
-    
-    return {
-        "success": True,
-        "hypothesis_id": hypothesis_id,
-        "status": "confirmed",
-        "message": f"Confirmed {hypothesis_id} as valid vulnerability",
-    }
+    # FIX Bug #1: DELETE unreachable dead code below (lines 282-289)
+    # This code was unreachable because return statement above exits function
 
 
 @register_tool
@@ -260,13 +313,23 @@ async def reject_hypothesis(hypothesis_id: str, reason: str) -> dict[str, Any]:
             reason="WAF blocks all SQL injection attempts"
         )
     """
-    if not _GLOBAL_LEDGER:
+    # FIX Bug #3 & #4: Use _get_active_ledger() with proper validation
+    _ledger = _get_active_ledger()
+    if _ledger is None:
         return {
             "success": False,
             "error": "Hypothesis ledger not initialized",
         }
     
-    await _GLOBAL_LEDGER.reject(hypothesis_id, reason)
+    # FIX Bug #4: Validate hypothesis_id exists
+    hyp = _ledger.get(hypothesis_id)
+    if not hyp:
+        return {
+            "success": False,
+            "error": f"Invalid hypothesis_id: {hypothesis_id}. Hypothesis not found.",
+        }
+    
+    await _ledger.reject(hypothesis_id, reason)
     
     return {
         "success": True,
@@ -306,15 +369,23 @@ def query_hypotheses(
         # Get all confirmed vulnerabilities
         query_hypotheses(status="confirmed")
     """
-    if not _GLOBAL_LEDGER:
+    if _GLOBAL_LEDGER is None:
         return {
             "success": False,
             "error": "Hypothesis ledger not initialized",
             "hypotheses": [],
         }
     
-    # Get all hypotheses
-    all_hyps = list(_GLOBAL_LEDGER.get_all().values())
+        # Get all hypotheses
+    _ledger = _get_active_ledger()
+    if _ledger is None:
+        return {
+            "success": False,
+            "error": "Hypothesis ledger not initialized",
+            "hypotheses": [],
+        }
+    
+    all_hyps = list(_ledger.get_all().values())
     
     # Filter by status
     if status:
@@ -331,7 +402,7 @@ def query_hypotheses(
         "success": True,
         "hypotheses": [h.to_dict() for h in result_hyps],
         "count": len(result_hyps),
-        "total": len(_GLOBAL_LEDGER.get_all()),
+        "total": len(_ledger.get_all()),
         "message": f"Found {len(result_hyps)} hypotheses",
     }
 
@@ -354,16 +425,17 @@ def get_hypothesis_summary() -> dict[str, Any]:
     Example:
         get_hypothesis_summary()
     """
-    if not _GLOBAL_LEDGER:
+    _ledger = _get_active_ledger()
+    if _ledger is None:
         return {
             "success": False,
             "error": "Hypothesis ledger not initialized",
         }
     
-    summary = _GLOBAL_LEDGER.get_summary()
+    summary = _ledger.get_summary()
     
     # Get top confirmed and open
-    all_hyps = _GLOBAL_LEDGER.get_all()
+    all_hyps = _ledger.get_all()
     confirmed = [h.to_dict() for h in all_hyps.values() if h.status == "confirmed"]
     open_hyps = [h.to_dict() for h in all_hyps.values() if h.status == "open"]
     
@@ -403,17 +475,18 @@ def has_tested_payload(surface: str, vuln_class: str, payload: str) -> dict[str,
             payload="' OR 1=1--"
         )
     """
-    if not _GLOBAL_LEDGER:
+    _ledger = _get_active_ledger()
+    if _ledger is None:
         return {
             "success": False,
             "error": "Hypothesis ledger not initialized",
             "tested": False,
         }
     
-    tested = _GLOBAL_LEDGER.has_tested(surface, vuln_class, payload)
+    tested = _ledger.has_tested(surface, vuln_class, payload)
     
     # Find hypothesis if it exists
-    hyp = _GLOBAL_LEDGER.find_by_surface_and_class(surface, vuln_class)
+    hyp = _ledger.find_by_surface_and_class(surface, vuln_class)
     hyp_id = hyp.id if hyp else None
     
     return {

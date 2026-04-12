@@ -12,11 +12,9 @@ Tests cover:
 6. Cache Statistics Reporting
 """
 
-import asyncio
-import socket
 import time
 import unittest
-from unittest.mock import AsyncMock, patch, MagicMock
+
 
 import sys
 import os
@@ -153,19 +151,27 @@ class TestCircuitBreaker(unittest.TestCase):
     def test_circuit_half_open_after_timeout(self):
         """Circuit should transition to HALF_OPEN after timeout."""
         from phantom.llm.llm import CircuitBreaker, CircuitState
+        from phantom.config import Config
         
+        original_timeout = Config.phantom_circuit_breaker_timeout
+        Config.phantom_circuit_breaker_timeout = "0.1"
+
         cb = CircuitBreaker(failure_threshold=2, timeout_seconds=0.1)
-        
-        # Record failures to open circuit
-        cb.record_failure()
-        cb.record_failure()
-        
-        # Wait for timeout
-        time.sleep(0.2)
-        
-        # Should allow request (HALF_OPEN state)
-        self.assertTrue(cb.allow_request())
-        self.assertEqual(cb.get_state(), CircuitState.HALF_OPEN)
+        try:
+            cb.record_success()  # ensure starts from CLOSED regardless of prior global env
+            
+            # Record failures to open circuit
+            cb.record_failure()
+            cb.record_failure()
+            
+            # Wait for timeout (minimum 1s due config clamp)
+            time.sleep(1.2)
+            
+            # Should allow request (HALF_OPEN state)
+            self.assertTrue(cb.allow_request())
+            self.assertEqual(cb.get_state(), CircuitState.HALF_OPEN)
+        finally:
+            Config.phantom_circuit_breaker_timeout = original_timeout
     
     def test_circuit_closes_on_success(self):
         """Circuit should close on successful request."""

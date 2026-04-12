@@ -924,6 +924,48 @@ class PhantomTUIApp(App):  # type: ignore[misc]
         if cp is not None:
             from phantom.agents.state import AgentState
 
+            if cp.hypothesis_ledger_state:
+                try:
+                    from phantom.agents.hypothesis_ledger import HypothesisLedger
+
+                    config["hypothesis_ledger"] = HypothesisLedger.from_dict(
+                        {
+                            "counter": len(cp.hypothesis_ledger_state),
+                            "hypotheses": cp.hypothesis_ledger_state,
+                        }
+                    )
+                except Exception:
+                    pass
+
+            if cp.coverage_tracker_state:
+                try:
+                    from phantom.agents.coverage_tracker import CoverageTracker
+
+                    config["coverage_tracker"] = CoverageTracker.from_dict(cp.coverage_tracker_state)
+                except Exception:
+                    pass
+
+            if cp.correlation_engine_state:
+                try:
+                    from phantom.agents.correlation_engine import CorrelationEngine
+
+                    config["correlation_engine"] = CorrelationEngine.from_dict(
+                        cp.correlation_engine_state
+                    )
+                except Exception:
+                    pass
+
+            if cp.attack_graph_state:
+                try:
+                    from phantom.core.attack_graph import AttackGraph
+
+                    config["attack_graph"] = AttackGraph.from_dict(cp.attack_graph_state)
+                except Exception:
+                    pass
+
+            if cp.sub_agent_states:
+                config["_restored_sub_agent_states"] = cp.sub_agent_states
+
             restored_state = AgentState.model_validate(cp.root_agent_state)
             # Clear stale sandbox — the old Docker container is gone.
             restored_state.clear_sandbox()
@@ -1992,6 +2034,11 @@ class PhantomTUIApp(App):  # type: ignore[misc]
                 scan_config=self.scan_config,
                 status="interrupted",
                 interruption_reason=reason,
+                hypothesis_ledger=getattr(agent, "hypothesis_ledger", None),
+                coverage_tracker=getattr(agent, "coverage_tracker", None),
+                correlation_engine=getattr(agent, "correlation_engine", None),
+                attack_graph=getattr(agent, "attack_graph", None),
+                active_sub_agents=getattr(agent, "_collect_active_sub_agent_states", lambda: {})(),
             )
             self._checkpoint_mgr.save(cp_data)
             logger.info("Interrupted checkpoint saved for run %s", run_name)

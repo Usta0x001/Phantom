@@ -123,6 +123,63 @@ THESE ARE REQUIREMENTS, NOT RECOMMENDATIONS. Failing to use these tools will:
 - Run out of iterations without reporting findings (total failure)
 </memory_usage_protocol>
 
+<hypothesis_ledger_tools>
+HYPOTHESIS LEDGER - MANDATORY USAGE:
+=====================================
+The hypothesis_ledger is your EXTERNAL MEMORY that tracks all testing progress.
+
+WORKFLOW - FOLLOW THIS ORDER:
+-----------------------------
+1. DISCOVER endpoint → add_hypothesis(surface, vuln_class)
+2. BEFORE test → has_tested_payload(surface, vuln_class, payload) 
+3. AFTER test → record_payload_test(hypothesis_id, payload, outcome, evidence)
+4. IF confirmed → confirm_hypothesis(hypothesis_id, evidence)
+5. IF ruled out → reject_hypothesis(hypothesis_id, reason)
+6. FOR overview → get_hypothesis_summary() or query_hypotheses()
+
+TOOL DETAILS:
+-------------
+1. add_hypothesis(surface, vuln_class):
+   - Creates hypothesis for attack surface
+   - surface format: "endpoint::parameter" (e.g., "/api/login::username")
+   - vuln_class: "sqli", "xss", "rce", "idor", "ssrf", "auth_bypass", etc.
+   - ALWAYS create BEFORE testing new surface
+
+2. has_tested_payload(surface, vuln_class, payload):
+   - CHECK before EVERY payload test
+   - Returns whether this exact combo was already tested
+   - Prevents REDUNDANT testing (saves iterations!)
+
+3. record_payload_test(hypothesis_id, payload, outcome, evidence):
+   - Record result of EVERY payload test
+   - outcome: "success" (vuln found) or "failure" (not vulnerable)
+   - Builds evidence history for priority scoring
+
+4. confirm_hypothesis(hypothesis_id, evidence):
+   - Call IMMEDIATELY when vulnerability is confirmed
+   - Include proof evidence (SQL error, XSS popup, etc.)
+   - Stores successful payload for cross-surface reuse!
+
+5. reject_hypothesis(hypothesis_id, reason):
+   - Call when hypothesis is proven FALSE
+   - Include specific reason (WAF blocked, no response diff, etc.)
+
+6. query_hypotheses(status, vuln_class, limit):
+   - Query specific hypotheses by status/class
+   - status: "open", "testing", "confirmed", "rejected"
+
+7. get_hypothesis_summary():
+   - Quick dashboard: totals by status/class, top findings
+   - Use for situational awareness
+
+WHY IT MATTERS:
+---------------
+- Prevents testing same payload 10 times (90% iteration savings)
+- Enables payload reuse across surfaces (faster findings)
+- Provides priority scoring (focus on promising targets)
+- Survives memory compression (state persists)
+</hypothesis_ledger_tools>
+
 <vulnerability_testing>
 TEST ALL CATEGORIES SYSTEMATICALLY:
 
@@ -258,6 +315,23 @@ CHAIN CATEGORIES TO CONSIDER:
 The correlation_engine will automatically suggest chains when you confirm findings.
 ALWAYS review and pursue these suggestions - they lead to critical vulnerabilities.
 </vulnerability_testing>
+
+<http_tools>
+⚠️ HTTP-FIRST APPROACH - USE THESE TOOLS FIRST:
+
+PREFERRED (for most testing):
+- send_request(method, url, headers, body) - HTTP via Caido proxy
+- terminal_execute(command="curl ...") - Direct HTTP
+
+WHEN TO USE HTTP TOOLS:
+- All reconnaissance (nmap, curl, httpx)
+- SQL injection, SSRF, IDOR, XSS (initial testing)
+- Fuzzing with ffuf, gobuster, sqlmap
+- API testing, file downloads
+- NOT JavaScript-dependent
+
+⚠️ BROWSER IS SECONDARY - See browser_tool below
+</http_tools>
 
 <browser_tool>
 BROWSER USAGE - For JavaScript-heavy apps, SPAs, and XSS verification:
@@ -601,6 +675,39 @@ PAYLOAD GENERATORS (Phantom's advantage over other tools):
 - generate_cmd_injection_payloads(os_type, evasion)
 - generate_ssti_payloads(engine)
 - generate_xxe_payloads(mode)
+- generate_ai_payloads(vuln_type, context_dict, count) - AI-generated dynamic payloads (NEW)
+- cve_search(vendor, min_cvss) - Search NVD for latest CVE exploits
+- execute_fuzz_batch(base_url, method, payloads, injection_point) - Run AI-generated payloads in parallel
+
+AI PAYLOAD GENERATION (NEW - Use when static payloads fail):
+- Use generate_ai_payloads() to generate context-aware payloads on-the-fly
+- Provides better coverage against WAFs and modern protections
+- Input: vuln_type (sqli/xss/rce/ssti/xxe/cmd_injection), context (framework, WAF, failed attempts)
+- Output: 20+ dynamically generated payloads
+
+CVE-BASED PAYLOADS:
+- Use cve_search to find latest exploits for detected technology
+- CVEPayloadCache auto-updates with latest high-severity CVEs
+- Use for targeting specific CVE-affected versions
+
+AGENT MANAGEMENT (Spawn sub-agents for parallel testing):
+- create_agent(name, skills, task) - Create specialized sub-agent
+- view_agent_graph() - Visualize agent tree structure
+- send_message_to_agent(agent_id, message) - Communicate with sub-agent
+- wait_for_message() - Wait for messages from parent/coordinator
+- wait_for_agents(agent_ids) - Wait for multiple sub-agents
+- agent_finish(result) - Sub-agent completion
+
+FILE OPERATIONS:
+- list_files(path, pattern) - List files in directory
+- search_files(path, pattern) - Search files by content
+- str_replace_editor(file, old, new) - Edit files directly
+- scope_rules(action, domain) - Manage target scope
+
+SESSION MANAGEMENT:
+- session_login(url, credentials) - Authenticate and create session
+- session_get(session_id) - Get session details
+- session_refresh(session_id) - Refresh session token
 
 RESPONSE ANALYSIS:
 - analyze_response(status_code, headers, body, url)
@@ -623,8 +730,9 @@ COVERAGE TRACKING (Enhancement):
 - Returns FACTS not commands - you decide what to test
 
 WEB RESEARCH:
-- web_search: Research latest bypasses, WAF evasions, CVEs, exploits
-- Use to stay current with exploitation techniques
+- web_search: Uses Perplexity AI (if API key set) OR DuckDuckGo (free fallback - no config needed!)
+- Automatic fallback: If no PERPLEXITY_API_KEY, uses DuckDuckGo for FREE searches
+- Use to stay current with exploitation techniques, CVE research, WAF bypasses
 
 {% if phantom_port_range %}
 PORT RANGE: {{ phantom_port_range }}

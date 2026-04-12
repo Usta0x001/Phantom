@@ -92,6 +92,7 @@ class Config:
     # ════════════════════════════════════════════════════════════════════════════
     # SECURITY REC LOW-7: RBAC Configuration
     # ════════════════════════════════════════════════════════════════════════════
+    phantom_security_mode = "research"              # PHANTOM_SECURITY_MODE - research | hardened
     # Tool-level role-based access control
     phantom_rbac_enabled = "false"                 # PHANTOM_RBAC_ENABLED - off by default
     phantom_rbac_default_role = "senior_pentester" # PHANTOM_RBAC_DEFAULT_ROLE

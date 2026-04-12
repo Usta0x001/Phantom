@@ -73,6 +73,41 @@ TOOL_CATEGORIES = {
 }
 
 
+TOOL_SUBSET_CATEGORIES = {
+    "minimal": ["web_testing", "terminal", "reporting", "python"],
+    "core": [
+        "web_testing",
+        "terminal",
+        "browser",
+        "reporting",
+        "agent_management",
+        "files",
+        "thinking",
+        "python",
+    ],
+    "core-fast": [
+        "web_testing",
+        "terminal",
+        "browser",
+        "reporting",
+        "agent_management",
+        "files",
+        "python",
+    ],
+    "web": [
+        "web_testing",
+        "terminal",
+        "browser",
+        "reporting",
+        "agent_management",
+        "files",
+        "thinking",
+        "python",
+        "web_search",
+    ],
+}
+
+
 DEFAULT_TOOL_CATEGORIES = {
     # FIX-5: Excluded 'files', 'notes', 'todo' from the default main_agent schema.
     # These are low-signal for pentesting but cost ~5K tokens per LLM call to describe.
@@ -189,6 +224,33 @@ def get_tools_for_task(task_description: str, available_tools: list[str] | None 
         needed_tools = needed_tools.intersection(set(available_tools))
     
     return list(needed_tools)
+
+
+def get_tool_subset_categories(mode: str) -> list[str]:
+    return TOOL_SUBSET_CATEGORIES.get(mode, [])
+
+
+def get_tools_for_subset_mode(mode: str) -> list[str]:
+    """Resolve runtime tool names for a configured subset mode.
+
+    Returns the intersection with currently registered tools so runtime
+    enforcement and prompt exposure share the same concrete set.
+    """
+    from phantom.tools.registry import get_tool_names
+
+    available = set(get_tool_names())
+    if mode == "full":
+        return sorted(available)
+
+    categories = get_tool_subset_categories(mode)
+    if not categories:
+        return sorted(available)
+
+    needed_tools: set[str] = set()
+    for cat in categories:
+        needed_tools.update(TOOL_CATEGORIES.get(cat, []))
+
+    return sorted(needed_tools.intersection(available))
 
 
 def get_minimal_tools() -> list[str]:

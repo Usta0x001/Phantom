@@ -1307,6 +1307,10 @@ def report_export(
     ] = None,
 ) -> None:
     """Export a scan report in the specified format."""
+    import json
+
+    from phantom.checkpoint.checkpoint import CheckpointManager
+
     runs_dir = Path("phantom_runs") / run_name
     if not runs_dir.exists():
         console.print(f"[red]Run '{run_name}' not found in phantom_runs/[/]")
@@ -1314,20 +1318,30 @@ def report_export(
 
     console.print(f"[dim]Exporting {run_name} as {fmt.value}...[/]")
 
-    # Find the report JSON
-    report_files = [p for p in runs_dir.glob("*.json") if p.is_file()]
-    if not report_files:
-        console.print("[red]No report data found in this run.[/]")
+    cp_mgr = CheckpointManager(runs_dir)
+    cp = cp_mgr.load()
+    if cp is None:
+        console.print("[red]No readable checkpoint data found in this run.[/]")
         raise typer.Exit(1)
+
+    # Build canonical report payload from decrypted checkpoint data.
+    data = {
+        "run_name": cp.run_name,
+        "status": cp.status,
+        "iteration": cp.iteration,
+        "target": (cp.scan_config.get("targets", [{}])[0].get("original") if cp.scan_config else run_name),
+        "targets": [t.get("original", "") for t in cp.scan_config.get("targets", [])] if cp.scan_config else [run_name],
+        "vulnerabilities": cp.vulnerability_reports,
+        "llm_stats": cp.llm_stats_at_checkpoint,
+        "per_model_stats": cp.per_model_stats,
+        "saved_at": cp.saved_at,
+    }
 
     if fmt == OutputFormat.sarif:
         try:
             from phantom.interface.formatters.sarif_formatter import SARIFFormatter
 
             formatter = SARIFFormatter()
-            import json
-
-            data = json.loads(report_files[0].read_text(encoding="utf-8"))
             sarif_output = formatter.format(data)
             out_path = output or (runs_dir / f"{run_name}.sarif.json")
             out_path.write_text(json.dumps(sarif_output, indent=2), encoding="utf-8")
@@ -1336,24 +1350,15 @@ def report_export(
             console.print("[red]SARIF formatter not available.[/]")
             raise typer.Exit(1)
     elif fmt == OutputFormat.json:
-        import json
-        import shutil
-
         out_path = output or (runs_dir / f"{run_name}_export.json")
-        shutil.copy2(report_files[0], out_path)
+        out_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
         console.print(f"[green]JSON report written to {out_path}[/]")
     elif fmt == OutputFormat.markdown:
-        import json
-
-        data = json.loads(report_files[0].read_text(encoding="utf-8"))
         md_content = _render_markdown_report(run_name, data)
         out_path = output or (runs_dir / f"{run_name}.md")
         out_path.write_text(md_content, encoding="utf-8")
         console.print(f"[green]Markdown report written to {out_path}[/]")
     elif fmt == OutputFormat.html:
-        import json
-
-        data = json.loads(report_files[0].read_text(encoding="utf-8"))
         html_content = _render_html_report(run_name, data)
         out_path = output or (runs_dir / f"{run_name}.html")
         out_path.write_text(html_content, encoding="utf-8")

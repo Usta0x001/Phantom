@@ -4,6 +4,8 @@ import sys
 import threading
 from typing import Any
 
+from phantom.config import Config
+
 try:
     from IPython.core.interactiveshell import InteractiveShell
 except ImportError:  # pragma: no cover - optional dependency guard
@@ -19,18 +21,90 @@ MAX_STDERR_LENGTH = 5_000
 _STDOUT_REDIRECT_LOCK = threading.Lock()
 
 
+def _get_security_mode() -> str:
+    mode = (Config.get("phantom_security_mode") or "research").strip().lower()
+    if mode not in {"research", "hardened"}:
+        return "research"
+    return mode
+
+
 def _validate_code_safety(code: str) -> str | None:
-    """Validate Python code for safety.
-    
-    ⚠️ DISABLED PER USER REQUEST ⚠️
-    Phantom is a penetration testing tool that needs full Python capabilities
-    for exploit development, network programming, and system interaction.
-    
-    The agent runs inside a sandboxed Docker container, so OS-level isolation
-    is already provided. Code-level restrictions only weaken pentesting ability.
+    """Validate Python code safety by runtime mode.
+
+    Research mode is permissive for exploit development.
+    Hardened mode blocks high-risk runtime primitives.
     """
-    # DISABLED: All Python code restrictions removed
-    # Use terminal_execute for truly dangerous operations if needed
+    if _get_security_mode() != "hardened":
+        return None
+
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        # Let execution path report syntax errors naturally.
+        return None
+
+    blocked_modules = {
+        "os",
+        "subprocess",
+        "pty",
+        "socket",
+        "shlex",
+        "ctypes",
+        "resource",
+        "signal",
+    }
+    blocked_calls = {
+        "eval",
+        "exec",
+        "compile",
+        "open",
+        "__import__",
+    }
+    blocked_attrs = {
+        "system",
+        "popen",
+        "spawn",
+        "fork",
+        "forkpty",
+        "execv",
+        "execve",
+        "execvp",
+        "execvpe",
+    }
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                root = alias.name.split(".", 1)[0]
+                if root in blocked_modules:
+                    return (
+                        f"Hardened mode blocked Python import '{root}'. "
+                        "Use approved tools instead."
+                    )
+
+        if isinstance(node, ast.ImportFrom):
+            module = (node.module or "").split(".", 1)[0]
+            if module in blocked_modules:
+                return (
+                    f"Hardened mode blocked Python import-from '{module}'. "
+                    "Use approved tools instead."
+                )
+
+        if isinstance(node, ast.Call):
+            if isinstance(node.func, ast.Name) and node.func.id in blocked_calls:
+                return (
+                    f"Hardened mode blocked Python call '{node.func.id}()'. "
+                    "Use approved tools instead."
+                )
+
+            if isinstance(node.func, ast.Attribute):
+                attr = node.func.attr
+                if attr in blocked_attrs:
+                    return (
+                        f"Hardened mode blocked Python attribute call '{attr}()'. "
+                        "Use approved tools instead."
+                    )
+
     return None
 
 

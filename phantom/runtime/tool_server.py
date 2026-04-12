@@ -116,22 +116,25 @@ async def _run_tool(agent_id: str, tool_name: str, kwargs: dict[str, Any]) -> An
     import inspect
 
     from phantom.tools.argument_parser import convert_arguments
-    from phantom.tools.context import set_current_agent_id
+    from phantom.tools.context import reset_current_agent_id, set_current_agent_id
     from phantom.tools.registry import get_tool_by_name
 
-    set_current_agent_id(agent_id)
+    token = set_current_agent_id(agent_id)
 
-    tool_func = get_tool_by_name(tool_name)
-    if not tool_func:
-        raise ValueError(f"Tool '{tool_name}' not found")
+    try:
+        tool_func = get_tool_by_name(tool_name)
+        if not tool_func:
+            raise ValueError(f"Tool '{tool_name}' not found")
 
-    converted_kwargs = convert_arguments(tool_func, kwargs)
+        converted_kwargs = convert_arguments(tool_func, kwargs)
 
-    # Async tool functions must be awaited directly; asyncio.to_thread would
-    # only get the coroutine object back without executing it.
-    if inspect.iscoroutinefunction(tool_func):
-        return await tool_func(**converted_kwargs)
-    return await asyncio.to_thread(tool_func, **converted_kwargs)
+        # Async tool functions must be awaited directly; asyncio.to_thread would
+        # only get the coroutine object back without executing it.
+        if inspect.iscoroutinefunction(tool_func):
+            return await tool_func(**converted_kwargs)
+        return await asyncio.to_thread(tool_func, **converted_kwargs)
+    finally:
+        reset_current_agent_id(token)
 
 
 @app.post("/execute", response_model=ToolExecutionResponse)

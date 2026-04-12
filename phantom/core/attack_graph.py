@@ -300,12 +300,21 @@ class AttackGraph:
             "density": nx.density(self._graph),
         }
         
-        # Calculate average path length if graph is connected
-        if nx.is_weakly_connected(self._graph):
-            metrics["avg_path_length"] = nx.average_shortest_path_length(self._graph)
-        else:
+        # Calculate average path length safely for directed graphs.
+        # networkx.average_shortest_path_length on a DiGraph requires strong
+        # connectivity; weak connectivity is not sufficient and raises.
+        metrics["avg_path_length"] = None
+        try:
+            if self._graph.number_of_nodes() >= 2:
+                if nx.is_strongly_connected(self._graph):
+                    metrics["avg_path_length"] = nx.average_shortest_path_length(self._graph)
+                elif nx.is_weakly_connected(self._graph):
+                    metrics["avg_path_length"] = nx.average_shortest_path_length(
+                        self._graph.to_undirected()
+                    )
+        except Exception:
             metrics["avg_path_length"] = None
-        
+
         return metrics
 
     def get_vulnerability_chains(self, min_length: int = 2) -> list[list[str]]:

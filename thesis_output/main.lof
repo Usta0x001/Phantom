@@ -1,0 +1,16 @@
+\addvspace {10\p@ }
+\addvspace {10\p@ }
+\contentsline {figure}{\numberline {2.1}{\ignorespaces Taxonomy of automated vulnerability detection. Approximate positioning based on design analysis; no experimental measurement of axes is claimed. \textit {Phantom}{} targets the high-adaptability, high-semantic-depth quadrant as an architectural goal, not a verified performance claim.}}{6}{figure.caption.13}%
+\addvspace {10\p@ }
+\addvspace {10\p@ }
+\contentsline {figure}{\numberline {4.1}{\ignorespaces Logical layer architecture of \textit {Phantom}{}. Each component is verified from inspected source files. Shading encodes layer type: blue~=~agent intelligence; green~=~LLM integration; red~=~security boundary; yellow~=~external sandbox.}}{14}{figure.caption.16}%
+\addvspace {10\p@ }
+\addvspace {10\p@ }
+\contentsline {figure}{\numberline {6.1}{\ignorespaces Multi-agent runtime topology. Solid arrows~=~spawn; dashed arrows~=~result messages via \texttt {send\_message\_to\_agent}. Each sub-agent has an independent \texttt {LLM} instance and \texttt {AgentState}; the \texttt {HypothesisLedger} is shared. Sub-agents do not share \texttt {AgentState} with each other or with the root, which means reasoning traces are not shared---only deduplication state.}}{21}{figure.caption.18}%
+\contentsline {figure}{\numberline {6.2}{\ignorespaces \textit {ReAct} execution loop (\texttt {base\_agent.py}:246--486). Bounded by three termination conditions (Eq.~\ref {eq:termination}). Budget-warning messages are injected at 80\%, 85\%, and $I_{\max }-3$ iterations.}}{22}{figure.caption.19}%
+\contentsline {figure}{\numberline {6.3}{\ignorespaces Circuit breaker state machine (\texttt {llm.py}:181--250). Transitions are triggered by exhausted retry sequences, not individual HTTP 429 responses. The global singleton means the circuit breaker does not independently track per-agent failure counts.}}{23}{figure.caption.20}%
+\contentsline {figure}{\numberline {6.4}{\ignorespaces Memory management pipeline (\texttt {memory\_compressor.py}:598--772, \texttt {llm.py}:601--650). Parallel chunk summarisation uses asyncio with bounded concurrency (semaphore $= 4$) and falls back to sequential mode if \texttt {nest\_asyncio} is unavailable. Dual-anchor invariant Inv-1 holds when both anchoring paths succeed; failure modes documented in Chapter~\ref {chap:limits}.}}{24}{figure.caption.21}%
+\contentsline {figure}{\numberline {6.5}{\ignorespaces Tool execution pipeline (\texttt {executor.py}). RBAC uses a lazy import: if the RBAC module is absent, all tools execute without access control (verified: \texttt {executor.py}:374--381). The result cache is a top-level import active in all execution paths (\texttt {executor.py}:95).}}{25}{figure.caption.22}%
+\addvspace {10\p@ }
+\addvspace {10\p@ }
+\addvspace {10\p@ }

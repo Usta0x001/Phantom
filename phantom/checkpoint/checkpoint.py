@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import json
 import hashlib
 import hmac
@@ -10,6 +11,12 @@ import os
 import threading
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
+
+try:
+    from cryptography.fernet import Fernet
+    CRYPTO_AVAILABLE = True
+except ImportError:
+    CRYPTO_AVAILABLE = False
 
 from pydantic import ValidationError
 
@@ -24,6 +31,34 @@ logger = logging.getLogger(__name__)
 CHECKPOINT_FILE = "checkpoint.json"
 CHECKPOINT_HMAC_FILE = "checkpoint.json.hmac"
 CHECKPOINT_INTERVAL = 5   # persist every N agent iterations
+
+# FIX 1: Max checkpoint size (10 MB)
+MAX_CHECKPOINT_SIZE_BYTES = 10 * 1024 * 1024
+
+# Current version for validation
+CURRENT_VERSION = "1"
+
+# FIX 4: Encryption key environment variable
+ENCRYPTION_KEY_ENV = "PHANTOM_CHECKPOINT_ENCRYPTION_KEY"
+
+
+def _get_encryption_key() -> bytes | None:
+    """Get encryption key from environment or derive from HMAC key.
+    
+    Fernet requires a 32-byte key that is base64-encoded.
+    If env key is provided, we hash it to get 32 bytes and then base64 encode.
+    """
+    key = os.getenv(ENCRYPTION_KEY_ENV, "")
+    if key:
+        # Hash the user-provided key to get 32 bytes
+        hashed = hashlib.sha256(key.encode("utf-8")).digest()
+        return base64.urlsafe_b64encode(hashed)
+    if CRYPTO_AVAILABLE:
+        # Derive from HMAC key - same process
+        hmac_key = _get_hmac_key()
+        hashed = hashlib.sha256(hmac_key).digest()
+        return base64.urlsafe_b64encode(hashed)
+    return None
 
 
 def _sanitize_run_dir(run_dir: Path) -> Path:
@@ -124,12 +159,53 @@ class CheckpointManager:
         """True when it's time to write a checkpoint (iteration must be > 0).
         
         Saves at intervals: 5, 10, 15, 20... (not at iteration 1).
-        FIX: Removed special-case 'iteration == 1' that caused off-by-one bug.
+        FIX 5: Added lock to prevent race condition with concurrent saves.
         """
-        return iteration > 0 and iteration % self._interval == 0
+        with self._lock:
+            return iteration > 0 and iteration % self._interval == 0
 
     def _compute_hmac(self, data: bytes) -> str:
+        """FIX 3: Use constant-time comparison via hmac.compare_digest"""
         return hmac.new(_get_hmac_key(), data, hashlib.sha256).hexdigest()
+    
+    def _verify_hmac_constant_time(self, data: bytes, expected_sig: str) -> bool:
+        """FIX 3: Verify HMAC using constant-time comparison to prevent timing attacks"""
+        actual_sig = self._compute_hmac(data)
+        return hmac.compare_digest(actual_sig, expected_sig)
+
+    def _validate_version(self, version: str) -> bool:
+        """FIX 2: Validate checkpoint version to reject incompatible formats"""
+        if version != CURRENT_VERSION:
+            logger.warning(
+                "Checkpoint version mismatch: expected %s, got %s",
+                CURRENT_VERSION,
+                version,
+            )
+            return False
+        return True
+
+    def _encrypt_data(self, data: bytes) -> bytes:
+        """FIX 4: Encrypt data using Fernet if key is available"""
+        key = _get_encryption_key()
+        if not key or not CRYPTO_AVAILABLE:
+            return data
+        try:
+            f = Fernet(key)
+            return f.encrypt(data)
+        except Exception:
+            logger.warning("Encryption failed, saving plaintext", exc_info=True)
+            return data
+
+    def _decrypt_data(self, data: bytes) -> bytes:
+        """FIX 4: Decrypt data using Fernet if key is available"""
+        key = _get_encryption_key()
+        if not key or not CRYPTO_AVAILABLE:
+            return data
+        try:
+            f = Fernet(key)
+            return f.decrypt(data)
+        except Exception:
+            return data  # Not encrypted or wrong key, return as-is
 
     def save(self, data: CheckpointData) -> None:
         """Atomically persist checkpoint data to disk with HMAC integrity."""
@@ -137,12 +213,25 @@ class CheckpointManager:
             try:
                 self.run_dir.mkdir(parents=True, exist_ok=True)
                 json_bytes = data.model_dump_json(indent=2).encode("utf-8")
+                # FIX 1: Check size before saving
+                if len(json_bytes) > MAX_CHECKPOINT_SIZE_BYTES:
+                    logger.warning(
+                        "Checkpoint too large (%d bytes > %d bytes), skipping save",
+                        len(json_bytes),
+                        MAX_CHECKPOINT_SIZE_BYTES,
+                    )
+                    return
+                # FIX 4: Compute HMAC before encryption (on plaintext)
+                # This ensures HMAC can be verified after decryption
+                sig = self._compute_hmac(json_bytes)
+                # Encrypt data before writing
+                if _get_encryption_key() and CRYPTO_AVAILABLE:
+                    json_bytes = self._encrypt_data(json_bytes)
                 # Write data
                 tmp = self.checkpoint_file.with_suffix(".tmp")
                 tmp.write_bytes(json_bytes)
                 tmp.replace(self.checkpoint_file)   # atomic on POSIX, best-effort on Windows
                 # Write HMAC signature
-                sig = self._compute_hmac(json_bytes)
                 hmac_tmp = self._hmac_file.with_suffix(".tmp")
                 hmac_tmp.write_text(sig, encoding="utf-8")
                 hmac_tmp.replace(self._hmac_file)
@@ -164,16 +253,48 @@ class CheckpointManager:
                 logger.debug("Empty checkpoint file — ignoring (%s)", self.checkpoint_file)
                 return None
             # Verify HMAC integrity if signature file exists
+            # HMAC is on plaintext, so verify before decrypting
             if self._hmac_file.exists():
                 stored_sig = self._hmac_file.read_text(encoding="utf-8").strip()
-                computed_sig = self._compute_hmac(raw_bytes)
+                # If encrypted, compute HMAC on encrypted data (same as save)
+                # If not encrypted, compute on plaintext (will work because raw_bytes is plaintext)
+                # We need to check if data is encrypted by trying to parse as JSON
+                is_encrypted = False
+                try:
+                    import json
+                    json.loads(raw_bytes)
+                except json.JSONDecodeError:
+                    is_encrypted = True
+                
+                if is_encrypted and _get_encryption_key() and CRYPTO_AVAILABLE:
+                    # Data is encrypted, decrypt first then compute HMAC
+                    decrypted = self._decrypt_data(raw_bytes)
+                    computed_sig = self._compute_hmac(decrypted)
+                else:
+                    # Data is plaintext
+                    computed_sig = self._compute_hmac(raw_bytes)
+                
                 if not hmac.compare_digest(stored_sig, computed_sig):
                     logger.warning(
                         "Checkpoint HMAC mismatch — file may have been tampered with. Ignoring."
                     )
                     return None
+            # FIX 4: Decrypt AFTER HMAC verification
+            if _get_encryption_key() and CRYPTO_AVAILABLE:
+                # Check if data is encrypted
+                try:
+                    import json
+                    json.loads(raw_bytes)
+                    # Not encrypted, try to decrypt anyway (will pass through)
+                except json.JSONDecodeError:
+                    raw_bytes = self._decrypt_data(raw_bytes)
             raw = raw_bytes.decode("utf-8")
             try:
+                # FIX 2: Validate version before full parsing
+                parsed = json.loads(raw)
+                if isinstance(parsed, dict) and "version" in parsed:
+                    if not self._validate_version(parsed["version"]):
+                        return None
                 return CheckpointData.model_validate_json(raw)
             except ValidationError:
                 payload = json.loads(raw)
@@ -219,6 +340,7 @@ class CheckpointManager:
         hypothesis_ledger: Any = None,  # P4: Add hypothesis ledger parameter
         coverage_tracker: Any = None,   # P4: Add coverage tracker parameter
         correlation_engine: Any = None,  # P4: Add correlation engine parameter
+        attack_graph: Any = None,  # FIX 5: Add attack graph parameter
         active_sub_agents: dict[str, Any] | None = None,  # FIX ISSUE#6: Sub-agent states
     ) -> CheckpointData:
         vulns: list[dict[str, Any]] = []
@@ -291,7 +413,16 @@ class CheckpointManager:
                 correlation_engine_state = correlation_engine.to_dict() if hasattr(correlation_engine, 'to_dict') else {}
             except Exception:
                 logger.debug("Failed to serialize correlation engine state", exc_info=True)
-        
+
+        # FIX 5: Serialize attack graph state for vulnerability chain visualization
+        attack_graph_state: dict[str, Any] = {}
+        if attack_graph:
+            try:
+                attack_graph_state = attack_graph.to_dict()
+                logger.debug("Serialized attack graph with %d nodes", len(attack_graph_state.get("nodes", [])))
+            except Exception:
+                logger.debug("Failed to serialize attack graph state", exc_info=True)
+
         # FIX ISSUE#6: Capture active sub-agent states
         # This allows resuming scans without losing sub-agent work
         sub_agent_states_dict: dict[str, dict[str, Any]] = {}
@@ -337,6 +468,8 @@ class CheckpointManager:
             hypothesis_ledger_state=hypothesis_ledger_state,
             coverage_tracker_state=coverage_tracker_state,
             correlation_engine_state=correlation_engine_state,
+            # FIX 5: Include attack graph state for vulnerability chain analysis
+            attack_graph_state=attack_graph_state,
             # FIX ISSUE#6: Include sub-agent states to avoid losing work on resume
             sub_agent_states=sub_agent_states_dict,
         )

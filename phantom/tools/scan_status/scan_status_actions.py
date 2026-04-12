@@ -209,7 +209,10 @@ def _compute_recommendation(
         untested = cov_tracker.get_untested_surfaces()
         if untested:
             top = untested[0]
-            return f"Test untested surface: {top[:50]}"
+            surface = getattr(top, "surface", None)
+            if not isinstance(surface, str):
+                surface = str(top)
+            return f"Test untested surface: {surface[:50]}"
     
     # Default
     if phase == "WRAP_UP":

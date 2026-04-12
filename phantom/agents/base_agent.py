@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any, Optional
 
 
 if TYPE_CHECKING:
+    from phantom.agents import PhantomAgent
     from phantom.telemetry.tracer import Tracer
 
 from jinja2 import (
@@ -83,6 +84,7 @@ class BaseAgent(metaclass=AgentMeta):
             )
 
         self.llm = LLM(self.llm_config, agent_name=self.agent_name)
+        setattr(self.state, "_runtime_llm", self.llm)
 
         with contextlib.suppress(Exception):
             self.llm.set_agent_identity(self.state.agent_name, self.state.agent_id)
@@ -138,8 +140,9 @@ class BaseAgent(metaclass=AgentMeta):
 
         # C1: Wire hypothesis ledger to the tool so the LLM can interact with it
         try:
-            from phantom.tools.hypothesis.hypothesis_actions import set_ledger, set_correlation_engine
-            set_ledger(self.hypothesis_ledger)
+            from phantom.tools.hypothesis.hypothesis_actions import set_global_ledger, set_correlation_engine
+            # FIX Bug #3: Use global for backward compatibility (shared ledger for all agents)
+            set_global_ledger(self.hypothesis_ledger)
             # FIX 4: Wire correlation engine for automatic chain detection
             set_correlation_engine(self.correlation_engine)
         except ImportError as e:
@@ -242,6 +245,96 @@ class BaseAgent(metaclass=AgentMeta):
             with agents_graph_actions._ROOT_AGENT_LOCK:
                 if agents_graph_actions._root_agent_id is None:
                     agents_graph_actions._root_agent_id = self.state.agent_id
+
+    def _restore_sub_agents_from_checkpoint(self) -> None:
+        restored = self.config.get("_restored_sub_agent_states")
+        if not isinstance(restored, dict) or not restored:
+            return
+
+        try:
+            from phantom.agents import PhantomAgent
+            from phantom.agents.state import AgentState
+            from phantom.tools.agents_graph import agents_graph_actions
+        except Exception:
+            return
+
+        parent_id = self.state.agent_id
+        allowed_statuses = {"active", "running", "waiting"}
+
+        for sub_agent_id, entry in restored.items():
+            if not isinstance(entry, dict):
+                continue
+            if str(entry.get("parent_id", "")) != parent_id:
+                continue
+            if str(entry.get("status", "active")) not in allowed_statuses:
+                continue
+
+            state_payload = entry.get("state")
+            if not isinstance(state_payload, dict):
+                continue
+
+            try:
+                sub_state = AgentState.model_validate(state_payload)
+            except Exception:
+                continue
+
+            sub_state.clear_sandbox()
+            if not sub_state.parent_id:
+                sub_state.parent_id = parent_id
+
+            with agents_graph_actions._GRAPH_LOCK:
+                if sub_state.agent_id in agents_graph_actions._agent_graph["nodes"]:
+                    continue
+
+            sub_llm_config = LLMConfig(
+                skills=list(self.llm_config.skills or []),
+                timeout=self.llm_config.timeout,
+                scan_mode=self.llm_config.scan_mode,
+            )
+            sub_config = {
+                "llm_config": sub_llm_config,
+                "state": sub_state,
+                "non_interactive": self.non_interactive,
+                "local_sources": self.local_sources,
+                "hypothesis_ledger": self.hypothesis_ledger,
+                "coverage_tracker": self.coverage_tracker,
+                "correlation_engine": self.correlation_engine,
+                "attack_graph": self.attack_graph,
+            }
+
+            sub_agent = PhantomAgent(sub_config)
+
+            inherited_messages = []
+            if sub_state.messages:
+                inherited_messages.append(
+                    {
+                        "role": "user",
+                        "content": (
+                            "<resume_context>Sub-agent restored from checkpoint. "
+                            "Continue from last known progress.</resume_context>"
+                        ),
+                    }
+                )
+
+            with agents_graph_actions._GRAPH_LOCK:
+                node = agents_graph_actions._agent_graph["nodes"].get(sub_state.agent_id)
+                if node is not None:
+                    node["status"] = "running"
+                    node["finished_at"] = None
+                    node["result"] = None
+                    node["task"] = sub_state.task
+
+            import threading
+
+            thread = threading.Thread(
+                target=agents_graph_actions._run_agent_in_thread,
+                args=(sub_agent, sub_state, inherited_messages),
+                daemon=True,
+                name=f"Agent-{sub_state.agent_name}-{sub_state.agent_id}-resumed",
+            )
+            thread.start()
+            with agents_graph_actions._GRAPH_LOCK:
+                agents_graph_actions._running_agents[sub_state.agent_id] = thread
 
     async def agent_loop(self, task: str) -> dict[str, Any]:  # noqa: PLR0912, PLR0915
         import time as _time_mod
@@ -579,14 +672,19 @@ class BaseAgent(metaclass=AgentMeta):
 
     async def _initialize_sandbox_and_state(self, task: str) -> None:
         import os
+        from phantom.telemetry.tracer import get_global_tracer
 
         sandbox_mode = os.getenv("PHANTOM_SANDBOX_MODE", "false").lower() == "true"
         if not sandbox_mode and self.state.sandbox_id is None:
             from phantom.runtime import get_runtime
 
             runtime = get_runtime()
+            tracer = get_global_tracer()
             sandbox_info = await runtime.create_sandbox(
-                self.state.agent_id, self.state.sandbox_token, self.local_sources
+                self.state.agent_id,
+                self.state.sandbox_token,
+                self.local_sources,
+                tracer.scan_config if tracer else {},
             )
             self.state.sandbox_id = sandbox_info["workspace_id"]
             self.state.sandbox_token = sandbox_info["auth_token"]
@@ -597,14 +695,14 @@ class BaseAgent(metaclass=AgentMeta):
 
             caido_port = sandbox_info.get("caido_port")
             if caido_port:
-                from phantom.telemetry.tracer import get_global_tracer
-
-                tracer = get_global_tracer()
                 if tracer:
                     tracer.caido_url = f"localhost:{caido_port}"
 
         if not self.state.task:
             self.state.task = task
+
+        if self.state.parent_id is None:
+            self._restore_sub_agents_from_checkpoint()
 
         # Only add the initial task message when the history is fresh.
         # When resuming from a checkpoint, messages are already populated.
@@ -618,6 +716,28 @@ class BaseAgent(metaclass=AgentMeta):
 
         # AUDIT-FIX: Auto-inject scan_status every 10 iterations OR when message count > 50
         message_count = len(self.state.get_conversation_history())
+
+        # PLAN FIX: Activate bounded history cleanup when context is clearly bloated.
+        # We keep this as a high-watermark safeguard (2x cap) so normal iterations
+        # still benefit from full context, while runaway histories are trimmed.
+        max_before_cleanup = int(getattr(self.state, "MAX_MESSAGES_BEFORE_CLEANUP", 50) or 50)
+        cleanup_threshold = max_before_cleanup * 2
+        if message_count > cleanup_threshold and hasattr(self.state, "cleanup_old_messages"):
+            removed = self.state.cleanup_old_messages()
+            if removed > 0 and tracer:
+                tracer.record_runtime_event(
+                    event_type="state.message_cleanup",
+                    actor={"agent_id": self.state.agent_id},
+                    payload={
+                        "removed": removed,
+                        "remaining": len(self.state.get_conversation_history()),
+                        "threshold": cleanup_threshold,
+                    },
+                    status="completed",
+                    source="phantom.agents",
+                )
+            message_count = len(self.state.get_conversation_history())
+
         should_inject_status = (
             (self.state.iteration > 0 and self.state.iteration % 10 == 0) or
             (message_count > 50)
@@ -632,6 +752,20 @@ class BaseAgent(metaclass=AgentMeta):
                 self.state.add_message("user", status_msg)
             except Exception as e:
                 logging.debug(f"Failed to inject scan status: {e}")
+                if tracer:
+                    tracer.record_runtime_event(
+                        event_type="scan_status.injection.failed",
+                        actor={"agent_id": self.state.agent_id},
+                        payload={
+                            "iteration": self.state.iteration,
+                            "message_count": message_count,
+                            "error_type": type(e).__name__,
+                            "error": str(e)[:300],
+                        },
+                        status="error",
+                        error=str(e)[:300],
+                        source="phantom.agents",
+                    )
 
         # Rec 6 (SF-005): Inject Hypothesis Ledger summary every 10 iterations.
         # AUDIT-FIX-08: Only inject unresolved hypotheses (PROPOSED/TESTING).
@@ -795,7 +929,7 @@ class BaseAgent(metaclass=AgentMeta):
         conversation_history = self.state.get_conversation_history()
 
         tool_task = asyncio.create_task(
-            process_tool_invocations(actions, conversation_history, self.state)
+            process_tool_invocations(actions, conversation_history, self.state, self)
         )
         self._current_task = tool_task
 
@@ -919,6 +1053,10 @@ class BaseAgent(metaclass=AgentMeta):
                 hypothesis_ledger=self.hypothesis_ledger,
                 coverage_tracker=self.coverage_tracker,
                 correlation_engine=self.correlation_engine,
+                # FIX 5: Include attack graph for vulnerability chain analysis
+                attack_graph=self.attack_graph if hasattr(self, 'attack_graph') else None,
+                # Wave D: Persist active sub-agent states for resume continuity
+                active_sub_agents=self._collect_active_sub_agent_states(),
             )
             checkpoint_mgr.save(cp)
             # ── Audit: log checkpoint saved ──────────────────────────────
@@ -933,6 +1071,37 @@ class BaseAgent(metaclass=AgentMeta):
             # ────────────────────────────────────────────────────────────
         except Exception:  # noqa: BLE001
             logger.warning("Checkpoint save failed", exc_info=True)
+
+    def _collect_active_sub_agent_states(self) -> dict[str, Any]:
+        try:
+            from phantom.tools.agents_graph import agents_graph_actions
+
+            parent_id = self.state.agent_id
+            active_statuses = {"running", "waiting", "stopping"}
+            collected: dict[str, Any] = {}
+
+            with agents_graph_actions._GRAPH_LOCK:
+                for node in agents_graph_actions._agent_graph["nodes"].values():
+                    if node.get("parent_id") != parent_id:
+                        continue
+                    status = str(node.get("status", ""))
+                    if status not in active_statuses:
+                        continue
+                    agent_id = str(node.get("id", ""))
+                    if not agent_id:
+                        continue
+                    state_obj = agents_graph_actions._agent_states.get(agent_id)
+                    if state_obj is None:
+                        continue
+                    collected[agent_id] = {
+                        "state": state_obj,
+                        "status": status,
+                        "parent_id": parent_id,
+                    }
+
+            return collected
+        except Exception:
+            return {}
 
     def _format_scan_status(self, status: dict[str, Any]) -> str:
         """Format scan status into a compact message for LLM injection."""

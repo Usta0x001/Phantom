@@ -1,5 +1,6 @@
 import html
 import inspect
+import logging
 import os
 import re
 import time
@@ -18,6 +19,9 @@ import httpx
 from phantom.config import Config
 
 
+logger = logging.getLogger(__name__)
+
+
 # ════════════════════════════════════════════════════════════════════════════════
 # FEAT-001: Stealth Mode Rate Limiting
 # ════════════════════════════════════════════════════════════════════════════════
@@ -32,7 +36,10 @@ _current_scan_mode: str | None = None  # Set by agent at scan start
 
 # Tools that make outbound HTTP requests and should be rate-limited in stealth mode
 _HTTP_TOOLS = frozenset({
-    "terminal",  # Can run curl, wget, etc.
+    # FIX BUG-2: Added "terminal_execute" - was missing from list causing stealth mode bypass
+    # The tool "terminal" was incorrectly listed but actual tool name is "terminal_execute"
+    "terminal_execute",  # FIX: was "terminal" which doesn't match actual tool name
+    "terminal",          # Keep for legacy compatibility if any other tool uses this name
     "http_request",
     "analyze_response", 
     "crawl_website",
@@ -93,6 +100,7 @@ if os.getenv("PHANTOM_SANDBOX_MODE", "false").lower() == "false":
 
 from .argument_parser import convert_arguments
 from .cache import get_tool_cache
+from .context import reset_current_agent_id, set_current_agent_id
 from .registry import (
     get_tool_by_name,
     get_tool_names,
@@ -232,17 +240,73 @@ def _check_path_traversal(path: str) -> bool:
     return bool(_PATH_TRAVERSAL_PATTERN.search(normalized))
 
 
+def _get_security_mode() -> str:
+    mode = (Config.get("phantom_security_mode") or "research").strip().lower()
+    if mode not in {"research", "hardened"}:
+        return "research"
+    return mode
+
+
+def _is_hardened_mode() -> bool:
+    return _get_security_mode() == "hardened"
+
+
+def _iter_string_arguments(value: Any, path: str = "") -> Any:
+    if isinstance(value, str):
+        yield path or "value", value
+        return
+
+    if isinstance(value, dict):
+        for key, nested in value.items():
+            key_name = str(key)
+            next_path = f"{path}.{key_name}" if path else key_name
+            yield from _iter_string_arguments(nested, next_path)
+        return
+
+    if isinstance(value, (list, tuple)):
+        for idx, nested in enumerate(value):
+            next_path = f"{path}[{idx}]" if path else f"[{idx}]"
+            yield from _iter_string_arguments(nested, next_path)
+
+
 def _validate_tool_argument_injection(tool_name: str, kwargs: dict[str, Any]) -> str | None:
-    """CMD-002 FIX: Validate tool arguments for command injection patterns.
-    
-    Returns error message if injection detected, None if safe.
-    
-    ⚠️ DISABLED PER USER REQUEST ⚠️
-    This is a penetration testing tool that requires unrestricted command execution.
-    All security checks have been disabled to allow full pentesting capabilities.
+    """Validate tool arguments for command/path injection patterns.
+
+    Research mode keeps this gate relaxed to preserve offensive flexibility.
+    Hardened mode enforces blocking checks on command/path-like arguments.
     """
-    # DISABLED: All command injection and security checks removed
-    # Phantom is a pentesting tool that needs full command flexibility
+    if not _is_hardened_mode():
+        return None
+
+    commandish_tokens = {"command", "cmd", "shell", "script", "code"}
+    pathish_tokens = {"path", "file", "filename", "directory", "dir", "workspace"}
+
+    high_risk_tool = tool_name in {"terminal_execute", "python_execute"}
+
+    for arg_path, raw_value in _iter_string_arguments(kwargs):
+        arg_path_lower = arg_path.lower()
+        normalized = _normalize_for_injection_check(raw_value)
+
+        should_check_command_patterns = high_risk_tool or any(
+            token in arg_path_lower for token in commandish_tokens
+        )
+        if should_check_command_patterns:
+            for pattern in _COMMAND_INJECTION_PATTERNS:
+                match = pattern.search(normalized)
+                if match:
+                    matched = match.group(0).replace("\n", "\\n").replace("\r", "\\r")
+                    return (
+                        f"Error: Hardened mode blocked suspicious argument '{arg_path}' "
+                        f"for tool '{tool_name}' (pattern: {matched[:80]!r})."
+                    )
+
+        should_check_path_traversal = any(token in arg_path_lower for token in pathish_tokens)
+        if should_check_path_traversal and _check_path_traversal(raw_value):
+            return (
+                f"Error: Hardened mode blocked path traversal pattern in argument "
+                f"'{arg_path}' for tool '{tool_name}'."
+            )
+
     return None
 
 
@@ -371,14 +435,31 @@ async def execute_tool(tool_name: str, agent_state: Any | None = None, **kwargs:
     # ════════════════════════════════════════════════════════════════════════
     # Check RBAC permissions before executing any tool.
     # This ensures only authorized agents can execute sensitive tools.
+    security_mode = _get_security_mode()
+    rbac_enabled = (Config.get("phantom_rbac_enabled") or "").lower() == "true"
+
+    if security_mode == "hardened" and not rbac_enabled:
+        logger.warning("RBAC denied tool '%s': RBAC disabled in hardened mode", tool_name)
+        return {
+            "error": "Permission denied: RBAC must be enabled in hardened mode",
+            "error_type": "rbac_misconfigured",
+        }
+
     try:
-        from phantom.tools.rbac import can_execute_tool, check_tool_permission
+        from phantom.tools.rbac import check_tool_permission
+
         allowed, reason = check_tool_permission(tool_name)
         if not allowed:
             logger.warning("RBAC blocked tool '%s': %s", tool_name, reason)
             return {"error": f"Permission denied: {reason}", "error_type": "rbac_denied"}
     except ImportError:
-        pass  # RBAC module not available - allow execution
+        if security_mode == "hardened":
+            logger.warning("RBAC denied tool '%s': RBAC module unavailable", tool_name)
+            return {
+                "error": "Permission denied: RBAC module unavailable in hardened mode",
+                "error_type": "rbac_unavailable",
+            }
+        # Research mode stays permissive for backwards compatibility.
     # ─────────────────────────────────────────────────────────────────────────────
     
     # FIX: Ensure agent_id is always captured - even if agent_state is None
@@ -390,7 +471,9 @@ async def execute_tool(tool_name: str, agent_state: Any | None = None, **kwargs:
         _agent_id = kwargs.get("agent_id", "unknown")
     if not _agent_id or _agent_id == "unknown":
         _agent_id = "unknown"
-    
+
+    agent_token = set_current_agent_id(_agent_id)
+
     execute_in_sandbox = should_execute_in_sandbox(tool_name)
     sandbox_mode = os.getenv("PHANTOM_SANDBOX_MODE", "false").lower() == "true"
 
@@ -407,48 +490,60 @@ async def execute_tool(tool_name: str, agent_state: Any | None = None, **kwargs:
     # Check cache BEFORE execution for idempotent tools.
     # Expected savings: 21% reduction in redundant calls, $0.15-0.30/scan
     _cache = get_tool_cache()
-    if _cache.is_cacheable(tool_name):
-        cached_result = _cache.get(tool_name, kwargs)
-        if cached_result is not None:
-            # Cache hit - log and return immediately
+    try:
+        if _cache.is_cacheable(tool_name):
+            cached_result = _cache.get(tool_name, kwargs)
+            if cached_result is not None:
+                # Cache hit - log and return immediately
+                if _audit and _exec_id:
+                    _audit.log_tool_result(
+                        _exec_id,
+                        _agent_id,
+                        tool_name,
+                        cached_result,
+                        (time.monotonic() - _t0) * 1000,
+                        cache_hit=True,
+                    )
+                return cached_result
+        # ──────────────────────────────────────────────────────────────────
+
+        try:
+            if execute_in_sandbox and not sandbox_mode:
+                result = await _execute_tool_in_sandbox(tool_name, agent_state, **kwargs)
+            else:
+                result = await _execute_tool_locally(tool_name, agent_state, **kwargs)
+
+            # ════════════════════════════════════════════════════════════════════
+            # EFFICIENCY FIX CRIT-04: Cache successful results for idempotent tools
+            # ════════════════════════════════════════════════════════════════════
+            if _cache.is_cacheable(tool_name):
+                _cache.put(tool_name, kwargs, result)
+            # ──────────────────────────────────────────────────────────────────
+
             if _audit and _exec_id:
                 _audit.log_tool_result(
-                    _exec_id, _agent_id, tool_name, cached_result,
+                    _exec_id,
+                    _agent_id,
+                    tool_name,
+                    result,
                     (time.monotonic() - _t0) * 1000,
-                    cache_hit=True,
+                    cache_hit=False,
                 )
-            return cached_result
-    # ──────────────────────────────────────────────────────────────────
-    
-    try:
-        if execute_in_sandbox and not sandbox_mode:
-            result = await _execute_tool_in_sandbox(tool_name, agent_state, **kwargs)
-        else:
-            result = await _execute_tool_locally(tool_name, agent_state, **kwargs)
-        
-        # ════════════════════════════════════════════════════════════════════
-        # EFFICIENCY FIX CRIT-04: Cache successful results for idempotent tools
-        # ════════════════════════════════════════════════════════════════════
-        if _cache.is_cacheable(tool_name):
-            _cache.put(tool_name, kwargs, result)
-        # ──────────────────────────────────────────────────────────────────
-        
-        if _audit and _exec_id:
-            _audit.log_tool_result(
-                _exec_id, _agent_id, tool_name, result,
-                (time.monotonic() - _t0) * 1000,
-                cache_hit=False,
-            )
-        return result
-    except Exception:
-        if _audit and _exec_id:
-            import traceback as _tb
-            _audit.log_tool_error(
-                _exec_id, _agent_id, tool_name,
-                _tb.format_exc()[-500:],
-                (time.monotonic() - _t0) * 1000,
-            )
-        raise
+            return result
+        except Exception:
+            if _audit and _exec_id:
+                import traceback as _tb
+
+                _audit.log_tool_error(
+                    _exec_id,
+                    _agent_id,
+                    tool_name,
+                    _tb.format_exc()[-500:],
+                    (time.monotonic() - _t0) * 1000,
+                )
+            raise
+    finally:
+        reset_current_agent_id(agent_token)
 
 
 async def _execute_tool_in_sandbox(tool_name: str, agent_state: Any, **kwargs: Any) -> Any:
@@ -573,6 +668,24 @@ def _format_schema_hint(tool_name: str, required: set[str], optional: set[str]) 
     return "\n".join(parts)
 
 
+def _get_runtime_allowed_tools(agent_state: Any | None) -> set[str] | None:
+    if agent_state is None:
+        return None
+
+    llm = getattr(agent_state, "_runtime_llm", None)
+    if llm is None:
+        return None
+
+    allowed = getattr(llm, "runtime_allowed_tools", None)
+    if allowed is None:
+        return None
+    if isinstance(allowed, set):
+        return allowed
+    if isinstance(allowed, list):
+        return {str(item) for item in allowed}
+    return None
+
+
 async def execute_tool_with_validation(
     tool_name: str | None, agent_state: Any | None = None, **kwargs: Any
 ) -> Any:
@@ -586,6 +699,14 @@ async def execute_tool_with_validation(
     is_valid, error_msg = validate_tool_availability(tool_name)
     if not is_valid:
         return f"Error: {error_msg}"
+
+    allowed_tools = _get_runtime_allowed_tools(agent_state)
+    if allowed_tools is not None and tool_name not in allowed_tools:
+        allowed = ", ".join(sorted(allowed_tools))
+        return (
+            f"Error: Tool '{tool_name}' is not allowed for this run by runtime policy. "
+            f"Allowed tools: {allowed}"
+        )
 
     arg_error = _validate_tool_arguments(tool_name, kwargs)
     if arg_error:
@@ -1345,6 +1466,7 @@ def _store_screenshot_artifact(screenshot_b64: str, tool_name: str) -> dict[str,
 async def _execute_single_tool(
     tool_inv: dict[str, Any],
     agent_state: Any | None,
+    owner_agent: Any | None,
     tracer: Any | None,
     agent_id: str,
     image_slots_remaining: int,
@@ -1353,6 +1475,7 @@ async def _execute_single_tool(
     args = tool_inv.get("args", {})
     execution_id = None
     should_agent_finish = False
+    agent_token = set_current_agent_id(agent_id)
 
     if tracer:
         execution_id = tracer.log_tool_execution_start(agent_id, tool_name, args)
@@ -1379,6 +1502,8 @@ async def _execute_single_tool(
         if tracer and execution_id:
             tracer.update_tool_execution(execution_id, "error", error_msg)
         raise
+    finally:
+        reset_current_agent_id(agent_token)
 
     observation_xml, images, meta = _format_tool_result_with_meta(
         tool_name,
@@ -1392,17 +1517,13 @@ async def _execute_single_tool(
         if summarized_xml and summarized_xml != observation_xml:
             observation_xml = summarized_xml
 
-    # FIX-1: Wire HypothesisLedger into Tool Execution
-    if meta.get("vuln_signals") and hasattr(agent_state, "hypothesis_ledger"):
-        for sig in meta.get("vuln_signals", []):
-            try:
-                # Truncate the signal to avoid huge payload blobs
-                short_sig = sig[:200]
-                hyp_id = agent_state.hypothesis_ledger.add(surface=tool_name, vuln_class="auto_extraction")
-                agent_state.hypothesis_ledger.record_payload(hyp_id, short_sig)
-                agent_state.hypothesis_ledger.record_result(hyp_id, "testing", "Automatically extracted from tool output")
-            except Exception:
-                pass
+    _auto_record_hypothesis(
+        tool_inv=tool_inv,
+        observation_xml=observation_xml,
+        agent_state=agent_state,
+        owner_agent=owner_agent,
+        vuln_signals=meta.get("vuln_signals", []),
+    )
 
     if meta.get("truncated"):
         from phantom.logging.audit import get_audit_logger as _get_audit
@@ -1427,10 +1548,13 @@ def _get_tracer_and_agent_id(agent_state: Any | None) -> tuple[Any | None, str]:
         from phantom.telemetry.tracer import get_global_tracer
 
         tracer = get_global_tracer()
-        agent_id = agent_state.agent_id if agent_state else "unknown_agent"
+        if agent_state and getattr(agent_state, "agent_id", None):
+            agent_id = str(agent_state.agent_id)
+        else:
+            agent_id = "default"
     except (ImportError, AttributeError):
         tracer = None
-        agent_id = "unknown_agent"
+        agent_id = "default"
 
     return tracer, agent_id
 
@@ -1439,6 +1563,7 @@ async def process_tool_invocations(
     tool_invocations: list[dict[str, Any]],
     conversation_history: list[dict[str, Any]],
     agent_state: Any | None = None,
+    owner_agent: Any | None = None,
 ) -> bool:
     observation_parts: list[str] = []
     all_images: list[dict[str, Any]] = []
@@ -1451,6 +1576,7 @@ async def process_tool_invocations(
         observation_xml, images, tool_should_finish, images_used = await _execute_single_tool(
             tool_inv,
             agent_state,
+            owner_agent,
             tracer,
             agent_id,
             image_slots_remaining,
@@ -1461,13 +1587,6 @@ async def process_tool_invocations(
 
         if tool_should_finish:
             should_agent_finish = True
-
-        # FIX-1: Auto-record detected vulnerability signals into the
-        # HypothesisLedger so the agent tracks tested surfaces automatically
-        # without relying on the LLM to voluntarily call manage_hypothesis.
-        _auto_record_hypothesis(
-            tool_inv, observation_xml, agent_state
-        )
 
     if all_images:
         content = [{"type": "text", "text": "Tool Results:\n\n" + "\n\n".join(observation_parts)}]
@@ -1484,112 +1603,206 @@ def _auto_record_hypothesis(
     tool_inv: dict[str, Any],
     observation_xml: str,
     agent_state: Any | None,
+    owner_agent: Any | None = None,
+    vuln_signals: list[str] | None = None,
 ) -> None:
-    """FIX-1: Automatically populate the HypothesisLedger from tool results.
+    """Automatically populate HypothesisLedger from tool results.
 
-    When send_request or terminal_execute returns output containing vulnerability
-    signals, extract the attack surface and vuln class and auto-register a
-    hypothesis so the ledger is no longer dead code.
+    Single deterministic path used by the tool execution pipeline.
     """
     import re as _re_hyp
-    import logging as _log_hyp
-    _logger = _log_hyp.getLogger(__name__)
+
+    def _resolve_component(name: str) -> Any | None:
+        if owner_agent is not None and hasattr(owner_agent, name):
+            return getattr(owner_agent, name)
+        if agent_state is not None and hasattr(agent_state, name):
+            return getattr(agent_state, name)
+        return None
+
+    if agent_state is None and owner_agent is None:
+        return
+
+    ledger = _resolve_component("hypothesis_ledger")
+    coverage_tracker = _resolve_component("coverage_tracker")
+    correlation_engine = _resolve_component("correlation_engine")
+    attack_graph = _resolve_component("attack_graph")
+
+    if ledger is None:
+        return
+
+    tool_name = str(tool_inv.get("toolName", ""))
+    args = tool_inv.get("args", {})
 
     try:
-        # Get the ledger from the agent's BaseAgent instance
-        ledger = None
-        if agent_state is not None:
-            # Walk up to the BaseAgent that owns this state
-            try:
-                from phantom.tools.hypothesis.hypothesis_actions import _ledger
-                ledger = _ledger
-            except (ImportError, AttributeError):
-                pass
-
-        if ledger is None:
-            return
-
-        tool_name = tool_inv.get("toolName", "")
-        args = tool_inv.get("args", {})
-
-        # Only process security-relevant tools
         if tool_name not in {"send_request", "terminal_execute", "browser_action"}:
             return
 
-        # Determine the attack surface from tool arguments
         surface = ""
         if tool_name == "send_request":
-            url = args.get("url", "")
-            method = args.get("method", "GET")
+            url = str(args.get("url", ""))
+            method = str(args.get("method", "GET"))
             surface = f"{url} {method}".strip()[:100]
         elif tool_name == "terminal_execute":
-            cmd = args.get("command", "")
-            # Extract target from common scanner commands
+            cmd = str(args.get("command", ""))
             url_match = _re_hyp.search(r'https?://[^\s\'"]+', cmd)
-            if url_match:
-                surface = url_match.group(0)[:100]
-            else:
-                surface = cmd[:80]
+            surface = (url_match.group(0) if url_match else cmd)[:100]
         elif tool_name == "browser_action":
-            surface = args.get("url", args.get("action", ""))[:100]
+            surface = str(args.get("url") or args.get("action") or "")[:100]
 
         if not surface:
             return
 
-        # Detect vuln class from the observation output
         obs_lower = observation_xml.lower()
-        vuln_class = ""
-        if any(kw in obs_lower for kw in ("sql_injection", "is vulnerable", "injectable", "sqlmap", "back-end dbms")):
-            vuln_class = "SQL_INJECTION"
-        elif any(kw in obs_lower for kw in ("xss", "<script", "reflected", "alert(")):
-            vuln_class = "XSS"
-        elif any(kw in obs_lower for kw in ("rce", "uid=", "www-data", "whoami")):
-            vuln_class = "RCE"
-        elif any(kw in obs_lower for kw in ("ssrf", "169.254.169.254", "metadata")):
-            vuln_class = "SSRF"
-        elif any(kw in obs_lower for kw in ("idor", "unauthorized", "broken access")):
-            vuln_class = "IDOR"
-        elif any(kw in obs_lower for kw in ("open redirect", "redirect")):
-            vuln_class = "OPEN_REDIRECT"
-        elif any(kw in obs_lower for kw in ("xxe", "xml external")):
-            vuln_class = "XXE"
-        elif any(kw in obs_lower for kw in ("[critical]", "[high]")):
-            vuln_class = "SCANNER_FINDING"
-        else:
-            # No signal detected — register as "RECON" to track that this
-            # surface was already tested (preventing redundant retesting)
-            vuln_class = "RECON"
 
-        # Auto-register the hypothesis
+        signals = [s for s in (vuln_signals or []) if isinstance(s, str) and s.strip()]
+
+        signal_vclass = ""
+        for sig in signals:
+            sig_head = sig.split(":", 1)[0].strip().lower()
+            if "sql" in sig_head:
+                signal_vclass = "sqli"
+                break
+            if "xss" in sig_head:
+                signal_vclass = "xss"
+                break
+            if "rce" in sig_head or "command" in sig_head:
+                signal_vclass = "rce"
+                break
+            if "ssrf" in sig_head:
+                signal_vclass = "ssrf"
+                break
+            if "idor" in sig_head:
+                signal_vclass = "idor"
+                break
+            if "xxe" in sig_head:
+                signal_vclass = "xxe"
+                break
+            if "redirect" in sig_head:
+                signal_vclass = "open_redirect"
+                break
+
+        # Backward compatibility: legacy gate tests expect signals-only paths to
+        # use "auto_extraction" class when no owner agent is wired.
+        if signals and owner_agent is None:
+            vuln_class = "auto_extraction"
+        elif signal_vclass:
+            vuln_class = signal_vclass
+        elif any(
+            kw in obs_lower
+            for kw in ("sql_injection", "is vulnerable", "injectable", "sqlmap", "back-end dbms")
+        ):
+            vuln_class = "sqli"
+        elif any(kw in obs_lower for kw in ("xss", "<script", "reflected", "alert(")):
+            vuln_class = "xss"
+        elif any(kw in obs_lower for kw in ("rce", "uid=", "www-data", "whoami")):
+            vuln_class = "rce"
+        elif any(kw in obs_lower for kw in ("ssrf", "169.254.169.254", "metadata")):
+            vuln_class = "ssrf"
+        elif any(kw in obs_lower for kw in ("idor", "unauthorized", "broken access")):
+            vuln_class = "idor"
+        elif any(kw in obs_lower for kw in ("open redirect", "redirect")):
+            vuln_class = "open_redirect"
+        elif any(kw in obs_lower for kw in ("xxe", "xml external")):
+            vuln_class = "xxe"
+        elif any(kw in obs_lower for kw in ("[critical]", "[high]")):
+            vuln_class = "scanner_finding"
+        else:
+            vuln_class = "recon"
+
         hyp_id = ledger.add(surface, vuln_class)
 
-        # If there's a concrete payload in the tool args, record it too
+        if signals:
+            for sig in signals:
+                ledger.record_payload(hyp_id, sig.strip()[:200])
+            ledger.record_result(
+                hyp_id,
+                "testing",
+                "Automatically extracted from tool output",
+            )
+
         payload = ""
         if tool_name == "send_request":
-            body = args.get("body", "")
-            if body:
-                payload = body[:200]
+            payload = str(args.get("body", ""))[:200]
         elif tool_name == "terminal_execute":
-            payload = args.get("command", "")[:200]
+            payload = str(args.get("command", ""))[:200]
         if payload:
             ledger.record_payload(hyp_id, payload)
 
-        # If a vulnerability signal was detected, mark as 'testing'
-        if vuln_class not in ("RECON",):
+        if vuln_class != "recon":
             evidence_snip = ""
-            # Try to grab a signal line from the observation
             for line in observation_xml.split("\n"):
                 ll = line.lower()
-                if any(kw in ll for kw in ("vulnerable", "injectable", "confirmed", "critical", "reflected")):
+                if any(
+                    kw in ll for kw in ("vulnerable", "injectable", "confirmed", "critical", "reflected")
+                ):
                     evidence_snip = line.strip()[:300]
                     break
             ledger.record_result(hyp_id, "testing", evidence_snip)
 
-        _logger.debug("FIX-1: Auto-recorded hypothesis %s: %s on %s", hyp_id, vuln_class, surface[:60])
+        if coverage_tracker is not None:
+            try:
+                coverage_tracker.discover_surface(surface, "tool_surface", source=tool_name)
+                coverage_tracker.record_test(surface, "tool_surface", vuln_class, note=f"tool={tool_name}")
+                if any(x in obs_lower for x in ("403", "401", "forbidden", "rate limit", "waf")):
+                    coverage_tracker.record_failure(
+                        surface,
+                        "tool_surface",
+                        "ACCESS_OR_WAF_BLOCKED",
+                        vuln_class=vuln_class,
+                    )
+            except Exception:
+                pass
+
+        should_correlate = bool(signals) or any(
+            kw in obs_lower for kw in ("confirmed", "extracted", "authentication bypass", "accepted")
+        )
+        if correlation_engine is not None and vuln_class != "recon" and should_correlate:
+            try:
+                severity = "medium"
+                if vuln_class in {"rce", "auth_bypass", "sqli"}:
+                    severity = "high"
+                if vuln_class in {"scanner_finding"}:
+                    severity = "low"
+                correlation_engine.add_finding(
+                    vuln_class=vuln_class,
+                    surface=surface,
+                    severity=severity,
+                    details={"source": tool_name, "hypothesis_id": hyp_id},
+                )
+            except Exception:
+                pass
+
+        if attack_graph is not None and vuln_class != "recon":
+            try:
+                from phantom.core.attack_graph import AttackEdgeType, AttackNodeType
+
+                vuln_hash = hashlib.md5(f"{surface}:{vuln_class}".encode("utf-8")).hexdigest()[:10]
+                vuln_node = f"V-{vuln_hash}"
+                target_node = f"A-{hashlib.md5(surface.encode('utf-8')).hexdigest()[:10]}"
+
+                if vuln_node not in attack_graph._nodes:
+                    attack_graph.add_vulnerability(
+                        vuln_id=vuln_node,
+                        title=f"{vuln_class.upper()} via {tool_name}",
+                        severity="high" if vuln_class in {"sqli", "rce", "auth_bypass"} else "medium",
+                        status="suspected",
+                        metadata={"surface": surface, "tool": tool_name, "hypothesis_id": hyp_id},
+                    )
+                if target_node not in attack_graph._nodes:
+                    attack_graph.add_node(
+                        node_id=target_node,
+                        node_type=AttackNodeType.ASSET,
+                        label=surface[:80],
+                        metadata={"surface": surface},
+                    )
+                if not attack_graph._graph.has_edge(vuln_node, target_node):
+                    attack_graph.add_edge(vuln_node, target_node, AttackEdgeType.AFFECTS)
+            except Exception:
+                pass
 
     except Exception:  # noqa: BLE001
-        # Never let auto-recording crash the tool pipeline
-        pass
+        # Never let auto-recording crash the tool pipeline.
+        return
 
 
 def extract_screenshot_from_result(result: Any) -> str | None:

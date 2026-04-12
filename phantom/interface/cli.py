@@ -103,7 +103,8 @@ async def run_cli(args: Any) -> None:  # noqa: PLR0912, PLR0915
         restored_hypothesis_ledger = None
         restored_coverage_tracker = None
         restored_correlation_engine = None
-        
+        restored_attack_graph = None
+
         if cp.hypothesis_ledger_state:
             try:
                 from phantom.agents.hypothesis_ledger import HypothesisLedger
@@ -114,7 +115,7 @@ async def run_cli(args: Any) -> None:  # noqa: PLR0912, PLR0915
                 logger.info("Restored %d hypotheses from checkpoint", len(cp.hypothesis_ledger_state))
             except Exception as e:
                 logger.warning("Failed to restore hypothesis ledger: %s", e)
-        
+
         if cp.coverage_tracker_state:
             try:
                 from phantom.agents.coverage_tracker import CoverageTracker
@@ -122,7 +123,7 @@ async def run_cli(args: Any) -> None:  # noqa: PLR0912, PLR0915
                 logger.info("Restored coverage tracker from checkpoint")
             except Exception as e:
                 logger.warning("Failed to restore coverage tracker: %s", e)
-        
+
         if cp.correlation_engine_state:
             try:
                 from phantom.agents.correlation_engine import CorrelationEngine
@@ -130,11 +131,28 @@ async def run_cli(args: Any) -> None:  # noqa: PLR0912, PLR0915
                 logger.info("Restored correlation engine from checkpoint")
             except Exception as e:
                 logger.warning("Failed to restore correlation engine: %s", e)
-        
+
+        # FIX: Restore attack graph state if present
+        if cp.attack_graph_state:
+            try:
+                from phantom.core.attack_graph import AttackGraph
+                restored_attack_graph = AttackGraph.from_dict(cp.attack_graph_state)
+                logger.info("Restored attack graph from checkpoint")
+            except Exception as e:
+                logger.warning("Failed to restore attack graph: %s", e)
+
         # Store restored components in args to pass to agent config
         args._restored_hypothesis_ledger = restored_hypothesis_ledger  # type: ignore[attr-defined]
         args._restored_coverage_tracker = restored_coverage_tracker  # type: ignore[attr-defined]
         args._restored_correlation_engine = restored_correlation_engine  # type: ignore[attr-defined]
+        args._restored_attack_graph = restored_attack_graph  # type: ignore[attr-defined]
+
+        # FIX ISSUE#6: Restore sub-agent states from checkpoint
+        # Sub-agents are ephemeral by default, but if they were active at checkpoint time,
+        # we need to restore their state to avoid losing work
+        args._restored_sub_agent_states = cp.sub_agent_states  # type: ignore[attr-defined]
+        if cp.sub_agent_states:
+            logger.info("Checkpoint contains %d sub-agent state(s)", len(cp.sub_agent_states))
         
         # Inject resume notice so agent knows context was restored
         restored_state.add_message(
@@ -240,6 +258,13 @@ async def run_cli(args: Any) -> None:  # noqa: PLR0912, PLR0915
         agent_config["coverage_tracker"] = args._restored_coverage_tracker
     if getattr(args, "_restored_correlation_engine", None):
         agent_config["correlation_engine"] = args._restored_correlation_engine
+    if getattr(args, "_restored_attack_graph", None):
+        agent_config["attack_graph"] = args._restored_attack_graph
+
+    # FIX ISSUE#6: Pass restored sub-agent states to agent config
+    # This allows the agent tree to be properly resumed
+    if getattr(args, "_restored_sub_agent_states", None):
+        agent_config["_restored_sub_agent_states"] = args._restored_sub_agent_states
 
     # Attach checkpoint manager to agent config so BaseAgent can save periodically
     if checkpoint_mgr is None:
@@ -303,6 +328,11 @@ async def run_cli(args: Any) -> None:  # noqa: PLR0912, PLR0915
                 scan_config=scan_config,
                 status="interrupted",
                 interruption_reason=reason,
+                hypothesis_ledger=getattr(agent, "hypothesis_ledger", None),
+                coverage_tracker=getattr(agent, "coverage_tracker", None),
+                correlation_engine=getattr(agent, "correlation_engine", None),
+                attack_graph=getattr(agent, "attack_graph", None),
+                active_sub_agents=getattr(agent, "_collect_active_sub_agent_states", lambda: {})(),
             )
             checkpoint_mgr.save(cp_data)
             console.print(f"[dim]Checkpoint saved → phantom_runs/{args.run_name}/checkpoint.json[/]")

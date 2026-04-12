@@ -1,0 +1,77 @@
+\contentsline {chapter}{Dedication}{i}{chapter*.1}%
+\contentsline {chapter}{Acknowledgements}{ii}{chapter*.2}%
+\contentsline {chapter}{Abstract}{iii}{chapter*.3}%
+\contentsline {chapter}{R\'{e}sum\'{e}}{iv}{chapter*.4}%
+\contentsline {chapter}{Contents}{v}{chapter*.5}%
+\contentsline {chapter}{List of Figures}{viii}{chapter*.6}%
+\contentsline {chapter}{List of Figures}{viii}{chapter*.6}%
+\contentsline {chapter}{List of Tables}{ix}{chapter*.7}%
+\contentsline {chapter}{List of Tables}{ix}{chapter*.7}%
+\contentsline {chapter}{List of Abbreviations}{x}{chapter*.8}%
+\contentsline {chapter}{Introduction}{1}{chapter*.9}%
+\contentsline {section}{Context and Motivation}{1}{section*.10}%
+\contentsline {section}{Problem Statement}{1}{section*.10}%
+\contentsline {section}{Research Hypotheses}{2}{section*.10}%
+\contentsline {section}{Objectives}{2}{table.caption.11}%
+\contentsline {section}{Document Structure}{3}{Item.4}%
+\contentsline {chapter}{\numberline {1}Problem Definition}{4}{chapter.1}%
+\contentsline {section}{\numberline {1.1}The Long-Horizon Security Reasoning Problem}{4}{section.1.1}%
+\contentsline {section}{\numberline {1.2}Research Questions}{4}{section.1.2}%
+\contentsline {section}{\numberline {1.3}Characterisation of the Target System}{5}{section.1.3}%
+\contentsline {chapter}{\numberline {2}State of the Art}{6}{chapter.2}%
+\contentsline {section}{\numberline {2.1}Taxonomy of Automated Vulnerability Detection}{6}{section.2.1}%
+\contentsline {section}{\numberline {2.2}Signature-Based Dynamic Scanning}{6}{section.2.2}%
+\contentsline {subsection}{\numberline {2.2.1}Nuclei and Template-Dependent Systems}{6}{subsection.2.2.1}%
+\contentsline {subsection}{\numberline {2.2.2}OWASP ZAP}{7}{subsection.2.2.2}%
+\contentsline {subsection}{\numberline {2.2.3}Structural Limitations}{7}{subsection.2.2.3}%
+\contentsline {section}{\numberline {2.3}Machine Learning Approaches}{7}{section.2.3}%
+\contentsline {section}{\numberline {2.4}LLM-Based Security Testing}{8}{section.2.4}%
+\contentsline {subsection}{\numberline {2.4.1}Foundational Approaches}{8}{subsection.2.4.1}%
+\contentsline {subsection}{\numberline {2.4.2}PentestGPT}{8}{subsection.2.4.2}%
+\contentsline {subsection}{\numberline {2.4.3}LLM Agents in Controlled Settings}{8}{subsection.2.4.3}%
+\contentsline {subsection}{\numberline {2.4.4}Critical Assessment}{9}{subsection.2.4.4}%
+\contentsline {section}{\numberline {2.5}Multi-Agent Architectures}{9}{section.2.5}%
+\contentsline {section}{\numberline {2.6}Context Window Management}{9}{section.2.6}%
+\contentsline {chapter}{\numberline {3}Identified Gaps}{11}{chapter.3}%
+\contentsline {section}{\numberline {3.1}Gap G1: The CVE Template Gap}{11}{section.3.1}%
+\contentsline {section}{\numberline {3.2}Gap G2: Context Loss Under Compression}{11}{section.3.2}%
+\contentsline {section}{\numberline {3.3}Gap G3: Absent Deduplication}{12}{section.3.3}%
+\contentsline {section}{\numberline {3.4}Gap G4: Unverifiable Architectural Claims}{12}{section.3.4}%
+\contentsline {chapter}{\numberline {4}Proposed Approach}{13}{chapter.4}%
+\contentsline {section}{\numberline {4.1}Scientific Positioning}{13}{section.4.1}%
+\contentsline {section}{\numberline {4.2}Design Theses}{13}{section.4.2}%
+\contentsline {section}{\numberline {4.3}System Overview}{14}{section.4.3}%
+\contentsline {section}{\numberline {4.4}Scientific Contributions}{14}{section.4.4}%
+\contentsline {chapter}{\numberline {5}Formal Model}{16}{chapter.5}%
+\contentsline {section}{\numberline {5.1}Agent State and Transition Function}{16}{section.5.1}%
+\contentsline {section}{\numberline {5.2}CVE Template Gap}{17}{section.5.2}%
+\contentsline {section}{\numberline {5.3}Memory Compression and the Dual-Anchor Mechanism}{17}{section.5.3}%
+\contentsline {section}{\numberline {5.4}Hypothesis Ledger}{18}{section.5.4}%
+\contentsline {section}{\numberline {5.5}ReAct Loop: State Machine Model}{19}{section.5.5}%
+\contentsline {section}{\numberline {5.6}Code-Verified Methodology}{19}{section.5.6}%
+\contentsline {chapter}{\numberline {6}System Architecture}{20}{chapter.6}%
+\contentsline {section}{\numberline {6.1}Agent Class Hierarchy}{20}{section.6.1}%
+\contentsline {subsection}{\numberline {6.1.1}BaseAgent Initialisation}{20}{subsection.6.1.1}%
+\contentsline {section}{\numberline {6.2}Multi-Agent Topology}{20}{section.6.2}%
+\contentsline {section}{\numberline {6.3}ReAct Execution Loop: Implementation}{21}{section.6.3}%
+\contentsline {section}{\numberline {6.4}LLM Integration and Reliability}{22}{section.6.4}%
+\contentsline {subsection}{\numberline {6.4.1}Three-State Circuit Breaker}{22}{subsection.6.4.1}%
+\contentsline {subsection}{\numberline {6.4.2}Graduated Retry Strategy}{23}{subsection.6.4.2}%
+\contentsline {section}{\numberline {6.5}Memory Management}{23}{section.6.5}%
+\contentsline {subsection}{\numberline {6.5.1}Proactive Compression}{23}{subsection.6.5.1}%
+\contentsline {subsection}{\numberline {6.5.2}Dual-Anchor Implementation}{24}{subsection.6.5.2}%
+\contentsline {section}{\numberline {6.6}Tool Execution Pipeline}{25}{section.6.6}%
+\contentsline {section}{\numberline {6.7}Sandbox and Scope Enforcement}{25}{section.6.7}%
+\contentsline {section}{\numberline {6.8}Checkpointing}{26}{section.6.8}%
+\contentsline {chapter}{\numberline {7}Design Decisions}{27}{chapter.7}%
+\contentsline {section}{\numberline {7.1}ReAct vs.\ Hierarchical Planning}{28}{section.7.1}%
+\contentsline {section}{\numberline {7.2}Exact-Match vs.\ Semantic Deduplication}{28}{section.7.2}%
+\contentsline {section}{\numberline {7.3}Dual Anchoring vs.\ Single-Mechanism Approaches}{28}{section.7.3}%
+\contentsline {chapter}{\numberline {8}System Limitations and Failure Modes}{29}{chapter.8}%
+\contentsline {chapter}{\numberline {9}Discussion}{31}{chapter.9}%
+\contentsline {section}{\numberline {9.1}Scientific Value of the Contributions}{31}{section.9.1}%
+\contentsline {section}{\numberline {9.2}Positioning Against Prior Work}{31}{section.9.2}%
+\contentsline {section}{\numberline {9.3}Claims That Require Empirical Validation}{32}{section.9.3}%
+\contentsline {section}{\numberline {9.4}Failure Mode Prioritisation}{32}{section.9.4}%
+\contentsline {chapter}{Conclusion}{33}{chapter*.24}%
+\contentsline {chapter}{References}{35}{chapter*.25}%

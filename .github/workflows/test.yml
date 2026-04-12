@@ -46,6 +46,9 @@ jobs:
       - name: Run tests
         run: poetry run pytest tests/ -v --tb=short -x
 
+      - name: Enforce Wave A/B gates
+        run: poetry run pytest tests/test_wave_a_b_gates.py -q
+
       - name: Check imports
         run: poetry run python -c "import phantom; print(f'Phantom v{phantom.__version__}')"
 

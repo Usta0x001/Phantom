@@ -18,6 +18,7 @@ class AbstractRuntime(ABC):
         agent_id: str,
         existing_token: str | None = None,
         local_sources: list[dict[str, str]] | None = None,
+        scan_config: dict | None = None,
     ) -> SandboxInfo:
         raise NotImplementedError
 

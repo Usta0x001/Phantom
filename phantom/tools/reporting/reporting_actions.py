@@ -1,4 +1,5 @@
 import contextlib
+import json
 import re
 from pathlib import PurePosixPath
 from typing import Any
@@ -640,7 +641,27 @@ def create_vulnerability_report(  # noqa: PLR0912
     if confidence not in _VALID_CONFIDENCE:
         confidence = "LIKELY"  # safe fallback
 
-    _VALID_REPLAY_STATUS = {"PENDING", "SKIPPED", "PASSED", "FAILED", "EXPLOIT_CONFIRMED", "EXECUTION_ONLY", "REQUIRES_BROWSER"}
+_VALID_REPLAY_STATUS = {"PENDING", "SKIPPED", "PASSED", "FAILED", "EXPLOIT_CONFIRMED", "EXECUTION_ONLY", "REQUIRES_BROWSER"}
+
+
+def _build_replay_command(poc_code: str) -> str:
+    """Wrap PoC snippets into an executable command for terminal_execute.
+
+    If the content already looks like a shell/python invocation, pass it through.
+    Otherwise execute it as a Python heredoc so multiline scripts run correctly.
+    """
+    stripped = (poc_code or "").strip()
+    if not stripped:
+        return ""
+
+    first = stripped.splitlines()[0].strip().lower()
+    if first.startswith(("python", "curl", "bash", "sh", "pwsh", "powershell")):
+        return stripped
+    if stripped.startswith("#!/"):
+        body = "\n".join(stripped.splitlines()[1:]).strip()
+        if body:
+            return f"python -c {json.dumps(body)}"
+    return f"python -c {json.dumps(stripped)}"
 
     # Rec 5 (ER-005): PoC auto-replay — execute poc_script_code in the sandbox
     # before writing the report.  If replay succeeds, upgrade confidence to
@@ -662,8 +683,14 @@ def create_vulnerability_report(  # noqa: PLR0912
             try:
                 from phantom.tools.executor import execute_tool
 
+                replay_command = _build_replay_command(_poc_code)
+                if not replay_command:
+                    _replay = "SKIPPED"
+                    _replay_reason = "Empty PoC"
+                    return
+
                 replay_result = await execute_tool(
-                    "terminal_execute", command=_poc_code, timeout=60,
+                    "terminal_execute", command=replay_command, timeout=60,
                 )
                 replay_out = str(replay_result or "")
                 # Only treat as FAILED on execution-failure signals or empty output.

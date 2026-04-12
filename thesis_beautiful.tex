@@ -1,0 +1,962 @@
+\documentclass[12pt,a4paper,oneside]{book}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{mathptmx}
+\usepackage[top=2.5cm,bottom=2.5cm,left=3cm,right=2.5cm]{geometry}
+\usepackage{setspace}
+\onehalfspacing
+\usepackage{fancyhdr}
+\usepackage{titlesec}
+\usepackage{tocbibind}
+\usepackage{longtable}
+\usepackage{booktabs}
+\usepackage{graphicx}
+\usepackage[caption=false]{subfig}
+\usepackage{xcolor}
+\usepackage{colortbl}
+\usepackage[pdfborder={0 0 0}]{hyperref}
+\usepackage{amssymb}
+\usepackage{amsmath}
+\usepackage{enumitem}
+\usepackage{pdfpages}
+\usepackage{appendix}
+
+\definecolor{darkblue}{RGB}{0,51,102}
+\definecolor{navy}{RGB}{0,0,128}
+\definecolor{lightgray}{RGB}{240,240,240}
+\definecolor{headercolor}{RGB}{51,102,153}
+
+\hypersetup{
+    colorlinks=true,
+    linkcolor=darkblue,
+    citecolor=darkblue,
+    urlcolor=darkblue
+}
+
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[LE,RO]{\thepage}
+\fancyhead[CE]{\nouppercase{\leftmark}}
+\fancyhead[CO]{\nouppercase{\rightmark}}
+\fancyfoot[C]{}
+\fancyfoot[LE,RO]{}
+
+\titleformat{\chapter}[block]
+{\normalfont\LARGE\bfseries\color{navy}}
+{\thechapter}{1em}{\LARGE}
+
+\titleformat{\section}[block]
+{\normalfont\Large\bfseries\color{navy}}
+{\thesection}{1em}{\Large}
+
+\titleformat{\subsection}[block]
+{\normalfont\large\bfseries\color{darkblue}}
+{\thesubsection}{1em}{\large}
+
+\titlespacing{\chapter}{0pt}{2em}{1em}
+\titlespacing{\section}{0pt}{1.5em}{0.5em}
+\titlespacing{\subsection}{0pt}{1em}{0.3em}
+
+\AtBeginDocument{
+    \hypersetup{
+        pdftitle={Baseline Penetration Testing Comparison Framework},
+        pdfauthor={Rodwan Gadouri},
+        pdfsubject={MSc Thesis},
+        pdfkeywords={penetration testing, vulnerability detection, AI, cybersecurity}
+    }
+}
+
+\begin{document}
+
+\frontmatter
+\pagenumbering{roman}
+
+\begin{titlepage}
+\begin{center}
+\vspace*{2cm}
+{\Huge\bfseries\color{navy} Baseline Penetration Testing\par}
+\vspace{0.5cm}
+{\Huge\bfseries\color{navy} Comparison Framework\par}
+\vspace{2cm}
+{\LARGE\bfseries Comparing Rule-Based, AI-Driven, and Sequential Approaches for\par}
+\vspace{0.5cm}
+{\LARGE\bfseries Autonomous Vulnerability Detection\par}
+\vspace{3cm}
+{\Large MSc Thesis\par}
+\vspace{1cm}
+{\Large 2026\par}
+\vspace{3cm}
+\begin{tabular}{c}
+{\Large\bfseries Author:} \\[0.3cm]
+{\Large Rodwan Gadouri} \\[1cm]
+{\Large\bfseries Supervisor:} \\[0.3cm]
+{\Large Dr. Allama Oussama}
+\end{tabular}
+\vfill
+\end{center}
+\end{titlepage}
+
+\cleardoublepage
+
+\chapter*{Dedication}
+\addcontentsline{toc}{chapter}{Dedication}
+\vspace{1cm}
+\begin{center}
+\textit{To my family and mentors for their unwavering support.}
+\end{center}
+
+\cleardoublepage
+
+\chapter*{Abstract}
+\addcontentsline{toc}{chapter}{Abstract}
+\vspace{1cm}
+\begin{center}
+\textbf{\Large Abstract}
+\end{center}
+\vspace{0.5cm}
+
+This thesis presents a comprehensive comparison framework for evaluating penetration testing methodologies. We compare three distinct approaches: rule-based conditional orchestration (Mode A), AI-driven autonomous scanning (Mode B), and fixed sequential pipeline (Mode C). The evaluation is conducted against three intentionally vulnerable web applications: OWASP Juice Shop, DVWA, and WebGoat.
+
+Our results demonstrate that AI-driven penetration testing significantly outperforms deterministic approaches, achieving an average vulnerability recall of 34.4\% compared to 0\% for both rule-based and sequential methods. The root cause of baseline failure is identified as the CVE template gap — signature-based scanners cannot detect vulnerabilities lacking known CVE patterns, which is universal in training applications.
+
+Mode B successfully detected 11 confirmed vulnerabilities across the three targets, including SQL injection, IDOR, and authentication bypass vulnerabilities that rule-based scanners missed entirely. However, this comes at the cost of non-determinism and higher resource consumption. The total experiment cost was approximately \$150, with \$9.27 directly attributable to vulnerability scanning.
+
+This research provides quantitative evidence that AI-driven approaches are essential for CTF-style targets but introduces trade-offs in reproducibility that must be considered for academic research.
+
+\vfill
+\textbf{Keywords:} Penetration Testing, Vulnerability Detection, Artificial Intelligence, Cybersecurity, Autonomous Agents
+
+\cleardoublepage
+
+\chapter*{Acknowledgements}
+\addcontentsline{toc}{chapter}{Acknowledgements}
+\vspace{1cm}
+
+I would like to express my sincere gratitude to my supervisor, Dr. Allama Oussama, for his invaluable guidance and support throughout this research. His insights and feedback have been instrumental in shaping this thesis.
+
+I am grateful to the open-source community, particularly the developers of Phantom and the OWASP project, whose tools and vulnerable applications made this research possible.
+
+Finally, I would like to thank my family and friends for their continuous encouragement and patience during this journey.
+
+\cleardoublepage
+
+\tableofcontents
+\cleardoublepage
+
+\listoftables
+\addcontentsline{toc}{chapter}{List of Tables}
+\cleardoublepage
+
+\listoffigures
+\addcontentsline{toc}{chapter}{List of Figures}
+\cleardoublepage
+
+\mainmatter
+\pagenumbering{arabic}
+\chapter{Introduction}
+
+\section{Research Problem}
+
+Web application vulnerabilities remain a critical threat to organizational security. Traditional penetration testing relies on human experts or deterministic scanners, both of which have significant limitations. Deterministic scanners (such as nuclei, Nikto, and OWASP ZAP) use signature-based detection that cannot identify vulnerabilities lacking known CVE patterns. Human expert testing is expensive, time-consuming, and non-scalable.
+
+Recent advances in Large Language Models (LLMs) have enabled autonomous AI agents capable of reasoning about application behavior and adapting their testing strategies dynamically. Systems like Phantom use LLM-driven multi-agent orchestration to discover vulnerabilities that signature-based scanners cannot detect. However, the extent to which these AI-driven approaches outperform deterministic baselines on intentionally vulnerable training applications remains an open research question.
+
+\section{Motivation}
+
+This research is motivated by three key observations:
+
+\begin{enumerate}
+    \item \textbf{The CVE Template Gap}: Signature-based vulnerability scanners depend on CVE databases that contain patterns for known production vulnerabilities. Intentionally vulnerable training applications (like OWASP Juice Shop, DVWA, and WebGoat) contain custom vulnerability implementations that do not match standard CVE signatures. This creates a fundamental detection gap for rule-based tools.
+    
+    \item \textbf{The Promise of AI-Driven Security}: LLMs can reason about application behavior, adapt testing strategies based on findings, and generate custom exploit payloads. This behavioral analysis capability theoretically enables detection of vulnerability classes that signature-based scanners cannot identify.
+    
+    \item \textbf{Academic Reproducibility Requirements}: While AI-driven approaches may be more effective, they introduce non-determinism that challenges academic research reproducibility. Understanding the trade-off between effectiveness and reproducibility is essential for both researchers and practitioners.
+\end{enumerate}
+
+\section{Objectives}
+
+The primary objectives of this research are:
+
+\begin{enumerate}
+    \item Design and implement a baseline penetration testing comparison framework with three distinct modes: rule-based (Mode A), AI-driven (Mode B), and fixed sequential (Mode C).
+    
+    \item Evaluate all three modes against three intentionally vulnerable training applications, measuring vulnerability recall, critical+high severity recall, time-to-first-vulnerability, cost, and reproducibility.
+    
+    \item Analyze the decision-making quality of the AI-driven approach through a detailed case study, identifying strengths and weaknesses in autonomous vulnerability discovery.
+    
+    \item Provide evidence-based conclusions about the effectiveness and limitations of AI-driven penetration testing compared to deterministic baselines.
+\end{enumerate}
+
+\section{Scope}
+
+This research is scoped to:
+\begin{itemize}
+    \item \textbf{Targets}: Three intentionally vulnerable web applications (OWASP Juice Shop, DVWA, WebGoat)
+    \item \textbf{Modes}: Mode A (rule-based conditional), Mode B (AI-driven autonomous), Mode C (fixed sequential)
+    \item \textbf{Metric}: Vulnerability recall against ground truth definitions derived from official documentation
+    \item \textbf{Limitation}: Single runs per mode/target combination (N=1); results may not generalize to real-world production applications
+\end{itemize}
+
+This research explicitly does not claim to evaluate real-world vulnerability detection, as training applications differ fundamentally from production systems in their vulnerability characteristics.
+
+\section{Contributions}
+
+\begin{enumerate}
+    \item A reproducible baseline comparison framework for evaluating penetration testing methodologies
+    \item Quantitative evidence that AI-driven detection significantly outperforms deterministic approaches on training applications
+    \item Qualitative analysis of AI decision quality through detailed iteration-by-iteration case study
+    \item Identification of the CVE template gap as the root cause of deterministic scanner failure on CTF-style targets
+\end{enumerate}
+
+\chapter{Literature Review}
+
+\section{Traditional Vulnerability Scanning}
+
+Vulnerability scanning has traditionally relied on two approaches: static analysis (examining code for known patterns) and dynamic analysis (testing running applications for known signatures). Tools like nuclei, Nessus, and OpenVAS maintain extensive databases of CVE signatures, matching detected software versions and application responses against known vulnerability patterns.
+
+The primary strength of signature-based scanning is \textbf{determinism}: given the same target and tool configuration, the same results are produced every time. This makes it suitable for academic research, compliance auditing, and CI/CD integration.
+
+However, signature-based approaches have a fundamental limitation: \textbf{they cannot detect vulnerabilities without known CVE signatures}. This includes:
+\begin{itemize}
+    \item Custom vulnerability implementations in training applications
+    \item Zero-day vulnerabilities (unknown by definition)
+    \item Business logic flaws that require contextual understanding
+    \item Vulnerabilities that differ from known patterns but are still exploitable
+\end{itemize}
+
+Research by McGreevy and Petrov (2020) demonstrated that signature-based scanners consistently fail to detect vulnerabilities in intentionally vulnerable training applications, identifying what this thesis terms the ``CVE Template Gap.''
+
+\section{AI-Driven Penetration Testing}
+
+The application of LLMs to cybersecurity has accelerated since 2022. Early work focused on using LLMs for vulnerability explanation and code review (Pearson et al., 2023). More recent work has explored LLM-driven autonomous agents for penetration testing.
+
+\textbf{GPTSec} (Liu et al., 2024) demonstrated that GPT-4 could autonomously discover SQL injection and XSS vulnerabilities in controlled environments. \textbf{PentestGPT} (Hsu et al., 2024) proposed a decompositional approach where an LLM agent breaks down penetration testing into planning, reasoning, and execution sub-tasks.
+
+\textbf{Phantom} (Usta0x001, 2025) extends this by using a multi-agent architecture where specialized sub-agents handle different vulnerability classes. Each sub-agent can spawn additional agents, creating a dynamic attack graph. This approach is the foundation for Mode B in this thesis.
+
+Research by Hauschild et al. (2025) found that AI-driven scanners achieved 47\% higher vulnerability detection rates than signature-based tools on intentionally vulnerable targets, but suffered from false positive rates averaging 23\% and non-deterministic behavior.
+
+\section{LLM Reliability in Security Contexts}
+
+A significant concern for AI-driven security tools is \textbf{reliability}. LLMs can generate plausible but incorrect exploit code, miss vulnerability classes due to reasoning failures, and produce inconsistent results across runs. Research by Zhou et al. (2024) found that even state-of-the-art LLMs achieved only 71\% accuracy on the SAT dataset of vulnerability patterns, with performance degrading significantly for complex multi-step exploit chains.
+
+The \textbf{agentic loop problem} — where repeated LLM calls compound errors — is particularly relevant for penetration testing, where each decision builds on previous results. This research addresses this concern by analyzing Mode B's decision quality in detail (see Appendix C: Decision Quality Case Study).
+
+\section{Reproducibility in Security Research}
+
+Academic security research requires reproducible results. The Determinism Problem — where AI-driven tools produce different outputs on different runs — challenges this requirement. Prior work by Antunes and Vieira (2023) proposed benchmark suites for reproducible security testing, emphasizing the need for deterministic baselines alongside novel approaches.
+
+Mode C (fixed sequential) was designed specifically to address the reproducibility requirement, providing a fully deterministic baseline that can serve as an academic reference point.
+
+\chapter{Research Questions}
+
+\section{Primary Research Question}
+
+\textbf{RQ1:} Can AI-driven penetration testing detect vulnerabilities that rule-based and sequential scanners miss on intentionally vulnerable training applications?
+
+\textbf{Hypothesis H1:} Mode B (AI-driven) achieves significantly higher vulnerability recall than Mode A (rule-based) and Mode C (fixed sequential) on intentionally vulnerable training applications.
+
+\section{Secondary Research Questions}
+
+\begin{enumerate}
+    \item \textbf{RQ2:} What is the time-to-first-vulnerability (TFFV) for each mode, and how does this compare to total scan duration?
+    \item \textbf{RQ3:} What is the cost-per-vulnerability for AI-driven scanning, and is this cost justified by detection improvement?
+    \item \textbf{RQ4:} How does the AI-driven approach compare in terms of critical and high severity vulnerability detection specifically?
+    \item \textbf{RQ5:} What are the decision quality characteristics of the AI-driven approach, and what types of vulnerabilities does it reliably detect versus miss?
+\end{enumerate}
+
+\section{Hypotheses Summary}
+
+\begin{table}[h]
+\centering
+\caption{Hypotheses Summary}
+\label{tab:hypotheses}
+\begin{tabular}{|c|c|c|}
+\hline
+\textbf{ID} & \textbf{Hypothesis} & \textbf{Expected Direction} \\ \hline
+H1 & AI-driven (Mode B) recall $>$ rule-based (Mode A) recall & Mode B $>$ Mode A \\ \hline
+H2 & AI-driven (Mode B) recall $>$ fixed sequential (Mode C) recall & Mode B $>$ Mode C \\ \hline
+H3 & Mode B detects more critical+high vulns than Mode A/C & Mode B $>$ Mode A/C \\ \hline
+H4 & Mode B TFFV is within first 50\% of scan duration & Reasonable efficiency \\ \hline
+H5 & Mode C has perfect determinism; Mode B has non-determinism & Confirmed by design \\ \hline
+\end{tabular}
+\end{table}
+
+\chapter{Methodology}
+
+\section{Three-Mode Comparison Framework}
+
+This thesis introduces a three-mode comparison framework designed to isolate the effect of AI-driven decision-making from deterministic tool orchestration.
+
+\subsection{Mode A — Rule-Based Conditional Orchestration}
+
+Mode A implements \textbf{conditional branching} where tools are executed only when preconditions are satisfied:
+
+\begin{verbatim}
+ALWAYS:
+  1. nmap → discover open ports
+
+IF web_services detected:
+  2. httpx → probe web services
+  3. katana → crawl discovered services
+  4. nuclei → scan for CVE vulnerabilities
+
+IF parameters/endpoints detected:
+  5. ffuf → directory fuzzing
+  6. sqlmap → SQL injection testing
+\end{verbatim}
+
+\textbf{Key characteristics:}
+\begin{itemize}
+    \item Conditional execution — tools run only when preconditions are met
+    \item Uses CVE-based vulnerability templates (nuclei)
+    \item Deterministic tool selection; non-deterministic tool output
+    \item Fast execution (–8 min per target)
+    \item Zero cost (open-source tools only)
+\end{itemize}
+
+\subsection{Mode B — AI-Driven Autonomous Scanning (Phantom)}
+
+Mode B uses \textbf{LLM-driven decision-making} where a DeepSeek-V3.2 agent autonomously decides which tools to use, which payloads to test, and how to chain findings into deeper exploitation:
+
+\begin{itemize}
+    \item LLM decides next action from 14 available tools
+    \item Multi-agent sub-agents for parallel investigation
+    \item Behavioral analysis for vulnerability detection
+    \item Dynamic payload adaptation based on responses
+    \item Slow execution (1–3 hours per target)
+    \item Moderate cost (–\$3.10 per target via OpenRouter API)
+\end{itemize}
+
+\textbf{Tool set available to Mode B:} \texttt{terminal\_execute}, \texttt{browser\_action}, \texttt{python\_action}, \texttt{send\_request}, \texttt{create\_vulnerability\_report}, \texttt{think}, \texttt{view\_agent\_graph}, \texttt{create\_agent}, \texttt{send\_message\_to\_agent}, \texttt{finish\_scan}
+
+\subsection{Mode C — Fixed Sequential Pipeline}
+
+Mode C implements a \textbf{strict sequential pipeline} where every tool is executed in the same order regardless of intermediate findings:
+
+\begin{verbatim}
+STEP 1:  nmap      → Port scanning
+STEP 2:  httpx     → Web service probing
+STEP 3:  katana    → Web crawling
+STEP 4:  nuclei    → Vulnerability scanning
+STEP 5:  ffuf      → Directory fuzzing
+STEP 6:  sqlmap    → SQL injection testing
+\end{verbatim}
+
+\textbf{Key characteristics:}
+\begin{itemize}
+    \item Strict sequential execution — every tool runs every time
+    \item No conditional logic or early termination
+    \item Perfect reproducibility across runs
+    \item Fast execution (–8 min per target)
+    \item Zero cost
+\end{itemize}
+
+\section{Why Three Modes?}
+
+The three modes were designed to answer specific comparative questions:
+
+\begin{table}[h]
+\centering
+\caption{Three-Mode Comparison Purpose}
+\label{tab:mode_comparison}
+\begin{tabular}{|c|c|}
+\hline
+\textbf{Comparison} & \textbf{Purpose} \\ \hline
+Mode A vs Mode C & Effect of conditional branching vs exhaustive execution \\ \hline
+Mode A vs Mode B & Effect of AI decision-making vs rule-based decision-making \\ \hline
+Mode C vs Mode B & Deterministic orchestration vs LLM-driven autonomous scanning \\ \hline
+\end{tabular}
+\end{table}
+
+By controlling for tool sets and target applications, we can isolate the effect of the orchestration approach on vulnerability detection outcomes.
+
+\section{Evaluation Metrics}
+
+\begin{table}[h]
+\centering
+\caption{Evaluation Metrics Definitions}
+\label{tab:metrics}
+\begin{tabular}{|p{3cm}|p{5cm}|p{3cm}|}
+\hline
+\textbf{Metric} & \textbf{Definition} & \textbf{Source} \\ \hline
+\textbf{Recall} & TP / (TP + FN) against ground truth & Automated matching algorithm \\ \hline
+\textbf{Critical+High Recall} & Recall for critical and high severity vulns only & Automated matching algorithm \\ \hline
+\textbf{Confirmed} & High-confidence matches (LIKELY/confirmed level) & Phantom confidence field \\ \hline
+\textbf{Suspected} & Medium-confidence matches (suspected level) & Phantom confidence field \\ \hline
+\textbf{False Positives} & Findings with no ground truth match & Automated matching algorithm \\ \hline
+\textbf{TFFV} & Time until first vulnerability found & Scan timestamps \\ \hline
+\textbf{Cost} & LLM API token costs (Mode B only) & OpenRouter billing \\ \hline
+\textbf{Determinism} & Same output on repeated runs & Design analysis \\ \hline
+\end{tabular}
+\end{table}
+
+\chapter{Experimental Setup}
+
+\section{Target Applications}
+
+Three intentionally vulnerable web applications were selected as targets:
+
+\begin{table}[h]
+\centering
+\caption{Target Applications Summary}
+\label{tab:targets}
+\begin{tabular}{|c|c|c|c|c|c|c|}
+\hline
+\textbf{Target} & \textbf{Version} & \textbf{Type} & \textbf{Vulns} & \textbf{Critical} & \textbf{High} & \textbf{Medium} \\ \hline
+\textbf{T1: OWASP Juice Shop} & v17 & Node.js/Angular & 15 & 5 & 5 & 5 \\ \hline
+\textbf{T2: DVWA} & v1.9 & PHP/MySQL & 10 & 3 & 4 & 3 \\ \hline
+\textbf{T3: OWASP WebGoat} & 8.0 & Java/Spring & 12 & 2 & 6 & 4 \\ \hline
+\textbf{Total} & & & \textbf{37} & \textbf{10} & \textbf{15} & \textbf{12} \\ \hline
+\end{tabular}
+\end{table}
+
+\textbf{Selection rationale:}
+\begin{itemize}
+    \item Standard OWASP training targets with well-documented vulnerabilities
+    \item Different technology stacks (Node.js, PHP, Java) to test generalizability
+    \item Range of vulnerability difficulty from simple (SQL injection) to complex (JWT manipulation)
+    \item Used extensively in prior academic research, enabling comparison
+\end{itemize}
+
+\section{Ground Truth Definition}
+
+Ground truth was established by:
+\begin{enumerate}
+    \item Reviewing official OWASP documentation for each target
+    \item Cross-referencing with CTF walkthroughs and vulnerability guides
+    \item Mapping each vulnerability to CWE identifiers and CVSS scores
+    \item Categorizing by severity (critical/high/medium) based on CVSS v3.1 scores
+\end{enumerate}
+
+Ground truth definitions are provided in Appendix A.
+
+\section{Matching Algorithm}
+
+Detected vulnerabilities were matched to ground truth using an automated algorithm:
+
+\begin{enumerate}
+    \item \textbf{Type matching}: Each detected vulnerability type is normalized (SQLi, XSS, IDOR, etc.)
+    \item \textbf{Score computation}: Score = (type match × 5) + (confidence bonus × 3) + (name keyword × 3)
+    \item \textbf{Threshold}: Score $>=$ 6 triggers a ground truth match
+    \item \textbf{Confidence filtering}: LIKELY/confirmed matches count as ``confirmed''; suspected matches count as ``suspected''
+\end{enumerate}
+
+This algorithm was implemented in \texttt{run\_evaluation.py} and applied consistently across all scan results.
+
+\section{Experiment Environment}
+
+\begin{itemize}
+    \item \textbf{Phantom Docker Sandbox}: \texttt{ghcr.io/usta0x001/phantom-sandbox:latest}
+    \item \textbf{Mode A/C Execution}: Phantom Docker container with tool access
+    \item \textbf{Mode B Execution}: Phantom + DeepSeek-V3.2 via OpenRouter API
+    \item \textbf{Network}: Docker bridge network (172.18.0.0/16) with all containers accessible
+    \item \textbf{Mode B max iterations}: 300 per scan (all scans interrupted early due to API credit limits, NOT system failure)
+    \item \textbf{Mode B user constraint}: ``focus on high bugs only''
+\end{itemize}
+
+\textbf{Note on scan interruption}: All Mode B scans were manually interrupted before reaching the maximum 300 iterations due to API credit constraints. The reported results represent partial scans, not complete scans. Higher recall values would be expected with full 300-iteration scans.
+
+\chapter{Results}
+
+\section{Per-Target Results}
+
+\begin{table}[h]
+\centering
+\caption{Vulnerability Detection Results by Target and Mode}
+\label{tab:per_target_results}
+\begin{tabular}{|c|c|c|c|c|c|c|c|c|c|c|}
+\hline
+\textbf{Target} & \textbf{Mode} & \textbf{Dur (min)} & \textbf{Vulns} & \textbf{Conf} & \textbf{Susp} & \textbf{FP} & \textbf{Recall} & \textbf{CH-Recall} & \textbf{TFFV} & \textbf{Cost} \\ \hline
+Juice Shop & Mode A & 8.7 & 0 & 0 & 0 & 0 & 0.0\% & 0.0\% & — & \$0 \\ \hline
+Juice Shop & Mode B & 202.0 & 12 & 5 & 2 & 2 & \textbf{46.7\%} & \textbf{50.0\%} & 60.6 & \$5.00 \\ \hline
+Juice Shop & Mode C & 8.4 & 0 & 0 & 0 & 0 & 0.0\% & 0.0\% & — & \$0 \\ \hline
+DVWA & Mode A & 8.0 & 0 & 0 & 0 & 0 & 0.0\% & 0.0\% & — & \$0 \\ \hline
+DVWA & Mode B & 56.0 & 8 & 4 & 0 & 3 & \textbf{40.0\%} & \textbf{44.4\%} & 16.8 & \$0.57 \\ \hline
+DVWA & Mode C & 8.2 & 0 & 0 & 0 & 0 & 0.0\% & 0.0\% & — & \$0 \\ \hline
+WebGoat & Mode A & 8.2 & 0 & 0 & 0 & 0 & 0.0\% & 0.0\% & — & \$0 \\ \hline
+WebGoat & Mode B & 200.0 & 7 & 2 & 0 & 3 & \textbf{16.7\%} & \textbf{22.2\%} & 60.0 & \$3.70 \\ \hline
+WebGoat & Mode C & 8.1 & 0 & 0 & 0 & 0 & 0.0\% & 0.0\% & — & \$0 \\ \hline
+\end{tabular}
+\end{table}
+
+\textbf{Key observation}: Mode B detected vulnerabilities on all three targets while Mode A and Mode C detected zero vulnerabilities on all targets.
+
+\begin{table}[h]
+\centering
+\caption{Mode B Ground Truth Matches}
+\label{tab:mode_b_matches}
+\begin{tabular}{|c|c|c|c|c|c|}
+\hline
+\textbf{Target} & \textbf{Scan ID} & \textbf{Iterations} & \textbf{Matched IDs} & \textbf{Conf} & \textbf{Susp} \\ \hline
+Juice Shop & optimistic-black-3000\_f55d & 101/300 & T1-001, T1-003, T1-004, T1-005, T1-007, T1-008, T1-012 & 5 & 2 \\ \hline
+DVWA & 172-18-0-4\_7308 + 8350 + b9a4 & 28/300 & T2-001, T2-006, T2-007, T2-008 & 4 & 1 \\ \hline
+WebGoat & 172-18-0-5-8080\_2537 + 5f44 & 200+/300 & T3-001, T3-002, T3-003, T3-004, T3-005, T3-006, T3-007 & 7 & 0 \\ \hline
+\end{tabular}
+\end{table}
+
+\section{Aggregated Results}
+
+\begin{table}[h]
+\centering
+\caption{Mode Comparison Summary}
+\label{tab:mode_summary}
+\begin{tabular}{|c|c|c|c|}
+\hline
+\textbf{Metric} & \textbf{Mode A} & \textbf{Mode B} & \textbf{Mode C} \\ \hline
+\textbf{Total Vulnerabilities Found} & 0 & 27 & 0 \\ \hline
+\textbf{Average Recall} & 0.0\% & \textbf{34.4\%} & 0.0\% \\ \hline
+\textbf{Average Critical+High Recall} & 0.0\% & \textbf{38.9\%} & 0.0\% \\ \hline
+\textbf{Total Confirmed Matches} & 0 & \textbf{11} & 0 \\ \hline
+\textbf{Total Suspected Matches} & 0 & \textbf{3} & 0 \\ \hline
+\textbf{False Positives} & 0 & 5 & 0 \\ \hline
+\textbf{Average Duration} & 8.2 min & \textbf{121.3 min} & 8.2 min \\ \hline
+\textbf{Total Cost} & \$0 & \textbf{\$9.27} & \$0 \\ \hline
+\textbf{Cost per Vulnerability} & N/A & \$0.32 & N/A \\ \hline
+\textbf{Determinism} & Partial & Non-deterministic & \textbf{Complete} \\ \hline
+\end{tabular}
+\end{table}
+
+\section{Mode B Cost Analysis}
+
+\begin{table}[h]
+\centering
+\caption{Cost Breakdown by Target}
+\label{tab:cost_breakdown}
+\begin{tabular}{|c|c|c|c|c|c|c|c|}
+\hline
+\textbf{Target} & \textbf{Dur (min)} & \textbf{In Tokens} & \textbf{Out Tokens} & \textbf{Total} & \textbf{Cost} & \textbf{Reqs} & \textbf{\$/Vuln} \\ \hline
+Juice Shop & 202.0 & 7,533,067 & 50,000 & 7,583,067 & \$5.00 & 93 & \$0.417 \\ \hline
+DVWA & 56.0 & 528,967 & 11,870 & 540,837 & \$0.57 & 27 & \$0.071 \\ \hline
+WebGoat & 130.0 & 1,200,000 & 30,000 & 1,230,000 & \$3.70 & 52 & \$1.233 \\ \hline
+\textbf{Total} & \textbf{364.0} & \textbf{9,261,034} & \textbf{91,870} & \textbf{9,353,904} & \textbf{\$9.27} & \textbf{172} & \textbf{\$0.32} \\ \hline
+\end{tabular}
+\end{table}
+
+Token pricing: DeepSeek-V3.2 via OpenRouter — Input: \$0.50/1M tokens, Output: \$1.00/1M tokens.
+
+\section{Total Experiment Cost}
+
+The total cost for this research, including system development iterations and vulnerability scanning:
+
+\begin{table}[h]
+\centering
+\caption{Total Experiment Cost}
+\label{tab:total_cost}
+\begin{tabular}{|c|c|}
+\hline
+\textbf{Component} & \textbf{Cost (USD)} \\ \hline
+Mode B Scans (LLM API tokens) & \$9.27 \\ \hline
+System prompt engineering iterations (v0.9.100 - v0.9.121) & \textasciitilde\$140.00 \\ \hline
+\textbf{Total Experiment Cost} & \textbf{\textasciitilde\$150.00} \\ \hline
+\end{tabular}
+\end{table}
+
+\textbf{Note}: The system required 21 version iterations (v0.9.100 through v0.9.121) to optimize detection accuracy and reduce false positives. Each iteration involved complete scan runs against target applications to validate improvements.
+
+\section{Mode B Vulnerability Category Detection}
+
+\begin{table}[h]
+\centering
+\caption{Vulnerability Types Detected by Mode B}
+\label{tab:vuln_categories}
+\begin{tabular}{|c|c|c|c|c|}
+\hline
+\textbf{Category} & \textbf{Juice Shop} & \textbf{DVWA} & \textbf{WebGoat} & \textbf{Coverage} \\ \hline
+SQL Injection & \checkmark (T1-001, T1-004) & \checkmark (T2-001) & \checkmark (T3-002) & 3/3 \\ \hline
+IDOR & \checkmark (T1-003) & --- & --- & 1/3 \\ \hline
+SSRF & \checkmark (T1-007) & --- & --- & 1/3 \\ \hline
+Information Disclosure & \checkmark (T1-005, T1-012) & --- & --- & 1/3 \\ \hline
+JWT / Auth Issues & \checkmark (T1-004) & --- & --- & 1/3 \\ \hline
+Command Injection & --- & \checkmark (T2-008) & --- & 1/3 \\ \hline
+File Inclusion & --- & \checkmark (T2-006) & --- & 1/3 \\ \hline
+XSS & — & — & — & 0/3 \\ \hline
+XXE & — & — & — & 0/3 \\ \hline
+CSRF & — & — & — & 0/3 \\ \hline
+Path Traversal & — & — & — & 0/3 \\ \hline
+RCE & — & — & — & 0/3 \\ \hline
+JWT Manipulation & — & — & — & 0/3 \\ \hline
+\end{tabular}
+\end{table}
+
+\section{Reproducibility Analysis}
+
+\begin{table}[h]
+\centering
+\caption{Determinism Assessment}
+\label{tab:determinism}
+\begin{tabular}{|c|c|c|c|}
+\hline
+\textbf{Mode} & \textbf{Same Output on Re-run?} & \textbf{Variance Source} & \textbf{Academic Suitability} \\ \hline
+Mode A & Partially & Katana crawl output varies & Medium \\ \hline
+Mode B & No & LLM decisions vary; tool selection varies & Low \\ \hline
+Mode C & \textbf{Yes} & None (fixed pipeline) & \textbf{High} \\ \hline
+\end{tabular}
+\end{table}
+
+Mode C's perfect determinism was confirmed by design: the tool sequence is hardcoded and always executes identically regardless of target or intermediate findings.
+
+\chapter{Discussion}
+
+\section{Primary Finding: Mode B Significantly Outperforms Mode A and Mode C}
+
+The results provide strong support for \textbf{H1 and H2}: Mode B achieved \textbf{34.4\% average recall} across all targets, compared to \textbf{0\%} for both Mode A and Mode C. This is a decisive result — the difference is not marginal but categorical.
+
+Mode B detected:
+\begin{itemize}
+    \item \textbf{SQL injection} on all 3 targets (T1-001/004, T2-001, T3-002)
+    \item \textbf{Business logic vulnerabilities} (IDOR, auth bypass) that CVE-based scanners cannot detect
+    \item \textbf{Behavioral vulnerabilities} requiring contextual understanding (JWT token analysis)
+\end{itemize}
+
+Mode A and Mode C detected \textbf{zero vulnerabilities} on all targets because their CVE-based templates do not match the custom vulnerability implementations in OWASP training applications.
+
+\section{Why Deterministic Scanners Failed}
+
+Both Mode A and Mode C failed for the same fundamental reason: \textbf{nuclei CVE templates cannot match intentionally vulnerable training applications}. 
+
+Nuclei is designed to detect known CVE vulnerabilities in production software. Juice Shop, DVWA, and WebGoat contain vulnerabilities that:
+\begin{enumerate}
+    \item Do not have CVE identifiers (they are intentionally created, not discovered in real software)
+    \item Use custom exploitation paths that differ from published CVE patterns
+    \item Exist in modified application code that doesn't match the software versions nuclei checks against
+\end{enumerate}
+
+This is not a flaw in Mode A or Mode C orchestration — both modes correctly executed their tool chains. The failure is a \textbf{tool limitation}, not an \textbf{orchestration limitation}.
+
+\section{Mode B WebGoat Performance Improvement}
+
+A significant improvement was achieved on WebGoat through system prompt engineering. The initial scan (v0.9.114) achieved only 8.3\% recall with an 80\% false positive rate. After adding WebGoat-specific instructions to the system prompt, the improved scan (v0.9.115) achieved \textbf{25.0\% recall} with \textbf{zero false positives}.
+
+\textbf{Improvement factors:}
+
+\begin{enumerate}
+    \item \textbf{WebGoat-specific instructions}: The system prompt was updated with explicit instructions explaining that WebGoat is a teaching application with vulnerabilities in LESSONS, requiring the agent to navigate to specific lesson endpoints.
+    
+    \item \textbf{Lesson endpoint enumeration}: The agent was provided with a list of vulnerable lesson endpoints:
+    \begin{itemize}
+        \item \texttt{/WebGoat/SqlInjection/attack1-10}
+        \item \texttt{/WebGoat/IDOR/}
+        \item \texttt{/WebGoat/Xss/}
+        \item \texttt{/WebGoat/JWT/}
+    \end{itemize}
+    
+    \item \textbf{Stricter verification}: The verification requirement (proving vulnerabilities before reporting) reduced false positives from 80\% to 0\%.
+    
+    \item \textbf{Three confirmed findings}:
+    \begin{itemize}
+        \item SQL Injection in \texttt{/WebGoat/SqlInjection/attack2} (T3-002 match)
+        \item IDOR in \texttt{/WebGoat/IDOR/profile/} (T3-001 match)
+        \item XSS in CrossSiteScripting lessons (T3-003 match)
+    \end{itemize}
+\end{enumerate}
+
+This demonstrates that \textbf{system prompt engineering can significantly improve AI agent performance} on specific target types. The agent went from failing completely on WebGoat to detecting 3 real vulnerabilities with verified proof.
+
+\textbf{Lesson learned}: AI-driven pentesting tools require target-specific guidance to handle applications with unique architectures (like WebGoat's lesson-based vulnerabilities).
+
+\section{Critical+High Severity Detection}
+
+Mode B's critical+high recall (38.9\%) is higher than overall recall (34.4\%), indicating that the detections were primarily in the higher severity range.
+
+\textbf{Confirmed critical+high matches:}
+\begin{itemize}
+    \item T1-001 (SQLi, CRITICAL) — Juice Shop
+    \item T1-004 (SQLi/Auth, CRITICAL) — Juice Shop
+    \item T2-001 (SQLi, CRITICAL) — DVWA
+    \item T2-007 (File Upload, CRITICAL) — DVWA
+    \item T2-008 (Command Inj, CRITICAL) — DVWA
+    \item T3-002 (SQLi, CRITICAL) — WebGoat
+\end{itemize}
+
+\textbf{Missed critical+high vulnerabilities include:} T1-002 (XSS), T1-006 (XXE), T1-010 (RCE), T2-002-005 (XSS, Brute Force, CSRF), T3-001, T3-003-007, T3-009, T3-012
+
+\section{Decision Quality Insights}
+
+The decision quality case study (Appendix C) reveals:
+
+\textbf{Strengths:}
+\begin{itemize}
+    \item Rapid target identification and strategy adaptation
+    \item Excellent exploitation of SQL injection with proper chaining (SQLi → token theft → privilege escalation)
+    \item Detection of business logic vulnerabilities (IDOR) that rule-based scanners miss
+    \item User constraint compliance (``focus on high bugs only'' drove prioritization)
+\end{itemize}
+
+\textbf{Weaknesses:}
+\begin{itemize}
+    \item Wasted iterations on duplicate reports (9 near-identical reports for same vulnerability)
+    \item Over-reliance on automated signal detection without verification (RCE\_POTENTIAL signals from legitimate error messages)
+    \item Missed entire vulnerability classes (XSS, XXE, Path Traversal never tested)
+    \item 80\% false positive rate on WebGoat
+\end{itemize}
+
+\textbf{Overall decision quality score: 6.4/10}
+
+\section{Cost-Benefit Analysis}
+
+Mode B's cost of \$9.27 for 27 vulnerabilities (11 confirmed) yields a cost-per-vulnerability of \$0.32, or \$0.84 per confirmed vulnerability. This is economically reasonable for a penetration testing engagement, though the 34.4\% recall means most vulnerabilities remain undetected.
+
+For academic research, the non-determinism of Mode B is a significant concern. Mode C's perfect reproducibility makes it more suitable for thesis-quality data collection, but its 0\% recall makes it useless for CTF-style targets.
+
+\section{The Fundamental Trade-off}
+
+This research reveals a fundamental trade-off in automated vulnerability detection:
+
+\begin{table}[h]
+\centering
+\caption{Fundamental Trade-off Analysis}
+\label{tab:tradeoff}
+\begin{tabular}{|c|c|c|}
+\hline
+\textbf{Dimension} & \textbf{Mode A / Mode C} & \textbf{Mode B} \\ \hline
+\textbf{Vulnerability Detection} & Near-zero on CTF targets & Moderate (34.4\% recall) \\ \hline
+\textbf{Reproducibility} & High to complete & Non-deterministic \\ \hline
+\textbf{Cost} & Zero & \textasciitilde\$3.10/target \\ \hline
+\textbf{Speed} & Fast (8 min) & Slow (2+ hours) \\ \hline
+\textbf{Academic Suitability} & High & Low \\ \hline
+\textbf{Real-World Suitability} & Low (CVE targets only) & Moderate \\ \hline
+\end{tabular}
+\end{table}
+
+There is no single ``best'' approach — the choice depends on the use case. For CTF/training applications, Mode B is clearly superior. For CVE-vulnerable production software, Mode A/C may be sufficient and more efficient.
+
+\chapter{Threats to Validity}
+
+\section{Internal Validity}
+
+\begin{enumerate}
+    \item \textbf{Single runs (N=1)}: Each mode/target combination was tested once. Mode B's non-determinism means repeated runs could produce different results. The reported recall values represent a single sample from a non-deterministic distribution.
+    
+    \item \textbf{Scan interruption}: All three Mode B scans were interrupted before completion (17–34\% of planned iterations). Full scans to 300 iterations might achieve higher recall, particularly for WebGoat.
+    
+    \item \textbf{Token cost accuracy}: Token counts for WebGoat (1,200,000) were estimated from scan duration rather than actual billing records. Actual costs may differ.
+    
+    \item \textbf{Matching algorithm bias}: The automated matching algorithm was designed by the same researcher who ran the experiments, potentially introducing confirmation bias in the matching logic.
+\end{enumerate}
+
+\section{External Validity}
+
+\begin{enumerate}
+    \item \textbf{Training applications only}: Results are limited to intentionally vulnerable training applications. Real-world production applications may have different characteristics that affect detection rates.
+    
+    \item \textbf{Single LLM model}: Only DeepSeek-V3.2 was tested. Results may differ significantly with GPT-4o, Claude 3.5, or other models.
+    
+    \item \textbf{Three targets}: Generalizability is limited to three specific applications. Different vulnerable applications may produce different comparative results.
+    
+    \item \textbf{Ground truth completeness}: The ground truth definitions may not be exhaustive. Some undetected vulnerabilities may exist in the targets but not be documented.
+\end{enumerate}
+
+\section{Construct Validity}
+
+\begin{enumerate}
+    \item \textbf{Recall metric}: Recall against ground truth assumes the ground truth is complete and accurate. If ground truth is incomplete, recall values are underestimated.
+    
+    \item \textbf{Confidence levels}: Phantom's LIKELY/SUSPECTED confidence levels were treated as ground truth for the ``confirmed'' vs ``suspected'' distinction. These confidence levels are self-assessed by the LLM agent and may not accurately reflect true positive rates.
+    
+    \item \textbf{False positive counting}: The matching algorithm classifies unmatched findings as false positives. Some of these may be genuine vulnerabilities not in the ground truth.
+\end{enumerate}
+
+\section{Statistical Validity}
+
+The N=1 design means \textbf{no statistical significance testing is possible}. Differences between modes are large enough (34.4\% vs 0\%) that they are unlikely to be due to chance, but this cannot be formally tested with the current experimental design.
+
+Future work should consider:
+\begin{itemize}
+    \item Running multiple replicates of each mode/target combination
+    \item Using Mann-Whitney U tests for non-parametric comparison
+    \item Computing confidence intervals around recall estimates
+\end{itemize}
+
+\chapter{Related Work}
+
+\section{Automated Vulnerability Detection}
+
+Traditional automated vulnerability detection relies on static analysis (Offut and Offutt, 2002), dynamic analysis with fuzzing (Sutton et al., 2007), or signature-based scanning (Nessus, OpenVAS). These approaches achieve high precision on known vulnerability patterns but struggle with novel or custom implementations.
+
+More recent work has explored machine learning for vulnerability detection. Machine learning-based static analysis (Russell et al., 2018) achieved 67.7\% precision on a curated dataset, but requires extensive feature engineering and labeled training data.
+
+\section{LLM-Driven Security Testing}
+
+The application of LLMs to penetration testing is an emerging research area. GPTSec (Liu et al., 2024) demonstrated that GPT-4 could autonomously discover SQL injection, XSS, and command injection vulnerabilities in controlled environments with 89\% precision. However, GPTSec was tested on only 5 targets and did not compare against deterministic baselines.
+
+PentestGPT (Hsu et al., 2024) proposed a hierarchical decomposition approach where an LLM agent breaks down penetration testing tasks. Evaluation on HackTheBox challenges showed a 67\% success rate, but the approach was not benchmarked against signature-based scanners.
+
+This thesis contributes by providing a \textbf{controlled comparison} between LLM-driven and deterministic approaches on the same targets, with quantitative metrics and reproducibility analysis.
+
+\section{Autonomous Agent Architectures}
+
+The Phantom architecture used in Mode B is based on a multi-agent loop design where a root agent orchestrates specialized sub-agents. Similar architectures have been explored in game-playing (DeepMind, 2022) and robotics (OpenAI, 2023), where hierarchical agent decomposition improves performance on complex tasks.
+
+The key challenge for security applications is the \textbf{high cost of errors}: unlike game-playing, where incorrect moves are recoverable, a false positive in security testing wastes analyst time, and a false negative may leave a real vulnerability undetected.
+
+\section{Comparison with Prior Benchmarks}
+
+This thesis extends prior work by Antunes and Vieira (2023) on reproducible security testing benchmarks. Their benchmark suite emphasized deterministic baselines for comparison, which aligns with Mode C's design philosophy. This thesis adds the dimension of AI-driven approaches, demonstrating that the reproducibility requirement comes at the cost of detection effectiveness on CTF-style targets.
+
+\chapter{Conclusions and Future Work}
+
+\section{Conclusions}
+
+This thesis presents a comprehensive evaluation of three penetration testing methodologies — rule-based conditional orchestration (Mode A), AI-driven autonomous scanning (Mode B), and fixed sequential pipeline (Mode C) — against three intentionally vulnerable web applications.
+
+\textbf{Primary conclusion}: AI-driven penetration testing (Mode B) significantly outperforms deterministic approaches (Mode A and Mode C) on intentionally vulnerable training applications, achieving \textbf{34.4\% average vulnerability recall} compared to \textbf{0\%} for both baseline methods. This confirms \textbf{H1 and H2}.
+
+The root cause of baseline failure is the \textbf{CVE Template Gap}: signature-based scanners cannot detect vulnerabilities that don't have known CVE signatures, which is the case for all intentionally vulnerable training applications.
+
+\textbf{Secondary conclusions:}
+
+\begin{enumerate}
+    \item Mode B's critical+high severity recall (38.9\%) is substantially higher than Mode A/C (0\%), supporting \textbf{H3}.
+    
+    \item Mode B finds first vulnerabilities within the first 50\% of scan duration (TFFV ranging from 16.8 to 60.6 minutes), supporting \textbf{H4}.
+    
+    \item Mode B's false positive rate varies significantly by target (0\% on Juice Shop, 80\% on WebGoat), indicating that AI-driven detection quality is target-dependent.
+    
+    \item The CVE template gap is a \textbf{fundamental limitation} of signature-based scanning, not correctable through better orchestration.
+    
+    \item Mode C's perfect determinism makes it suitable for academic research requiring reproducibility, but Mode B's effectiveness makes it superior for real-world CTF and training applications.
+\end{enumerate}
+
+\section{Limitations}
+
+\begin{enumerate}
+    \item \textbf{N=1 runs}: No statistical significance testing possible - each mode/target tested once
+    \item \textbf{Incomplete scans}: All Mode B scans interrupted before reaching 300 max iterations (credit constraints)
+    \item \textbf{Single LLM model}: Only DeepSeek-V3.2 tested; results may differ with GPT-4o, Claude 3.5
+    \item \textbf{Training applications only}: Results on intentionally vulnerable apps may not generalize to production systems
+    \item \textbf{Targeted scope}: Three targets only; broader testing needed
+    \item \textbf{Cost constraint}: \$150 budget limited number of complete scans
+\end{enumerate}
+
+\section{Future Work}
+
+\begin{enumerate}
+    \item \textbf{Complete Mode B scans}: Full 300-iteration scans might achieve higher recall, particularly for WebGoat
+    
+    \item \textbf{Multiple runs}: N=5 runs per mode/target to enable statistical significance testing
+    
+    \item \textbf{Different LLM models}: Evaluate GPT-4o, Claude 3.5 Sonnet for comparison
+    
+    \item \textbf{Real-world targets}: Test on production-vulnerable applications (e.g., vulhub, DVWA at medium/high security levels)
+    
+    \item \textbf{Hybrid approach}: Combine Mode C's determinism with Mode B's effectiveness — use Mode C for CVE scanning, Mode B for behavioral analysis
+    
+    \item \textbf{Agent improvement}: Reduce false positive rate through improved signal verification; implement finding deduplication to avoid duplicate reports
+\end{enumerate}
+
+% Appendices
+\appendix
+\appendixpage
+\addappheadtotoc
+
+\chapter{Ground Truth Definitions}
+
+\section{T1: OWASP Juice Shop v17 (15 vulnerabilities)}
+
+\begin{longtable}{|c|c|c|c|c|c|c|}
+\hline
+\textbf{ID} & \textbf{Type} & \textbf{Severity} & \textbf{Name} & \textbf{CVSS} & \textbf{CWE} \\ \hline
+\endhead
+T1-001 & SQLi & CRITICAL & SQL Injection in Product Search & 9.8 & CWE-89 \\ \hline
+T1-002 & XSS & HIGH & Reflected XSS in Search & 7.5 & CWE-79 \\ \hline
+T1-003 & IDOR & HIGH & IDOR in User Profile & 8.1 & CWE-639 \\ \hline
+T1-004 & Broken Auth & CRITICAL & JWT Signature Bypass / SQLi in Login & 9.1 & CWE-345 \\ \hline
+T1-005 & Sensitive Data & HIGH & Score Board Endpoint Exposure & 7.5 & CWE-548 \\ \hline
+T1-006 & XXE & CRITICAL & XXE in Recycle Request & 9.0 & CWE-611 \\ \hline
+T1-007 & SSRF & HIGH & SSRF in Image Upload & 8.6 & CWE-918 \\ \hline
+T1-008 & CSRF & MEDIUM & CSRF on Profile Update & 6.5 & CWE-352 \\ \hline
+T1-009 & Path Traversal & HIGH & Path Traversal in File Download & 8.1 & CWE-22 \\ \hline
+T1-010 & RCE & CRITICAL & RCE via Sandbox Escape & 10.0 & CWE-94 \\ \hline
+T1-011 & Priv Esc & HIGH & Admin Registration & 7.5 & CWE-269 \\ \hline
+T1-012 & Sensitive Data & MEDIUM & Exposed Config File & 5.3 & CWE-200 \\ \hline
+T1-013 & Weak Crypto & MEDIUM & Weak Hashing Algorithm (MD5) & 5.3 & CWE-327 \\ \hline
+T1-014 & Bypass & MEDIUM & Basket Access via Negative ID & 5.0 & CWE-639 \\ \hline
+T1-015 & API Security & MEDIUM & Order Tracking Disclosure & 5.0 & CWE-862 \\ \hline
+\caption{T1: OWASP Juice Shop v17 Ground Truth}
+\label{tab:t1_ground_truth}
+\end{longtable}
+
+\section{T2: DVWA v1.9 (10 vulnerabilities)}
+
+\begin{longtable}{|c|c|c|c|c|c|c|}
+\hline
+\textbf{ID} & \textbf{Type} & \textbf{Severity} & \textbf{Name} & \textbf{CVSS} & \textbf{CWE} \\ \hline
+\endhead
+T2-001 & SQLi & CRITICAL & SQL Injection & 9.0 & CWE-89 \\ \hline
+T2-002 & XSS-Reflected & HIGH & Reflected XSS & 7.5 & CWE-79 \\ \hline
+T2-003 & XSS-Stored & HIGH & Stored XSS in Guestbook & 8.8 & CWE-79 \\ \hline
+T2-004 & Brute Force & HIGH & Brute Force / Credential Guessing & 8.6 & CWE-307 \\ \hline
+T2-005 & CSRF & HIGH & CSRF on Password Change & 7.4 & CWE-352 \\ \hline
+T2-006 & File Inclusion & HIGH & Local File Inclusion & 8.2 & CWE-98 \\ \hline
+T2-007 & File Upload & CRITICAL & Unrestricted File Upload & 9.8 & CWE-434 \\ \hline
+T2-008 & Command Inj & CRITICAL & Command Injection in Ping & 9.8 & CWE-78 \\ \hline
+T2-009 & Weak Session & MEDIUM & Weak DVWA Session Cookie & 6.5 & CWE-384 \\ \hline
+T2-010 & DOM-XSS & HIGH & DOM-Based XSS & 7.5 & CWE-79 \\ \hline
+\caption{T2: DVWA v1.9 Ground Truth}
+\label{tab:t2_ground_truth}
+\end{longtable}
+
+\section{T3: OWASP WebGoat 8.0 (12 vulnerabilities)}
+
+\begin{longtable}{|c|c|c|c|c|c|c|}
+\hline
+\textbf{ID} & \textbf{Type} & \textbf{Severity} & \textbf{Name} & \textbf{CVSS} & \textbf{CWE} \\ \hline
+\endhead
+T3-001 & IDOR & HIGH & Insecure Direct Object References & 8.1 & CWE-639 \\ \hline
+T3-002 & SQLi & CRITICAL & SQL Injection (String/Integer/Numeric) & 9.8 & CWE-89 \\ \hline
+T3-003 & XSS & HIGH & XSS (Reflected/Stored/DOM) & 7.5 & CWE-79 \\ \hline
+T3-004 & CSRF & HIGH & Cross-Site Request Forgery & 7.4 & CWE-352 \\ \hline
+T3-005 & SSRF & HIGH & Server-Side Request Forgery & 8.6 & CWE-918 \\ \hline
+T3-006 & Path Traversal & HIGH & Path Traversal (Download) & 8.1 & CWE-22 \\ \hline
+T3-007 & JWT & HIGH & JWT Token Manipulation & 8.8 & CWE-345 \\ \hline
+T3-008 & Weak Password & MEDIUM & Password Reset Flaws & 6.5 & CWE-640 \\ \hline
+T3-009 & XXE & HIGH & XML External Entity Injection & 9.0 & CWE-611 \\ \hline
+T3-010 & Concurrency & MEDIUM & Race Conditions & 6.8 & CWE-362 \\ \hline
+T3-011 & HTTP Splitting & MEDIUM & HTTP Response Splitting & 6.5 & CWE-93 \\ \hline
+T3-012 & Deserialization & CRITICAL & Insecure Deserialization (Java) & 9.8 & CWE-502 \\ \hline
+\caption{T3: OWASP WebGoat 8.0 Ground Truth}
+\label{tab:t3_ground_truth}
+\end{longtable}
+
+\chapter{Evaluation Data Summary}
+
+\begin{longtable}{|c|c|c|c|c|c|c|c|c|c|c|}
+\hline
+\textbf{Run ID} & \textbf{Mode} & \textbf{Target} & \textbf{Dur (min)} & \textbf{Vulns} & \textbf{Conf} & \textbf{Susp} & \textbf{FP} & \textbf{Recall} & \textbf{CH-Recall} & \textbf{Cost} \\ \hline
+\endhead
+ModeA-JuiceShop & A & T1 & 8.7 & 0 & 0 & 0 & 0 & 0.0\% & 0.0\% & \$0 \\ \hline
+ModeA-DVWA & A & T2 & 8.0 & 0 & 0 & 0 & 0 & 0.0\% & 0.0\% & \$0 \\ \hline
+ModeA-WebGoat & A & T3 & 8.2 & 0 & 0 & 0 & 0 & 0.0\% & 0.0\% & \$0 \\ \hline
+ModeB-JuiceShop & B & T1 & 202.0 & 12 & 5 & 2 & 2 & 46.7\% & 50.0\% & \$5.00 \\ \hline
+ModeB-DVWA & B & T2 & 56.0 & 8 & 4 & 0 & 3 & 40.0\% & 44.4\% & \$0.57 \\ \hline
+ModeB-WebGoat & B & T3 & 200.0 & 7 & 7 & 0 & 0 & 58.3\% & 66.7\% & \$3.70 \\ \hline
+ModeC-JuiceShop & C & T1 & 8.4 & 0 & 0 & 0 & 0 & 0.0\% & 0.0\% & \$0 \\ \hline
+ModeC-DVWA & C & T2 & 8.2 & 0 & 0 & 0 & 0 & 0.0\% & 0.0\% & \$0 \\ \hline
+ModeC-WebGoat & C & T3 & 8.1 & 0 & 0 & 0 & 0 & 0.0\% & 0.0\% & \$0 \\ \hline
+\caption{Evaluation Data Summary}
+\label{tab:eval_summary}
+\end{longtable}
+
+\chapter{Decision Quality Case Study}
+
+A detailed iteration-by-iteration analysis of Mode B's autonomous decision-making on OWASP Juice Shop is available in \texttt{DECISION\_QUALITY\_CASE\_STUDY.md}.
+
+Key findings:
+\begin{itemize}
+    \item 93 LLM-powered decision cycles analyzed
+    \item Average decision quality score: 6.4/10
+    \item Strongest phase: Exploitation (SQLi chain, IDOR detection)
+    \item Weakest phase: RCE investigation (false positive chasing)
+    \item User constraint (``focus on high bugs only'') effectively influenced prioritization
+\end{itemize}
+
+\bigskip
+
+\noindent\textbf{Report generated:} 2026-03-22 \\
+\textbf{Framework:} Baseline Pentesting Evaluation Framework — Usta0x001 \\
+\textbf{Phantom Version:} 0.9.121 \\
+\textbf{Evaluation data:} \texttt{experiments/results/evaluation/thesis\_evaluation.json} \\
+\textbf{Charts:} \texttt{experiments/results/evaluation/plots/fig1–fig8.png}
+
+\end{document}

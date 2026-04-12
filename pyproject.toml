@@ -44,7 +44,7 @@ include = [
 ]
 
 [tool.poetry.scripts]
-phantom = "phantom.interface.cli_app:app"
+phantom = "phantom.interface.cli_app:cli_main"
 
 [tool.poetry.dependencies]
 python = "^3.12"

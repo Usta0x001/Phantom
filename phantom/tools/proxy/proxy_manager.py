@@ -152,6 +152,11 @@ def _is_ssrf_safe(url: str) -> bool:
     try:
         parsed = urlparse(url)
         host = parsed.hostname or ""
+        netloc = parsed.netloc or ""
+        if parsed.scheme in {"http", "https"} and ":" in netloc and "[" not in netloc and "]" not in netloc:
+            # Reject malformed IPv6 literals without brackets (e.g. http://fe80::1:8080).
+            # These can bypass hostname parsing and should be treated as unsafe.
+            return False
         if not host:
             return False
 
