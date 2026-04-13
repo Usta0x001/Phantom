@@ -2,19 +2,13 @@ from functools import cache
 from typing import Any, ClassVar
 
 from pygments.lexers import get_lexer_by_name
-from pygments.styles import get_style_by_name
 from rich.text import Text
 from textual.widgets import Static
 
+from ..tui_design_system import ACTION_CYAN, PRIMARY_CYAN
+from ._colors import get_token_color
 from .base_renderer import BaseToolRenderer
 from .registry import register_tool_renderer
-
-
-@cache
-def _get_style_colors() -> dict[Any, str]:
-    style = get_style_by_name("native")
-    return {token: f"#{style_def['color']}" for token, style_def in style if style_def["color"]}
-
 
 @register_tool_renderer
 class BrowserRenderer(BaseToolRenderer):
@@ -39,12 +33,7 @@ class BrowserRenderer(BaseToolRenderer):
 
     @classmethod
     def _get_token_color(cls, token_type: Any) -> str | None:
-        colors = _get_style_colors()
-        while token_type:
-            if token_type in colors:
-                return colors[token_type]
-            token_type = token_type.parent
-        return None
+        return get_token_color(token_type)
 
     @classmethod
     def _highlight_js(cls, code: str) -> Text:
@@ -72,11 +61,11 @@ class BrowserRenderer(BaseToolRenderer):
 
     @classmethod
     def _build_url_action(cls, text: Text, label: str, url: str | None, suffix: str = "") -> None:
-        text.append(label, style="#06b6d4")
+        text.append(label, style=PRIMARY_CYAN)
         if url:
-            text.append(url, style="#06b6d4")
+            text.append(url, style=PRIMARY_CYAN)
             if suffix:
-                text.append(suffix, style="#06b6d4")
+                text.append(suffix, style=PRIMARY_CYAN)
 
     @classmethod
     def _build_content(cls, action: str, args: dict[str, Any]) -> Text:
@@ -84,7 +73,7 @@ class BrowserRenderer(BaseToolRenderer):
         text.append("🌐 ")
 
         if action in cls.SIMPLE_ACTIONS:
-            text.append(cls.SIMPLE_ACTIONS[action], style="#06b6d4")
+            text.append(cls.SIMPLE_ACTIONS[action], style=PRIMARY_CYAN)
             return text
 
         url = args.get("url")
@@ -97,7 +86,7 @@ class BrowserRenderer(BaseToolRenderer):
         if action in url_actions:
             label, suffix = url_actions[action]
             if action == "launch" and not url:
-                text.append("launching browser", style="#06b6d4")
+                text.append("launching browser", style=PRIMARY_CYAN)
             else:
                 cls._build_url_action(text, label, url, suffix)
             return text
@@ -108,7 +97,7 @@ class BrowserRenderer(BaseToolRenderer):
             "hover": "hovering",
         }
         if action in click_actions:
-            text.append(click_actions[action], style="#06b6d4")
+            text.append(click_actions[action], style=PRIMARY_CYAN)
             return text
 
         handlers: dict[str, tuple[str, str | None]] = {
@@ -118,13 +107,13 @@ class BrowserRenderer(BaseToolRenderer):
         }
         if action in handlers:
             label, value = handlers[action]
-            text.append(label, style="#06b6d4")
+            text.append(label, style=PRIMARY_CYAN)
             if value:
-                text.append(str(value), style="#06b6d4")
+                text.append(str(value), style=PRIMARY_CYAN)
             return text
 
         if action == "execute_js":
-            text.append("executing javascript", style="#06b6d4")
+            text.append("executing javascript", style=ACTION_CYAN)
             js_code = args.get("js_code")
             if js_code:
                 text.append("\n")
@@ -132,5 +121,5 @@ class BrowserRenderer(BaseToolRenderer):
             return text
 
         if action:
-            text.append(action, style="#06b6d4")
+            text.append(action, style=ACTION_CYAN)
         return text

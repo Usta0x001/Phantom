@@ -149,6 +149,44 @@ def _get_schema_path(func: Callable[..., Any]) -> Path | None:
     return get_phantom_resource_path("tools", folder, schema_file)
 
 
+def _extract_tools_folder(func: Callable[..., Any]) -> str | None:
+    module = inspect.getmodule(func)
+    if not module or not module.__name__ or ".tools." not in module.__name__:
+        return None
+    parts = module.__name__.split(".tools.")[-1].split(".")
+    if not parts:
+        return None
+    return parts[0]
+
+
+def _resolve_schema_for_tool(func: Callable[..., Any]) -> str | None:
+    """Resolve schema XML for a tool with fallback file scanning.
+
+    Primary lookup uses the canonical stem-derived path. If that misses, scan
+    all `*_schema.xml` files in the module folder and return the one containing
+    the tool name.
+    """
+    preferred_path = _get_schema_path(func)
+    tool_name = func.__name__
+
+    if preferred_path:
+        xml_tools = _load_xml_schema(preferred_path)
+        if xml_tools is not None and tool_name in xml_tools:
+            return xml_tools[tool_name]
+
+    folder = _extract_tools_folder(func)
+    if not folder:
+        return None
+
+    folder_path = get_phantom_resource_path("tools", folder)
+    for schema_path in sorted(folder_path.glob("*_schema.xml")):
+        xml_tools = _load_xml_schema(schema_path)
+        if xml_tools is not None and tool_name in xml_tools:
+            return xml_tools[tool_name]
+
+    return None
+
+
 def register_tool(
     func: Callable[..., Any] | None = None, *, sandbox_execution: bool = True
 ) -> Callable[..., Any]:
@@ -163,14 +201,13 @@ def register_tool(
         sandbox_mode = os.getenv("PHANTOM_SANDBOX_MODE", "false").lower() == "true"
         if not sandbox_mode:
             try:
-                schema_path = _get_schema_path(f)
-                xml_tools = _load_xml_schema(schema_path) if schema_path else None
+                schema_xml = _resolve_schema_for_tool(f)
 
-                if xml_tools is not None and f.__name__ in xml_tools:
-                    func_dict["xml_schema"] = xml_tools[f.__name__]
+                if schema_xml is not None:
+                    func_dict["xml_schema"] = schema_xml
                 else:
                     func_dict["xml_schema"] = (
-                        f'<tool name="{f.__name__}">'
+                        f'<tool name="{f.__name__}">' 
                         "<description>Schema not found for tool.</description>"
                         "</tool>"
                     )

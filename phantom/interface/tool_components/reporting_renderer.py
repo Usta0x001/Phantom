@@ -2,10 +2,27 @@ from functools import cache
 from typing import Any, ClassVar
 
 from pygments.lexers import PythonLexer
-from pygments.styles import get_style_by_name
 from rich.text import Text
 from textual.widgets import Static
 
+from ..tui_design_system import (
+    ACTION_BLUE,
+    ACCENT_PURPLE,
+    DANGER_RED,
+    DANGER_ROSE,
+    INFO_BLUE,
+    NEUTRAL_SLATE,
+    SUCCESS_EMERALD,
+    SUCCESS_GREEN,
+    SUCCESS_LIME,
+    TEXT_MUTED,
+    TEXT_PRIMARY,
+    TEXT_SOFT,
+    WARNING_AMBER,
+    WARNING_ORANGE,
+    WARNING_SOFT_ORANGE,
+)
+from ._colors import get_token_color
 from phantom.tools.reporting.reporting_actions import (
     parse_code_locations_xml,
     parse_cvss_xml,
@@ -15,20 +32,14 @@ from .base_renderer import BaseToolRenderer
 from .registry import register_tool_renderer
 
 
-@cache
-def _get_style_colors() -> dict[Any, str]:
-    style = get_style_by_name("native")
-    return {token: f"#{style_def['color']}" for token, style_def in style if style_def["color"]}
-
-
-FIELD_STYLE = "bold #4ade80"
+FIELD_STYLE = f"bold {SUCCESS_LIME}"
 DIM_STYLE = "dim"
-FILE_STYLE = "bold #60a5fa"
-LINE_STYLE = "#facc15"
-LABEL_STYLE = "italic #a1a1aa"
-CODE_STYLE = "#e2e8f0"
-BEFORE_STYLE = "#ef4444"
-AFTER_STYLE = "#22c55e"
+FILE_STYLE = f"bold {INFO_BLUE}"
+LINE_STYLE = WARNING_AMBER
+LABEL_STYLE = f"italic {NEUTRAL_SLATE}"
+CODE_STYLE = TEXT_SOFT
+BEFORE_STYLE = DANGER_RED
+AFTER_STYLE = SUCCESS_GREEN
 
 
 @register_tool_renderer
@@ -37,21 +48,16 @@ class CreateVulnerabilityReportRenderer(BaseToolRenderer):
     css_classes: ClassVar[list[str]] = ["tool-call", "reporting-tool"]
 
     SEVERITY_COLORS: ClassVar[dict[str, str]] = {
-        "critical": "#dc2626",
-        "high": "#ea580c",
-        "medium": "#d97706",
-        "low": "#65a30d",
-        "info": "#0284c7",
+        "critical": DANGER_ROSE,
+        "high": WARNING_SOFT_ORANGE,
+        "medium": WARNING_AMBER,
+        "low": SUCCESS_EMERALD,
+        "info": TEXT_PRIMARY,
     }
 
     @classmethod
     def _get_token_color(cls, token_type: Any) -> str | None:
-        colors = _get_style_colors()
-        while token_type:
-            if token_type in colors:
-                return colors[token_type]
-            token_type = token_type.parent
-        return None
+        return get_token_color(token_type)
 
     @classmethod
     def _highlight_python(cls, code: str) -> Text:
@@ -69,14 +75,14 @@ class CreateVulnerabilityReportRenderer(BaseToolRenderer):
     @classmethod
     def _get_cvss_color(cls, cvss_score: float) -> str:
         if cvss_score >= 9.0:
-            return "#dc2626"
+            return DANGER_ROSE
         if cvss_score >= 7.0:
-            return "#ea580c"
+            return WARNING_SOFT_ORANGE
         if cvss_score >= 4.0:
-            return "#d97706"
+            return WARNING_AMBER
         if cvss_score >= 0.1:
-            return "#65a30d"
-        return "#6b7280"
+            return SUCCESS_EMERALD
+        return TEXT_MUTED
 
     @classmethod
     def render(cls, tool_data: dict[str, Any]) -> Static:  # noqa: PLR0912, PLR0915
@@ -108,7 +114,7 @@ class CreateVulnerabilityReportRenderer(BaseToolRenderer):
 
         text = Text()
         text.append("🐞 ")
-        text.append("Vulnerability Report", style="bold #ea580c")
+        text.append("Vulnerability Report", style=f"bold {WARNING_AMBER}")
 
         if title:
             text.append("\n\n")
@@ -118,7 +124,7 @@ class CreateVulnerabilityReportRenderer(BaseToolRenderer):
         if severity:
             text.append("\n\n")
             text.append("Severity: ", style=FIELD_STYLE)
-            severity_color = cls.SEVERITY_COLORS.get(severity.lower(), "#6b7280")
+            severity_color = cls.SEVERITY_COLORS.get(severity.lower(), TEXT_MUTED)
             text.append(severity.upper(), style=f"bold {severity_color}")
 
         if cvss_score is not None:

@@ -407,7 +407,7 @@ class CheckpointManager:
             except Exception:
                 logger.debug("Failed to serialize coverage tracker state", exc_info=True)
         
-        if correlation_engine:
+        if correlation_engine is not None:
             # Correlation engine should have a method to export state
             try:
                 correlation_engine_state = correlation_engine.to_dict() if hasattr(correlation_engine, 'to_dict') else {}

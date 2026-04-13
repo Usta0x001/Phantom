@@ -33,7 +33,7 @@ class Config:
     """Configuration Manager for Phantom."""
 
     # LLM Configuration
-    phantom_llm = None
+    phantom_llm = "DeepSeek-V3.2"
     llm_api_key = None
     llm_api_base = None
     openai_api_base = None
@@ -52,9 +52,9 @@ class Config:
     phantom_cost_per_1m_input = None   # PHANTOM_COST_PER_1M_INPUT (USD per 1M input tokens)
     phantom_cost_per_1m_output = None  # PHANTOM_COST_PER_1M_OUTPUT (USD per 1M output tokens)
     # Memory compressor configuration
-    phantom_compressor_llm = None          # PHANTOM_COMPRESSOR_LLM — cheaper model for summarization
+    phantom_compressor_llm = "DeepSeek-V3.2"          # PHANTOM_COMPRESSOR_LLM — cheaper model for summarization
     phantom_compressor_chunk_size = None   # PHANTOM_COMPRESSOR_CHUNK_SIZE — msgs per compression call
-    phantom_max_context_ceiling = None     # PHANTOM_MAX_CONTEXT_CEILING — hard limit on context tokens (default 80000)
+    phantom_max_context_ceiling = "131072"     # PHANTOM_MAX_CONTEXT_CEILING — hard limit on context tokens (DeepSeek v3.2)
     # Resume / checkpoint feature
     phantom_checkpoint_interval = "5"      # save checkpoint every N agent iterations
     # LLM fallback on persistent failure
@@ -142,7 +142,7 @@ class Config:
     # Tool & Feature Configuration
     perplexity_api_key = None
     phantom_disable_browser = "false"
-    phantom_tool_subset = "core"  # full | core | core-fast | minimal — filters tools in system prompt to reduce tokens
+    phantom_tool_subset = "full"  # full | core | core-fast | minimal — filters tools in system prompt to reduce tokens
     phantom_attach_browser_images = "false"
     phantom_browser_image_mode = "off"          # off | thumb | full
     phantom_browser_image_thumb_max_bytes = "80000"
@@ -184,7 +184,7 @@ class Config:
 
     # Telemetry
     phantom_telemetry = "1"
-    phantom_audit_log = None  # Set via env var PHANTOM_AUDIT_LOG or config
+    phantom_audit_log = "true"  # Set via env var PHANTOM_AUDIT_LOG or config
     phantom_otel_telemetry = None
     traceloop_base_url = None
     traceloop_api_key = None

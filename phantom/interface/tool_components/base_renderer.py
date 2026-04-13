@@ -4,6 +4,8 @@ from typing import Any, ClassVar
 from rich.text import Text
 from textual.widgets import Static
 
+from ..tui_design_system import DANGER_ROSE, SUCCESS_EMERALD, WARNING_AMBER
+
 
 class BaseToolRenderer(ABC):
     tool_name: ClassVar[str] = ""
@@ -26,10 +28,10 @@ class BaseToolRenderer(ABC):
     @classmethod
     def status_icon(cls, status: str) -> tuple[str, str]:
         icons = {
-            "running": ("● In progress...", "#f59e0b"),
-            "completed": ("✓ Done", "#22c55e"),
-            "failed": ("✗ Failed", "#dc2626"),
-            "error": ("✗ Error", "#dc2626"),
+            "running": ("● In progress...", WARNING_AMBER),
+            "completed": ("✓ Done", SUCCESS_EMERALD),
+            "failed": ("✗ Failed", DANGER_ROSE),
+            "error": ("✗ Error", DANGER_ROSE),
         }
         return icons.get(status, ("○ Unknown", "dim"))
 

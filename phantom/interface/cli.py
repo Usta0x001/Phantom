@@ -12,6 +12,8 @@ from rich.live import Live
 from rich.panel import Panel
 from rich.text import Text
 
+from .tui_design_system import ACTION_BLUE, DANGER_CRIMSON, INFO_BLUE, WARNING_ORANGE
+
 from phantom.agents.PhantomAgent import PhantomAgent
 from phantom.llm.config import LLMConfig
 from phantom.telemetry.tracer import Tracer, set_global_tracer
@@ -181,7 +183,7 @@ async def run_cli(args: Any) -> None:  # noqa: PLR0912, PLR0915
     # ── Build startup panel ────────────────────────────────────────────────
     # BUG FIX A: start_text was accidentally dropped in a prior patch; restored.
     start_text = Text()
-    start_text.append("Penetration test initiated", style="bold #dc2626")
+    start_text.append("Penetration test initiated", style=f"bold {DANGER_CRIMSON}")
 
     target_text = Text()
     target_text.append("Target", style="dim")
@@ -197,7 +199,7 @@ async def run_cli(args: Any) -> None:  # noqa: PLR0912, PLR0915
     results_text = Text()
     results_text.append("Output", style="dim")
     results_text.append("  ")
-    results_text.append(f"phantom_runs/{args.run_name}", style="#60a5fa")
+    results_text.append(f"phantom_runs/{args.run_name}", style=ACTION_BLUE)
 
     note_text = Text()
     note_text.append("\n\n", style="dim")
@@ -216,7 +218,7 @@ async def run_cli(args: Any) -> None:  # noqa: PLR0912, PLR0915
             ),
             title="[bold white]PHANTOM",
             title_align="left",
-            border_style="#dc2626",
+            border_style=DANGER_CRIMSON,
             padding=(1, 2),
         )
 
@@ -363,7 +365,7 @@ async def run_cli(args: Any) -> None:  # noqa: PLR0912, PLR0915
 
     def create_live_status() -> Panel:
         status_text = Text()
-        status_text.append("Penetration test in progress", style="bold #dc2626")
+        status_text.append("Penetration test in progress", style=f"bold {DANGER_CRIMSON}")
         status_text.append("\n\n")
 
         stats_text = build_live_stats_text(tracer, agent_config)
@@ -374,7 +376,7 @@ async def run_cli(args: Any) -> None:  # noqa: PLR0912, PLR0915
             status_text,
             title="[bold white]PHANTOM",
             title_align="left",
-            border_style="#dc2626",
+            border_style=DANGER_CRIMSON,
             padding=(1, 2),
         )
 
@@ -463,7 +465,7 @@ async def run_cli(args: Any) -> None:  # noqa: PLR0912, PLR0915
             console.print()
 
             final_report_text = Text()
-            final_report_text.append("Penetration test summary", style="bold #60a5fa")
+            final_report_text.append("Penetration test summary", style=f"bold {INFO_BLUE}")
 
             final_report_panel = Panel(
                 Text.assemble(
@@ -473,7 +475,7 @@ async def run_cli(args: Any) -> None:  # noqa: PLR0912, PLR0915
                 ),
                 title="[bold white]PHANTOM",
                 title_align="left",
-                border_style="#60a5fa",
+                border_style=INFO_BLUE,
                 padding=(1, 2),
             )
 

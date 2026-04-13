@@ -174,4 +174,19 @@ NOTE: If you are waiting for an agent that is NOT your subagent, you first tell 
 </function>
     </examples>
   </tool>
+
+  <tool name="wait_for_agents">
+    <description>Wait for specific agents to finish, with timeout.</description>
+    <parameters>
+      <parameter name="agent_ids" type="array" required="true">
+        <description>List of agent IDs to wait on.</description>
+      </parameter>
+      <parameter name="timeout_seconds" type="integer" required="false">
+        <description>Max seconds to wait before returning partial results.</description>
+      </parameter>
+    </parameters>
+    <returns type="Dict[str, Any]">
+      <description>Completion status and per-agent results.</description>
+    </returns>
+  </tool>
 </tools>

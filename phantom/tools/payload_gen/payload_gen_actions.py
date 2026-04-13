@@ -200,6 +200,88 @@ def _payload_similarity(payload1: str, payload2: str) -> float:
     return intersection / union if union > 0 else 0.0
 
 
+def _apply_learning_profile(payloads: list[dict[str, Any]], learning_profile: dict[str, Any]) -> list[dict[str, Any]]:
+    if not learning_profile:
+        return payloads
+
+    learned_entries = learning_profile.get("successful_payloads", []) or []
+    if not learned_entries:
+        return payloads
+
+    recommended_families = learning_profile.get("recommended_families", []) or []
+    family_corr: dict[str, float] = {
+        str(entry.get("family", "")).strip().lower(): float(entry.get("correlation_score", 0.5) or 0.5)
+        for entry in recommended_families
+        if entry.get("family")
+    }
+    surface_corr = float(learning_profile.get("surface_correlation_score", 0.5) or 0.5)
+
+    learned_by_payload = {entry["payload"]: entry for entry in learned_entries if entry.get("payload")}
+    merged: dict[str, dict[str, Any]] = {}
+
+    for payload in payloads:
+        payload_text = str(payload.get("payload", ""))
+        if not payload_text:
+            continue
+        merged[payload_text] = payload.copy()
+
+    for payload_text, profile_entry in learned_by_payload.items():
+        if not payload_text:
+            continue
+        merged_entry = merged.get(payload_text, {"payload": payload_text})
+        merged_entry.setdefault("category", "learned")
+        merged_entry.setdefault("context", learning_profile.get("vuln_class", "learned"))
+        merged_entry["learned_from"] = {
+            "payload": payload_text,
+            "source_surface": profile_entry.get("source_surface"),
+            "source_hypothesis_id": profile_entry.get("source_hypothesis_id"),
+            "family": profile_entry.get("family"),
+            "surface_match": profile_entry.get("surface_match", 0.0),
+        }
+        learned_priority = float(profile_entry.get("transfer_score", 0.0))
+        family = str(profile_entry.get("family", "")).strip().lower()
+        corr_bonus = max(0.0, (family_corr.get(family, surface_corr) - 0.5) * 2.0)
+        merged_entry["priority"] = max(float(merged_entry.get("priority", 0)), learned_priority + 1.0 + corr_bonus)
+        merged[payload_text] = merged_entry
+
+    adjusted: list[dict[str, Any]] = []
+    for payload_text, payload in merged.items():
+        best_similarity = 0.0
+        best_source = None
+        for learned in learned_by_payload:
+            similarity = _payload_similarity(payload_text, learned)
+            if similarity > best_similarity:
+                best_similarity = similarity
+                best_source = learned
+
+        if best_source is not None:
+            profile_entry = learned_by_payload.get(best_source, {})
+            learned_priority = float(profile_entry.get("transfer_score", best_similarity))
+            family = str(profile_entry.get("family", "")).strip().lower()
+            corr_bonus = max(0.0, (family_corr.get(family, surface_corr) - 0.5) * 2.0)
+            payload["learned_from"] = {
+                "payload": best_source,
+                "source_surface": profile_entry.get("source_surface"),
+                "source_hypothesis_id": profile_entry.get("source_hypothesis_id"),
+                "family": profile_entry.get("family"),
+                "surface_match": profile_entry.get("surface_match", 0.0),
+            }
+            payload["priority"] = max(
+                float(payload.get("priority", 0)),
+                learned_priority + (best_similarity * 0.5) + corr_bonus,
+            )
+        adjusted.append(payload)
+
+    adjusted.sort(
+        key=lambda p: (
+            float(p.get("priority", 0)),
+            1 if p.get("learned_from") else 0,
+        ),
+        reverse=True,
+    )
+    return adjusted
+
+
 def _enhance_payload_for_waf(payload: str, waf_type: str, injection_type: str) -> list[str]:
     """
     Generate WAF bypass variations of a payload.
@@ -998,16 +1080,38 @@ async def generate_smart_payloads(
     )
     
     # Load learning data from hypothesis ledger if provided
-    if hypothesis_id:
+    learning_profile: dict[str, Any] = {}
+    surface_ref: str | None = None
+    if url and parameter:
+        surface_ref = f"{url}::{parameter}"
+    elif url:
+        surface_ref = url
+    elif parameter:
+        surface_ref = parameter
+
+    if hypothesis_id or surface_ref:
         try:
-            from phantom.agents.hypothesis_ledger import HypothesisLedger
-            
-            # Attempt to load hypothesis (this is a simplified version - in real impl,
-            # we'd need access to the agent's ledger instance)
-            # For now, we'll document the integration point
-            logger.info(f"P6: Would load hypothesis {hypothesis_id} for payload learning")
-            # context.failed_payloads = hyp.payloads_tested (excluding successful)
-            # context.successful_payloads = hyp.successful_payloads
+            from phantom.tools.hypothesis.hypothesis_actions import get_ledger
+
+            ledger = get_ledger()
+            if ledger is not None:
+                hyp = ledger.get(hypothesis_id) if hypothesis_id else None
+                if hyp is None and surface_ref:
+                    hyp = ledger.find_by_surface_and_class(surface_ref, vuln_class)
+
+                profile_surface = hyp.surface if hyp is not None else surface_ref
+                if profile_surface:
+                    learning_profile = ledger.get_payload_learning_profile(vuln_class, profile_surface, limit=max_payloads)
+                    if hyp is not None:
+                        context.failed_payloads = [
+                            payload for payload in hyp.payloads_tested if payload not in hyp.successful_payloads
+                        ]
+                    context.successful_payloads = [entry["payload"] for entry in learning_profile.get("successful_payloads", [])]
+                    logger.info(
+                        "P6: Loaded learning profile for %s with %d successful payloads",
+                        profile_surface,
+                        len(context.successful_payloads),
+                    )
         except Exception as e:
             logger.debug(f"Could not load hypothesis ledger: {e}")
     
@@ -1065,6 +1169,10 @@ async def generate_smart_payloads(
     # Optimize for framework if specified
     if framework:
         filtered_payloads = _optimize_for_framework(filtered_payloads, framework)
+
+    # Apply cross-surface learning from confirmed hypotheses when available
+    if learning_profile:
+        filtered_payloads = _apply_learning_profile(filtered_payloads, learning_profile)
     
     # Generate WAF bypass variations for top payloads
     final_payloads: list[dict[str, Any]] = []

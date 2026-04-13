@@ -28,7 +28,7 @@ CHAIN_PATTERNS: list[dict[str, Any]] = [
         "id": "ssrf_to_cloud_metadata",
         "name": "SSRF to Cloud Metadata",
         "description": "SSRF can be chained with cloud metadata endpoints to extract credentials",
-        "required_findings": ["ssrf"],
+        "required_findings_any": ["ssrf"],
         "suggested_next": ["cloud_metadata_access"],
         "target_hints": ["169.254.169.254", "metadata.google.internal", "100.100.100.200"],
     },
@@ -36,7 +36,7 @@ CHAIN_PATTERNS: list[dict[str, Any]] = [
         "id": "sqli_to_rce",
         "name": "SQL Injection to RCE",
         "description": "SQL injection may allow writing files or executing commands depending on DB permissions",
-        "required_findings": ["sqli"],
+        "required_findings_any": ["sqli"],
         "suggested_next": ["file_write", "into_outfile", "xp_cmdshell"],
         "db_functions": ["INTO OUTFILE", "LOAD_FILE", "xp_cmdshell", "pg_read_file"],
     },
@@ -44,7 +44,7 @@ CHAIN_PATTERNS: list[dict[str, Any]] = [
         "id": "lfi_to_rce",
         "name": "LFI to RCE",
         "description": "Local File Inclusion can potentially lead to RCE via log poisoning, PHP wrappers, or session files",
-        "required_findings": ["lfi", "path_traversal"],
+        "required_findings_any": ["lfi", "path_traversal"],
         "suggested_next": ["log_poisoning", "php_wrappers", "session_inclusion"],
         "target_hints": ["/var/log/apache2/access.log", "php://filter", "/tmp/sess_"],
     },
@@ -52,52 +52,95 @@ CHAIN_PATTERNS: list[dict[str, Any]] = [
         "id": "xxe_to_ssrf",
         "name": "XXE to SSRF",
         "description": "XXE can be leveraged for SSRF to access internal services",
-        "required_findings": ["xxe"],
+        "required_findings_any": ["xxe"],
         "suggested_next": ["internal_port_scan", "cloud_metadata"],
     },
     {
         "id": "idor_to_priv_esc",
         "name": "IDOR to Privilege Escalation",
         "description": "IDOR on user resources may allow accessing admin accounts or sensitive data",
-        "required_findings": ["idor"],
+        "required_findings_any": ["idor"],
         "suggested_next": ["admin_account_access", "password_reset_takeover"],
     },
     {
         "id": "xss_to_session_hijack",
         "name": "XSS to Session Hijacking",
         "description": "Stored/Reflected XSS can steal session tokens or perform actions as victim",
-        "required_findings": ["xss", "stored_xss", "reflected_xss"],
+        "required_findings_any": ["xss", "stored_xss", "reflected_xss"],
         "suggested_next": ["cookie_theft", "csrf_via_xss", "keylogging"],
     },
     {
         "id": "auth_bypass_to_admin",
         "name": "Auth Bypass to Admin Access",
         "description": "Authentication bypass may provide access to admin functionality",
-        "required_findings": ["auth_bypass", "broken_auth"],
+        "required_findings_any": ["auth_bypass", "broken_auth"],
         "suggested_next": ["admin_panel_access", "user_management"],
     },
     {
         "id": "open_redirect_to_phishing",
         "name": "Open Redirect to Credential Phishing",
         "description": "Open redirect can be chained with OAuth flows or used in phishing campaigns",
-        "required_findings": ["open_redirect"],
+        "required_findings_any": ["open_redirect"],
         "suggested_next": ["oauth_token_theft", "credential_phishing"],
     },
     {
         "id": "ssti_to_rce",
         "name": "SSTI to RCE",
         "description": "Server-Side Template Injection typically leads directly to RCE",
-        "required_findings": ["ssti"],
+        "required_findings_any": ["ssti"],
         "suggested_next": ["command_execution", "file_access"],
     },
     {
         "id": "info_disclosure_to_exploit",
         "name": "Information Disclosure to Targeted Exploit",
         "description": "Leaked version info, stack traces, or config can enable targeted exploits",
-        "required_findings": ["info_disclosure", "version_leak", "stack_trace"],
+        "required_findings_any": ["info_disclosure", "version_leak", "stack_trace"],
         "suggested_next": ["cve_exploit", "default_credentials"],
     },
 ]
+
+
+OUTCOME_WEIGHT_SUCCESS = 1.0
+OUTCOME_WEIGHT_FAILURE = 1.0
+OUTCOME_WEIGHT_SUPPORTIVE = 0.25
+SIM_WEIGHT_BASE_EXACT = 0.75
+SIM_WEIGHT_BASE_PREFIX = 0.30
+SIM_WEIGHT_PARAM_EXACT = 0.20
+SIM_WEIGHT_PARAM_PREFIX = 0.08
+
+
+def _surface_signature(surface: str) -> tuple[str, str]:
+    """Normalize `surface` into base path and parameter key."""
+    normalized = str(surface or "").strip().lower()
+    base, _, param = normalized.partition("::")
+    base = base.split("#", 1)[0].split("?", 1)[0].rstrip("/")
+    param = param.split("#", 1)[0].split("?", 1)[0].strip()
+    return base, param
+
+
+def _path_prefix_similarity(a: str, b: str) -> float:
+    a_segments = [s for s in a.split("/") if s]
+    b_segments = [s for s in b.split("/") if s]
+    if not a_segments or not b_segments:
+        return 0.0
+
+    shared_prefix = 0
+    for left, right in zip(a_segments, b_segments):
+        if left != right:
+            break
+        shared_prefix += 1
+
+    denom = max(len(a_segments), len(b_segments), 1)
+    return shared_prefix / denom
+
+
+def _surface_outcome_key(vuln_class: str, surface: str) -> str:
+    base, param = _surface_signature(surface)
+    return f"{vuln_class.lower()}|{base}|{param}"
+
+
+def _payload_family_key(vuln_class: str, payload_family: str) -> str:
+    return f"{vuln_class.lower()}|{payload_family.lower().strip()}"
 
 
 @dataclass
@@ -160,6 +203,36 @@ class ChainSuggestion:
         return cls(**{k: v for k, v in d.items() if k in cls.__dataclass_fields__})
 
 
+@dataclass
+class OutcomeStats:
+    """Running evidence for exploit success/failure likelihoods."""
+
+    attempts: int = 0
+    successes: int = 0
+    failures: int = 0
+    supportive: int = 0
+    last_updated: str = field(default_factory=lambda: datetime.now(UTC).isoformat())
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "attempts": self.attempts,
+            "successes": self.successes,
+            "failures": self.failures,
+            "supportive": self.supportive,
+            "last_updated": self.last_updated,
+        }
+
+    @classmethod
+    def from_dict(cls, d: dict[str, Any]) -> "OutcomeStats":
+        return cls(
+            attempts=int(d.get("attempts", 0)),
+            successes=int(d.get("successes", 0)),
+            failures=int(d.get("failures", 0)),
+            supportive=int(d.get("supportive", 0)),
+            last_updated=str(d.get("last_updated") or datetime.now(UTC).isoformat()),
+        )
+
+
 class CorrelationEngine:
     """
     Thread-safe engine for identifying potential vulnerability chains.
@@ -176,6 +249,209 @@ class CorrelationEngine:
         self._findings: dict[str, Finding] = {}
         self._suggestions: dict[str, ChainSuggestion] = {}
         self._counter: int = 0
+        self._surface_outcomes: dict[str, OutcomeStats] = {}
+        self._payload_family_outcomes: dict[str, OutcomeStats] = {}
+
+    # ── Learning Core ─────────────────────────────────────────────────────────
+
+    def _get_or_create_stats(self, bucket: dict[str, OutcomeStats], key: str) -> OutcomeStats:
+        stats = bucket.get(key)
+        if stats is None:
+            stats = OutcomeStats()
+            bucket[key] = stats
+        return stats
+
+    def _touch_stats(self, stats: OutcomeStats) -> None:
+        stats.last_updated = datetime.now(UTC).isoformat()
+
+    def _record_stats(self, stats: OutcomeStats, outcome: str) -> None:
+        normalized = str(outcome or "testing").strip().lower()
+        if normalized not in {"confirmed", "rejected", "testing"}:
+            normalized = "testing"
+
+        stats.attempts += 1
+        if normalized == "confirmed":
+            stats.successes += 1
+        elif normalized == "rejected":
+            stats.failures += 1
+        else:
+            stats.supportive += 1
+        self._touch_stats(stats)
+
+    def _bayesian_score(self, stats: OutcomeStats) -> float:
+        # Simple Beta posterior mean with weak prior.
+        alpha = 1.0 + (float(stats.successes) * OUTCOME_WEIGHT_SUCCESS) + (
+            float(stats.supportive) * OUTCOME_WEIGHT_SUPPORTIVE
+        )
+        beta = 1.0 + (float(stats.failures) * OUTCOME_WEIGHT_FAILURE)
+        return round(alpha / max(alpha + beta, 1e-9), 4)
+
+    def record_outcome(
+        self,
+        vuln_class: str,
+        surface: str,
+        outcome: str,
+        payload_family: str | None = None,
+        evidence_strength: float = 1.0,
+    ) -> dict[str, Any]:
+        """
+        Update learned outcome priors for a vuln class and surface.
+
+        This is the learned counterpart to fixed chain suggestions.
+        """
+        if not vuln_class or not surface:
+            return {
+                "updated": False,
+                "reason": "missing-vuln-or-surface",
+            }
+
+        normalized_class = vuln_class.strip().lower()
+        normalized_outcome = outcome.strip().lower() if outcome else "testing"
+        strength = max(0.0, min(float(evidence_strength or 1.0), 2.0))
+
+        with self._lock:
+            surface_key = _surface_outcome_key(normalized_class, surface)
+            surface_stats = self._get_or_create_stats(self._surface_outcomes, surface_key)
+            surface_iterations = max(1, int(round(strength)))
+            for _ in range(surface_iterations):
+                self._record_stats(surface_stats, normalized_outcome)
+
+            payload_score = None
+            payload_key = None
+            if payload_family:
+                payload_key = _payload_family_key(normalized_class, payload_family)
+                payload_stats = self._get_or_create_stats(self._payload_family_outcomes, payload_key)
+                for _ in range(surface_iterations):
+                    self._record_stats(payload_stats, normalized_outcome)
+                payload_score = self._bayesian_score(payload_stats)
+
+            return {
+                "updated": True,
+                "surface_key": surface_key,
+                "surface_score": self._bayesian_score(surface_stats),
+                "surface_attempts": surface_stats.attempts,
+                "payload_key": payload_key,
+                "payload_score": payload_score,
+            }
+
+    def get_surface_success_score(self, vuln_class: str, surface: str) -> float:
+        """Return learned success prior [0,1] for vuln_class on similar surface."""
+        normalized_class = str(vuln_class or "").strip().lower()
+        base, param = _surface_signature(surface)
+        if not normalized_class or not base:
+            return 0.5
+
+        with self._lock:
+            candidates: list[tuple[float, OutcomeStats]] = []
+            for key, stats in self._surface_outcomes.items():
+                key_class, key_base, key_param = (key.split("|", 2) + ["", ""])[:3]
+                if key_class != normalized_class:
+                    continue
+                similarity = 0.0
+                if key_base == base:
+                    similarity += SIM_WEIGHT_BASE_EXACT
+                else:
+                    similarity += _path_prefix_similarity(key_base, base) * SIM_WEIGHT_BASE_PREFIX
+                if key_param and param:
+                    if key_param == param:
+                        similarity += SIM_WEIGHT_PARAM_EXACT
+                    elif key_param.split("_")[0] == param.split("_")[0]:
+                        similarity += SIM_WEIGHT_PARAM_PREFIX
+                if similarity > 0:
+                    candidates.append((min(similarity, 1.0), stats))
+
+        if not candidates:
+            return 0.5
+
+        weighted_num = 0.0
+        weighted_den = 0.0
+        for similarity, stats in candidates:
+            score = self._bayesian_score(stats)
+            weight = similarity * max(1.0, min(stats.attempts, 10))
+            weighted_num += score * weight
+            weighted_den += weight
+
+        if weighted_den <= 0:
+            return 0.5
+        return round(max(0.0, min(weighted_num / weighted_den, 1.0)), 4)
+
+    def get_payload_family_success_score(self, vuln_class: str, payload_family: str) -> float:
+        """Return learned success prior [0,1] for vuln_class + payload_family."""
+        key = _payload_family_key(vuln_class, payload_family)
+        with self._lock:
+            stats = self._payload_family_outcomes.get(key)
+        if stats is None:
+            return 0.5
+        return self._bayesian_score(stats)
+
+    def get_learning_metrics(self, top_n: int = 5) -> dict[str, Any]:
+        """Expose compact metrics for learned exploit priors."""
+        with self._lock:
+            surface_items = list(self._surface_outcomes.items())
+            family_items = list(self._payload_family_outcomes.items())
+
+        total_surface_attempts = sum(stats.attempts for _, stats in surface_items)
+        total_surface_successes = sum(stats.successes for _, stats in surface_items)
+        total_surface_failures = sum(stats.failures for _, stats in surface_items)
+
+        surface_rate = (
+            float(total_surface_successes) / float(total_surface_attempts)
+            if total_surface_attempts > 0
+            else 0.0
+        )
+
+        ranked_surfaces = sorted(
+            surface_items,
+            key=lambda item: self._bayesian_score(item[1]),
+            reverse=True,
+        )[:max(1, top_n)]
+        ranked_families = sorted(
+            family_items,
+            key=lambda item: self._bayesian_score(item[1]),
+            reverse=True,
+        )[:max(1, top_n)]
+
+        top_surface_priors = []
+        for key, stats in ranked_surfaces:
+            vuln_class, surface_base, surface_param = (key.split("|", 2) + ["", ""])[:3]
+            label = surface_base or "(unknown)"
+            if surface_param:
+                label += f"::{surface_param}"
+            top_surface_priors.append(
+                {
+                    "vuln_class": vuln_class,
+                    "surface": label,
+                    "posterior_success": self._bayesian_score(stats),
+                    "attempts": stats.attempts,
+                    "successes": stats.successes,
+                    "failures": stats.failures,
+                }
+            )
+
+        top_payload_family_priors = []
+        for key, stats in ranked_families:
+            vuln_class, family = (key.split("|", 1) + [""])[:2]
+            top_payload_family_priors.append(
+                {
+                    "vuln_class": vuln_class,
+                    "family": family,
+                    "posterior_success": self._bayesian_score(stats),
+                    "attempts": stats.attempts,
+                    "successes": stats.successes,
+                    "failures": stats.failures,
+                }
+            )
+
+        return {
+            "surface_models": len(surface_items),
+            "payload_family_models": len(family_items),
+            "surface_attempts": total_surface_attempts,
+            "surface_successes": total_surface_successes,
+            "surface_failures": total_surface_failures,
+            "surface_success_rate": round(surface_rate, 4),
+            "top_surface_priors": top_surface_priors,
+            "top_payload_family_priors": top_payload_family_priors,
+        }
 
     # ── Finding Management ────────────────────────────────────────────────────
 
@@ -198,6 +474,7 @@ class CorrelationEngine:
             # Generate finding ID
             self._counter += 1
             finding_id = f"F-{self._counter:04d}"
+            details_dict = details or {}
 
             # Store the finding
             self._findings[finding_id] = Finding(
@@ -205,17 +482,26 @@ class CorrelationEngine:
                 vuln_class=vuln_class.lower(),
                 surface=surface,
                 severity=severity,
-                details=details or {},
+                details=details_dict,
             )
 
             # Check for chain opportunities
             new_suggestions = self._identify_chains(finding_id, vuln_class.lower())
+
+            learned = self.record_outcome(
+                vuln_class=vuln_class.lower(),
+                surface=surface,
+                outcome=str(details_dict.get("outcome", "testing")),
+                payload_family=(str(details_dict.get("payload_family")) if details_dict.get("payload_family") else None),
+                evidence_strength=float(details_dict.get("evidence_strength", 1.0) or 1.0),
+            )
 
             return {
                 "finding_id": finding_id,
                 "new_suggestions": [s.to_dict() for s in new_suggestions],
                 "total_findings": len(self._findings),
                 "total_suggestions": len(self._suggestions),
+                "learning": learned,
             }
 
     def record_finding(
@@ -239,8 +525,8 @@ class CorrelationEngine:
         new_suggestions: list[ChainSuggestion] = []
 
         for pattern in CHAIN_PATTERNS:
-            # Check if this vuln_class matches any required finding in the pattern
-            required = pattern.get("required_findings", [])
+            # Explicit required-any semantics for chain triggers.
+            required = pattern.get("required_findings_any", pattern.get("required_findings", []))
             if vuln_class not in required:
                 continue
 
@@ -423,6 +709,27 @@ class CorrelationEngine:
             for combo in combo_result["combinations"][:3]:
                 lines.append(f"    - {combo['description'][:70]}...")
 
+        learned_rows: list[tuple[str, OutcomeStats]] = []
+        with self._lock:
+            learned_rows = list(self._surface_outcomes.items())
+        if learned_rows:
+            ranked = sorted(
+                learned_rows,
+                key=lambda item: self._bayesian_score(item[1]),
+                reverse=True,
+            )[:3]
+            lines.append("  Learned exploit priors:")
+            for key, stats in ranked:
+                vuln_class, surface_base, surface_param = (key.split("|", 2) + ["", ""])[:3]
+                prior = self._bayesian_score(stats)
+                surface_label = surface_base or "(unknown surface)"
+                if surface_param:
+                    surface_label += f"::{surface_param}"
+                lines.append(
+                    f"    - {vuln_class} on {surface_label}: p={prior:.2f} "
+                    f"(n={stats.attempts}, +{stats.successes}/-{stats.failures})"
+                )
+
         lines.append("[END CORRELATION]")
         return "\n".join(lines)
 
@@ -435,6 +742,8 @@ class CorrelationEngine:
                 "counter": self._counter,
                 "findings": {k: v.to_dict() for k, v in self._findings.items()},
                 "suggestions": {k: v.to_dict() for k, v in self._suggestions.items()},
+                "surface_outcomes": {k: v.to_dict() for k, v in self._surface_outcomes.items()},
+                "payload_family_outcomes": {k: v.to_dict() for k, v in self._payload_family_outcomes.items()},
             }
 
     @classmethod
@@ -446,6 +755,10 @@ class CorrelationEngine:
             engine._findings[k] = Finding.from_dict(v)
         for k, v in d.get("suggestions", {}).items():
             engine._suggestions[k] = ChainSuggestion.from_dict(v)
+        for k, v in d.get("surface_outcomes", {}).items():
+            engine._surface_outcomes[k] = OutcomeStats.from_dict(v)
+        for k, v in d.get("payload_family_outcomes", {}).items():
+            engine._payload_family_outcomes[k] = OutcomeStats.from_dict(v)
         return engine
 
     def __len__(self) -> int:

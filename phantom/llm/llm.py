@@ -295,10 +295,7 @@ class LLM:
                 else:
                     tools_prompt_fn = get_tools_prompt
 
-            use_condensed_prompt = (
-                os.environ.get("PHANTOM_USE_CONDENSED_PROMPT", "false").lower() == "true"
-            )
-            template_name = "system_prompt_condensed.jinja" if use_condensed_prompt else "system_prompt.jinja"
+            template_name = "system_prompt.jinja"
             try:
                 template = env.get_template(template_name)
             except Exception:
@@ -615,13 +612,25 @@ class LLM:
         # Run compression in a thread to avoid blocking the async event loop.
         # The sync compress_history call can take 30s+ per chunk when LLM summarisation fires.
         _state = getattr(self, "_agent_state", None)
+        _archive = []
+        if _state is not None and hasattr(_state, "get_archived_messages"):
+            try:
+                _archive = list(_state.get_archived_messages())
+            except Exception:
+                _archive = []
+        compression_input = conversation_history + _archive
         compressed = list(
             await asyncio.to_thread(
-                self.memory_compressor.compress_history, conversation_history, _state
+                self.memory_compressor.compress_history, compression_input, _state
             )
         )
         conversation_history.clear()
         conversation_history.extend(compressed)
+        if _archive and _state is not None and hasattr(_state, "clear_archived_messages"):
+            try:
+                _state.clear_archived_messages()
+            except Exception:
+                pass
 
         # ── Finding anchors injection ─────────────────────────────────────────
         # AUDIT-FIX-04: Re-inject high-signal findings continuously from iter 2+

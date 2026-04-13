@@ -24,6 +24,7 @@ _GLOBAL_COVERAGE_TRACKER: CoverageTracker | None = None
 _GLOBAL_CORRELATION_ENGINE: CorrelationEngine | None = None
 _GLOBAL_ATTACK_GRAPH: AttackGraph | None = None  # FIX 5
 _GLOBAL_AGENT_STATE: Any | None = None
+_CONTEXT_BY_AGENT: dict[str, dict[str, Any]] = {}
 
 
 def set_scan_status_context(
@@ -46,9 +47,40 @@ def set_scan_status_context(
     if agent_state is not None:
         _GLOBAL_AGENT_STATE = agent_state
 
+    # P1 HARDENING: keep agent-scoped context to prevent cross-agent overwrite.
+    agent_id = getattr(agent_state, "agent_id", None) if agent_state is not None else None
+    if isinstance(agent_id, str) and agent_id:
+        _CONTEXT_BY_AGENT[agent_id] = {
+            "hypothesis_ledger": hypothesis_ledger if hypothesis_ledger is not None else _GLOBAL_HYPOTHESIS_LEDGER,
+            "coverage_tracker": coverage_tracker if coverage_tracker is not None else _GLOBAL_COVERAGE_TRACKER,
+            "correlation_engine": correlation_engine if correlation_engine is not None else _GLOBAL_CORRELATION_ENGINE,
+            "attack_graph": attack_graph if attack_graph is not None else _GLOBAL_ATTACK_GRAPH,
+            "agent_state": agent_state,
+        }
+
+
+def _resolve_context(agent_id: str | None = None) -> tuple[Any, Any, Any, Any, Any]:
+    if agent_id and agent_id in _CONTEXT_BY_AGENT:
+        ctx = _CONTEXT_BY_AGENT[agent_id]
+        return (
+            ctx.get("hypothesis_ledger"),
+            ctx.get("coverage_tracker"),
+            ctx.get("correlation_engine"),
+            ctx.get("attack_graph"),
+            ctx.get("agent_state"),
+        )
+
+    return (
+        _GLOBAL_HYPOTHESIS_LEDGER,
+        _GLOBAL_COVERAGE_TRACKER,
+        _GLOBAL_CORRELATION_ENGINE,
+        _GLOBAL_ATTACK_GRAPH,
+        _GLOBAL_AGENT_STATE,
+    )
+
 
 @register_tool(sandbox_execution=False)
-def get_scan_status(include_recommendations: bool = True) -> dict[str, Any]:
+def get_scan_status(include_recommendations: bool = True, agent_id: str | None = None) -> dict[str, Any]:
     """
     Get a compressed summary of the entire scan state.
     
@@ -71,12 +103,8 @@ def get_scan_status(include_recommendations: bool = True) -> dict[str, Any]:
     Example:
         get_scan_status(include_recommendations=True)
     """
-    # Get references
-    hypothesis_ledger = _GLOBAL_HYPOTHESIS_LEDGER
-    coverage_tracker = _GLOBAL_COVERAGE_TRACKER
-    correlation_engine = _GLOBAL_CORRELATION_ENGINE
-    attack_graph = _GLOBAL_ATTACK_GRAPH
-    state = _GLOBAL_AGENT_STATE
+    # Get references (agent-scoped when available)
+    hypothesis_ledger, coverage_tracker, correlation_engine, attack_graph, state = _resolve_context(agent_id)
     
     # Compute phase
     iteration = getattr(state, "iteration", 0) if state else 0
@@ -97,23 +125,53 @@ def get_scan_status(include_recommendations: bool = True) -> dict[str, Any]:
     
     # Get coverage stats
     cov_stats = {}
+    blocked_surfaces = []
+    archived_messages = {"count": 0, "recent": []}
     if coverage_tracker:
         tested = len(coverage_tracker.get_tested_surfaces())
         untested = len(coverage_tracker.get_untested_surfaces())
         cov_stats = {"tested": tested, "untested": untested}
+        try:
+            blocked_surfaces = coverage_tracker.get_blocked_surfaces()[:5]
+        except Exception:  # noqa: BLE001
+            blocked_surfaces = []
+
+    top_hypotheses = []
+    if hypothesis_ledger:
+        try:
+            top_hypotheses = hypothesis_ledger.get_prioritized_summary(top_n=5)
+        except Exception:  # noqa: BLE001
+            top_hypotheses = []
+
+    if state and hasattr(state, "get_archived_messages"):
+        try:
+            archived = state.get_archived_messages()
+            archived_messages = {
+                "count": len(archived),
+                "recent": [str(msg.get("content", ""))[:120] for msg in archived[-2:]],
+            }
+        except Exception:  # noqa: BLE001
+            archived_messages = {"count": 0, "recent": []}
     
     # Get chain opportunities
     chains = []
-    if correlation_engine:
+    correlation_learning = None
+    if correlation_engine is not None:
         active = correlation_engine.get_active_suggestions()
         chains = [
             {
                 "chain": s.chain_name,
-                "surface": s.trigger_vuln_class,
+                "surface": (
+                    next((f.surface for f in correlation_engine.get_findings() if f.id == s.trigger_finding_id), s.trigger_vuln_class)
+                ),
                 "description": s.description[:60]
             }
             for s in active[:3]
         ]
+        try:
+            correlation_learning = correlation_engine.get_learning_metrics(top_n=3)
+        except Exception:  # noqa: BLE001
+            correlation_learning = None
     
     # FIX 5: Get attack graph metrics
     attack_graph_summary = None
@@ -158,7 +216,11 @@ def get_scan_status(include_recommendations: bool = True) -> dict[str, Any]:
             "surfaces_remaining": cov_stats.get("untested", 0),
             "coverage_percent": _calc_coverage_percent(cov_stats)
         },
+        "blocked_surfaces": blocked_surfaces,
+        "top_hypotheses": top_hypotheses,
+        "archived_messages": archived_messages,
         "chain_opportunities": chains,
+        "correlation_learning": correlation_learning,
         "recommended_next_action": recommendation,
         "warnings": _get_warnings(iteration, max_iter, pending, chains)
     }
@@ -191,18 +253,34 @@ def _compute_recommendation(
 ) -> str:
     """Compute recommended next action based on scan state."""
     # Priority 1: Confirmed vulns with chains
-    if corr_engine:
+    if corr_engine is not None:
         active_chains = corr_engine.get_active_suggestions()
         if active_chains:
             top = active_chains[0]
-            return f"Explore chain: {top.chain_name} from {top.trigger_vuln_class}"
+            top_surface = None
+            for finding in corr_engine.get_findings():
+                if finding.id == top.trigger_finding_id:
+                    top_surface = finding.surface
+                    break
+            score = corr_engine.get_surface_success_score(
+                top.trigger_vuln_class,
+                top_surface or top.trigger_vuln_class,
+            )
+            return (
+                f"Explore chain: {top.chain_name} from {top.trigger_vuln_class} "
+                f"(learned confidence: {score:.2f})"
+            )
     
     # Priority 2: High-scoring hypotheses
     if hyp_ledger:
         scored = hyp_ledger.get_scored_hypotheses()
         if scored:
             top = scored[0]
-            return f"Test hypothesis: {top['vuln_class']} on {top['surface'][:40]} (score: {top['priority_score']})"
+            corr_score = float(top.get("correlation_surface_score", 0.5))
+            return (
+                f"Test hypothesis: {top['vuln_class']} on {top['surface'][:40]} "
+                f"(score: {top['priority_score']}, corr: {corr_score:.2f})"
+            )
     
     # Priority 3: Untested surfaces
     if cov_tracker:

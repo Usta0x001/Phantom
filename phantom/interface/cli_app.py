@@ -11,9 +11,11 @@ Subcommands:
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import sys
 from enum import Enum
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated, Optional
 
@@ -26,13 +28,15 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.text import Text
 
+from phantom.interface.tui_design_system import ACTION_BLUE, DANGER_CRIMSON, DANGER_RED, INFO_BLUE, INFO_ROYAL, NEUTRAL_DARK, WARNING_AMBER, WARNING_ORANGE, SUCCESS_GREEN
+
 console = Console()
 
 app = typer.Typer(
     name="phantom",
     help=(
-        "[bold #dc2626]☠ PHANTOM[/] — Autonomous Adversary Simulation Platform\n\n"
-        '[italic #f59e0b]" The Ghost in the Machine "[/]\n\n'
+        f"[bold {DANGER_CRIMSON}]☠ PHANTOM[/] — Autonomous Adversary Simulation Platform\n\n"
+        f'[italic {WARNING_ORANGE}]" The Ghost in the Machine "[/]\n\n'
         "[dim]Quick start:[/]\n"
         "  [bold]phantom scan -t https://example.com[/]\n"
         "  [bold]phantom scan -t https://example.com -i 'test SQLi and XSS'[/]\n\n"
@@ -52,7 +56,7 @@ def _version_callback(value: bool) -> None:
             ver = importlib.metadata.version("phantom-agent")
         except importlib.metadata.PackageNotFoundError:
             ver = "dev"
-        console.print(f"[bold #dc2626]Phantom[/] [white]{ver}[/]")
+        console.print(f"[bold {DANGER_CRIMSON}]Phantom[/] [white]{ver}[/]")
         raise typer.Exit()
 
 
@@ -122,6 +126,51 @@ class UiVariant(str, Enum):
     auto = "auto"
     v1 = "v1"
     v2 = "v2"
+
+
+@app.command()
+def audit(
+    output_dir: Annotated[
+        Path,
+        typer.Option(
+            "--output-dir",
+            help="Directory to write the audit report.",
+        ),
+    ] = Path("thesis_output/audit"),
+    run_dir: Annotated[
+        Optional[Path],
+        typer.Option(
+            "--run-dir",
+            help="Optional phantom run directory for trace ingestion.",
+        ),
+    ] = None,
+    compare_run_dir: Annotated[
+        Optional[Path],
+        typer.Option(
+            "--compare-run-dir",
+            help="Optional second run directory for compare mode.",
+        ),
+    ] = None,
+) -> None:
+    """Generate a system audit report."""
+    from audit_report import write_report
+
+    if compare_run_dir and not run_dir:
+        raise typer.Exit(code=2)
+    if compare_run_dir and run_dir:
+        from audit_report import compare_runs, render_markdown
+
+        report = compare_runs(run_dir, compare_run_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        json_path = output_dir / "audit_compare.json"
+        md_path = output_dir / "audit_compare.md"
+        json_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
+        md_path.write_text(render_markdown(report), encoding="utf-8")
+    else:
+        json_path, md_path, report = write_report(output_dir, run_dir=run_dir)
+    console.print(f"JSON: {json_path}")
+    console.print(f"Markdown: {md_path}")
+    console.print(f"Schema drift: {len(report.get('schema_drift', []))}")
 
 
 # ──────────────────────────── scan ────────────────────────────
@@ -926,7 +975,7 @@ def _render_html_report(run_name: str, data: dict) -> str:
     sev_order = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4}
     vulns_sorted = sorted(vulns, key=lambda v: sev_order.get(str(v.get("severity", "info")).lower(), 5))
 
-    sev_colors = {"critical": "#dc2626", "high": "#ea580c", "medium": "#d97706", "low": "#65a30d", "info": "#2563eb"}
+    sev_colors = {"critical": DANGER_CRIMSON, "high": WARNING_ORANGE, "medium": WARNING_AMBER, "low": SUCCESS_GREEN, "info": ACTION_BLUE}
     counts: dict[str, int] = {"critical": 0, "high": 0, "medium": 0, "low": 0, "info": 0}
     for v in vulns_sorted:
         sev = str(v.get("severity", "info")).lower()
@@ -936,7 +985,7 @@ def _render_html_report(run_name: str, data: dict) -> str:
     for i, v in enumerate(vulns_sorted, 1):
         name = html_lib.escape(str(v.get("name", "Unknown")))
         sev_key = str(v.get("severity", "info")).lower()
-        color = sev_colors.get(sev_key, "#64748b")
+        color = sev_colors.get(sev_key, NEUTRAL_DARK)
         sev = html_lib.escape(sev_key.upper())
         endpoint = html_lib.escape(str(v.get("endpoint", "")))
         desc = html_lib.escape(str(v.get("description", "")))
@@ -960,16 +1009,16 @@ def _render_html_report(run_name: str, data: dict) -> str:
 <title>Phantom Report: {html_lib.escape(target)}</title>
 <style>
   body {{ font-family: system-ui, sans-serif; background: #0f172a; color: #e2e8f0; margin: 0; padding: 2rem; }}
-  h1 {{ color: #dc2626; border-bottom: 2px solid #dc2626; padding-bottom: .5rem; }}
-  h2 {{ color: #a78bfa; margin-top: 2rem; }}
+  h1 {{ color: {DANGER_CRIMSON}; border-bottom: 2px solid {DANGER_CRIMSON}; padding-bottom: .5rem; }}
+  h2 {{ color: {WARNING_ORANGE}; margin-top: 2rem; }}
   h3 {{ color: #e2e8f0; }}
   .meta {{ color: #94a3b8; font-size: .9rem; margin-bottom: 2rem; }}
   .summary {{ display: flex; gap: 1rem; flex-wrap: wrap; margin-bottom: 2rem; }}
   .sev-card {{ padding: .75rem 1.5rem; border-radius: .5rem; text-align:center; }}
-  .finding {{ background: #1e293b; border-radius: .5rem; padding: 1.5rem; margin-bottom: 1rem; border-left: 4px solid #dc2626; }}
+  .finding {{ background: #1e293b; border-radius: .5rem; padding: 1.5rem; margin-bottom: 1rem; border-left: 4px solid {DANGER_CRIMSON}; }}
   .badge {{ display: inline-block; padding: .2rem .6rem; border-radius: .25rem; color: white; font-size:.8rem; font-weight:700; margin-right:.5rem; }}
   code {{ background: #0f172a; padding: .1rem .4rem; border-radius:.25rem; font-size:.9em; }}
-  footer {{ color: #475569; font-size: .8rem; margin-top: 3rem; text-align: center; }}
+  footer {{ color: {NEUTRAL_DARK}; font-size: .8rem; margin-top: 3rem; text-align: center; }}
 </style>
 </head>
 <body>
@@ -981,15 +1030,15 @@ def _render_html_report(run_name: str, data: dict) -> str:
 </div>
 <h2>Summary</h2>
 <div class="summary">
-  <div class="sev-card" style="background:#dc262622;border:1px solid #dc2626"><div style="font-size:2rem;font-weight:700;color:#dc2626">{counts["critical"]}</div>Critical</div>
-  <div class="sev-card" style="background:#ea580c22;border:1px solid #ea580c"><div style="font-size:2rem;font-weight:700;color:#ea580c">{counts["high"]}</div>High</div>
-  <div class="sev-card" style="background:#d9770622;border:1px solid #d97706"><div style="font-size:2rem;font-weight:700;color:#d97706">{counts["medium"]}</div>Medium</div>
-  <div class="sev-card" style="background:#65a30d22;border:1px solid #65a30d"><div style="font-size:2rem;font-weight:700;color:#65a30d">{counts["low"]}</div>Low</div>
-  <div class="sev-card" style="background:#2563eb22;border:1px solid #2563eb"><div style="font-size:2rem;font-weight:700;color:#2563eb">{counts["info"]}</div>Info</div>
+  <div class="sev-card" style="background:{DANGER_CRIMSON}22;border:1px solid {DANGER_CRIMSON}"><div style="font-size:2rem;font-weight:700;color:{DANGER_CRIMSON}">{counts["critical"]}</div>Critical</div>
+  <div class="sev-card" style="background:{WARNING_ORANGE}22;border:1px solid {WARNING_ORANGE}"><div style="font-size:2rem;font-weight:700;color:{WARNING_ORANGE}">{counts["high"]}</div>High</div>
+  <div class="sev-card" style="background:{WARNING_AMBER}22;border:1px solid {WARNING_AMBER}"><div style="font-size:2rem;font-weight:700;color:{WARNING_AMBER}">{counts["medium"]}</div>Medium</div>
+  <div class="sev-card" style="background:{SUCCESS_GREEN}22;border:1px solid {SUCCESS_GREEN}"><div style="font-size:2rem;font-weight:700;color:{SUCCESS_GREEN}">{counts["low"]}</div>Low</div>
+  <div class="sev-card" style="background:{ACTION_BLUE}22;border:1px solid {ACTION_BLUE}"><div style="font-size:2rem;font-weight:700;color:{ACTION_BLUE}">{counts["info"]}</div>Info</div>
 </div>
 <h2>Findings ({len(vulns_sorted)})</h2>
 {"".join(["<p><em>No vulnerabilities found.</em></p>"]) if not vulns_sorted else vuln_rows}
-<footer>Generated by <strong>Phantom</strong> — Autonomous Adversary Simulation Platform | <a href="https://github.com/Usta0x001/Phantom" style="color:#dc2626">github.com/Usta0x001/Phantom</a></footer>
+<footer>Generated by <strong>Phantom</strong> — Autonomous Adversary Simulation Platform | <a href="https://github.com/Usta0x001/Phantom" style="color:{DANGER_CRIMSON}">github.com/Usta0x001/Phantom</a></footer>
 </body>
 </html>"""
 
@@ -1002,91 +1051,63 @@ app.add_typer(config_app, name="config")
 
 @config_app.command("show")
 def config_show(
-    include_env: Annotated[
-        bool,
-        typer.Option(
-            "--include-env",
-            help="Include current process environment variables in the output.",
-        ),
-    ] = False,
+    mode: str | None = typer.Argument(None, help="Use 'all' to show every tracked variable."),
 ) -> None:
-    """Display current configuration.
-
-    By default, this shows Phantom's saved config file values plus built-in defaults.
-    Use --include-env to also include current environment variable overrides.
-    """
+    """Show key config values. Use `phantom config show all` for the full list."""
     import os
+
     from phantom.config import Config
 
     saved = Config.load()
     saved_vars: dict[str, str] = saved.get("env", {}) or {}
 
-    # Build the full active configuration:
-    # 1. Start with all tracked variables that have non-None values (env or default)
-    # 2. Mark each row with its source: [env] set in environment, [saved] from config
-    #    file, [default] from built-in defaults
-    from rich.table import Table
+    if mode not in (None, "all"):
+        console.print("Use 'phantom config show all' to show every variable.")
+        return
 
-    table = Table(title="Phantom Configuration", show_lines=True)
-    table.add_column("Variable", style="cyan")
-    table.add_column("Value", style="green")
-    table.add_column("Source", style="dim")
+    important_keys = [
+        "PHANTOM_LLM",
+        "PHANTOM_TOOL_SUBSET",
+        "PHANTOM_MAX_COST",
+        "PHANTOM_MAX_INPUT_TOKENS",
+        "PHANTOM_SANDBOX_EXECUTION_TIMEOUT",
+    ]
+    keys = [name.upper() for name in Config._tracked_names()] if mode == "all" else important_keys
 
-    rows: dict[str, tuple[str, str]] = {}  # key → (value, source)
-
-    # Walk every tracked var in the Config class
-    for attr_name in Config._tracked_names():
+    rows: list[tuple[str, str]] = []
+    for key in keys:
+        attr_name = key.lower()
         key = attr_name.upper()
         default = getattr(Config, attr_name, None)
-        env_val = os.environ.get(key) if include_env else None
+        env_val = os.environ.get(key)
         saved_val = saved_vars.get(key)
 
         if env_val is not None:
-            # Source is "saved" only when the active env value equals what was saved
-            # (meaning apply_saved() loaded it). If they differ, env overrides saved.
-            if saved_val is not None and saved_val == env_val:
-                source = "saved"
-            else:
-                source = "env"
-            rows[key] = (env_val, source)
+            value = env_val
         elif saved_val is not None:
-            rows[key] = (saved_val, "saved")
+            value = saved_val
         elif default is not None:
-            rows[key] = (default, "default")
+            value = str(default)
         else:
-            # Show ALL tracked vars even if None - mark as "not set"
-            rows[key] = ("<not set>", "default")
+            value = "<not set>"
+
+        rows.append((key, value))
 
     if not rows:
-        console.print("[dim]No configuration found. Use 'phantom config set KEY VALUE' to configure.[/]")
+        console.print("No configuration found.")
         return
 
-    _source_style = {"env": "bold green", "saved": "yellow", "default": "dim"}
-    for key, (value, source) in sorted(rows.items()):
-        # Mask secrets - but show NOT_SET or placeholder so users know which are not configured
-        display_value = value
+    for key, value in rows:
         if value in ("NOT_SET", "<not set>"):
-            display_value = value  # Show NOT_SET so users know it's not configured
-        elif any(s in key.lower() for s in ("key", "token", "secret", "password")):
-            display_value = value[:8] + "..." + value[-4:] if len(value) > 12 else "***"
-        style = _source_style.get(source, "")
-        table.add_row(key, display_value, f"[{style}]{source}[/]")
+            display = value
+        elif any(token in key.lower() for token in ("key", "token", "secret", "password")):
+            display = value[:6] + "..." + value[-4:] if len(value) > 12 else "***"
+        else:
+            display = value
+        console.print(f"{key}: {display}")
 
-    console.print(table)
-    if include_env:
-        console.print(
-            f"[dim]Showing {len(rows)} variables  "
-            "[bold green]env[/][dim]=active in env  "
-            "[yellow]saved[/][dim]=saved config  "
-            "default=built-in default[/]"
-        )
-    else:
-        console.print(
-            f"[dim]Showing {len(rows)} variables  "
-            "[yellow]saved[/][dim]=saved config  "
-            "default=built-in default  "
-            "(use --include-env to display env overrides)[/]"
-        )
+    if mode != "all":
+        console.print("Use 'phantom config show all' to see everything.")
 
 
 @config_app.command("set")
@@ -1386,14 +1407,17 @@ def version() -> None:
     has_docker = shutil.which("docker") is not None
 
     info = Text()
-    info.append(f"☠ PHANTOM v{ver}\n", style="bold #dc2626")
-    info.append('" The Ghost in the Machine "\n', style="italic #f59e0b")
+    info.append(f"☠ PHANTOM v{ver}\n", style=f"bold {DANGER_CRIMSON}")
+    info.append('" The Ghost in the Machine "\n', style=f"italic {WARNING_ORANGE}")
     info.append(f"Python {platform.python_version()}\n", style="dim")
     info.append(f"Platform {platform.system()} {platform.machine()}\n", style="dim")
-    info.append(f"Docker {'available' if has_docker else 'NOT FOUND'}", style="green" if has_docker else "red")
+    info.append(
+        f"Docker {'available' if has_docker else 'NOT FOUND'}",
+        style="green" if has_docker else DANGER_RED,
+    )
 
     console.print(
-        Panel(info, title="[bold #dc2626]☠ PHANTOM", border_style="#dc2626", padding=(1, 2))
+        Panel(info, title=f"[bold {DANGER_CRIMSON}]☠ PHANTOM", border_style=DANGER_CRIMSON, padding=(1, 2))
     )
 
 
@@ -1408,11 +1432,11 @@ def profiles() -> None:
     from phantom.core.scan_profiles import list_profiles, get_profile
 
     table = Table(
-        title="[bold #dc2626]☠ Phantom Scan Profiles[/]",
+        title=f"[bold {DANGER_CRIMSON}]☠ Phantom Scan Profiles[/]",
         show_lines=True,
-        border_style="#dc2626",
+        border_style=DANGER_CRIMSON,
     )
-    table.add_column("Profile", style="bold #f59e0b")
+    table.add_column("Profile", style=f"bold {WARNING_ORANGE}")
     table.add_column("Max Iterations", justify="center")
     table.add_column("Timeout (s)", justify="center")
     table.add_column("Effort", justify="center")
@@ -1443,17 +1467,17 @@ def doctor() -> None:
     configured_model = Config.get("phantom_llm") or "(not set)"
     ui_variant = Config.get("phantom_tui_variant") or "v2"
     info = Text()
-    info.append("CLI Doctor\n", style="bold #dc2626")
+    info.append("CLI Doctor\n", style=f"bold {DANGER_CRIMSON}")
     info.append("Configured model: ", style="dim")
     info.append(f"{configured_model}\n")
     info.append("Default UI variant: ", style="dim")
     info.append(f"{ui_variant}\n")
     info.append("\nHelpful commands:\n", style="bold")
-    info.append("  phantom profiles\n", style="#f59e0b")
-    info.append("  phantom scan --preset deep -t https://example.com\n", style="#f59e0b")
-    info.append("  phantom scan --ui v2 -t https://example.com\n", style="#f59e0b")
-    info.append("  phantom config show --include-env\n", style="#f59e0b")
-    console.print(Panel(info, border_style="#dc2626", padding=(1, 2)))
+    info.append("  phantom profiles\n", style=WARNING_ORANGE)
+    info.append("  phantom scan --preset deep -t https://example.com\n", style=WARNING_ORANGE)
+    info.append("  phantom scan --ui v2 -t https://example.com\n", style=WARNING_ORANGE)
+    info.append("  phantom config show --include-env\n", style=WARNING_ORANGE)
+    console.print(Panel(info, border_style=DANGER_CRIMSON, padding=(1, 2)))
 
 
 # ──────────────────────────── cleanup ────────────────────────────

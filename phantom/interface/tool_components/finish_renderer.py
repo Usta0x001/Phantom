@@ -3,11 +3,12 @@ from typing import Any, ClassVar
 from rich.text import Text
 from textual.widgets import Static
 
+from ..tui_design_system import SUCCESS_EMERALD
 from .base_renderer import BaseToolRenderer
 from .registry import register_tool_renderer
 
 
-FIELD_STYLE = "bold #4ade80"
+FIELD_STYLE = f"bold {SUCCESS_EMERALD}"
 
 
 @register_tool_renderer
@@ -25,8 +26,8 @@ class FinishScanRenderer(BaseToolRenderer):
         recommendations = args.get("recommendations", "")
 
         text = Text()
-        text.append("◆ ", style="#22c55e")
-        text.append("Penetration test completed", style="bold #22c55e")
+        text.append("◆ ", style=SUCCESS_EMERALD)
+        text.append("Penetration test completed", style=f"bold {SUCCESS_EMERALD}")
 
         if executive_summary:
             text.append("\n\n")

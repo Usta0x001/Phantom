@@ -17,6 +17,8 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.text import Text
 
+from .tui_design_system import ACTION_BLUE, DANGER_CRIMSON, DANGER_RED, SUCCESS_GREEN, WARNING_YELLOW
+
 from phantom.config import Config, apply_saved_config, save_current_config
 from phantom.config.config import resolve_llm_config
 from phantom.llm.utils import resolve_phantom_model
@@ -416,9 +418,9 @@ def display_completion_message(args: argparse.Namespace, results_path: Path) -> 
 
     completion_text = Text()
     if scan_completed:
-        completion_text.append("Penetration test completed", style="bold #22c55e")
+        completion_text.append("Penetration test completed", style=f"bold {SUCCESS_GREEN}")
     else:
-        completion_text.append("SESSION ENDED", style="bold #eab308")
+        completion_text.append("SESSION ENDED", style=f"bold {WARNING_YELLOW}")
 
     target_text = Text()
     target_text.append("Target", style="dim")
@@ -442,12 +444,12 @@ def display_completion_message(args: argparse.Namespace, results_path: Path) -> 
     results_text.append("\n")
     results_text.append("Output", style="dim")
     results_text.append("  ")
-    results_text.append(str(results_path), style="#60a5fa")
+    results_text.append(str(results_path), style=ACTION_BLUE)
     panel_parts.extend(["\n", results_text])
 
     panel_content = Text.assemble(*panel_parts)
 
-    border_style = "#22c55e" if scan_completed else "#eab308"
+    border_style = SUCCESS_GREEN if scan_completed else WARNING_YELLOW
 
     panel = Panel(
         panel_content,
@@ -462,7 +464,7 @@ def display_completion_message(args: argparse.Namespace, results_path: Path) -> 
     console.print()
     brand = Config.get("phantom_footer_brand") or "phantom-agent"
     discord = Config.get("phantom_footer_discord") or "phantom-agent"
-    console.print(f"[#60a5fa]{brand}[/]  [dim]·[/]  [#60a5fa]https://github.com/usta0x001/{discord}[/]")
+    console.print(f"[{ACTION_BLUE}]{brand}[/]  [dim]·[/]  [{ACTION_BLUE}]https://github.com/usta0x001/{discord}[/]")
     console.print()
 
 
@@ -505,7 +507,7 @@ def pull_docker_image() -> None:
             sys.exit(1)
 
     success_text = Text()
-    success_text.append("Docker image ready", style="#22c55e")
+    success_text.append("Docker image ready", style=SUCCESS_GREEN)
     console.print(success_text)
     console.print()
 

@@ -4,14 +4,52 @@ from dataclasses import dataclass
 from typing import Final
 
 
+CANVAS_BG: Final[str] = "#050816"
+SURFACE_BG: Final[str] = "#0b1220"
+SURFACE_ALT_BG: Final[str] = "#0f1a2c"
+TEXT_PRIMARY: Final[str] = "#e6eef8"
+TEXT_MUTED: Final[str] = "#93a4bf"
+TEXT_FAINT: Final[str] = "#a3a3a3"
+TEXT_SHADOW: Final[str] = "#525252"
+TEXT_SOFT: Final[str] = "#d4d4d4"
+PRIMARY_CYAN: Final[str] = "#2dd4ff"
+ACTION_CYAN: Final[str] = "#06b6d4"
+ACTION_BLUE: Final[str] = "#3b82f6"
+INFO_ROYAL: Final[str] = "#2563eb"
+SUCCESS_EMERALD: Final[str] = "#2ee59d"
+SUCCESS_GREEN: Final[str] = "#22c55e"
+SUCCESS_LIME: Final[str] = "#4ade80"
+SUCCESS_SOFT: Final[str] = "#86efac"
+SUCCESS_TEAL: Final[str] = "#10b981"
+WARNING_AMBER: Final[str] = "#f2b84b"
+WARNING_YELLOW: Final[str] = "#eab308"
+DANGER_RED: Final[str] = "#ef4444"
+DANGER_ROSE: Final[str] = "#ff5d73"
+DANGER_CRIMSON: Final[str] = "#dc2626"
+SECONDARY_VIOLET: Final[str] = "#b58cff"
+ACCENT_PURPLE: Final[str] = "#a78bfa"
+ACCENT_LILAC: Final[str] = "#c084fc"
+BORDER_SLATE: Final[str] = "#223452"
+INFO_SKY: Final[str] = "#8ac6ff"
+INFO_BLUE: Final[str] = "#60a5fa"
+WARNING_GOLD: Final[str] = "#facc15"
+WARNING_ORANGE: Final[str] = "#f59e0b"
+WARNING_SOFT_ORANGE: Final[str] = "#ff8a5b"
+WARNING_BRIGHT_ORANGE: Final[str] = "#f97316"
+NEUTRAL_DOT: Final[str] = "#0a3d1f"
+NEUTRAL_SLATE: Final[str] = "#6b7280"
+NEUTRAL_STEEL: Final[str] = "#94a3b8"
+NEUTRAL_DARK: Final[str] = "#475569"
+
+
 @dataclass(frozen=True)
 class TUITheme:
-    bg: str = "#000000"
-    fg: str = "#d4d4d4"
-    muted: str = "#737373"
-    accent: str = "#dc2626"
-    warning: str = "#f59e0b"
-    border: str = "#333333"
+    bg: str = CANVAS_BG
+    fg: str = TEXT_PRIMARY
+    muted: str = TEXT_MUTED
+    accent: str = PRIMARY_CYAN
+    warning: str = WARNING_AMBER
+    border: str = BORDER_SLATE
 
 
 @dataclass(frozen=True)
@@ -60,11 +98,11 @@ SPACING: Final[TUISpacing] = TUISpacing()
 
 
 SEVERITY_COLORS: Final[dict[str, str]] = {
-    "critical": "#dc2626",
-    "high": "#ea580c",
-    "medium": "#d97706",
-    "low": "#65a30d",
-    "info": "#2563eb",
+    "critical": DANGER_ROSE,
+    "high": WARNING_SOFT_ORANGE,
+    "medium": WARNING_AMBER,
+    "low": SUCCESS_EMERALD,
+    "info": PRIMARY_CYAN,
 }
 
 SEVERITY_SEMANTICS: Final[dict[str, str]] = {
@@ -96,14 +134,16 @@ TOOL_STATUS_ICONS: Final[dict[str, str]] = {
 
 
 SWEEP_COLORS: Final[list[str]] = [
-    "#000000",
-    "#031a09",
-    "#052e16",
-    "#0d4a2a",
-    "#15803d",
-    "#dc2626",
-    "#4ade80",
-    "#86efac",
+    CANVAS_BG,
+    SURFACE_BG,
+    SURFACE_ALT_BG,
+    BORDER_SLATE,
+    INFO_SKY,
+    PRIMARY_CYAN,
+    SUCCESS_EMERALD,
+    SECONDARY_VIOLET,
+    WARNING_AMBER,
+    DANGER_ROSE,
 ]
 
 

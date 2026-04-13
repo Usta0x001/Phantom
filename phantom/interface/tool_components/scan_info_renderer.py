@@ -3,6 +3,7 @@ from typing import Any, ClassVar
 from rich.text import Text
 from textual.widgets import Static
 
+from ..tui_design_system import SECONDARY_VIOLET, SUCCESS_EMERALD
 from .base_renderer import BaseToolRenderer
 from .registry import register_tool_renderer
 
@@ -19,7 +20,7 @@ class ScanStartInfoRenderer(BaseToolRenderer):
         targets = args.get("targets", [])
 
         text = Text()
-        text.append("◈ ", style="#22c55e")
+        text.append("◈ ", style=SUCCESS_EMERALD)
         text.append("Starting penetration test")
 
         if len(targets) == 1:
@@ -56,9 +57,9 @@ class SubagentStartInfoRenderer(BaseToolRenderer):
         task = str(args.get("task", ""))
 
         text = Text()
-        text.append("◈ ", style="#a78bfa")
+        text.append("◈ ", style=SECONDARY_VIOLET)
         text.append("subagent ", style="dim")
-        text.append(name, style="bold #a78bfa")
+        text.append(name, style=f"bold {SECONDARY_VIOLET}")
 
         if task:
             text.append("\n  ")

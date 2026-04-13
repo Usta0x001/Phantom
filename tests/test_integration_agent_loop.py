@@ -216,6 +216,67 @@ class TestMemoryCompression:
         assert any("SQL error" in text for text in anchor_texts)
         assert any("script" in text.lower() for text in anchor_texts)
 
+    def test_compression_records_structured_state(self):
+        """Verify compression stores structured facts and delta memory."""
+        from phantom.llm.memory_compressor import MemoryCompressor
+        from phantom.agents.enhanced_state import EnhancedAgentState
+        from phantom.models.scan import ScanPhase
+
+        state = EnhancedAgentState(task="test")
+        state.current_phase = ScanPhase.EXPLOITATION
+        state.add_message("user", "Test /api/login with ' OR '1'='1 --")
+        state.add_message("assistant", "SQL error: syntax error near 'OR'")
+        state.add_message("assistant", "Found SSRF -> metadata access at /api/proxy")
+        state.add_message("user", "Continue")
+
+        state.compression_state = {"last_digest": ["old-digest"]}
+
+        compressor = MemoryCompressor(model_name="claude-3-haiku-20240307")
+        compressed = compressor.compress_history(state.get_conversation_history(), state)
+
+        assert compressed
+        assert state.compression_state.get("structured_facts") is not None
+        assert state.compression_state.get("delta_facts") is not None
+        assert state.compression_state.get("last_keep_recent") >= 15
+        assert any(
+            fact.get("type") in {"url", "payload", "chain"}
+            for fact in state.compression_state.get("structured_facts", [])
+        )
+
+    def test_anchor_retention_prefers_evidence(self):
+        """Verify anchor retention prefers high-evidence findings."""
+        from phantom.agents.state import AgentState
+
+        state = AgentState(task="test")
+        for i in range(20):
+            state.add_finding_anchor({"text": f"Weak finding {i}", "key": f"w{i}", "evidence_score": 0.1})
+
+        state.add_finding_anchor({"text": "CRITICAL: SQLi confirmed", "key": "strong", "evidence_score": 10.0})
+
+        assert len(state.finding_anchors) == state.MAX_FINDING_ANCHORS
+        assert any(a.get("key") == "strong" for a in state.finding_anchors)
+
+    def test_rare_high_value_anchor_survives_compression_cycles(self):
+        """Verify a rare high-value anchor survives normal compression churn."""
+        from phantom.agents.state import AgentState
+        from phantom.llm.memory_compressor import MemoryCompressor
+
+        state = AgentState(task="test")
+        state.add_finding_anchor({
+            "text": "CRITICAL: Rare auth bypass confirmed on /admin/export",
+            "key": "rare-auth",
+            "evidence_score": 20.0,
+        })
+
+        compressor = MemoryCompressor(model_name="claude-3-haiku-20240307")
+        messages = [{"role": "user", "content": f"msg {i} /api/test"} for i in range(140)]
+
+        # Stress several compression cycles; the anchor should persist because it's high-value.
+        for _ in range(state.MAX_ANCHOR_AGE_CYCLES - 1):
+            compressor.compress_history(messages, state)
+
+        assert any(a.get("key") == "rare-auth" for a in state.finding_anchors)
+
 
 class TestCorrelationEngine:
     """Test vulnerability chain correlation."""

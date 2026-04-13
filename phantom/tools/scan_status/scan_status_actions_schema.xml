@@ -1,0 +1,13 @@
+<tools>
+  <tool name="get_scan_status">
+    <description>Return compressed scan state, progress, findings, and next-action recommendation.</description>
+    <parameters>
+      <parameter name="include_recommendations" type="boolean" required="false">
+        <description>Whether to include suggested next action.</description>
+      </parameter>
+      <parameter name="agent_id" type="string" required="false">
+        <description>Optional agent ID for agent-scoped context resolution.</description>
+      </parameter>
+    </parameters>
+  </tool>
+</tools>

@@ -3,6 +3,7 @@ from typing import Any, ClassVar
 from rich.text import Text
 from textual.widgets import Static
 
+from ..tui_design_system import SECONDARY_VIOLET
 from .base_renderer import BaseToolRenderer
 from .registry import register_tool_renderer
 
@@ -19,7 +20,7 @@ class ThinkRenderer(BaseToolRenderer):
 
         text = Text()
         text.append("🧠 ")
-        text.append("Thinking", style="bold #a855f7")
+        text.append("Thinking", style=f"bold {SECONDARY_VIOLET}")
         text.append("\n  ")
 
         if thought:

@@ -675,15 +675,12 @@ PAYLOAD GENERATORS (Phantom's advantage over other tools):
 - generate_cmd_injection_payloads(os_type, evasion)
 - generate_ssti_payloads(engine)
 - generate_xxe_payloads(mode)
-- generate_ai_payloads(vuln_type, context_dict, count) - AI-generated dynamic payloads (NEW)
 - cve_search(vendor, min_cvss) - Search NVD for latest CVE exploits
 - execute_fuzz_batch(base_url, method, payloads, injection_point) - Run AI-generated payloads in parallel
 
-AI PAYLOAD GENERATION (NEW - Use when static payloads fail):
-- Use generate_ai_payloads() to generate context-aware payloads on-the-fly
-- Provides better coverage against WAFs and modern protections
-- Input: vuln_type (sqli/xss/rce/ssti/xxe/cmd_injection), context (framework, WAF, failed attempts)
-- Output: 20+ dynamically generated payloads
+AI PAYLOAD GENERATION:
+- Use generate_smart_payloads() with rich context (framework, WAF, database, hypothesis_id)
+- Then execute payload sets via execute_fuzz_batch() when batch testing is needed
 
 CVE-BASED PAYLOADS:
 - Use cve_search to find latest exploits for detected technology
@@ -730,8 +727,7 @@ COVERAGE TRACKING (Enhancement):
 - Returns FACTS not commands - you decide what to test
 
 WEB RESEARCH:
-- web_search: Uses Perplexity AI (if API key set) OR DuckDuckGo (free fallback - no config needed!)
-- Automatic fallback: If no PERPLEXITY_API_KEY, uses DuckDuckGo for FREE searches
+- web_search: available when Perplexity integration is enabled in runtime config
 - Use to stay current with exploitation techniques, CVE research, WAF bypasses
 
 {% if phantom_port_range %}

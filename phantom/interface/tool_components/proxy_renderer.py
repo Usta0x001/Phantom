@@ -3,6 +3,16 @@ from typing import Any, ClassVar
 from rich.text import Text
 from textual.widgets import Static
 
+from ..tui_design_system import (
+    ACCENT_PURPLE,
+    ACTION_BLUE,
+    ACTION_CYAN,
+    DANGER_RED,
+    SUCCESS_GREEN,
+    WARNING_BRIGHT_ORANGE,
+    WARNING_GOLD,
+    WARNING_ORANGE,
+)
 from .base_renderer import BaseToolRenderer
 from .registry import register_tool_renderer
 
@@ -17,7 +27,6 @@ def _truncate(text: str, max_len: int = 80) -> str:
 
 
 def _sanitize(text: str, max_len: int = 150) -> str:
-    """Remove newlines and truncate text."""
     clean = text.replace("\n", " ").replace("\r", "").replace("\t", " ")
     return _truncate(clean, max_len)
 
@@ -26,13 +35,13 @@ def _status_style(code: int | None) -> str:
     if code is None:
         return "dim"
     if 200 <= code < 300:
-        return "#22c55e"  # green
+        return SUCCESS_GREEN
     if 300 <= code < 400:
-        return "#eab308"  # yellow
+        return WARNING_GOLD
     if 400 <= code < 500:
-        return "#f97316"  # orange
+        return WARNING_BRIGHT_ORANGE
     if code >= 500:
-        return "#ef4444"  # red
+        return DANGER_RED
     return "dim"
 
 
@@ -42,7 +51,7 @@ class ListRequestsRenderer(BaseToolRenderer):
     css_classes: ClassVar[list[str]] = ["tool-call", "proxy-tool"]
 
     @classmethod
-    def render(cls, tool_data: dict[str, Any]) -> Static:  # noqa: PLR0912  # noqa: PLR0912
+    def render(cls, tool_data: dict[str, Any]) -> Static:
         args = tool_data.get("args", {})
         result = tool_data.get("result")
         status = tool_data.get("status", "running")
@@ -54,12 +63,12 @@ class ListRequestsRenderer(BaseToolRenderer):
 
         text = Text()
         text.append(PROXY_ICON, style="dim")
-        text.append(" listing requests", style="#06b6d4")
+        text.append(" listing requests", style=ACTION_CYAN)
 
         if httpql_filter:
             text.append(f"  where {_truncate(httpql_filter, 150)}", style="dim italic")
 
-        meta_parts = []
+        meta_parts: list[str] = []
         if sort_by and sort_by != "timestamp":
             meta_parts.append(f"by:{sort_by}")
         if sort_order and sort_order != "desc":
@@ -71,7 +80,7 @@ class ListRequestsRenderer(BaseToolRenderer):
 
         if status == "completed" and isinstance(result, dict):
             if "error" in result:
-                text.append(f"  error: {_sanitize(str(result['error']), 150)}", style="#ef4444")
+                text.append(f"  error: {_sanitize(str(result['error']), 150)}", style=DANGER_RED)
             else:
                 total = result.get("total_count", 0)
                 requests = result.get("requests", [])
@@ -83,6 +92,7 @@ class ListRequestsRenderer(BaseToolRenderer):
                     for i, req in enumerate(requests[:MAX_REQUESTS_DISPLAY]):
                         if not isinstance(req, dict):
                             continue
+
                         method = req.get("method", "?")
                         host = req.get("host", "")
                         path = req.get("path", "/")
@@ -90,7 +100,7 @@ class ListRequestsRenderer(BaseToolRenderer):
                         code = resp.get("statusCode") if isinstance(resp, dict) else None
 
                         text.append("  ")
-                        text.append(f"{method:6}", style="#a78bfa")
+                        text.append(f"{method:6}", style=ACCENT_PURPLE)
                         text.append(f" {_truncate(host + path, 180)}", style="dim")
                         if code:
                             text.append(f" {code}", style=_status_style(code))
@@ -105,8 +115,7 @@ class ListRequestsRenderer(BaseToolRenderer):
                             style="dim italic",
                         )
 
-        css_classes = cls.get_css_classes(status)
-        return Static(text, classes=css_classes)
+        return Static(text, classes=cls.get_css_classes(status))
 
 
 @register_tool_renderer
@@ -115,7 +124,7 @@ class ViewRequestRenderer(BaseToolRenderer):
     css_classes: ClassVar[list[str]] = ["tool-call", "proxy-tool"]
 
     @classmethod
-    def render(cls, tool_data: dict[str, Any]) -> Static:  # noqa: PLR0912, PLR0915
+    def render(cls, tool_data: dict[str, Any]) -> Static:
         args = tool_data.get("args", {})
         result = tool_data.get("result")
         status = tool_data.get("status", "running")
@@ -128,7 +137,7 @@ class ViewRequestRenderer(BaseToolRenderer):
         text.append(PROXY_ICON, style="dim")
 
         action = "searching" if search_pattern else "viewing"
-        text.append(f" {action} {part}", style="#06b6d4")
+        text.append(f" {action} {part}", style=ACTION_CYAN)
 
         if request_id:
             text.append(f" #{request_id}", style="dim")
@@ -138,7 +147,7 @@ class ViewRequestRenderer(BaseToolRenderer):
 
         if status == "completed" and isinstance(result, dict):
             if "error" in result:
-                text.append(f"  error: {_sanitize(str(result['error']), 150)}", style="#ef4444")
+                text.append(f"  error: {_sanitize(str(result['error']), 150)}", style=DANGER_RED)
             elif "matches" in result:
                 matches = result.get("matches", [])
                 total = result.get("total_matches", len(matches))
@@ -149,18 +158,15 @@ class ViewRequestRenderer(BaseToolRenderer):
                     for i, m in enumerate(matches[:5]):
                         if not isinstance(m, dict):
                             continue
-                        before = m.get("before", "") or ""
-                        match_text = m.get("match", "") or ""
-                        after = m.get("after", "") or ""
 
-                        before = before.replace("\n", " ").replace("\r", "")[-100:]
-                        after = after.replace("\n", " ").replace("\r", "")[:100]
+                        before = (m.get("before", "") or "").replace("\n", " ").replace("\r", "")[-100:]
+                        match_text = m.get("match", "") or ""
+                        after = (m.get("after", "") or "").replace("\n", " ").replace("\r", "")[:100]
 
                         text.append("  ")
-
                         if before:
                             text.append(f"...{before}", style="dim")
-                        text.append(match_text, style="#22c55e bold")
+                        text.append(match_text, style=f"bold {SUCCESS_GREEN}")
                         if after:
                             text.append(f"{after}...", style="dim")
 
@@ -191,8 +197,7 @@ class ViewRequestRenderer(BaseToolRenderer):
                         text.append("\n")
                         text.append("  ... more content available", style="dim italic")
 
-        css_classes = cls.get_css_classes(status)
-        return Static(text, classes=css_classes)
+        return Static(text, classes=cls.get_css_classes(status))
 
 
 @register_tool_renderer
@@ -201,7 +206,7 @@ class SendRequestRenderer(BaseToolRenderer):
     css_classes: ClassVar[list[str]] = ["tool-call", "proxy-tool"]
 
     @classmethod
-    def render(cls, tool_data: dict[str, Any]) -> Static:  # noqa: PLR0912, PLR0915
+    def render(cls, tool_data: dict[str, Any]) -> Static:
         args = tool_data.get("args", {})
         result = tool_data.get("result")
         status = tool_data.get("status", "running")
@@ -213,23 +218,23 @@ class SendRequestRenderer(BaseToolRenderer):
 
         text = Text()
         text.append(PROXY_ICON, style="dim")
-        text.append(" sending request", style="#06b6d4")
+        text.append(" sending request", style=ACTION_CYAN)
 
         text.append("\n")
-        text.append("  >> ", style="#3b82f6")
-        text.append(method, style="#a78bfa")
+        text.append("  >> ", style=ACTION_BLUE)
+        text.append(method, style=ACCENT_PURPLE)
         text.append(f" {_truncate(url, 180)}", style="dim")
 
         if req_headers and isinstance(req_headers, dict):
             for k, v in list(req_headers.items())[:5]:
                 text.append("\n")
-                text.append("  >> ", style="#3b82f6")
+                text.append("  >> ", style=ACTION_BLUE)
                 text.append(f"{k}: ", style="dim")
                 text.append(_sanitize(str(v), 150), style="dim")
 
         if req_body and isinstance(req_body, str):
             text.append("\n")
-            text.append("  >> ", style="#3b82f6")
+            text.append("  >> ", style=ACTION_BLUE)
             body_lines = req_body.split("\n")[:4]
             for i, line in enumerate(body_lines):
                 if i > 0:
@@ -241,13 +246,13 @@ class SendRequestRenderer(BaseToolRenderer):
 
         if status == "completed" and isinstance(result, dict):
             if "error" in result:
-                text.append(f"\n  error: {_sanitize(str(result['error']), 150)}", style="#ef4444")
+                text.append(f"\n  error: {_sanitize(str(result['error']), 150)}", style=DANGER_RED)
             else:
                 code = result.get("status_code")
                 time_ms = result.get("response_time_ms")
 
                 text.append("\n")
-                text.append("  << ", style="#22c55e")
+                text.append("  << ", style=SUCCESS_GREEN)
                 if code:
                     text.append(f"{code}", style=_status_style(code))
                 if time_ms:
@@ -258,15 +263,14 @@ class SendRequestRenderer(BaseToolRenderer):
                     lines = body.split("\n")[:6]
                     for line in lines:
                         text.append("\n")
-                        text.append("  << ", style="#22c55e")
+                        text.append("  << ", style=SUCCESS_GREEN)
                         text.append(_truncate(line, MAX_LINE_LENGTH - 5), style="dim")
 
                     if len(body.split("\n")) > 6:
                         text.append("\n")
                         text.append("  ...", style="dim italic")
 
-        css_classes = cls.get_css_classes(status)
-        return Static(text, classes=css_classes)
+        return Static(text, classes=cls.get_css_classes(status))
 
 
 @register_tool_renderer
@@ -275,7 +279,7 @@ class RepeatRequestRenderer(BaseToolRenderer):
     css_classes: ClassVar[list[str]] = ["tool-call", "proxy-tool"]
 
     @classmethod
-    def render(cls, tool_data: dict[str, Any]) -> Static:  # noqa: PLR0912, PLR0915
+    def render(cls, tool_data: dict[str, Any]) -> Static:
         args = tool_data.get("args", {})
         result = tool_data.get("result")
         status = tool_data.get("status", "running")
@@ -285,7 +289,7 @@ class RepeatRequestRenderer(BaseToolRenderer):
 
         text = Text()
         text.append(PROXY_ICON, style="dim")
-        text.append(" repeating request", style="#06b6d4")
+        text.append(" repeating request", style=ACTION_CYAN)
 
         if request_id:
             text.append(f" #{request_id}", style="dim")
@@ -295,30 +299,30 @@ class RepeatRequestRenderer(BaseToolRenderer):
 
             if "url" in modifications:
                 text.append("\n")
-                text.append("  >> ", style="#3b82f6")
+                text.append("  >> ", style=ACTION_BLUE)
                 text.append(f"url: {_truncate(str(modifications['url']), 180)}", style="dim")
 
             if "headers" in modifications and isinstance(modifications["headers"], dict):
                 for k, v in list(modifications["headers"].items())[:5]:
                     text.append("\n")
-                    text.append("  >> ", style="#3b82f6")
+                    text.append("  >> ", style=ACTION_BLUE)
                     text.append(f"{k}: {_sanitize(str(v), 150)}", style="dim")
 
             if "cookies" in modifications and isinstance(modifications["cookies"], dict):
                 for k, v in list(modifications["cookies"].items())[:5]:
                     text.append("\n")
-                    text.append("  >> ", style="#3b82f6")
+                    text.append("  >> ", style=ACTION_BLUE)
                     text.append(f"cookie {k}={_sanitize(str(v), 100)}", style="dim")
 
             if "params" in modifications and isinstance(modifications["params"], dict):
                 for k, v in list(modifications["params"].items())[:5]:
                     text.append("\n")
-                    text.append("  >> ", style="#3b82f6")
+                    text.append("  >> ", style=ACTION_BLUE)
                     text.append(f"param {k}={_sanitize(str(v), 100)}", style="dim")
 
             if "body" in modifications and isinstance(modifications["body"], str):
                 text.append("\n")
-                text.append("  >> ", style="#3b82f6")
+                text.append("  >> ", style=ACTION_BLUE)
                 body_lines = modifications["body"].split("\n")[:4]
                 for i, line in enumerate(body_lines):
                     if i > 0:
@@ -333,7 +337,7 @@ class RepeatRequestRenderer(BaseToolRenderer):
 
         if status == "completed" and isinstance(result, dict):
             if "error" in result:
-                text.append(f"\n  error: {_sanitize(str(result['error']), 150)}", style="#ef4444")
+                text.append(f"\n  error: {_sanitize(str(result['error']), 150)}", style=DANGER_RED)
             else:
                 req = result.get("request", {})
                 method = req.get("method", "")
@@ -342,14 +346,14 @@ class RepeatRequestRenderer(BaseToolRenderer):
                 time_ms = result.get("response_time_ms")
 
                 text.append("\n")
-                text.append("  >> ", style="#3b82f6")
+                text.append("  >> ", style=ACTION_BLUE)
                 if method:
-                    text.append(f"{method} ", style="#a78bfa")
+                    text.append(f"{method} ", style=ACCENT_PURPLE)
                 if url:
                     text.append(_truncate(url, 180), style="dim")
 
                 text.append("\n")
-                text.append("  << ", style="#22c55e")
+                text.append("  << ", style=SUCCESS_GREEN)
                 if code:
                     text.append(f"{code}", style=_status_style(code))
                 if time_ms:
@@ -360,15 +364,14 @@ class RepeatRequestRenderer(BaseToolRenderer):
                     lines = body.split("\n")[:5]
                     for line in lines:
                         text.append("\n")
-                        text.append("  << ", style="#22c55e")
+                        text.append("  << ", style=SUCCESS_GREEN)
                         text.append(_truncate(line, MAX_LINE_LENGTH - 5), style="dim")
 
                     if len(body.split("\n")) > 5:
                         text.append("\n")
                         text.append("  ...", style="dim italic")
 
-        css_classes = cls.get_css_classes(status)
-        return Static(text, classes=css_classes)
+        return Static(text, classes=cls.get_css_classes(status))
 
 
 @register_tool_renderer
@@ -377,7 +380,7 @@ class ScopeRulesRenderer(BaseToolRenderer):
     css_classes: ClassVar[list[str]] = ["tool-call", "proxy-tool"]
 
     @classmethod
-    def render(cls, tool_data: dict[str, Any]) -> Static:  # noqa: PLR0912, PLR0915
+    def render(cls, tool_data: dict[str, Any]) -> Static:
         args = tool_data.get("args", {})
         result = tool_data.get("result")
         status = tool_data.get("status", "running")
@@ -399,7 +402,7 @@ class ScopeRulesRenderer(BaseToolRenderer):
             "delete": "deleting",
         }
         action_text = action_map.get(action, action + "ing" if action else "managing")
-        text.append(f" {action_text} proxy scope", style="#06b6d4")
+        text.append(f" {action_text} proxy scope", style=ACTION_CYAN)
 
         if scope_name:
             text.append(f" '{_truncate(scope_name, 50)}'", style="dim italic")
@@ -419,7 +422,7 @@ class ScopeRulesRenderer(BaseToolRenderer):
 
         if status == "completed" and isinstance(result, dict):
             if "error" in result:
-                text.append(f"  error: {_sanitize(str(result['error']), 150)}", style="#ef4444")
+                text.append(f"  error: {_sanitize(str(result['error']), 150)}", style=DANGER_RED)
             elif "scopes" in result:
                 scopes = result.get("scopes", [])
                 text.append(f"  [{len(scopes)} scopes]", style="dim")
@@ -432,7 +435,7 @@ class ScopeRulesRenderer(BaseToolRenderer):
                         name = scope.get("name", "?")
                         allow = scope.get("allowlist") or []
                         text.append("  ")
-                        text.append(_truncate(str(name), 40), style="#22c55e")
+                        text.append(_truncate(str(name), 40), style=SUCCESS_GREEN)
                         if allow and isinstance(allow, list):
                             allow_str = ", ".join(_truncate(str(a), 30) for a in allow[:3])
                             text.append(f"  {allow_str}", style="dim")
@@ -455,10 +458,9 @@ class ScopeRulesRenderer(BaseToolRenderer):
                         text.append(f"\n  deny: {deny_str}", style="dim")
 
             elif "message" in result:
-                text.append(f"  {result['message']}", style="#22c55e")
+                text.append(f"  {result['message']}", style=SUCCESS_GREEN)
 
-        css_classes = cls.get_css_classes(status)
-        return Static(text, classes=css_classes)
+        return Static(text, classes=cls.get_css_classes(status))
 
 
 @register_tool_renderer
@@ -467,7 +469,7 @@ class ListSitemapRenderer(BaseToolRenderer):
     css_classes: ClassVar[list[str]] = ["tool-call", "proxy-tool"]
 
     @classmethod
-    def render(cls, tool_data: dict[str, Any]) -> Static:  # noqa: PLR0912, PLR0915
+    def render(cls, tool_data: dict[str, Any]) -> Static:
         args = tool_data.get("args", {})
         result = tool_data.get("result")
         status = tool_data.get("status", "running")
@@ -478,12 +480,12 @@ class ListSitemapRenderer(BaseToolRenderer):
 
         text = Text()
         text.append(PROXY_ICON, style="dim")
-        text.append(" listing sitemap", style="#06b6d4")
+        text.append(" listing sitemap", style=ACTION_CYAN)
 
         if parent_id:
             text.append(f"  under #{_truncate(str(parent_id), 20)}", style="dim")
 
-        meta_parts = []
+        meta_parts: list[str] = []
         if scope_id and isinstance(scope_id, str):
             meta_parts.append(f"scope:{scope_id[:8]}")
         if depth and depth != "DIRECT":
@@ -493,7 +495,7 @@ class ListSitemapRenderer(BaseToolRenderer):
 
         if status == "completed" and isinstance(result, dict):
             if "error" in result:
-                text.append(f"  error: {_sanitize(str(result['error']), 150)}", style="#ef4444")
+                text.append(f"  error: {_sanitize(str(result['error']), 150)}", style=DANGER_RED)
             else:
                 total = result.get("total_count", 0)
                 entries = result.get("entries", [])
@@ -511,9 +513,9 @@ class ListSitemapRenderer(BaseToolRenderer):
                         req = entry.get("request") or {}
 
                         kind_style = {
-                            "DOMAIN": "#f59e0b",
-                            "DIRECTORY": "#3b82f6",
-                            "REQUEST": "#22c55e",
+                            "DOMAIN": WARNING_ORANGE,
+                            "DIRECTORY": ACTION_BLUE,
+                            "REQUEST": SUCCESS_GREEN,
                         }.get(kind, "dim")
 
                         text.append("  ")
@@ -525,7 +527,7 @@ class ListSitemapRenderer(BaseToolRenderer):
                             method = req.get("method", "")
                             code = req.get("status")
                             if method:
-                                text.append(f" {method}", style="#a78bfa")
+                                text.append(f" {method}", style=ACCENT_PURPLE)
                             if code:
                                 text.append(f" {code}", style=_status_style(code))
 
@@ -537,12 +539,9 @@ class ListSitemapRenderer(BaseToolRenderer):
 
                     if len(entries) > MAX_REQUESTS_DISPLAY:
                         text.append("\n")
-                        text.append(
-                            f"  ... +{len(entries) - MAX_REQUESTS_DISPLAY} more", style="dim italic"
-                        )
+                        text.append(f"  ... +{len(entries) - MAX_REQUESTS_DISPLAY} more", style="dim italic")
 
-        css_classes = cls.get_css_classes(status)
-        return Static(text, classes=css_classes)
+        return Static(text, classes=cls.get_css_classes(status))
 
 
 @register_tool_renderer
@@ -551,7 +550,7 @@ class ViewSitemapEntryRenderer(BaseToolRenderer):
     css_classes: ClassVar[list[str]] = ["tool-call", "proxy-tool"]
 
     @classmethod
-    def render(cls, tool_data: dict[str, Any]) -> Static:  # noqa: PLR0912
+    def render(cls, tool_data: dict[str, Any]) -> Static:
         args = tool_data.get("args", {})
         result = tool_data.get("result")
         status = tool_data.get("status", "running")
@@ -560,14 +559,14 @@ class ViewSitemapEntryRenderer(BaseToolRenderer):
 
         text = Text()
         text.append(PROXY_ICON, style="dim")
-        text.append(" viewing sitemap", style="#06b6d4")
+        text.append(" viewing sitemap", style=ACTION_CYAN)
 
         if entry_id:
             text.append(f" #{_truncate(str(entry_id), 20)}", style="dim")
 
         if status == "completed" and isinstance(result, dict):
             if "error" in result:
-                text.append(f"  error: {_sanitize(str(result['error']), 150)}", style="#ef4444")
+                text.append(f"  error: {_sanitize(str(result['error']), 150)}", style=DANGER_RED)
             elif "entry" in result:
                 entry = result.get("entry") or {}
                 if not isinstance(entry, dict):
@@ -594,7 +593,7 @@ class ViewSitemapEntryRenderer(BaseToolRenderer):
                         code = req.get("status")
 
                         text.append("  ")
-                        text.append(f"{method:6}", style="#a78bfa")
+                        text.append(f"{method:6}", style=ACCENT_PURPLE)
                         text.append(f" {_truncate(path, 180)}", style="dim")
                         if code:
                             text.append(f" {code}", style=_status_style(code))
@@ -606,5 +605,4 @@ class ViewSitemapEntryRenderer(BaseToolRenderer):
                         text.append("\n")
                         text.append(f"  ... +{len(related_reqs) - 10} more", style="dim italic")
 
-        css_classes = cls.get_css_classes(status)
-        return Static(text, classes=css_classes)
+        return Static(text, classes=cls.get_css_classes(status))

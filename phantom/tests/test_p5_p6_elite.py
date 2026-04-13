@@ -321,6 +321,88 @@ class TestP6PayloadContext(unittest.TestCase):
         self.assertIn("payloads", result)
         self.assertGreater(len(result["payloads"]), 0)
         self.assertEqual(result["vuln_class"], "sqli")
+
+    def test_generate_smart_payloads_uses_ledger_learning(self):
+        """Smart payload generation should reuse learned payloads when available."""
+        from phantom.agents.hypothesis_ledger import HypothesisLedger
+        from phantom.agents.correlation_engine import CorrelationEngine
+        from phantom.tools.hypothesis.hypothesis_actions import set_ledger
+        from phantom.tools.payload_gen.payload_gen_actions import generate_smart_payloads
+
+        ledger = HypothesisLedger()
+        engine = CorrelationEngine()
+        ledger.set_correlation_engine(engine)
+        set_ledger(ledger, "default")
+
+        hyp_id = ledger.add("/api/login::username", "sqli")
+        ledger.record_result(hyp_id, "confirmed", "SQLi found", "' OR 1=1--")
+
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+
+        result = loop.run_until_complete(
+            generate_smart_payloads(
+                vuln_class="sqli",
+                url="/api/login",
+                parameter="username",
+                hypothesis_id=hyp_id,
+                max_payloads=5,
+            )
+        )
+
+        self.assertTrue(result["success"])
+        self.assertGreater(len(result["payloads"]), 0)
+        self.assertTrue(any(p["payload"] == "' OR 1=1--" for p in result["payloads"]))
+        self.assertTrue(any(p.get("learned_from") for p in result["payloads"]))
+
+    def test_generate_smart_payloads_reflects_correlation_family_scores(self):
+        """Correlation learning should boost payloads from successful families."""
+        from phantom.agents.hypothesis_ledger import HypothesisLedger
+        from phantom.agents.correlation_engine import CorrelationEngine
+        from phantom.tools.hypothesis.hypothesis_actions import set_ledger
+        from phantom.tools.payload_gen.payload_gen_actions import generate_smart_payloads
+
+        ledger = HypothesisLedger()
+        engine = CorrelationEngine()
+        ledger.set_correlation_engine(engine)
+        set_ledger(ledger, "default")
+
+        hyp_id = ledger.add("/api/login::username", "sqli")
+        ledger.record_result(hyp_id, "confirmed", "UNION worked", "' UNION SELECT NULL--")
+
+        for _ in range(5):
+            engine.record_outcome(
+                vuln_class="sqli",
+                surface="/api/login::username",
+                outcome="confirmed",
+                payload_family="union",
+            )
+            engine.record_outcome(
+                vuln_class="sqli",
+                surface="/api/login::username",
+                outcome="rejected",
+                payload_family="boolean",
+            )
+
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+
+        result = loop.run_until_complete(
+            generate_smart_payloads(
+                vuln_class="sqli",
+                url="/api/login",
+                parameter="username",
+                hypothesis_id=hyp_id,
+                max_payloads=8,
+            )
+        )
+
+        self.assertTrue(result["success"])
+        self.assertGreater(len(result["payloads"]), 0)
+
+        top_payload = result["payloads"][0]
+        learned_from = top_payload.get("learned_from") or {}
+        self.assertEqual(learned_from.get("family"), "union")
     
     def test_generate_smart_payloads_invalid_class(self):
         """Smart payload generation with invalid class should fail gracefully."""

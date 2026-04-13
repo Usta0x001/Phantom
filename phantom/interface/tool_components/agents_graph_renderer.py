@@ -3,6 +3,7 @@ from typing import Any, ClassVar
 from rich.text import Text
 from textual.widgets import Static
 
+from ..tui_design_system import ACCENT_PURPLE, ACTION_BLUE, DANGER_RED, NEUTRAL_STEEL, SUCCESS_GREEN
 from .base_renderer import BaseToolRenderer
 from .registry import register_tool_renderer
 
@@ -17,7 +18,7 @@ class ViewAgentGraphRenderer(BaseToolRenderer):
         status = tool_data.get("status", "unknown")
 
         text = Text()
-        text.append("◇ ", style="#a78bfa")
+        text.append("◇ ", style=ACCENT_PURPLE)
         text.append("viewing agents graph", style="dim")
 
         css_classes = cls.get_css_classes(status)
@@ -38,9 +39,9 @@ class CreateAgentRenderer(BaseToolRenderer):
         name = args.get("name", "Agent")
 
         text = Text()
-        text.append("◈ ", style="#a78bfa")
+        text.append("◈ ", style=ACCENT_PURPLE)
         text.append("spawning ", style="dim")
-        text.append(name, style="bold #a78bfa")
+        text.append(name, style=f"bold {ACCENT_PURPLE}")
 
         if task:
             text.append("\n  ")
@@ -64,7 +65,7 @@ class SendMessageToAgentRenderer(BaseToolRenderer):
         agent_id = args.get("agent_id", "")
 
         text = Text()
-        text.append("→ ", style="#60a5fa")
+        text.append("→ ", style=ACTION_BLUE)
         if agent_id:
             text.append(f"to {agent_id}", style="dim")
         else:
@@ -94,11 +95,11 @@ class AgentFinishRenderer(BaseToolRenderer):
         text = Text()
 
         if success:
-            text.append("◆ ", style="#22c55e")
-            text.append("Agent completed", style="bold #22c55e")
+            text.append("◆ ", style=SUCCESS_GREEN)
+            text.append("Agent completed", style=f"bold {SUCCESS_GREEN}")
         else:
-            text.append("◆ ", style="#ef4444")
-            text.append("Agent failed", style="bold #ef4444")
+            text.append("◆ ", style=DANGER_RED)
+            text.append("Agent failed", style=f"bold {DANGER_RED}")
 
         if result_summary:
             text.append("\n  ")
@@ -129,7 +130,7 @@ class WaitForMessageRenderer(BaseToolRenderer):
         reason = args.get("reason", "")
 
         text = Text()
-        text.append("○ ", style="#6b7280")
+        text.append("○ ", style=NEUTRAL_STEEL)
         text.append("waiting", style="dim")
 
         if reason:

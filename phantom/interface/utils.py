@@ -20,6 +20,23 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.text import Text
 
+from .tui_design_system import (
+    ACCENT_LILAC,
+    ACTION_BLUE,
+    DANGER_CRIMSON,
+    DANGER_RED,
+    INFO_BLUE,
+    SUCCESS_GREEN,
+    SUCCESS_SOFT,
+    WARNING_AMBER,
+    WARNING_GOLD,
+    WARNING_ORANGE,
+    NEUTRAL_STEEL,
+    NEUTRAL_DARK,
+    TEXT_MUTED,
+    TEXT_SOFT,
+)
+
 
 def _strip_internal_paths(text: str) -> str:
     result = re.sub(r"/workspace/[A-Za-z0-9_./\\-]*", "[REDACTED_PATH]", text)
@@ -40,36 +57,36 @@ def format_token_count(count: float) -> str:
 # Display utilities
 def get_severity_color(severity: str) -> str:
     severity_colors = {
-        "critical": "#dc2626",
-        "high": "#ea580c",
-        "medium": "#d97706",
-        "low": "#65a30d",
-        "info": "#0284c7",
+        "critical": DANGER_CRIMSON,
+        "high": WARNING_ORANGE,
+        "medium": WARNING_AMBER,
+        "low": SUCCESS_GREEN,
+        "info": INFO_BLUE,
     }
-    return severity_colors.get(severity, "#6b7280")
+    return severity_colors.get(severity, TEXT_MUTED)
 
 
 def get_cvss_color(cvss_score: float) -> str:
     if cvss_score >= 9.0:
-        return "#dc2626"
+        return DANGER_CRIMSON
     if cvss_score >= 7.0:
-        return "#ea580c"
+        return WARNING_ORANGE
     if cvss_score >= 4.0:
-        return "#d97706"
+        return WARNING_AMBER
     if cvss_score >= 0.1:
-        return "#65a30d"
-    return "#6b7280"
+        return SUCCESS_GREEN
+    return TEXT_MUTED
 
 
 def format_vulnerability_report(report: dict[str, Any]) -> Text:  # noqa: PLR0912, PLR0915
     """Format a vulnerability report for CLI display with all rich fields."""
-    field_style = "bold #4ade80"
+    field_style = f"bold {SUCCESS_SOFT}"
 
     text = Text()
 
     title = report.get("title", "")
     if title:
-        text.append("Vulnerability Report", style="bold #ea580c")
+        text.append("Vulnerability Report", style=f"bold {WARNING_ORANGE}")
         text.append("\n\n")
         text.append("Title: ", style=field_style)
         text.append(title)
@@ -221,7 +238,7 @@ def _build_vulnerability_stats(stats_text: Text, tracer: Any) -> None:
             if severity in severity_counts:
                 severity_counts[severity] += 1
 
-        stats_text.append("Vulnerabilities  ", style="bold red")
+        stats_text.append("Vulnerabilities  ", style=f"bold {DANGER_RED}")
 
         severity_parts = []
         for severity in ["critical", "high", "medium", "low", "info"]:
@@ -239,13 +256,13 @@ def _build_vulnerability_stats(stats_text: Text, tracer: Any) -> None:
                 stats_text.append(" | ", style="dim white")
 
         stats_text.append(" (Total: ", style="dim white")
-        stats_text.append(str(vuln_count), style="bold yellow")
+        stats_text.append(str(vuln_count), style=f"bold {WARNING_GOLD}")
         stats_text.append(")", style="dim white")
         stats_text.append("\n")
     else:
-        stats_text.append("Vulnerabilities  ", style="bold #22c55e")
+        stats_text.append("Vulnerabilities  ", style=f"bold {SUCCESS_GREEN}")
         stats_text.append("0", style="bold white")
-        stats_text.append(" (No exploitable vulnerabilities detected)", style="dim green")
+        stats_text.append(" (No exploitable vulnerabilities detected)", style=f"dim {SUCCESS_GREEN}")
         stats_text.append("\n")
 
 
@@ -267,7 +284,7 @@ def _build_llm_stats(stats_text: Text, total_stats: dict[str, Any]) -> None:
 
         if total_stats["cached_tokens"] > 0:
             stats_text.append("  (cached: ", style="dim white")
-            stats_text.append(format_token_count(total_stats["cached_tokens"]), style="dim #86efac")
+            stats_text.append(format_token_count(total_stats["cached_tokens"]), style=f"dim {SUCCESS_SOFT}")
             stats_text.append(")", style="dim white")
 
         stats_text.append("  ·  ", style="dim white")
@@ -277,14 +294,14 @@ def _build_llm_stats(stats_text: Text, total_stats: dict[str, Any]) -> None:
         if total_stats["cost"] > 0:
             stats_text.append(" · ", style="dim white")
             stats_text.append("Cost ", style="dim")
-            stats_text.append(f"${total_stats['cost']:.4f}", style="bold #fbbf24")
+            stats_text.append(f"${total_stats['cost']:.4f}", style=f"bold {WARNING_GOLD}")
     else:
         stats_text.append("\n")
         stats_text.append("LLM Calls ", style="dim")
         stats_text.append("0  ", style="white")
         stats_text.append("· ", style="dim white")
         stats_text.append("Cost ", style="dim")
-        stats_text.append("$0.0000", style="#fbbf24")
+        stats_text.append("$0.0000", style=WARNING_GOLD)
 
 
 def build_final_stats_text(tracer: Any) -> Text:
@@ -368,10 +385,10 @@ def build_live_stats_text(tracer: Any, agent_config: dict[str, Any] | None = Non
     calls_total = total_stats["requests"]
     calls_done = total_stats.get("completed_requests", calls_total)
     if calls_done < calls_total:
-        stats_text.append(f"{calls_done}/{calls_total}", style="bold #fbbf24")
+        stats_text.append(f"{calls_done}/{calls_total}", style=f"bold {WARNING_GOLD}")
         stats_text.append(" done/tried", style="dim")
     else:
-        stats_text.append(str(calls_total), style="bold #fbbf24")
+        stats_text.append(str(calls_total), style=f"bold {WARNING_GOLD}")
 
     stats_text.append("\n")
 
@@ -380,7 +397,7 @@ def build_live_stats_text(tracer: Any, agent_config: dict[str, Any] | None = Non
 
     if total_stats["cached_tokens"] > 0:
         stats_text.append("  (cached: ", style="dim white")
-        stats_text.append(format_token_count(total_stats["cached_tokens"]), style="dim #86efac")
+        stats_text.append(format_token_count(total_stats["cached_tokens"]), style=f"dim {SUCCESS_SOFT}")
         stats_text.append(")", style="dim white")
 
     stats_text.append("  ·  ", style="dim white")
@@ -389,7 +406,7 @@ def build_live_stats_text(tracer: Any, agent_config: dict[str, Any] | None = Non
 
     stats_text.append("  ·  ", style="dim white")
     stats_text.append("Cost ", style="dim")
-    stats_text.append(f"${total_stats['cost']:.4f}", style="#fbbf24")
+    stats_text.append(f"${total_stats['cost']:.4f}", style=WARNING_GOLD)
 
     return stats_text
 
@@ -417,10 +434,10 @@ def build_tui_stats_text(tracer: Any, agent_config: dict[str, Any] | None = None
     completed = total_stats.get("completed_requests", calls)
     stats_text.append("Calls ", style="dim")
     if completed < calls:
-        stats_text.append(f"{completed}/{calls}", style="bold #fbbf24")
+        stats_text.append(f"{completed}/{calls}", style=f"bold {WARNING_GOLD}")
         stats_text.append(" done/tried", style="dim")
     else:
-        stats_text.append(str(calls), style="bold #fbbf24")
+        stats_text.append(str(calls), style=f"bold {WARNING_GOLD}")
 
     # ── Tokens ────────────────────────────────────────────────────────────────
     if calls > 0:
@@ -429,7 +446,7 @@ def build_tui_stats_text(tracer: Any, agent_config: dict[str, Any] | None = None
         stats_text.append(format_token_count(total_stats["input_tokens"]), style="white")
         if total_stats["cached_tokens"] > 0:
             stats_text.append(" (", style="dim white")
-            stats_text.append(format_token_count(total_stats["cached_tokens"]), style="dim #86efac")
+            stats_text.append(format_token_count(total_stats["cached_tokens"]), style=f"dim {SUCCESS_SOFT}")
             stats_text.append(" cached)", style="dim white")
         stats_text.append("  Out ", style="dim")
         stats_text.append(format_token_count(total_stats["output_tokens"]), style="white")
@@ -438,7 +455,7 @@ def build_tui_stats_text(tracer: Any, agent_config: dict[str, Any] | None = None
     if total_stats["cost"] > 0:
         stats_text.append("  ·  ", style="dim white")
         stats_text.append("$", style="dim")
-        stats_text.append(f"{total_stats['cost']:.4f}", style="bold #fbbf24")
+        stats_text.append(f"{total_stats['cost']:.4f}", style=f"bold {WARNING_GOLD}")
 
     stats_text.append("\n")
 
@@ -458,7 +475,7 @@ def build_tui_stats_text(tracer: Any, agent_config: dict[str, Any] | None = None
     )
     if active_tool_count > 0:
         stats_text.append(" (", style="dim white")
-        stats_text.append(str(active_tool_count), style="bold #22c55e")  # Green for active
+        stats_text.append(str(active_tool_count), style=f"bold {SUCCESS_GREEN}")
         stats_text.append(" active)", style="dim white")
 
     # ── Vulnerabilities ───────────────────────────────────────────────────────
@@ -466,7 +483,7 @@ def build_tui_stats_text(tracer: Any, agent_config: dict[str, Any] | None = None
     stats_text.append("  ·  ", style="dim white")
     stats_text.append("Vulns ", style="dim")
     if vuln_count > 0:
-        stats_text.append(str(vuln_count), style="bold #ef4444")
+        stats_text.append(str(vuln_count), style=f"bold {DANGER_RED}")
         # severity breakdown
         severity_counts = {"critical": 0, "high": 0, "medium": 0, "low": 0, "info": 0}
         for report in tracer.vulnerability_reports:
@@ -479,10 +496,10 @@ def build_tui_stats_text(tracer: Any, agent_config: dict[str, Any] | None = None
                 parts.append(f"{sev[0].upper()}:{severity_counts[sev]}")
         if parts:
             stats_text.append(" (", style="dim white")
-            stats_text.append(" ".join(parts), style="dim #fbbf24")
+            stats_text.append(" ".join(parts), style=f"dim {WARNING_GOLD}")
             stats_text.append(")", style="dim white")
     else:
-        stats_text.append("0", style="dim #22c55e")
+        stats_text.append("0", style=f"dim {SUCCESS_GREEN}")
 
     return stats_text
 

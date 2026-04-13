@@ -3,6 +3,7 @@ from typing import Any, ClassVar
 from rich.text import Text
 from textual.widgets import Static
 
+from ..tui_design_system import WARNING_AMBER
 from .base_renderer import BaseToolRenderer
 from .registry import register_tool_renderer
 
@@ -21,7 +22,7 @@ class CreateNoteRenderer(BaseToolRenderer):
         category = args.get("category", "general")
 
         text = Text()
-        text.append("◇ ", style="#fbbf24")
+        text.append("◇ ", style=WARNING_AMBER)
         text.append("note", style="dim")
         text.append(" ")
         text.append(f"({category})", style="dim")
@@ -50,7 +51,7 @@ class DeleteNoteRenderer(BaseToolRenderer):
     @classmethod
     def render(cls, tool_data: dict[str, Any]) -> Static:  # noqa: ARG003
         text = Text()
-        text.append("◇ ", style="#fbbf24")
+        text.append("◇ ", style=WARNING_AMBER)
         text.append("note removed", style="dim")
 
         css_classes = cls.get_css_classes("completed")
@@ -70,7 +71,7 @@ class UpdateNoteRenderer(BaseToolRenderer):
         content = args.get("content")
 
         text = Text()
-        text.append("◇ ", style="#fbbf24")
+        text.append("◇ ", style=WARNING_AMBER)
         text.append("note updated", style="dim")
 
         if title:
@@ -99,7 +100,7 @@ class ListNotesRenderer(BaseToolRenderer):
         result = tool_data.get("result")
 
         text = Text()
-        text.append("◇ ", style="#fbbf24")
+        text.append("◇ ", style=WARNING_AMBER)
         text.append("notes", style="dim")
 
         if isinstance(result, str) and result.strip():

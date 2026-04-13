@@ -1,4 +1,6 @@
 import asyncio
+import hashlib
+import json
 import logging
 import re
 from typing import Any
@@ -6,7 +8,6 @@ from typing import Any
 import litellm
 
 from phantom.config.config import Config, resolve_llm_config
-from phantom.llm.pentager.chain_summarizer import ChainSummarizer
 
 
 logger = logging.getLogger(__name__)
@@ -380,6 +381,183 @@ def _extract_message_text(msg: dict[str, Any]) -> str:
     return str(content)
 
 
+def _message_digest(msg: dict[str, Any]) -> str:
+    try:
+        payload = json.dumps(msg, sort_keys=True, ensure_ascii=False, default=str)
+    except Exception:
+        payload = str(msg)
+    return hashlib.sha256(payload.encode("utf-8", errors="ignore")).hexdigest()
+
+
+def _message_evidence_score(msg: dict[str, Any]) -> float:
+    text = _extract_message_text(msg)
+    if not text:
+        return 0.0
+
+    score = 0.0
+    if _ANCHOR_CONFIRM_PATTERN.search(text):
+        score += 5.0
+    if _ANCHOR_EVIDENCE_PATTERN.search(text):
+        score += 3.0
+    if _ANCHOR_UNCERTAIN_PATTERN.search(text):
+        score += 1.0
+    if _ANCHOR_KEYWORDS_PATTERN.search(text):
+        score += 1.0
+    score += min(len(text) / 250.0, 2.0)
+    return round(score, 2)
+
+
+def _get_phase_retention(agent_state: Any | None) -> tuple[str, int, int]:
+    phase = "recon"
+    scan_mode = "deep"
+    if agent_state is not None:
+        scan_mode = str(getattr(agent_state, "scan_mode", scan_mode)).lower()
+        current_phase = getattr(agent_state, "current_phase", None)
+        if current_phase is not None and hasattr(current_phase, "value"):
+            phase = str(current_phase.value).lower()
+        else:
+            phase = str(getattr(agent_state, "phase", phase)).lower()
+
+    if phase == "recon":
+        return phase, 18, 12
+    if phase == "testing":
+        return phase, 20, 15
+    if phase == "wrap_up":
+        return phase, 24, 15
+    if scan_mode == "stealth":
+        return phase, 22, 10
+    return phase, MIN_RECENT_MESSAGES, 15
+
+
+def _build_structured_summary(
+    messages: list[dict[str, Any]],
+    phase: str,
+    facts: list[dict[str, Any]],
+    delta_facts: list[dict[str, Any]],
+) -> str:
+    lines = [f"PHASE: {phase.upper()}", f"MESSAGES: {len(messages)}", f"FACTS: {len(facts)}"]
+    if delta_facts:
+        lines.append(f"DELTA_FACTS: {len(delta_facts)}")
+    for fact in facts[:12]:
+        lines.append(f"- {fact['type']}: {fact['value'][:180]}")
+    if delta_facts:
+        lines.append("DELTA:")
+        for fact in delta_facts[:8]:
+            lines.append(f"- {fact['type']}: {fact['value'][:180]}")
+    return "\n".join(lines)
+
+
+_FACT_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
+    ("url", re.compile(r"https?://[^\s'\"]+|/[^\s'\"]+")),
+    ("payload", re.compile(r"(?:'\s*or\s*'1'='1|union\s+select|<script[^>]*>|onerror=|onload=|sleep\(|waitfor\s+delay|../|\.\.\\|\$\{[^}]+\}|{{[^}]+}})", re.IGNORECASE)),
+    ("status_code", re.compile(r"\b(?:status\s*code[:=]\s*)?(?:200|201|204|301|302|400|401|403|404|500)\b", re.IGNORECASE)),
+    ("token", re.compile(r"\b(?:bearer|session_id|sessionid|csrf_token|auth_token|api[_-]?key|password|secret)\b", re.IGNORECASE)),
+    ("ip", re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")),
+    ("chain", re.compile(r"\b(?:ssrf\s*->\s*metadata|sqli\s*->\s*rce|pivot|chain|lateral)\b", re.IGNORECASE)),
+)
+
+
+def _extract_structured_facts(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    facts: list[dict[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
+
+    for msg in messages:
+        content = _extract_message_text(msg)
+        if not content:
+            continue
+
+        role = str(msg.get("role", "unknown"))
+        for fact_type, pattern in _FACT_PATTERNS:
+            for match in pattern.finditer(content):
+                value = match.group(0).strip()
+                if not value:
+                    continue
+                key = (fact_type, value.lower())
+                if key in seen:
+                    continue
+                seen.add(key)
+                facts.append({
+                    "type": fact_type,
+                    "value": value[:500],
+                    "role": role,
+                    "source": msg.get("role", "unknown"),
+                })
+
+    return facts
+
+
+def _hash_message(msg: dict[str, Any]) -> str:
+    try:
+        serialized = json.dumps(msg, sort_keys=True, ensure_ascii=False, default=str)
+    except Exception:
+        serialized = str(msg)
+    return __import__("hashlib").sha256(serialized.encode("utf-8", errors="ignore")).hexdigest()
+
+
+def _get_phase_retention_config(agent_state: Any | None) -> dict[str, int]:
+    phase = "recon"
+    scan_mode = "deep"
+    if agent_state is not None:
+        phase = str(getattr(agent_state, "current_phase", getattr(agent_state, "phase", phase))).lower()
+        if hasattr(agent_state, "current_phase") and hasattr(agent_state.current_phase, "value"):
+            phase = str(agent_state.current_phase.value).lower()
+        scan_mode = str(getattr(agent_state, "scan_mode", scan_mode)).lower()
+
+    if phase == "recon":
+        return {"keep_recent": 18, "chunk_size": 12, "anchor_cap": 12}
+    if phase == "testing":
+        return {"keep_recent": 20, "chunk_size": 10, "anchor_cap": 15}
+    if phase == "wrap_up":
+        return {"keep_recent": 24, "chunk_size": 8, "anchor_cap": 15}
+    if scan_mode == "stealth":
+        return {"keep_recent": 22, "chunk_size": 8, "anchor_cap": 10}
+    return {"keep_recent": MIN_RECENT_MESSAGES, "chunk_size": 10, "anchor_cap": 15}
+
+
+def _make_structured_summary(
+    messages: list[dict[str, Any]],
+    *,
+    phase: str,
+    facts: list[dict[str, Any]],
+    delta: list[dict[str, Any]],
+    model: str,
+) -> dict[str, Any]:
+    summary_lines = [
+        f"PHASE: {phase.upper()}",
+        f"MESSAGES: {len(messages)}",
+        f"FACTS: {len(facts)}",
+    ]
+    if delta:
+        summary_lines.append(f"DELTA: {len(delta)} new facts")
+    for fact in facts[:12]:
+        summary_lines.append(f"- {fact['type']}: {fact['value'][:180]}")
+    if delta:
+        summary_lines.append("DELTA FACTS:")
+        for fact in delta[:8]:
+            summary_lines.append(f"- {fact['type']}: {fact['value'][:180]}")
+
+    content = "\n".join(summary_lines)
+    return {
+        "role": "user",
+        "content": f"<context_summary message_count='{len(messages)}' phase='{phase}' format='structured'>{content}</context_summary>",
+        "_structured_facts": facts,
+        "_delta_facts": delta,
+        "_summary_model": model,
+    }
+
+
+def _normalize_summary_message(msg: dict[str, Any], *, phase: str, facts: list[dict[str, Any]], delta: list[dict[str, Any]], model: str) -> dict[str, Any]:
+    normalized = dict(msg)
+    content = str(normalized.get("content", ""))
+    if "<context_summary" not in content:
+        content = f"<context_summary message_count='{len(facts)}' phase='{phase}' format='structured'>{content}</context_summary>"
+        normalized["content"] = content
+    normalized["_structured_facts"] = facts
+    normalized["_delta_facts"] = delta
+    normalized["_summary_model"] = model
+    return normalized
+
+
 def _summarize_messages(
     messages: list[dict[str, Any]],
     model: str,
@@ -609,12 +787,14 @@ def _handle_images(
     max_images: int,
     max_total_image_bytes: int,
 ) -> tuple[int, int, int]:
+    messages = [{**msg} for msg in messages]
     image_count = 0
     kept_image_bytes = 0
     evicted = 0
     for msg in reversed(messages):
         content = msg.get("content", [])
         if isinstance(content, list):
+            copied_content = [dict(item) if isinstance(item, dict) else item for item in content]
             for index, item in enumerate(content):
                 if isinstance(item, dict) and item.get("type") == "image_url":
                     image_url = item.get("image_url", {})
@@ -624,7 +804,7 @@ def _handle_images(
                         url = str(image_url)
                     image_bytes = len(url.encode("utf-8", errors="ignore"))
                     if image_count >= max_images or (kept_image_bytes + image_bytes) > max_total_image_bytes:
-                        content[index] = {
+                        copied_content[index] = {
                             "type": "text",
                             "text": "[Previously attached image removed to preserve context]",
                         }
@@ -632,6 +812,8 @@ def _handle_images(
                     else:
                         image_count += 1
                         kept_image_bytes += image_bytes
+                        copied_content[index] = item
+            msg["content"] = copied_content
     return image_count, evicted, kept_image_bytes
 
 
@@ -711,6 +893,8 @@ class MemoryCompressor:
         if not messages:
             return messages
 
+        phase, keep_recent, anchor_cap = _get_phase_retention(agent_state)
+
         image_payload_before = _estimate_image_payload_bytes(messages)
         kept_images, evicted_images, image_payload_after = _handle_images(
             messages,
@@ -726,8 +910,8 @@ class MemoryCompressor:
             else:
                 regular_msgs.append(msg)
 
-        recent_msgs = regular_msgs[-MIN_RECENT_MESSAGES:]
-        old_msgs = regular_msgs[:-MIN_RECENT_MESSAGES]
+        recent_msgs = regular_msgs[-keep_recent:]
+        old_msgs = regular_msgs[:-keep_recent]
 
         # Type assertion since we ensure model_name is not None in __init__
         model_name: str = self.model_name  # type: ignore[assignment]
@@ -747,23 +931,57 @@ class MemoryCompressor:
             msg_trigger = 80
         message_pressure = len(regular_msgs) >= max(20, msg_trigger)
 
+        compression_state = {}
+        if agent_state is not None and hasattr(agent_state, "compression_state"):
+            try:
+                state_value = getattr(agent_state, "compression_state") or {}
+                if isinstance(state_value, dict):
+                    compression_state = dict(state_value)
+            except Exception:
+                compression_state = {}
+
+        last_digest = set(compression_state.get("last_digest", []))
+        current_digest = [_message_digest(msg) for msg in old_msgs]
+        delta_messages = [msg for msg, digest in zip(old_msgs, current_digest) if digest not in last_digest]
+        structured_facts = _extract_structured_facts(regular_msgs)
+        delta_facts = _extract_structured_facts(delta_messages)
+
+        if agent_state is not None and hasattr(agent_state, "compression_state"):
+            try:
+                compression_state["structured_facts"] = structured_facts[-50:]
+                compression_state["delta_facts"] = delta_facts[-25:]
+                compression_state["last_phase"] = phase
+                compression_state["last_keep_recent"] = keep_recent
+                compression_state["last_chunk_size"] = max(1, keep_recent // 2 or 1)
+                agent_state.compression_state = compression_state
+            except Exception:
+                pass
+
         if (
             total_tokens <= self._max_total_tokens * 0.9
             and not image_pressure
             and evicted_images == 0
             and not message_pressure
         ):
+            if agent_state is not None and hasattr(agent_state, "compression_state"):
+                try:
+                    compression_state["last_digest"] = [_message_digest(msg) for msg in recent_msgs]
+                    compression_state["last_phase"] = phase
+                    compression_state["last_keep_recent"] = keep_recent
+                    agent_state.compression_state = compression_state
+                except Exception:
+                    pass
             return messages
 
         # Pentager ChainSummarizer was here, but removed due to catastrophic forgetting
         # as it permanently deleted old messages rather than summarizing them.
 
         # Configurable chunk size — larger chunks = fewer compression LLM calls = less latency.
-        # PHANTOM_COMPRESSOR_CHUNK_SIZE default is 10 (was hardcoded 5).
+        # PHANTOM_COMPRESSOR_CHUNK_SIZE default is phase-aware.
         try:
-            chunk_size = int(Config.get("phantom_compressor_chunk_size") or "10")
+            chunk_size = int(Config.get("phantom_compressor_chunk_size") or str(keep_recent // 2 or 1))
         except ValueError:
-            chunk_size = 10
+            chunk_size = max(1, keep_recent // 2 or 1)
         chunk_size = max(1, chunk_size)
         logger.info(
             "MemoryCompressor: firing compression total_tokens=%d threshold=%d "
@@ -776,13 +994,28 @@ class MemoryCompressor:
             evicted_images,
         )
         _t0 = __import__("time").monotonic()
-        
+
         # Extract high-signal anchors BEFORE compression
         if agent_state is not None and hasattr(agent_state, "add_finding_anchor"):
             for i in range(0, len(old_msgs), chunk_size):
                 chunk = old_msgs[i : i + chunk_size]
                 for anchor in _extract_anchors_from_chunk(chunk):
+                    if isinstance(anchor, dict):
+                        anchor["evidence_score"] = max(float(anchor.get("evidence_score", 0.0)), _message_evidence_score({"content": anchor.get("text", "")}))
+                        anchor["confidence_score"] = max(float(anchor.get("confidence_score", 0.0)), anchor["evidence_score"])
                     agent_state.add_finding_anchor(anchor)
+
+        if agent_state is not None and hasattr(agent_state, "compression_state"):
+            try:
+                compression_state["last_digest"] = current_digest[-keep_recent:]
+                compression_state["last_phase"] = phase
+                compression_state["last_keep_recent"] = keep_recent
+                compression_state["structured_facts"] = structured_facts[-50:]
+                compression_state["delta_facts"] = delta_facts[-25:]
+                compression_state["last_chunk_size"] = chunk_size
+                agent_state.compression_state = compression_state
+            except Exception:
+                pass
         
         # ════════════════════════════════════════════════════════════════════
         # EFFICIENCY FIX MEM-P1.1: Parallel Chunk Summarization
@@ -832,6 +1065,35 @@ class MemoryCompressor:
                     compressed.append(summary)
                     self.compression_calls += 1
         # ────────────────────────────────────────────────────────────────────
+
+        if structured_facts:
+            qa_text = _build_structured_summary(old_msgs, phase, structured_facts[-20:], delta_facts[-10:])
+            qa_summary = {
+                "role": "user",
+                "content": f"<context_summary message_count='{len(old_msgs)}' phase='{phase}' format='structured'>{qa_text}</context_summary>",
+                "_structured_facts": structured_facts[-20:],
+                "_delta_facts": delta_facts[-10:],
+                "_summary_model": model_name,
+            }
+            if compressed:
+                compressed[0] = qa_summary
+            else:
+                compressed.append(qa_summary)
+
+        if agent_state is not None and hasattr(agent_state, "finding_anchors"):
+            try:
+                anchors = list(getattr(agent_state, "finding_anchors", []))
+                if len(anchors) > anchor_cap:
+                    anchors.sort(
+                        key=lambda item: (
+                            float(item.get("evidence_score", item.get("confidence_score", 0.0)) or 0.0),
+                            item.get("added_cycle", 0),
+                        ),
+                        reverse=True,
+                    )
+                    agent_state.finding_anchors = anchors[:anchor_cap]
+            except Exception:
+                pass
 
         result = system_msgs + compressed + recent_msgs
         

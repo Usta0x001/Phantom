@@ -1,12 +1,12 @@
 import re
-from functools import cache
 from typing import Any, ClassVar
 
 from pygments.lexers import get_lexer_by_name
-from pygments.styles import get_style_by_name
 from rich.text import Text
 from textual.widgets import Static
 
+from ..tui_design_system import ACTION_BLUE, DANGER_RED, SUCCESS_EMERALD
+from ._colors import get_token_color
 from .base_renderer import BaseToolRenderer
 from .registry import register_tool_renderer
 
@@ -26,13 +26,6 @@ STRIP_PATTERNS = [
         r"or interrupt it first \(e\.g\., with C-c\)\.$"
     ),
 ]
-
-
-@cache
-def _get_style_colors() -> dict[Any, str]:
-    style = get_style_by_name("native")
-    return {token: f"#{style_def['color']}" for token, style_def in style if style_def["color"]}
-
 
 @register_tool_renderer
 class TerminalRenderer(BaseToolRenderer):
@@ -104,12 +97,7 @@ class TerminalRenderer(BaseToolRenderer):
 
     @classmethod
     def _get_token_color(cls, token_type: Any) -> str | None:
-        colors = _get_style_colors()
-        while token_type:
-            if token_type in colors:
-                return colors[token_type]
-            token_type = token_type.parent
-        return None
+        return get_token_color(token_type)
 
     @classmethod
     def _highlight_bash(cls, code: str) -> Text:
@@ -163,13 +151,13 @@ class TerminalRenderer(BaseToolRenderer):
         text.append(" ")
 
         if is_special:
-            text.append(command, style="#ef4444")
+            text.append(command, style=DANGER_RED)
         elif is_input:
-            text.append(">>>", style="#3b82f6")
+            text.append(">>>", style=ACTION_BLUE)
             text.append(" ")
             text.append_text(cls._format_command(command))
         else:
-            text.append("$", style="#22c55e")
+            text.append("$", style=SUCCESS_EMERALD)
             text.append(" ")
             text.append_text(cls._format_command(command))
 
@@ -224,8 +212,8 @@ class TerminalRenderer(BaseToolRenderer):
 
         if error and not cls._is_status_message(error):
             text.append("\n")
-            text.append("  error: ", style="bold #ef4444")
-            text.append(cls._truncate_line(error), style="#ef4444")
+            text.append("  error: ", style=f"bold {DANGER_RED}")
+            text.append(cls._truncate_line(error), style=DANGER_RED)
             return
 
         if result_status == "running" or tool_status == "running":
@@ -238,7 +226,7 @@ class TerminalRenderer(BaseToolRenderer):
         if not output or not output.strip():
             if exit_code is not None and exit_code != 0:
                 text.append("\n")
-                text.append(f"  exit {exit_code}", style="dim #ef4444")
+                text.append(f"  exit {exit_code}", style=f"dim {DANGER_RED}")
             return
 
         text.append("\n")
@@ -247,7 +235,7 @@ class TerminalRenderer(BaseToolRenderer):
 
         if exit_code is not None and exit_code != 0:
             text.append("\n")
-            text.append(f"  exit {exit_code}", style="dim #ef4444")
+            text.append(f"  exit {exit_code}", style=f"dim {DANGER_RED}")
 
     @classmethod
     def _is_status_message(cls, message: str) -> bool:

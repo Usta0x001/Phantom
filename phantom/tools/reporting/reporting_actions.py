@@ -877,7 +877,7 @@ def _build_replay_command(poc_code: str) -> str:
         chain_suggestions = []
         try:
             from phantom.tools.hypothesis.hypothesis_actions import _GLOBAL_CORRELATION_ENGINE
-            if _GLOBAL_CORRELATION_ENGINE:
+            if _GLOBAL_CORRELATION_ENGINE is not None:
                 # Extract vulnerability class from title/CWE
                 vuln_class = _extract_vuln_class_from_report(title, cwe, description)
                 if vuln_class:

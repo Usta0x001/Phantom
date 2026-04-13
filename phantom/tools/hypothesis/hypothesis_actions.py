@@ -192,6 +192,19 @@ async def record_payload_test(
         await _ledger.add_evidence_for(hypothesis_id, evidence, outcome)
     elif outcome == "failure" and evidence:
         await _ledger.add_evidence_against(hypothesis_id, evidence, outcome)
+
+    if _GLOBAL_CORRELATION_ENGINE is not None and hyp:
+        payload_family = _ledger._make_payload_family(hyp.vuln_class, payload)
+        learned_outcome = "testing"
+        if str(outcome).strip().lower() == "failure":
+            learned_outcome = "rejected"
+        _GLOBAL_CORRELATION_ENGINE.record_outcome(
+            vuln_class=hyp.vuln_class,
+            surface=hyp.surface,
+            outcome=learned_outcome,
+            payload_family=payload_family,
+            evidence_strength=1.0,
+        )
     
     # Get current status
     hyp = _ledger.get(hypothesis_id)
@@ -248,7 +261,7 @@ async def confirm_hypothesis(hypothesis_id: str, evidence: str) -> dict[str, Any
     
     # FIX 4: Add finding to correlation engine for chain detection
     new_chains = []
-    if _GLOBAL_CORRELATION_ENGINE:
+    if _GLOBAL_CORRELATION_ENGINE is not None:
         hyp = _ledger.get(hypothesis_id)
         if hyp:
             # Determine severity from vulnerability class
@@ -273,6 +286,15 @@ async def confirm_hypothesis(hypothesis_id: str, evidence: str) -> dict[str, Any
                 details={
                     "hypothesis_id": hypothesis_id,
                     "evidence": evidence,
+                    "outcome": "confirmed",
+                    "payload_family": (
+                        _ledger._make_payload_family(
+                            hyp.vuln_class,
+                            hyp.successful_payloads[-1],
+                        )
+                        if hyp.successful_payloads
+                        else None
+                    ),
                     "tested_at": hyp.last_updated,  # FIX Bug #2: Use last_updated instead of non-existent tested_at
                 }
             )
@@ -330,6 +352,15 @@ async def reject_hypothesis(hypothesis_id: str, reason: str) -> dict[str, Any]:
         }
     
     await _ledger.reject(hypothesis_id, reason)
+
+    if _GLOBAL_CORRELATION_ENGINE is not None and hyp:
+        _GLOBAL_CORRELATION_ENGINE.record_outcome(
+            vuln_class=hyp.vuln_class,
+            surface=hyp.surface,
+            outcome="rejected",
+            payload_family=None,
+            evidence_strength=1.0,
+        )
     
     return {
         "success": True,
@@ -369,14 +400,7 @@ def query_hypotheses(
         # Get all confirmed vulnerabilities
         query_hypotheses(status="confirmed")
     """
-    if _GLOBAL_LEDGER is None:
-        return {
-            "success": False,
-            "error": "Hypothesis ledger not initialized",
-            "hypotheses": [],
-        }
-    
-        # Get all hypotheses
+    # Get all hypotheses
     _ledger = _get_active_ledger()
     if _ledger is None:
         return {
@@ -446,6 +470,7 @@ def get_hypothesis_summary() -> dict[str, Any]:
         "by_vuln_class": summary.get("by_class", {}),
         "top_confirmed": confirmed[:5],
         "top_open": open_hyps[:10],
+        "prioritized_summary": _ledger.get_prioritized_summary(top_n=10),
         "message": f"Ledger contains {summary.get('total', 0)} hypotheses",
     }
 

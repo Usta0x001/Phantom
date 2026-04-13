@@ -116,6 +116,8 @@ class BaseAgent(metaclass=AgentMeta):
         self.correlation_engine: CorrelationEngine = config.get(
             "correlation_engine"
         ) or CorrelationEngine()
+        with contextlib.suppress(Exception):
+            self.hypothesis_ledger.set_correlation_engine(self.correlation_engine)
 
         # FIX 5: Attack Graph - visualizes vulnerability relationships and attack paths.
         # Enables critical node identification and multi-step attack chain analysis.
@@ -717,27 +719,6 @@ class BaseAgent(metaclass=AgentMeta):
         # AUDIT-FIX: Auto-inject scan_status every 10 iterations OR when message count > 50
         message_count = len(self.state.get_conversation_history())
 
-        # PLAN FIX: Activate bounded history cleanup when context is clearly bloated.
-        # We keep this as a high-watermark safeguard (2x cap) so normal iterations
-        # still benefit from full context, while runaway histories are trimmed.
-        max_before_cleanup = int(getattr(self.state, "MAX_MESSAGES_BEFORE_CLEANUP", 50) or 50)
-        cleanup_threshold = max_before_cleanup * 2
-        if message_count > cleanup_threshold and hasattr(self.state, "cleanup_old_messages"):
-            removed = self.state.cleanup_old_messages()
-            if removed > 0 and tracer:
-                tracer.record_runtime_event(
-                    event_type="state.message_cleanup",
-                    actor={"agent_id": self.state.agent_id},
-                    payload={
-                        "removed": removed,
-                        "remaining": len(self.state.get_conversation_history()),
-                        "threshold": cleanup_threshold,
-                    },
-                    status="completed",
-                    source="phantom.agents",
-                )
-            message_count = len(self.state.get_conversation_history())
-
         should_inject_status = (
             (self.state.iteration > 0 and self.state.iteration % 10 == 0) or
             (message_count > 50)
@@ -745,7 +726,10 @@ class BaseAgent(metaclass=AgentMeta):
         if should_inject_status:
             try:
                 from phantom.tools.scan_status.scan_status_actions import get_scan_status
-                status = get_scan_status(include_recommendations=True)
+                status = get_scan_status(
+                    include_recommendations=True,
+                    agent_id=self.state.agent_id,
+                )
                 
                 # Format as compact message
                 status_msg = self._format_scan_status(status)
@@ -776,10 +760,7 @@ class BaseAgent(metaclass=AgentMeta):
             and self.state.iteration > 0
             and self.state.iteration % _LEDGER_INJECT_EVERY == 0
         ):
-            ledger_summary = self.hypothesis_ledger.to_prompt_summary(
-                top_n=10,
-                status_filter=["open", "testing"],
-            )
+            ledger_summary = self.hypothesis_ledger.get_prioritized_summary(top_n=10)
             if ledger_summary:
                 self.state.add_message("user", ledger_summary)
 
@@ -844,6 +825,7 @@ class BaseAgent(metaclass=AgentMeta):
                     suggestion = await reflector.reflect(context)
                     if suggestion:
                         self.state.add_message("user", f"Reflector suggestion: {suggestion}")
+                        self._cleanup_message_history(tracer)
                         return False
                 except Exception:
                     pass
@@ -852,6 +834,7 @@ class BaseAgent(metaclass=AgentMeta):
                 "Empty response. You MUST call a tool. Try: terminal_execute, send_request, or create_vulnerability_report."
             )
             self.state.add_message("user", corrective_message)
+            self._cleanup_message_history(tracer)
             return False
 
         thinking_blocks = getattr(final_response, "thinking_blocks", None)
@@ -872,7 +855,9 @@ class BaseAgent(metaclass=AgentMeta):
 
         if actions:
             self._last_iteration_action_count = len(actions)
-            return await self._execute_actions(actions, tracer)
+            should_agent_finish = await self._execute_actions(actions, tracer)
+            self._cleanup_message_history(tracer)
+            return should_agent_finish
 
         if use_reflector:
             try:
@@ -885,6 +870,7 @@ class BaseAgent(metaclass=AgentMeta):
                 pass
 
         self._last_iteration_action_count = 0
+        self._cleanup_message_history(tracer)
         return False
 
     async def _execute_actions(self, actions: list[Any], tracer: Optional["Tracer"]) -> bool:
@@ -1103,11 +1089,43 @@ class BaseAgent(metaclass=AgentMeta):
         except Exception:
             return {}
 
+    def _cleanup_message_history(self, tracer: Optional["Tracer"]) -> None:
+        """Trim only after the current LLM turn has been prepared and executed.
+
+        This keeps the full raw history available to compression/anchor extraction
+        for the current turn, then bounds the retained state once the turn is done.
+        """
+        max_before_cleanup = int(getattr(self.state, "MAX_MESSAGES_BEFORE_CLEANUP", 50) or 50)
+        scan_mode = str(getattr(self.state, "scan_mode", "") or getattr(self.llm_config, "scan_mode", "")).lower()
+        cleanup_multiplier = 4 if scan_mode == "deep" else 2
+        cleanup_threshold = max_before_cleanup * cleanup_multiplier
+        message_count = len(self.state.get_conversation_history())
+        if message_count <= cleanup_threshold or not hasattr(self.state, "cleanup_old_messages"):
+            return
+
+        removed = self.state.cleanup_old_messages()
+        if removed > 0 and tracer:
+            tracer.record_runtime_event(
+                event_type="state.message_cleanup",
+                actor={"agent_id": self.state.agent_id},
+                payload={
+                    "removed": removed,
+                    "remaining": len(self.state.get_conversation_history()),
+                    "threshold": cleanup_threshold,
+                },
+                status="completed",
+                source="phantom.agents",
+            )
+
     def _format_scan_status(self, status: dict[str, Any]) -> str:
         """Format scan status into a compact message for LLM injection."""
         progress = status.get("scan_progress", {})
         findings = status.get("findings", {})
         coverage = status.get("coverage", {})
+        attack_graph = status.get("attack_graph") or {}
+        archived_messages = status.get("archived_messages", {})
+        blocked_surfaces = status.get("blocked_surfaces", [])
+        top_hypotheses = status.get("top_hypotheses", [])
         chains = status.get("chain_opportunities", [])
         recommendation = status.get("recommended_next_action")
         warnings = status.get("warnings", [])
@@ -1128,6 +1146,50 @@ class BaseAgent(metaclass=AgentMeta):
             f"{coverage.get('surfaces_remaining')} remaining "
             f"({coverage.get('coverage_percent')}%)"
         )
+
+        if blocked_surfaces:
+            lines.append(f"Blocked: {len(blocked_surfaces)} surfaces")
+            for blocked in blocked_surfaces[:2]:
+                reasons = ", ".join(str(reason) for reason in blocked.get("failure_reasons", [])[:2])
+                lines.append(
+                    f"  - {str(blocked.get('surface', ''))[:45]} | {reasons[:70]}"
+                )
+
+        if top_hypotheses:
+            if isinstance(top_hypotheses, str):
+                lines.append(top_hypotheses)
+            else:
+                lines.append(f"Priority hypotheses: {len(top_hypotheses)}")
+                for hyp in top_hypotheses[:2]:
+                    lines.append(
+                        f"  - [{hyp.get('priority_score')}] {hyp.get('vuln_class')} @ "
+                        f"{str(hyp.get('surface', ''))[:35]}"
+                    )
+
+        if attack_graph:
+            lines.append(
+                "Attack graph: "
+                f"{attack_graph.get('total_nodes')} nodes, "
+                f"{attack_graph.get('total_vulnerabilities')} vulns, "
+                f"{attack_graph.get('total_edges')} edges, "
+                f"density={attack_graph.get('density')}"
+            )
+            critical_vulns = attack_graph.get("critical_vulns", [])
+            if critical_vulns:
+                critical_bits = []
+                for vuln in critical_vulns[:2]:
+                    if isinstance(vuln, dict):
+                        critical_bits.append(f"{vuln.get('id')}:{vuln.get('centrality')}")
+                if critical_bits:
+                    lines.append(f"  Critical: {', '.join(critical_bits)}")
+
+        if archived_messages:
+            lines.append(
+                f"Archived history: {archived_messages.get('count', 0)} messages retained"
+            )
+            recent = archived_messages.get("recent", [])
+            for item in recent[:2]:
+                lines.append(f"  - {str(item)[:70]}")
         
         if chains:
             lines.append(f"Chain Opportunities: {len(chains)}")

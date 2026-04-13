@@ -28,8 +28,10 @@ def test_effectiveness():
     print(f'   Confirmed SQLi on {h1}')
     
     print('STEP 3: Agent wants to test /api/login::password (sqli)')
-    tested_any = ledger.has_tested('/api/login::password', 'sqli')
-    print(f'   has_tested any: {tested_any}')
+    tested_any = ledger.has_seen_hypothesis('/api/login::password', 'sqli')
+    tested_payload = ledger.has_tested_payload('/api/login::username', 'sqli', "union_payload")
+    print(f'   has_seen_hypothesis: {tested_any}')
+    print(f'   has_tested_payload(existing): {tested_payload}')
     
     sqli_payloads = ledger.get_successful_payloads('sqli')
     print(f'   Retrieved {len(sqli_payloads)} successful SQLi payloads to reuse')
@@ -58,6 +60,7 @@ def test_effectiveness():
     print(f'Total hypotheses: {len(ledger)}')
     print(f'Payload reuse enabled: {len(sqli_payloads) > 0}')
     print(f'Priority scoring works: {len(scores) > 0}')
+    print(f'Prioritized summary available: {bool(ledger.get_prioritized_summary(top_n=3))}')
     print('')
     print('HypothesisLedger EFFECTIVENESS: PROVEN')
     

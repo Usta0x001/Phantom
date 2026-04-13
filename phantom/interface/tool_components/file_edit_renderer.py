@@ -2,19 +2,14 @@ from functools import cache
 from typing import Any, ClassVar
 
 from pygments.lexers import get_lexer_by_name, get_lexer_for_filename
-from pygments.styles import get_style_by_name
 from pygments.util import ClassNotFound
 from rich.text import Text
 from textual.widgets import Static
 
+from ..tui_design_system import ACCENT_PURPLE, DANGER_RED, SUCCESS_TEAL
+from ._colors import get_token_color
 from .base_renderer import BaseToolRenderer
 from .registry import register_tool_renderer
-
-
-@cache
-def _get_style_colors() -> dict[Any, str]:
-    style = get_style_by_name("native")
-    return {token: f"#{style_def['color']}" for token, style_def in style if style_def["color"]}
 
 
 def _get_lexer_for_file(path: str) -> Any:
@@ -31,12 +26,7 @@ class StrReplaceEditorRenderer(BaseToolRenderer):
 
     @classmethod
     def _get_token_color(cls, token_type: Any) -> str | None:
-        colors = _get_style_colors()
-        while token_type:
-            if token_type in colors:
-                return colors[token_type]
-            token_type = token_type.parent
-        return None
+        return get_token_color(token_type)
 
     @classmethod
     def _highlight_code(cls, code: str, path: str) -> Text:
@@ -65,14 +55,14 @@ class StrReplaceEditorRenderer(BaseToolRenderer):
         text = Text()
 
         icons_and_labels = {
-            "view": ("◇ ", "read", "#10b981"),
-            "str_replace": ("◇ ", "edit", "#10b981"),
-            "create": ("◇ ", "create", "#10b981"),
-            "insert": ("◇ ", "insert", "#10b981"),
-            "undo_edit": ("◇ ", "undo", "#10b981"),
+            "view": ("◇ ", "read", SUCCESS_TEAL),
+            "str_replace": ("◇ ", "edit", SUCCESS_TEAL),
+            "create": ("◇ ", "create", SUCCESS_TEAL),
+            "insert": ("◇ ", "insert", SUCCESS_TEAL),
+            "undo_edit": ("◇ ", "undo", SUCCESS_TEAL),
         }
 
-        icon, label, color = icons_and_labels.get(command, ("◇ ", "file", "#10b981"))
+        icon, label, color = icons_and_labels.get(command, ("◇ ", "file", SUCCESS_TEAL))
         text.append(icon, style=color)
         text.append(label, style="dim")
 
@@ -86,7 +76,7 @@ class StrReplaceEditorRenderer(BaseToolRenderer):
                 highlighted_old = cls._highlight_code(old_str, path)
                 for line in highlighted_old.plain.split("\n"):
                     text.append("\n")
-                    text.append("-", style="#ef4444")
+                    text.append("-", style=DANGER_RED)
                     text.append(" ")
                     text.append(line)
 
@@ -94,7 +84,7 @@ class StrReplaceEditorRenderer(BaseToolRenderer):
                 highlighted_new = cls._highlight_code(new_str, path)
                 for line in highlighted_new.plain.split("\n"):
                     text.append("\n")
-                    text.append("+", style="#22c55e")
+                    text.append("+", style=SUCCESS_TEAL)
                     text.append(" ")
                     text.append(line)
 
@@ -105,10 +95,10 @@ class StrReplaceEditorRenderer(BaseToolRenderer):
         elif command == "insert" and new_str:
             highlighted_new = cls._highlight_code(new_str, path)
             for line in highlighted_new.plain.split("\n"):
-                text.append("\n")
-                text.append("+", style="#22c55e")
-                text.append(" ")
-                text.append(line)
+                    text.append("\n")
+                    text.append("+", style=SUCCESS_TEAL)
+                    text.append(" ")
+                    text.append(line)
 
         elif isinstance(result, str) and result.strip():
             text.append("\n  ")
@@ -132,7 +122,7 @@ class ListFilesRenderer(BaseToolRenderer):
         path = args.get("path", "")
 
         text = Text()
-        text.append("◇ ", style="#10b981")
+        text.append("◇ ", style=SUCCESS_TEAL)
         text.append("list", style="dim")
         text.append(" ")
 
@@ -158,18 +148,18 @@ class SearchFilesRenderer(BaseToolRenderer):
         regex = args.get("regex", "")
 
         text = Text()
-        text.append("◇ ", style="#a855f7")
+        text.append("◇ ", style=ACCENT_PURPLE)
         text.append("search", style="dim")
         text.append("  ")
 
         if path and regex:
             text.append(path, style="dim")
             text.append(" ", style="dim")
-            text.append(regex, style="#a855f7")
+            text.append(regex, style=ACCENT_PURPLE)
         elif path:
             text.append(path, style="dim")
         elif regex:
-            text.append(regex, style="#a855f7")
+            text.append(regex, style=ACCENT_PURPLE)
         else:
             text.append("...", style="dim")
 

@@ -36,7 +36,27 @@ from phantom.interface.tui_design_system import (
     ERROR_STATES,
     KEYBOARD_MODEL,
     LOADING_STATES,
+    ACTION_BLUE,
+    ACCENT_PURPLE,
+    CANVAS_BG,
+    SURFACE_BG,
+    SURFACE_ALT_BG,
+    TEXT_PRIMARY,
+    TEXT_MUTED,
+    TEXT_FAINT,
+    TEXT_SHADOW,
+    TEXT_SOFT,
+    PRIMARY_CYAN,
+    SUCCESS_EMERALD,
+    SUCCESS_LIME,
+    INFO_BLUE,
+    WARNING_AMBER,
+    WARNING_ORANGE,
+    DANGER_ROSE,
+    SECONDARY_VIOLET,
+    BORDER_SLATE,
     SEVERITY_COLORS as DESIGN_SEVERITY_COLORS,
+    NEUTRAL_DOT,
     SWEEP_COLORS,
 )
 from phantom.interface.tui_presenter import (
@@ -117,7 +137,7 @@ class ChatTextArea(TextArea):  # type: ignore[misc]
 
 class SplashScreen(Static):  # type: ignore[misc]
     ALLOW_SELECT = False
-    PRIMARY_GREEN = "#dc2626"
+    PRIMARY_GREEN = PRIMARY_CYAN
     BANNER = (
         " ██████╗ ██╗  ██╗ █████╗ ███╗  ██╗████████╗ ██████╗ ███╗   ███╗\n"
         " ██╔══██╗██║  ██║██╔══██╗████╗ ██║╚══██╔══╝██╔═══██╗████╗ ████║\n"
@@ -178,11 +198,11 @@ class SplashScreen(Static):  # type: ignore[misc]
 
     def _build_url_text(self) -> Text:
         from phantom.config import Config
-        return Text(Config.get("phantom_footer_brand") or "phantom-agent", style=Style(color=self.PRIMARY_GREEN, bold=True))
+        return Text(Config.get("phantom_footer_brand") or "phantom-agent", style=Style(color=PRIMARY_CYAN, bold=True))
 
     def _build_welcome_text(self) -> Text:
         text = Text("Welcome to ", style=Style(color="white", bold=True))
-        text.append("Phantom", style=Style(color=self.PRIMARY_GREEN, bold=True))
+        text.append("Phantom", style=Style(color=PRIMARY_CYAN, bold=True))
         text.append("!", style=Style(color="white", bold=True))
         return text
 
@@ -207,9 +227,9 @@ class SplashScreen(Static):  # type: ignore[misc]
             elif dist <= 3:
                 style = Style(color="white", bold=True)
             elif dist <= 5:
-                style = Style(color="#a3a3a3")
+                style = Style(color=TEXT_FAINT)
             else:
-                style = Style(color="#525252")
+                style = Style(color=TEXT_SHADOW)
 
             text.append(char, style=style)
 
@@ -345,9 +365,9 @@ class CriticalVulnAlertScreen(ModalScreen):  # type: ignore[misc]
         target = self.vulnerability.get("target", "Unknown target")
         
         content = Text()
-        content.append("⚠  CRITICAL VULNERABILITY DISCOVERED  ⚠\n\n", style="bold #dc2626")
+        content.append("⚠  CRITICAL VULNERABILITY DISCOVERED  ⚠\n\n", style=f"bold {DANGER_ROSE}")
         content.append("Title: ", style="bold white")
-        content.append(f"{title}\n", style="#dc2626")
+        content.append(f"{title}\n", style=DANGER_ROSE)
         content.append("Target: ", style="bold white")
         content.append(f"{target}\n\n", style="white")
         content.append("This finding requires immediate attention.\n", style="dim")
@@ -381,7 +401,7 @@ class VulnerabilityDetailScreen(ModalScreen):  # type: ignore[misc]
 
     SEVERITY_COLORS: ClassVar[dict[str, str]] = DESIGN_SEVERITY_COLORS
 
-    FIELD_STYLE: ClassVar[str] = "bold #4ade80"
+    FIELD_STYLE: ClassVar[str] = f"bold {SUCCESS_LIME}"
 
     def __init__(self, vulnerability: dict[str, Any]) -> None:
         super().__init__()
@@ -405,14 +425,14 @@ class VulnerabilityDetailScreen(ModalScreen):  # type: ignore[misc]
 
     def _get_cvss_color(self, cvss_score: float) -> str:
         if cvss_score >= 9.0:
-            return "#dc2626"
+            return DANGER_ROSE
         if cvss_score >= 7.0:
-            return "#ea580c"
+            return WARNING_ORANGE
         if cvss_score >= 4.0:
-            return "#d97706"
+            return WARNING_AMBER
         if cvss_score >= 0.1:
-            return "#65a30d"
-        return "#6b7280"
+            return SUCCESS_EMERALD
+        return TEXT_MUTED
 
     def _highlight_python(self, code: str) -> Text:
         try:
@@ -447,7 +467,7 @@ class VulnerabilityDetailScreen(ModalScreen):  # type: ignore[misc]
         text = Text()
 
         text.append("🐞 ")
-        text.append("Vulnerability Report", style="bold #ea580c")
+        text.append("Vulnerability Report", style=f"bold {WARNING_AMBER}")
 
         agent_name = vuln.get("agent_name", "")
         if agent_name:
@@ -465,7 +485,7 @@ class VulnerabilityDetailScreen(ModalScreen):  # type: ignore[misc]
         if severity:
             text.append("\n\n")
             text.append("Severity: ", style=self.FIELD_STYLE)
-            severity_color = self.SEVERITY_COLORS.get(severity.lower(), "#6b7280")
+            severity_color = self.SEVERITY_COLORS.get(severity.lower(), TEXT_MUTED)
             text.append(severity.upper(), style=f"bold {severity_color}")
 
         cvss_score = vuln.get("cvss")
@@ -744,14 +764,14 @@ class VulnerabilitiesPanel(VerticalScroll):  # type: ignore[misc]
         for vuln in self._vulnerabilities:
             severity = vuln.get("severity", "info").lower()
             title = vuln.get("title", "Unknown Vulnerability")
-            color = self.SEVERITY_COLORS.get(severity, "#f59e0b")
+            color = self.SEVERITY_COLORS.get(severity, WARNING_AMBER)
             badge = SEVERITY_BADGES.get(severity, "INFO")
 
             label = Text()
             # Colored badge text + colored dot
             label.append(f"[{badge}] ", style=Style(color=color, bold=True))
             label.append("● ", style=Style(color=color))
-            label.append(title, style=Style(color="#d4d4d4"))
+            label.append(title, style=Style(color=TEXT_SOFT))
 
             item = VulnerabilityItem(label, vuln, classes="vuln-item")
             self.mount(item)
@@ -760,8 +780,9 @@ class VulnerabilitiesPanel(VerticalScroll):  # type: ignore[misc]
 class QuitScreen(ModalScreen):  # type: ignore[misc]
     def compose(self) -> ComposeResult:
         yield Grid(
-            Label("Quit Phantom?", id="quit_title"),
-            Grid(
+            Label("Stop scan and quit?", id="quit_title"),
+            Label("This will save a checkpoint so you can resume later.", id="quit_info"),
+            Horizontal(
                 Button("Yes", variant="error", id="quit"),
                 Button("No", variant="default", id="cancel"),
                 id="quit_buttons",
@@ -1005,12 +1026,15 @@ class PhantomTUIApp(App):  # type: ignore[misc]
             cleanup_runtime()
 
         def signal_handler(_signum: int, _frame: Any) -> None:
-            self._save_interrupted_checkpoint("signal")
-            self.tracer.cleanup()
-            # BUG FIX: Use blocking cleanup to ensure containers are stopped before exit
-            from phantom.runtime import cleanup_runtime
-            cleanup_runtime(wait=True)
-            sys.exit(0)
+            if self.is_mounted:
+                self.call_from_thread(self.action_request_quit)
+            else:
+                self._save_interrupted_checkpoint("signal")
+                self.tracer.cleanup()
+                # BUG FIX: Use blocking cleanup to ensure containers are stopped before exit
+                from phantom.runtime import cleanup_runtime
+                cleanup_runtime(wait=True)
+                sys.exit(0)
 
         atexit.register(cleanup_on_exit)
         signal.signal(signal.SIGINT, signal_handler)
@@ -1386,11 +1410,11 @@ class PhantomTUIApp(App):  # type: ignore[misc]
         if status_vm.mode == "active":
             # FIX: Add phase badge to status bar
             PHASE_BADGES = {
-                "recon": ("RECON", "#4ade80"),
-                "enumeration": ("ENUM", "#60a5fa"),
-                "exploitation": ("EXPLOIT", "#f87171"),
-                "post_exploitation": ("POST-EX", "#c084fc"),
-                "reporting": ("REPORT", "#facc15"),
+                "recon": ("RECON", SUCCESS_LIME),
+                "enumeration": ("ENUM", INFO_BLUE),
+                "exploitation": ("EXPLOIT", DANGER_ROSE),
+                "post_exploitation": ("POST-EX", SECONDARY_VIOLET),
+                "reporting": ("REPORT", WARNING_GOLD),
             }
             
             animated_text = Text()
@@ -1534,7 +1558,7 @@ class PhantomTUIApp(App):  # type: ignore[misc]
         wave_pos = total_range - abs(total_range - frame_in_cycle)
         sweep_pos = wave_pos - offset
 
-        dot_color = "#0a3d1f"
+        dot_color = NEUTRAL_DOT
 
         for i in range(num_squares):
             dist = abs(i - sweep_pos)
@@ -1961,6 +1985,9 @@ class PhantomTUIApp(App):  # type: ignore[misc]
             return
 
         if len(self.screen_stack) > 1:
+            return
+
+        if isinstance(self.screen, QuitScreen):
             return
 
         try:

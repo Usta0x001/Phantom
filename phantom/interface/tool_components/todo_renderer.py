@@ -3,6 +3,7 @@ from typing import Any, ClassVar
 from rich.text import Text
 from textual.widgets import Static
 
+from ..tui_design_system import ACCENT_PURPLE, DANGER_RED, NEUTRAL_STEEL, WARNING_ORANGE
 from .base_renderer import BaseToolRenderer
 from .registry import register_tool_renderer
 
@@ -50,7 +51,7 @@ class CreateTodoRenderer(BaseToolRenderer):
 
         text = Text()
         text.append("📋 ")
-        text.append("Todo", style="bold #a78bfa")
+        text.append("Todo", style=f"bold {ACCENT_PURPLE}")
 
         if isinstance(result, str) and result.strip():
             text.append("\n  ")
@@ -61,7 +62,7 @@ class CreateTodoRenderer(BaseToolRenderer):
             else:
                 error = result.get("error", "Failed to create todo")
                 text.append("\n  ")
-                text.append(error, style="#ef4444")
+                text.append(error, style=DANGER_RED)
         else:
             text.append("\n  ")
             text.append("Creating...", style="dim")
@@ -81,7 +82,7 @@ class ListTodosRenderer(BaseToolRenderer):
 
         text = Text()
         text.append("📋 ")
-        text.append("Todos", style="bold #a78bfa")
+        text.append("Todos", style=f"bold {ACCENT_PURPLE}")
 
         if isinstance(result, str) and result.strip():
             text.append("\n  ")
@@ -92,7 +93,7 @@ class ListTodosRenderer(BaseToolRenderer):
             else:
                 error = result.get("error", "Unable to list todos")
                 text.append("\n  ")
-                text.append(error, style="#ef4444")
+                text.append(error, style=DANGER_RED)
         else:
             text.append("\n  ")
             text.append("Loading...", style="dim")
@@ -112,7 +113,7 @@ class UpdateTodoRenderer(BaseToolRenderer):
 
         text = Text()
         text.append("📋 ")
-        text.append("Todo Updated", style="bold #a78bfa")
+        text.append("Todo Updated", style=f"bold {ACCENT_PURPLE}")
 
         if isinstance(result, str) and result.strip():
             text.append("\n  ")
@@ -123,7 +124,7 @@ class UpdateTodoRenderer(BaseToolRenderer):
             else:
                 error = result.get("error", "Failed to update todo")
                 text.append("\n  ")
-                text.append(error, style="#ef4444")
+                text.append(error, style=DANGER_RED)
         else:
             text.append("\n  ")
             text.append("Updating...", style="dim")
@@ -143,7 +144,7 @@ class MarkTodoDoneRenderer(BaseToolRenderer):
 
         text = Text()
         text.append("📋 ")
-        text.append("Todo Completed", style="bold #a78bfa")
+        text.append("Todo Completed", style=f"bold {ACCENT_PURPLE}")
 
         if isinstance(result, str) and result.strip():
             text.append("\n  ")
@@ -154,7 +155,7 @@ class MarkTodoDoneRenderer(BaseToolRenderer):
             else:
                 error = result.get("error", "Failed to mark todo done")
                 text.append("\n  ")
-                text.append(error, style="#ef4444")
+                text.append(error, style=DANGER_RED)
         else:
             text.append("\n  ")
             text.append("Marking done...", style="dim")
@@ -174,7 +175,7 @@ class MarkTodoPendingRenderer(BaseToolRenderer):
 
         text = Text()
         text.append("📋 ")
-        text.append("Todo Reopened", style="bold #f59e0b")
+        text.append("Todo Reopened", style=f"bold {WARNING_ORANGE}")
 
         if isinstance(result, str) and result.strip():
             text.append("\n  ")
@@ -185,7 +186,7 @@ class MarkTodoPendingRenderer(BaseToolRenderer):
             else:
                 error = result.get("error", "Failed to reopen todo")
                 text.append("\n  ")
-                text.append(error, style="#ef4444")
+                text.append(error, style=DANGER_RED)
         else:
             text.append("\n  ")
             text.append("Reopening...", style="dim")
@@ -205,7 +206,7 @@ class DeleteTodoRenderer(BaseToolRenderer):
 
         text = Text()
         text.append("📋 ")
-        text.append("Todo Removed", style="bold #94a3b8")
+        text.append("Todo Removed", style=f"bold {NEUTRAL_STEEL}")
 
         if isinstance(result, str) and result.strip():
             text.append("\n  ")
@@ -216,7 +217,7 @@ class DeleteTodoRenderer(BaseToolRenderer):
             else:
                 error = result.get("error", "Failed to remove todo")
                 text.append("\n  ")
-                text.append(error, style="#ef4444")
+                text.append(error, style=DANGER_RED)
         else:
             text.append("\n  ")
             text.append("Removing...", style="dim")

@@ -1,4 +1,5 @@
 import hashlib
+from copy import deepcopy
 import uuid
 from datetime import UTC, datetime
 from typing import Any
@@ -55,8 +56,17 @@ class AgentState(BaseModel):
     # so they survive memory compression and can be re-injected at report time.
     finding_anchors: list[dict[str, Any]] = Field(default_factory=list)
 
+    # Bounded archive of trimmed messages so full/deep runs can preserve older
+    # context and fold it back into later compression cycles.
+    archived_messages: list[dict[str, Any]] = Field(default_factory=list)
+
+    # Compression bookkeeping used by the memory compressor to avoid
+    # reprocessing the same history and to carry structured memory forward.
+    compression_state: dict[str, Any] = Field(default_factory=dict)
+
     # Maximum anchors to store (matches injection limit in llm.py)
     MAX_FINDING_ANCHORS: int = 15
+    MAX_ARCHIVED_MESSAGES: int = 200
     
     # FIX BUG-7: Anchor expiration after 3 compression cycles
     MAX_ANCHOR_AGE_CYCLES: int = 3
@@ -72,7 +82,7 @@ class AgentState(BaseModel):
         effective.
         """
         self._message_hashes.clear()
-        for msg in self.messages:
+        for msg in self.messages + self.archived_messages:
             content = msg.get("content", "")
             if isinstance(content, str):
                 self._message_hashes.add(hashlib.sha256(content.encode("utf-8")).hexdigest())
@@ -85,12 +95,28 @@ class AgentState(BaseModel):
         """
         if len(self.messages) <= self.MAX_MESSAGES_BEFORE_CLEANUP:
             return 0
-        
+
         removed_count = len(self.messages) - self.MAX_MESSAGES_BEFORE_CLEANUP
-        # Keep recent messages
+        # Keep recent messages and preserve older context in the bounded archive.
+        older_messages = deepcopy(self.messages[:-self.MAX_MESSAGES_BEFORE_CLEANUP])
+        if older_messages:
+            self.archived_messages.extend(older_messages)
+            if len(self.archived_messages) > self.MAX_ARCHIVED_MESSAGES:
+                self.archived_messages = self.archived_messages[-self.MAX_ARCHIVED_MESSAGES:]
+
         self.messages = self.messages[-self.MAX_MESSAGES_BEFORE_CLEANUP:]
         self.last_updated = datetime.now(UTC).isoformat()
         return removed_count
+
+    def get_archived_messages(self) -> list[dict[str, Any]]:
+        return list(self.archived_messages)
+
+    def clear_archived_messages(self) -> int:
+        removed = len(self.archived_messages)
+        if removed:
+            self.archived_messages = []
+            self.last_updated = datetime.now(UTC).isoformat()
+        return removed
     
     # Track compression cycles for anchor expiration
     _compression_cycle: int = 0
@@ -107,18 +133,53 @@ class AgentState(BaseModel):
         
         # Deduplicate by key if present
         key = anchor.get("key") or anchor_text[:80]
+        new_score = float(anchor.get("evidence_score", anchor.get("confidence_score", 0.0)) or 0.0)
         for existing in self.finding_anchors:
             if (existing.get("key") or existing.get("text", "")[:80]) == key:
+                existing_score = float(existing.get("evidence_score", existing.get("confidence_score", 0.0)) or 0.0)
+                if new_score > existing_score:
+                    existing.update(anchor)
+                    existing["text"] = anchor_text
+                    existing["evidence_score"] = new_score
+                    existing["added_cycle"] = self._compression_cycle
+                    self.finding_anchors.sort(
+                        key=lambda item: (
+                            float(item.get("evidence_score", item.get("confidence_score", 0.0)) or 0.0),
+                            item.get("added_cycle", 0),
+                        ),
+                        reverse=True,
+                    )
                 return  # already anchored
-        
-        # FIX BUG 2: Enforce maximum anchor limit
+
+        # FIX BUG 2: Enforce maximum anchor limit by evidential value, not age.
+        anchor["evidence_score"] = new_score
         if len(self.finding_anchors) >= self.MAX_FINDING_ANCHORS:
-            return  # Reject if at limit
+            weakest_index = min(
+                range(len(self.finding_anchors)),
+                key=lambda i: float(
+                    self.finding_anchors[i].get("evidence_score", self.finding_anchors[i].get("confidence_score", 0.0))
+                    or 0.0
+                ),
+            )
+            weakest_score = float(
+                self.finding_anchors[weakest_index].get("evidence_score", self.finding_anchors[weakest_index].get("confidence_score", 0.0))
+                or 0.0
+            )
+            if new_score <= weakest_score:
+                return
+            self.finding_anchors.pop(weakest_index)
         
         # Store the anchor with cleaned text and compression cycle
         anchor["text"] = anchor_text
         anchor["added_cycle"] = self._compression_cycle
         self.finding_anchors.append(anchor)
+        self.finding_anchors.sort(
+            key=lambda item: (
+                float(item.get("evidence_score", item.get("confidence_score", 0.0)) or 0.0),
+                item.get("added_cycle", 0),
+            ),
+            reverse=True,
+        )
         self.last_updated = datetime.now(UTC).isoformat()
     
     def expire_stale_anchors(self) -> int:

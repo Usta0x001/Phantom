@@ -433,6 +433,12 @@ def create_agent(
         # payloads and surfaces are deduplicated across the entire agent tree.
         if parent_agent and hasattr(parent_agent, "hypothesis_ledger"):
             agent_config["hypothesis_ledger"] = parent_agent.hypothesis_ledger
+        if parent_agent and hasattr(parent_agent, "coverage_tracker"):
+            agent_config["coverage_tracker"] = parent_agent.coverage_tracker
+        if parent_agent and hasattr(parent_agent, "correlation_engine"):
+            agent_config["correlation_engine"] = parent_agent.correlation_engine
+        if parent_agent and hasattr(parent_agent, "attack_graph"):
+            agent_config["attack_graph"] = parent_agent.attack_graph
 
         agent = PhantomAgent(agent_config)
 

@@ -3,6 +3,7 @@ from typing import Any, ClassVar
 from rich.text import Text
 from textual.widgets import Static
 
+from ..tui_design_system import INFO_BLUE
 from .base_renderer import BaseToolRenderer
 from .registry import register_tool_renderer
 
@@ -19,7 +20,7 @@ class WebSearchRenderer(BaseToolRenderer):
 
         text = Text()
         text.append("🌐 ")
-        text.append("Searching the web...", style="bold #60a5fa")
+        text.append("Searching the web...", style=f"bold {INFO_BLUE}")
 
         if query:
             text.append("\n  ")

@@ -88,6 +88,44 @@ class TestP32PayloadLearningVerification:
         # XSS: 2 tested, 1 successful
         assert stats["by_vuln_class"]["xss"]["tested"] == 2
         assert stats["by_vuln_class"]["xss"]["successful"] == 1
+
+    def test_testing_evidence_is_retained(self):
+        """Verify: testing evidence is preserved separately from confirmation evidence"""
+        ledger = HypothesisLedger()
+
+        hyp_id = ledger.add("/api/profile::id", "idor")
+        ledger.record_result(hyp_id, "testing", "IDOR signal from response diff")
+
+        hyp = ledger.get(hyp_id)
+        assert hyp is not None
+        assert hyp.supporting_evidence, "Testing evidence should be stored"
+        assert not hyp.evidence_for, "Testing evidence should not be treated as confirmed"
+
+    def test_payload_family_learning(self):
+        """Verify: payload families and next-best tests are learned."""
+        ledger = HypothesisLedger()
+
+        hyp_id = ledger.add("/api/login::username", "sqli")
+        ledger.record_payload(hyp_id, "' OR 1=1--")
+        ledger.record_result(hyp_id, "testing", "Boolean-based signal")
+
+        scored = ledger.get_scored_hypotheses()
+        assert scored[0]["payloads_tested"] == 1
+        assert scored[0]["tests_executed"] >= 1
+        assert scored[0]["next_best_tests"], "Should suggest next payload families"
+        assert "boolean" in scored[0]["payload_families_tested"] or scored[0]["payload_families_tested"], "Should track payload families"
+
+    def test_prioritized_summary_includes_confidence(self):
+        """Verify: prioritized summary includes confidence and next steps."""
+        ledger = HypothesisLedger()
+        hyp_id = ledger.add("/api/search::q", "xss")
+        ledger.record_payload(hyp_id, "<script>alert(1)</script>")
+        ledger.record_result(hyp_id, "testing", "Reflected payload")
+
+        summary = ledger.get_prioritized_summary(top_n=3)
+        assert "HYPOTHESIS PRIORITY ANALYSIS" in summary
+        assert "conf=" in summary
+        assert "next_best_tests" not in summary
     
     def test_cross_surface_learning(self):
         """Verify: Payloads successful on one surface help with others"""
@@ -110,6 +148,31 @@ class TestP32PayloadLearningVerification:
         assert any(p["payload"] == "' OR '1'='1" for p in learned)
         
         # This proves cross-surface learning works
+
+    def test_payload_transfer_profile(self):
+        """Verify: learned payloads are ranked for a similar surface."""
+        ledger = HypothesisLedger()
+
+        h1 = ledger.add("/api/login::user", "sqli")
+        ledger.record_result(h1, "confirmed", "SQLi found", "' UNION SELECT NULL--")
+
+        profile = ledger.get_payload_learning_profile("sqli", "/api/login::password", limit=5)
+        assert profile["successful_payloads"], "Should expose learned payloads"
+        assert profile["successful_payloads"][0]["payload"] == "' UNION SELECT NULL--"
+        assert profile["successful_payloads"][0]["transfer_score"] > 0
+
+    def test_stale_hypothesis_summary(self):
+        """Verify: stale hypotheses get explicit pruning guidance."""
+        ledger = HypothesisLedger()
+
+        hyp_id = ledger.add("/api/legacy::id", "idor")
+        for _ in range(25):
+            ledger.increment_iteration(hyp_id)
+
+        stale = ledger.get_stale_hypothesis_summary(iteration_threshold=20)
+        assert stale, "Expected stale hypothesis summary"
+        assert stale[0]["hypothesis_id"] == hyp_id
+        assert stale[0]["recommended_action"] in {"pivot", "retest", "deprioritize"}
 
 
 class TestP32PayloadLearningAttacks:
