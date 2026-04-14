@@ -93,6 +93,11 @@ class Config:
     # SECURITY REC LOW-7: RBAC Configuration
     # ════════════════════════════════════════════════════════════════════════════
     phantom_security_mode = "research"              # PHANTOM_SECURITY_MODE - research | hardened
+    phantom_proxy_direct_fallback = "false"         # PHANTOM_PROXY_DIRECT_FALLBACK - explicit proxy->direct fallback gate
+    phantom_scheduler_mode = "dabs"                 # PHANTOM_SCHEDULER_MODE - dabs | heuristic | fifo
+    phantom_strict_dabs_execution = "true"          # PHANTOM_STRICT_DABS_EXECUTION - enforce DABS-selected execution path
+    phantom_dabs_lambda = "0.20"                    # PHANTOM_DABS_LAMBDA - propagation strength [0,1]
+    phantom_scheduler_export_json = None             # PHANTOM_SCHEDULER_EXPORT_JSON - optional scheduler trace path
     # Tool-level role-based access control
     phantom_rbac_enabled = "false"                 # PHANTOM_RBAC_ENABLED - off by default
     phantom_rbac_default_role = "senior_pentester" # PHANTOM_RBAC_DEFAULT_ROLE

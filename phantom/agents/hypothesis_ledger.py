@@ -9,12 +9,27 @@ the context window.
 
 from __future__ import annotations
 
+import json
 import threading
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any, Callable
 
+from phantom.config.config import Config
 from phantom.agents.correlation_engine import CorrelationEngine
+from phantom.core.dabs_kernel import (
+    DABSDecisionTrace,
+    clamp_belief,
+    exploration_term,
+    initial_belief,
+    propagation_lambda,
+    propagate_belief,
+    relation_strength,
+    redundancy_penalty,
+    score_hypothesis,
+    select_argmax,
+)
 
 
 _VALID_STATUSES = frozenset({"open", "testing", "confirmed", "rejected"})
@@ -94,16 +109,44 @@ _DEFAULT_PAYLOAD_FAMILIES: list[str] = [
     "encoding",
 ]
 
-_CLASS_SCORE_WEIGHTS: dict[str, dict[str, float]] = {
-    "default": {"evidence": 1.0, "freshness": 1.0, "investment": 1.0, "payload": 1.0, "confidence": 1.0},
-    "sqli": {"evidence": 1.2, "freshness": 1.0, "investment": 1.1, "payload": 1.2, "confidence": 1.1},
-    "xss": {"evidence": 1.0, "freshness": 1.0, "investment": 0.9, "payload": 1.3, "confidence": 1.0},
-    "ssrf": {"evidence": 1.1, "freshness": 1.1, "investment": 1.0, "payload": 1.0, "confidence": 1.0},
-    "idor": {"evidence": 0.9, "freshness": 1.0, "investment": 1.2, "payload": 1.0, "confidence": 1.0},
-    "rce": {"evidence": 1.3, "freshness": 1.0, "investment": 1.0, "payload": 1.1, "confidence": 1.1},
-    "lfi": {"evidence": 1.0, "freshness": 1.0, "investment": 1.0, "payload": 1.1, "confidence": 1.0},
-    "auth_bypass": {"evidence": 1.2, "freshness": 1.0, "investment": 1.0, "payload": 1.0, "confidence": 1.1},
+_CHAIN_RELATIONS: set[frozenset[str]] = {
+    frozenset(("sqli", "rce")),
+    frozenset(("lfi", "rce")),
+    frozenset(("xxe", "ssrf")),
+    frozenset(("idor", "auth_bypass")),
+    frozenset(("auth_bypass", "idor")),
+    frozenset(("xss", "auth_bypass")),
+    frozenset(("open_redirect", "auth_bypass")),
 }
+
+_HEURISTIC_SEVERITY_WEIGHTS: dict[str, float] = {
+    "critical": 1.0,
+    "high": 0.8,
+    "medium": 0.5,
+    "low": 0.2,
+    "info": 0.0,
+}
+
+_VULN_DEFAULT_SEVERITY: dict[str, str] = {
+    "rce": "critical",
+    "cmd_injection": "critical",
+    "auth_bypass": "critical",
+    "sqli": "high",
+    "ssrf": "high",
+    "xxe": "high",
+    "lfi": "high",
+    "path_traversal": "high",
+    "idor": "medium",
+    "xss": "medium",
+    "open_redirect": "low",
+}
+
+_DABS_DEFAULT_LAMBDA = 0.20
+_MAX_SCHEDULER_EVENTS = 2000
+
+ARCHITECTURE_DIAGRAM_TEXT = (
+    "hypothesis -> belief_state -> scheduler_score -> selected_hypothesis -> outcome -> belief_propagation"
+)
 
 
 def _bounded_append(collection: list[Any], item: Any, limit: int) -> None:
@@ -192,6 +235,10 @@ class Hypothesis:
     # P3.2: Payload Learning - Track successful payloads
     successful_payloads: list[str] = field(default_factory=list)  # Payloads that confirmed vuln
     details: dict[str, Any] = field(default_factory=dict)  # Additional details (exploitation, etc.)
+    preconditions: list[str] = field(default_factory=list)
+    expected_exploit_path: str = ""
+    required_signals: list[str] = field(default_factory=list)
+    graph_metadata: dict[str, Any] = field(default_factory=dict)
     payload_family_examples: dict[str, list[str]] = field(default_factory=dict)
     negative_space: dict[str, list[str]] = field(default_factory=dict)
 
@@ -215,6 +262,10 @@ class Hypothesis:
             "last_updated": self.last_updated,
             "successful_payloads": self.successful_payloads,  # P3.2
             "details": self.details,  # Exploitation details
+            "preconditions": self.preconditions,
+            "expected_exploit_path": self.expected_exploit_path,
+            "required_signals": self.required_signals,
+            "graph_metadata": self.graph_metadata,
             "payload_family_examples": self.payload_family_examples,
             "negative_space": self.negative_space,
         }
@@ -241,6 +292,10 @@ class HypothesisLedger:
         self._counter: int = 0
         self._confirmation_callbacks: list[Callable[[str, Hypothesis], None]] = []
         self._correlation_engine: CorrelationEngine | None = None
+        self._belief_map: dict[str, float] = {}
+        self._scheduler_events: list[dict[str, Any]] = []
+        self._selection_step: int = 0
+        self._propagation_step: int = 0
 
     def set_correlation_engine(self, engine: CorrelationEngine | None) -> None:
         """Attach optional correlation engine for learned ranking signals."""
@@ -267,6 +322,250 @@ class HypothesisLedger:
         except Exception:
             return 0.5
 
+    def _scheduler_mode(self) -> str:
+        raw = str(Config.get("phantom_scheduler_mode") or "dabs").strip().lower()
+        if raw in {"dabs", "flat", "heuristic", "fifo"}:
+            return raw
+        return "dabs"
+
+    def _propagation_lambda(self) -> float:
+        return propagation_lambda(Config.get("phantom_dabs_lambda"))
+
+    def _log_scheduler_event(self, event_type: str, payload: dict[str, Any]) -> None:
+        event = {
+            "timestamp": datetime.now(UTC).isoformat(),
+            "event_type": event_type,
+            "payload": payload,
+        }
+        _bounded_append(self._scheduler_events, event, _MAX_SCHEDULER_EVENTS)
+
+    def compute_evidence_score(self, hyp: Hypothesis) -> float:
+        n_for = float(len(hyp.evidence_for))
+        n_support = float(len(hyp.supporting_evidence))
+        n_against = float(len(hyp.evidence_against))
+        denom = 1.0 + n_for + n_support + n_against
+        if denom <= 0:
+            return 0.0
+        return round((n_for + (0.5 * n_support)) / denom, 6)
+
+    def compute_redundancy(self, hyp: Hypothesis) -> float:
+        total_families = max(1, len(_payload_families_for_class(hyp.vuln_class)))
+        tested_families = len(set(hyp.payload_families_tested))
+        return round(tested_families / float(total_families), 6)
+
+    def _exploration_bonus(self, hyp: Hypothesis) -> float:
+        n_i = max(0, int(hyp.tests_executed))
+        return round(1.0 / float(1 + n_i), 6)
+
+    def _heuristic_endpoint_type_score(self, surface: str) -> float:
+        base, _ = _surface_signature(surface)
+        if not base:
+            return 0.2
+        if any(token in base for token in ("/admin", "/auth", "/login", "/oauth")):
+            return 1.0
+        if any(token in base for token in ("/api", "/graphql", "/v1", "/v2")):
+            return 0.7
+        return 0.4
+
+    def _heuristic_severity_score(self, vuln_class: str) -> float:
+        sev = _VULN_DEFAULT_SEVERITY.get(vuln_class.lower(), "medium")
+        return _HEURISTIC_SEVERITY_WEIGHTS.get(sev, 0.5)
+
+    def _hypothesis_priority_vector(self, hyp: Hypothesis) -> dict[str, float]:
+        belief = self.get_belief(hyp.id)
+        exploration = self._exploration_bonus(hyp)
+        redundancy = self.compute_redundancy(hyp)
+        heuristic_prior = (
+            (0.5 * self._heuristic_severity_score(hyp.vuln_class))
+            + (0.3 * self._heuristic_endpoint_type_score(hyp.surface))
+            + (0.2 * max(0.0, 1.0 - redundancy))
+        )
+        return {
+            "belief": belief,
+            "exploration": exploration,
+            "redundancy": redundancy,
+            "heuristic_prior": heuristic_prior,
+        }
+
+    def _is_chain_related(self, a: str, b: str) -> bool:
+        if not a or not b:
+            return False
+        if a.lower() == b.lower():
+            return True
+        return frozenset((a.lower(), b.lower())) in _CHAIN_RELATIONS
+
+    def _relation_strength(self, source: Hypothesis, target: Hypothesis) -> float:
+        if source.id == target.id:
+            return 1.0
+
+        rel = 0.0
+        if source.vuln_class.lower() == target.vuln_class.lower():
+            rel += 0.45
+
+        src_base, src_param = _surface_signature(source.surface)
+        dst_base, dst_param = _surface_signature(target.surface)
+        if src_base and dst_base and src_base == dst_base:
+            rel += 0.35
+        if src_param and dst_param and src_param == dst_param:
+            rel += 0.20
+
+        if self._is_chain_related(source.vuln_class, target.vuln_class):
+            rel += 0.25
+
+        return round(max(0.0, min(rel, 1.0)), 6)
+
+    def propagate_update(self, executed_hypothesis_id: str, outcome: str) -> None:
+        normalized = str(outcome or "testing").strip().lower()
+        if normalized == "confirmed":
+            delta = 1.0
+        elif normalized == "rejected":
+            delta = -1.0
+        else:
+            delta = 0.0
+
+        if self._scheduler_mode() == "flat":
+            with self._lock:
+                executed = self._hypotheses.get(executed_hypothesis_id)
+                if executed is None:
+                    return
+                self._propagation_step += 1
+                self._log_scheduler_event(
+                    "belief_propagation",
+                    {
+                        "step": self._propagation_step,
+                        "executed_hypothesis_id": executed_hypothesis_id,
+                        "outcome": normalized,
+                        "delta": delta,
+                        "lambda": 0.0,
+                        "updates": [],
+                    },
+                )
+            return
+
+        with self._lock:
+            executed = self._hypotheses.get(executed_hypothesis_id)
+            if executed is None:
+                return
+
+            if executed.id not in self._belief_map:
+                self._belief_map[executed.id] = initial_belief()
+
+            lam = self._propagation_lambda()
+            updates: list[dict[str, Any]] = []
+            for hyp in self._hypotheses.values():
+                rel = self._relation_strength(executed, hyp)
+                if rel <= 0.0:
+                    continue
+
+                old_belief = float(self._belief_map.get(hyp.id, initial_belief()))
+                new_belief = propagate_belief(old_belief, rel, delta, lam)
+                self._belief_map[hyp.id] = new_belief
+
+                updates.append(
+                    {
+                        "hypothesis_id": hyp.id,
+                        "relation": rel,
+                        "belief_before": round(old_belief, 6),
+                        "belief_after": round(new_belief, 6),
+                    }
+                )
+
+            self._propagation_step += 1
+            self._log_scheduler_event(
+                "belief_propagation",
+                {
+                    "step": self._propagation_step,
+                    "executed_hypothesis_id": executed_hypothesis_id,
+                    "outcome": normalized,
+                    "delta": delta,
+                    "lambda": lam,
+                    "updates": updates,
+                },
+            )
+
+    def get_belief(self, hypothesis_id: str) -> float:
+        with self._lock:
+            return float(self._belief_map.get(hypothesis_id, initial_belief()))
+
+    def get_belief_snapshot(self) -> dict[str, float]:
+        with self._lock:
+            return {hid: float(val) for hid, val in self._belief_map.items()}
+
+    def get_decision_trace(self) -> dict[str, Any]:
+        """Return the latest deterministic DABS decision trace."""
+        scored = self._compute_scored_hypotheses(log_selection=False)
+        return self._build_decision_trace(scored)
+
+    def _build_decision_trace(self, scored: list[dict[str, Any]]) -> dict[str, Any]:
+        selected = select_argmax(scored) if scored else None
+        trace = DABSDecisionTrace(
+            selected_hypothesis_id=selected,
+            scores=[
+                {
+                    "hypothesis_id": item["hypothesis_id"],
+                    "priority_score": item["priority_score"],
+                    "belief": item.get("belief", initial_belief()),
+                    "exploration": item.get("exploration_bonus", 0.0),
+                    "redundancy": item.get("redundancy", 0.0),
+                }
+                for item in scored
+            ],
+            belief_map=self.get_belief_snapshot(),
+            scheduler_mode=self._scheduler_mode(),
+            selection_step=self._selection_step,
+            propagation_step=self._propagation_step,
+            lambda_value=self._propagation_lambda(),
+        )
+        return trace.to_dict()
+
+    def get_scheduler_events(self, limit: int | None = None) -> list[dict[str, Any]]:
+        with self._lock:
+            events = list(self._scheduler_events)
+        if isinstance(limit, int) and limit > 0:
+            return events[-limit:]
+        return events
+
+    def get_scheduler_report(self) -> dict[str, Any]:
+        with self._lock:
+            open_or_testing = [h for h in self._hypotheses.values() if h.status in {"open", "testing"}]
+
+        scored = self._compute_scored_hypotheses(log_selection=False)
+        trace = self._build_decision_trace(scored)
+        selected = trace.get("selected_hypothesis_id")
+
+        return {
+            "scheduler_mode": self._scheduler_mode(),
+            "graph": {
+                "nodes": len(self._hypotheses),
+                "candidate_nodes": len(open_or_testing),
+            },
+            "belief_map": self.get_belief_snapshot(),
+            "selected_hypothesis_id": selected,
+            "events_recorded": len(self.get_scheduler_events()),
+            "decision_trace": trace,
+            "strict_validation": {
+                "no_external_ranking": self._scheduler_mode() in {"dabs", "flat", "heuristic", "fifo"},
+                "no_llm_scoring_path": True,
+                "dabs_only_selection_index": selected == select_argmax(scored),
+                "expert_outputs_append_only": True,
+                "graph_changes_affect_only_rel": True,
+            },
+            "architecture": ARCHITECTURE_DIAGRAM_TEXT,
+        }
+
+    def _export_scheduler_json(self, raw_path: str) -> None:
+        path = Path(raw_path)
+        payload = {
+            "scheduler_mode": self._scheduler_mode(),
+            "belief_map": self.get_belief_snapshot(),
+            "events": self.get_scheduler_events(),
+        }
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        except OSError:
+            return
+
     # ── Mutations ─────────────────────────────────────────────────────────────
 
     def add(self, surface: str, vuln_class: str) -> str:
@@ -275,12 +574,14 @@ class HypothesisLedger:
             # Dedup by surface + class
             for hyp in self._hypotheses.values():
                 if hyp.surface == surface and hyp.vuln_class == vuln_class:
+                    self._belief_map.setdefault(hyp.id, 0.5)
                     return hyp.id
             self._counter += 1
             hyp_id = f"H-{self._counter:04d}"
             self._hypotheses[hyp_id] = Hypothesis(
                 id=hyp_id, surface=surface, vuln_class=vuln_class
             )
+            self._belief_map[hyp_id] = 0.5
             return hyp_id
 
     def _make_payload_family(self, vuln_class: str, payload: str) -> str:
@@ -510,6 +811,9 @@ class HypothesisLedger:
             self._record_confidence(hyp, self._confidence_from_evidence(hyp), reason=outcome)
             hyp.last_updated = datetime.now(UTC).isoformat()
 
+        if self._scheduler_mode() != "flat":
+            self.propagate_update(hyp_id, outcome)
+
     def increment_iteration(self, hyp_id: str) -> None:
         """Increment the iterations-spent counter for a hypothesis."""
         with self._lock:
@@ -600,150 +904,137 @@ class HypothesisLedger:
         summary.sort(key=lambda entry: (entry["confidence"], entry["iterations_spent"]), reverse=True)
         return summary
 
+    def get_next_hypothesis(self) -> dict[str, Any] | None:
+        scored = self._compute_scored_hypotheses(log_selection=True)
+        if not scored:
+            return None
+        trace = self._build_decision_trace(scored)
+        selected_id = trace.get("selected_hypothesis_id")
+        if not selected_id:
+            return None
+        for item in scored:
+            if item.get("hypothesis_id") == selected_id:
+                return item
+        return None
+
     def get_scored_hypotheses(self) -> list[dict[str, Any]]:
+        """Return deterministic scheduler scores for open/testing hypotheses."""
+        return self._compute_scored_hypotheses(log_selection=True)
+
+    def _compute_scored_hypotheses(self, log_selection: bool) -> list[dict[str, Any]]:
+        """Compute deterministic scheduler scores.
+
+        When log_selection=False this method is side-effect free with respect to
+        scheduler event counters and trace logs.
         """
-        Return hypotheses with computed priority scores.
-
-        This returns SCORED DATA for the LLM to analyze - it does NOT prescribe
-        what to test next. The LLM uses these scores as input for its own decision.
-
-        Scoring factors:
-        - Evidence balance: More evidence_for increases score
-        - Freshness: Recently updated hypotheses score higher
-        - Investment: Moderate iteration count is optimal (too few = untested,
-          too many = likely false positive)
-        - Status: 'testing' scores higher than 'open' (already invested)
-
-        Returns:
-            List of dicts with hypothesis data plus 'priority_score' and 'score_factors'
-        """
-        from datetime import datetime as dt
-
+        mode = self._scheduler_mode()
         with self._lock:
             hypotheses = [h for h in self._hypotheses.values() if h.status in {"open", "testing"}]
 
         if not hypotheses:
+            if log_selection:
+                self._selection_step += 1
+                self._log_scheduler_event(
+                    "selection",
+                    {
+                        "step": self._selection_step,
+                        "scheduler_mode": mode,
+                        "ordered_hypotheses": [],
+                    },
+                )
+            export_path = str(Config.get("phantom_scheduler_export_json") or "").strip()
+            if export_path:
+                self._export_scheduler_json(export_path)
             return []
 
         scored: list[dict[str, Any]] = []
-        now = dt.now(UTC)
 
         for h in hypotheses:
-            factors: dict[str, float] = {}
-            vuln_class = h.vuln_class.lower()
-            class_weights = _CLASS_SCORE_WEIGHTS.get(vuln_class, _CLASS_SCORE_WEIGHTS["default"])
+            with self._lock:
+                self._belief_map.setdefault(h.id, 0.5)
 
-            # Evidence balance factor (0-30 points)
-            # More evidence_for relative to evidence_against = higher score
-            ev_for = len(h.evidence_for)
-            ev_against = len(h.evidence_against)
-            ev_supporting = len(h.supporting_evidence)
-            if ev_for + ev_against > 0:
-                factors["evidence_balance"] = (ev_for / (ev_for + ev_against)) * 30
+            vector = self._hypothesis_priority_vector(h)
+            exploration = vector["exploration"]
+            redundancy = vector["redundancy"]
+            belief = vector["belief"]
+            heuristic_prior = vector["heuristic_prior"]
+
+            if mode == "fifo":
+                total_score = -float(h.tests_executed)
+                score_factors = {
+                    "fifo_order": round(total_score, 6),
+                }
+            elif mode == "heuristic":
+                total_score = heuristic_prior + exploration - redundancy
+                score_factors = {
+                    "heuristic_prior": round(heuristic_prior, 6),
+                    "exploration": round(exploration, 6),
+                    "redundancy": round(redundancy, 6),
+                }
             else:
-                factors["evidence_balance"] = 15.0  # Neutral if no evidence
-            factors["evidence_balance"] *= class_weights.get("evidence", 1.0)
+                total_score = score_hypothesis(
+                    belief=belief,
+                    tests_executed=h.tests_executed,
+                    tested_families=len(set(h.payload_families_tested)),
+                    total_families=len(_payload_families_for_class(h.vuln_class)),
+                )
+                score_factors = {
+                    "belief": round(belief, 6),
+                    "exploration": round(exploration, 6),
+                    "redundancy": round(redundancy, 6),
+                    "kernel_exploration": round(exploration_term(h.tests_executed), 6),
+                    "kernel_redundancy": round(redundancy_penalty(len(set(h.payload_families_tested)), len(_payload_families_for_class(h.vuln_class))), 6),
+                }
 
-            # Freshness factor (0-20 points)
-            # Recently updated hypotheses get higher scores
-            try:
-                last_update = dt.fromisoformat(h.last_updated)
-                hours_ago = (now - last_update).total_seconds() / 3600
-                # Score decays over 24 hours
-                factors["freshness"] = max(0, 20 - (hours_ago * (20 / 24)))
-            except (ValueError, TypeError):
-                factors["freshness"] = 10.0  # Default if parsing fails
-            factors["freshness"] *= class_weights.get("freshness", 1.0)
+            scored.append(
+                {
+                    "hypothesis_id": h.id,
+                    "surface": h.surface,
+                    "vuln_class": h.vuln_class,
+                    "status": h.status,
+                    "payloads_tested": len(h.payloads_tested),
+                    "tests_executed": h.tests_executed,
+                    "iterations_spent": h.iterations_spent,
+                    "evidence_for": len(h.evidence_for),
+                    "evidence_against": len(h.evidence_against),
+                    "supporting_evidence": len(h.supporting_evidence),
+                    "confidence": round(self._confidence_from_evidence(h), 1),
+                    "payload_families_tested": list(h.payload_families_tested),
+                    "missing_payload_families": list(h.negative_space.get("missing_families", [])),
+                    "next_best_tests": self.get_next_best_tests(h.id, limit=3),
+                    "belief": round(belief, 6),
+                    "exploration_bonus": round(exploration, 6),
+                    "redundancy": round(redundancy, 6),
+                    "priority_score": round(total_score, 6),
+                    "score_factors": score_factors,
+                    "scheduler_mode": mode,
+                }
+            )
 
-            # Investment factor (0-25 points)
-            # Optimal is 3-10 iterations (enough to be promising, not too many)
-            iterations = h.tests_executed or h.iterations_spent
-            if iterations == 0:
-                factors["investment"] = 5.0  # Untested - low but not zero
-            elif 3 <= iterations <= 10:
-                factors["investment"] = 25.0  # Sweet spot
-            elif iterations < 3:
-                factors["investment"] = 10.0 + (iterations * 3)  # Building up
-            else:
-                # Diminishing returns after 10 iterations
-                factors["investment"] = max(5, 25 - (iterations - 10) * 2)
-            factors["investment"] *= class_weights.get("investment", 1.0)
+        scored.sort(key=lambda x: float(x["priority_score"]), reverse=True)
+        if log_selection:
+            self._selection_step += 1
+            self._log_scheduler_event(
+                "selection",
+                {
+                    "step": self._selection_step,
+                    "scheduler_mode": mode,
+                    "ordered_hypotheses": [
+                        {
+                            "hypothesis_id": item["hypothesis_id"],
+                            "priority_score": item["priority_score"],
+                            "belief": item.get("belief", 0.5),
+                            "exploration_bonus": item.get("exploration_bonus", 0.0),
+                            "redundancy": item.get("redundancy", 0.0),
+                        }
+                        for item in scored
+                    ],
+                },
+            )
 
-            confidence = self._confidence_from_evidence(h)
-            factors["confidence"] = confidence * 0.2
-            factors["confidence"] *= class_weights.get("confidence", 1.0)
-
-            # Status factor (0-15 points)
-            # 'testing' means we're already invested
-            if h.status == "testing":
-                factors["status"] = 15.0
-            else:  # 'open'
-                factors["status"] = 8.0
-
-            # Payload variety factor (0-10 points)
-            # Some payloads tested but not too many suggests methodical approach
-            payload_count = len(h.payloads_tested)
-            if 1 <= payload_count <= 5:
-                factors["payload_variety"] = 10.0
-            elif payload_count == 0:
-                factors["payload_variety"] = 3.0  # Needs testing
-            else:
-                factors["payload_variety"] = max(3, 10 - (payload_count - 5))
-            factors["payload_variety"] *= class_weights.get("payload", 1.0)
-
-            # Payload family coverage factor (0-12 points)
-            family_count = len(h.payload_families_tested)
-            if family_count == 0:
-                factors["payload_family_coverage"] = 2.0
-            elif family_count <= 2:
-                factors["payload_family_coverage"] = 8.0 + (family_count * 2)
-            else:
-                factors["payload_family_coverage"] = 12.0
-            factors["payload_family_coverage"] *= class_weights.get("payload", 1.0)
-
-            # Learned correlation prior factor (0-20 points)
-            corr_surface_score = self._correlation_surface_score(h.vuln_class, h.surface)
-            corr_surface_boost = max(0.0, min((corr_surface_score - 0.5) * 40.0, 20.0))
-            factors["correlation_prior"] = corr_surface_boost
-
-            evidence_events = len(h.evidence_history)
-            factors["evidence_signal"] = min(12.0, evidence_events * 1.5)
-            factors["supporting_signal"] = min(10.0, ev_supporting * 1.5)
-
-            status_trend = h.confidence_history[-1]["trend"] if h.confidence_history else "new"
-            if status_trend == "rising":
-                factors["trend_bonus"] = 4.0
-            elif status_trend == "falling":
-                factors["trend_bonus"] = -3.0
-            else:
-                factors["trend_bonus"] = 0.0
-
-            # Calculate total score
-            total_score = sum(factors.values())
-
-            scored.append({
-                "hypothesis_id": h.id,
-                "surface": h.surface,
-                "vuln_class": h.vuln_class,
-                "status": h.status,
-                "payloads_tested": len(h.payloads_tested),
-                "tests_executed": h.tests_executed,
-                "iterations_spent": h.iterations_spent,
-                "evidence_for": ev_for,
-                "evidence_against": ev_against,
-                "supporting_evidence": ev_supporting,
-                "confidence": round(confidence, 1),
-                "confidence_trend": status_trend,
-                "payload_families_tested": list(h.payload_families_tested),
-                "missing_payload_families": list(h.negative_space.get("missing_families", [])),
-                "next_best_tests": self.get_next_best_tests(h.id, limit=3),
-                "priority_score": round(total_score, 1),
-                "score_factors": {k: round(v, 1) for k, v in factors.items()},
-                "correlation_surface_score": round(corr_surface_score, 3),
-            })
-
-        # Sort by score descending
-        scored.sort(key=lambda x: x["priority_score"], reverse=True)
+        export_path = str(Config.get("phantom_scheduler_export_json") or "").strip()
+        if export_path:
+            self._export_scheduler_json(export_path)
 
         return scored
 
@@ -801,8 +1092,6 @@ class HypothesisLedger:
             by_class[h.vuln_class] = by_class.get(h.vuln_class, 0) + 1
 
         confirmed = [h for h in hypotheses_list if h.status == "confirmed"]
-        confirmed_sorted = sorted(confirmed, key=lambda h: len(h.evidence_for), reverse=True)[:5]
-        top_open = self.get_scored_hypotheses()[:5]
 
         return {
             "total": len(hypotheses_list),
@@ -817,19 +1106,20 @@ class HypothesisLedger:
                     "evidence_count": len(h.evidence_for),
                     "confidence": round(self._confidence_from_evidence(h), 1),
                 }
-                for h in confirmed_sorted
+                for h in confirmed[:5]
             ],
-            "top_open": [
+            "open_hypotheses": [
                 {
-                    "id": entry["hypothesis_id"],
-                    "vuln_class": entry["vuln_class"],
-                    "surface": entry["surface"][:50],
-                    "score": entry["priority_score"],
-                    "confidence": entry.get("confidence", 0),
-                    "next_best_tests": entry.get("next_best_tests", []),
+                    "id": h.id,
+                    "vuln_class": h.vuln_class,
+                    "surface": h.surface[:50],
+                    "status": h.status,
+                    "tests_executed": h.tests_executed,
+                    "confidence": round(self._confidence_from_evidence(h), 1),
                 }
-                for entry in top_open
-            ],
+                for h in hypotheses_list
+                if h.status in {"open", "testing"}
+            ][:5],
         }
 
     # ── NEW METHODS FOR HYPOTHESIS_ACTIONS.PY ─────────────────────────────────
@@ -933,10 +1223,6 @@ class HypothesisLedger:
                 evidence,
                 successful_payload=successful_payload,
             )
-
-            # Update priority scores of related hypotheses
-            # Related = same surface or same vuln_class
-            self._update_related_priorities(hyp.surface, hyp.vuln_class, "confirmed")
             
             # Store reference for callbacks (outside lock)
             callbacks = list(self._confirmation_callbacks)
@@ -978,9 +1264,6 @@ class HypothesisLedger:
                 return False
 
             self.record_result(hypothesis_id, "rejected", reason)
-
-            # Update priority scores of related hypotheses
-            self._update_related_priorities(hyp.surface, hyp.vuln_class, "rejected")
             
             return True
 
@@ -1039,33 +1322,6 @@ class HypothesisLedger:
             self._record_manual_evidence(hyp, validated_evidence, "against", f"evidence_against:{outcome}")
             
             return True
-
-    def _update_related_priorities(
-        self,
-        surface: str,
-        vuln_class: str,
-        outcome: str
-    ) -> None:
-        """
-        Update priority scores of hypotheses related to a confirmed/rejected one.
-        
-        This is called internally when a hypothesis is confirmed or rejected.
-        Related hypotheses are those with the same surface or same vuln_class.
-        
-        Args:
-            surface: The surface of the hypothesis
-            vuln_class: The vulnerability class
-            outcome: "confirmed" or "rejected"
-        """
-        # This is a no-op for now as priority scores are computed dynamically
-        # by get_scored_hypotheses(). The scores will automatically reflect
-        # the new status when recalculated.
-        # 
-        # If we wanted to implement static priority adjustment, we would:
-        # - Boost priorities of same-surface hypotheses if confirmed
-        # - Lower priorities of same-class hypotheses if rejected
-        # But dynamic scoring is better as it's always fresh.
-        pass
 
     # ── P3.2: Payload Learning ───────────────────────────────────────────────
 
@@ -1296,45 +1552,24 @@ class HypothesisLedger:
             }
 
     def get_prioritized_summary(self, top_n: int = 10) -> str:
-        """
-        Return a scored summary of hypotheses for LLM decision-making.
+        """Return a factual summary for the expert layer and prompt context."""
+        with self._lock:
+            hyps = [h for h in self._hypotheses.values() if h.status in {"open", "testing", "confirmed", "rejected"}]
 
-        This is an ENHANCED version of to_prompt_summary that includes priority
-        scores. The LLM uses these scores as INPUT for its decisions - the scores
-        are SUGGESTIONS not COMMANDS.
-        """
-        scored = self.get_scored_hypotheses()
-
-        if not scored:
+        if not hyps:
             return ""
 
-        lines = ["[HYPOTHESIS PRIORITY ANALYSIS — scored for LLM consideration]"]
-        lines.append("  (Scores are suggestions based on evidence/investment/freshness — you decide priority)")
+        lines = ["[HYPOTHESIS LEDGER — factual summary]"]
+        lines.append(f"  (scheduler_mode={self._scheduler_mode()}; no ranking exposed)")
         lines.append("")
 
-        for entry in scored[:top_n]:
-            score = entry["priority_score"]
-            h_id = entry["hypothesis_id"]
-            vuln = entry["vuln_class"]
-            surface = entry["surface"][:45]
-            ev_balance = f"+{entry['evidence_for']}/-{entry['evidence_against']}"
-            tests = entry.get("tests_executed", entry["iterations_spent"])
-            confidence = entry.get("confidence", 0)
-            trend = entry.get("confidence_trend", "stale")
-
-            # Score interpretation hint
-            if score >= 70:
-                hint = "HIGH"
-            elif score >= 50:
-                hint = "MED"
-            else:
-                hint = "LOW"
-
+        for hyp in hyps[:top_n]:
             lines.append(
-                f"  [{hint:4s} {score:5.1f}] {h_id} | {vuln:12s} | {surface:45s} | "
-                f"ev={ev_balance} tests={tests} conf={confidence:.1f}/{trend}"
+                f"  {hyp.id} | {hyp.status.upper():10s} | {hyp.vuln_class:15s} | {hyp.surface[:45]} | "
+                f"tests={hyp.tests_executed} conf={self._confidence_from_evidence(hyp):.1f} "
+                f"ev+={len(hyp.evidence_for)} ev-={len(hyp.evidence_against)}"
             )
-            next_items = entry.get("next_best_tests", [])
+            next_items = self.get_next_best_tests(hyp.id, limit=2)
             if next_items:
                 next_str = "; ".join(f"{item.get('family')}:{str(item.get('payload', ''))[:24]}" for item in next_items[:2])
                 lines.append(f"    next: {next_str}")
@@ -1347,9 +1582,17 @@ class HypothesisLedger:
 
         lines.append("")
         lines.append(f"  Active: {active}/{total} | Confirmed vulns: {confirmed}")
-        lines.append("[END PRIORITY ANALYSIS]")
+        lines.append("[END LEDGER SUMMARY]")
 
         return "\n".join(lines)
+
+    def get_factual_prompt_summary(self, top_n: int = 10) -> str:
+        """Return a prompt-safe factual summary with no ranking.
+
+        This is the only summary suitable for the expert layer or prompt
+        injection under strict separation.
+        """
+        return self.get_prioritized_summary(top_n=top_n)
 
     # ── Prompt Injection ──────────────────────────────────────────────────────
 
@@ -1427,6 +1670,10 @@ class HypothesisLedger:
             return {
                 "counter": self._counter,
                 "hypotheses": {k: v.to_dict() for k, v in self._hypotheses.items()},
+                "belief_map": dict(self._belief_map),
+                "scheduler_events": list(self._scheduler_events),
+                "selection_step": self._selection_step,
+                "propagation_step": self._propagation_step,
             }
 
     @classmethod
@@ -1435,6 +1682,28 @@ class HypothesisLedger:
         ledger._counter = d.get("counter", 0)
         for k, v in d.get("hypotheses", {}).items():
             ledger._hypotheses[k] = Hypothesis.from_dict(v)
+        raw_beliefs = d.get("belief_map", {})
+        if isinstance(raw_beliefs, dict):
+            for hyp_id, value in raw_beliefs.items():
+                try:
+                    ledger._belief_map[str(hyp_id)] = max(0.0, min(1.0, float(value)))
+                except (TypeError, ValueError):
+                    continue
+        for hyp_id in ledger._hypotheses:
+            ledger._belief_map.setdefault(hyp_id, 0.5)
+
+        raw_events = d.get("scheduler_events", [])
+        if isinstance(raw_events, list):
+            ledger._scheduler_events = [item for item in raw_events if isinstance(item, dict)][-_MAX_SCHEDULER_EVENTS:]
+
+        try:
+            ledger._selection_step = int(d.get("selection_step", 0))
+        except (TypeError, ValueError):
+            ledger._selection_step = 0
+        try:
+            ledger._propagation_step = int(d.get("propagation_step", 0))
+        except (TypeError, ValueError):
+            ledger._propagation_step = 0
         return ledger
 
     def __len__(self) -> int:

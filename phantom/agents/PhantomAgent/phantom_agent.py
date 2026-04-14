@@ -24,6 +24,8 @@ class PhantomAgent(BaseAgent):
         user_instructions = scan_config.get("user_instructions", "")
         targets = scan_config.get("targets", [])
 
+        self.state.update_context("scan_config", dict(scan_config))
+
         repositories = []
         local_code = []
         urls = []
@@ -57,6 +59,7 @@ class PhantomAgent(BaseAgent):
             elif target_type == "web_application":
                 target_url = details["target_url"]
                 urls.append(target_url)
+                self.state.update_context("target_url", target_url)
                 # Register hostname so SSRF check allows requests to the scan target.
                 try:
                     from phantom.tools.proxy.proxy_manager import allow_ssrf_host

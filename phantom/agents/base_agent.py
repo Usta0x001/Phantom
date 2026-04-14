@@ -20,6 +20,7 @@ from jinja2 import (
 from phantom.agents.hypothesis_ledger import HypothesisLedger  # Rec 6 (SF-005)
 from phantom.agents.coverage_tracker import CoverageTracker  # Enhancement: Coverage tracking
 from phantom.agents.correlation_engine import CorrelationEngine  # Enhancement: Vulnerability chains
+from phantom.agents.dabs_execution_planner import plan_bootstrap_invocations, plan_tool_invocation
 from phantom.llm import LLM, LLMConfig, LLMRequestFailedError
 from phantom.llm.pentager.reflector import get_reflector
 from phantom.llm.utils import clean_content
@@ -142,11 +143,13 @@ class BaseAgent(metaclass=AgentMeta):
 
         # C1: Wire hypothesis ledger to the tool so the LLM can interact with it
         try:
-            from phantom.tools.hypothesis.hypothesis_actions import set_global_ledger, set_correlation_engine
-            # FIX Bug #3: Use global for backward compatibility (shared ledger for all agents)
+            from phantom.tools.hypothesis.hypothesis_actions import set_global_ledger, set_correlation_engine, set_ledger
+            # Keep default/global mapping for backward compatibility while also
+            # registering per-agent context to avoid cross-agent state bleed.
             set_global_ledger(self.hypothesis_ledger)
-            # FIX 4: Wire correlation engine for automatic chain detection
-            set_correlation_engine(self.correlation_engine)
+            set_ledger(self.hypothesis_ledger, agent_id=self.state.agent_id)
+            # FIX 4: Wire correlation engine for automatic chain detection.
+            set_correlation_engine(self.correlation_engine, agent_id=self.state.agent_id)
         except ImportError as e:
             # Tool module not available in this environment
             logging.warning(f"Hypothesis ledger tool not available: {e}")
@@ -715,6 +718,14 @@ class BaseAgent(metaclass=AgentMeta):
         final_response = None
         self._last_iteration_action_count = 0
         use_reflector = os.environ.get("PHANTOM_USE_REFLECTOR", "false").lower() == "true"
+        strict_dabs_execution = str(Config.get("phantom_strict_dabs_execution") or "false").strip().lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
+        if strict_dabs_execution:
+            use_reflector = False
 
         # AUDIT-FIX: Auto-inject scan_status every 10 iterations OR when message count > 50
         message_count = len(self.state.get_conversation_history())
@@ -727,7 +738,7 @@ class BaseAgent(metaclass=AgentMeta):
             try:
                 from phantom.tools.scan_status.scan_status_actions import get_scan_status
                 status = get_scan_status(
-                    include_recommendations=True,
+                    include_recommendations=not strict_dabs_execution,
                     agent_id=self.state.agent_id,
                 )
                 
@@ -760,7 +771,7 @@ class BaseAgent(metaclass=AgentMeta):
             and self.state.iteration > 0
             and self.state.iteration % _LEDGER_INJECT_EVERY == 0
         ):
-            ledger_summary = self.hypothesis_ledger.get_prioritized_summary(top_n=10)
+            ledger_summary = self.hypothesis_ledger.get_factual_prompt_summary(top_n=10)
             if ledger_summary:
                 self.state.add_message("user", ledger_summary)
 
@@ -852,6 +863,17 @@ class BaseAgent(metaclass=AgentMeta):
             if hasattr(final_response, "tool_invocations") and final_response.tool_invocations
             else []
         )
+
+        if strict_dabs_execution:
+            selected = self.hypothesis_ledger.get_next_hypothesis()
+            if selected:
+                planned_action = plan_tool_invocation(selected, self.state.context)
+                if planned_action:
+                    actions = [planned_action]
+                    self.state.update_context("dabs_strict_selected_hypothesis_id", selected.get("hypothesis_id"))
+                    self.state.update_context("dabs_strict_decision_trace", self.hypothesis_ledger.get_decision_trace())
+            else:
+                actions = plan_bootstrap_invocations(self.state.context)
 
         if actions:
             self._last_iteration_action_count = len(actions)
@@ -1162,8 +1184,7 @@ class BaseAgent(metaclass=AgentMeta):
                 lines.append(f"Priority hypotheses: {len(top_hypotheses)}")
                 for hyp in top_hypotheses[:2]:
                     lines.append(
-                        f"  - [{hyp.get('priority_score')}] {hyp.get('vuln_class')} @ "
-                        f"{str(hyp.get('surface', ''))[:35]}"
+                        f"  - {hyp.get('vuln_class')} @ {str(hyp.get('surface', ''))[:35]}"
                     )
 
         if attack_graph:

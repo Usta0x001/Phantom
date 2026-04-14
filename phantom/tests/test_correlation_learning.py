@@ -1,9 +1,4 @@
-"""
-Correlation learning regression tests.
-
-These tests prove that the correlation engine now influences planning,
-not only prompt summaries.
-"""
+"""Correlation and DABS regression tests."""
 
 from phantom.agents.correlation_engine import CorrelationEngine
 from phantom.agents.hypothesis_ledger import HypothesisLedger
@@ -43,40 +38,23 @@ def test_correlation_engine_learns_success_vs_failure_priors() -> None:
     assert union_score > boolean_score
 
 
-def test_hypothesis_scoring_uses_correlation_prior() -> None:
-    engine = CorrelationEngine()
+def test_dabs_belief_propagation_moves_related_hypotheses() -> None:
     ledger = HypothesisLedger()
-    ledger.set_correlation_engine(engine)
 
-    favored = ledger.add("/api/login::username", "sqli")
-    unfavored = ledger.add("/api/profile::id", "sqli")
+    h_exec = ledger.add("/api/login::username", "sqli")
+    h_related = ledger.add("/api/login::password", "sqli")
+    h_unrelated = ledger.add("/profile/view::id", "xss")
 
-    # Keep raw evidence and investment identical.
-    ledger.record_payload(favored, "' OR 1=1--")
-    ledger.record_result(favored, "testing", "signal")
-    ledger.record_payload(unfavored, "' OR 1=1--")
-    ledger.record_result(unfavored, "testing", "signal")
+    before_related = ledger.get_belief(h_related)
+    before_unrelated = ledger.get_belief(h_unrelated)
 
-    for _ in range(4):
-        engine.record_outcome(
-            vuln_class="sqli",
-            surface="/api/login::username",
-            outcome="confirmed",
-            payload_family="union",
-        )
-        engine.record_outcome(
-            vuln_class="sqli",
-            surface="/api/profile::id",
-            outcome="rejected",
-            payload_family="boolean",
-        )
+    ledger.record_result(h_exec, "confirmed", "signal")
 
-    scored = ledger.get_scored_hypotheses()
-    assert scored, "Expected scored hypotheses"
+    after_related = ledger.get_belief(h_related)
+    after_unrelated = ledger.get_belief(h_unrelated)
 
-    top = scored[0]
-    assert top["hypothesis_id"] == favored
-    assert top["score_factors"].get("correlation_prior", 0) > 0
+    assert after_related > before_related
+    assert after_unrelated == before_unrelated
 
 
 def test_next_best_tests_prioritize_stronger_family_correlation() -> None:
@@ -111,3 +89,16 @@ def test_next_best_tests_prioritize_stronger_family_correlation() -> None:
     assert next_tests
     assert next_tests[0]["family"] == "union"
     assert next_tests[0].get("correlation_score", 0) >= next_tests[-1].get("correlation_score", 0)
+
+
+def test_chain_relation_propagates_from_sqli_to_rce() -> None:
+    ledger = HypothesisLedger()
+
+    h_sqli = ledger.add("/api/query::id", "sqli")
+    h_rce = ledger.add("/api/exec::cmd", "rce")
+
+    before = ledger.get_belief(h_rce)
+    ledger.record_result(h_sqli, "confirmed", "confirmed injection")
+    after = ledger.get_belief(h_rce)
+
+    assert after > before
