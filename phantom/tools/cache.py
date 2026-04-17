@@ -16,6 +16,7 @@ import hashlib
 import json
 import logging
 import time
+import threading
 from collections import OrderedDict
 from dataclasses import dataclass, field
 from typing import Any
@@ -58,8 +59,7 @@ CACHEABLE_TOOLS: frozenset[str] = frozenset({
     "list_requests",
     "view_request",
     
-    # Static web requests (same URL = same response within TTL)
-    # NOTE: Caching is conservative - only for GET requests with same params
+    # Static web requests (GET only, auth-safe)
     "send_request",
     
     # Documentation/help queries
@@ -123,8 +123,7 @@ class CacheStats:
 class ToolResultCache:
     """LRU cache for idempotent tool results with TTL expiration.
     
-    Thread-safe via GIL for basic operations. For high-concurrency scenarios,
-    consider adding explicit locking.
+    Thread-safe via an internal lock.
     
     Usage:
         cache = ToolResultCache()
@@ -169,6 +168,7 @@ class ToolResultCache:
         # LRU cache storage: key -> CacheEntry
         self._cache: OrderedDict[str, CacheEntry] = OrderedDict()
         self._stats = CacheStats()
+        self._lock = threading.RLock()
         
         logger.debug(
             "ToolResultCache initialized: enabled=%s max_size=%d ttl=%.0fs",
@@ -197,27 +197,6 @@ class ToolResultCache:
         # Normalize kwargs for cacheability
         normalized = kwargs.copy()
         
-        # For send_request: ignore headers that change per request but don't affect result
-        if tool_name == "send_request" and "headers" in normalized:
-            headers = normalized["headers"]
-            if isinstance(headers, dict):
-                # Remove ephemeral headers that don't affect cacheable responses
-                ephemeral_headers = {
-                    "User-Agent", "Accept-Encoding", "Accept-Language",
-                    "Cache-Control", "Pragma", "Date", "X-Request-ID",
-                    "Cookie",  # Cookies change per session
-                }
-                normalized_headers = {
-                    k: v for k, v in headers.items()
-                    if k not in ephemeral_headers
-                }
-                # Only include headers if non-empty after filtering
-                if normalized_headers:
-                    normalized["headers"] = normalized_headers
-                else:
-                    normalized.pop("headers", None)
-        
-        # For send_request: normalize method (GET vs get)
         if tool_name == "send_request" and "method" in normalized:
             normalized["method"] = normalized["method"].upper()
         
@@ -235,15 +214,53 @@ class ToolResultCache:
         
         return hashlib.sha256(canonical.encode()).hexdigest()[:32]
     
-    def is_cacheable(self, tool_name: str) -> bool:
+    def _is_send_request_cache_safe(self, kwargs: dict[str, Any] | None) -> bool:
+        if not kwargs:
+            return False
+
+        method = str(kwargs.get("method", "")).strip().upper()
+        if method != "GET":
+            return False
+
+        body = kwargs.get("body", "")
+        if isinstance(body, str) and body.strip():
+            return False
+        if body not in ("", None) and not isinstance(body, str):
+            return False
+
+        headers = kwargs.get("headers")
+        if headers is None:
+            return True
+        if not isinstance(headers, dict):
+            return False
+
+        sensitive_headers = {
+            "authorization",
+            "proxy-authorization",
+            "cookie",
+            "set-cookie",
+            "x-api-key",
+            "x-auth-token",
+            "x-csrf-token",
+            "x-xsrf-token",
+        }
+        for key in headers:
+            if str(key).strip().lower() in sensitive_headers:
+                return False
+
+        return True
+
+    def is_cacheable(self, tool_name: str, kwargs: dict[str, Any] | None = None) -> bool:
         """Check if a tool's results can be cached.
-        
+
         Returns True only for whitelisted idempotent tools.
         """
         if not self._enabled:
             return False
         if tool_name in NON_CACHEABLE_TOOLS:
             return False
+        if tool_name == "send_request":
+            return self._is_send_request_cache_safe(kwargs)
         return tool_name in CACHEABLE_TOOLS
     
     def get(self, tool_name: str, kwargs: dict[str, Any]) -> Any | None:
@@ -259,32 +276,33 @@ class ToolResultCache:
         if not self._enabled:
             return None
             
-        if not self.is_cacheable(tool_name):
+        if not self.is_cacheable(tool_name, kwargs):
             # Not cacheable - this is expected for most tools
             return None
         
         key = self._make_key(tool_name, kwargs)
-        entry = self._cache.get(key)
-        
-        if entry is None:
-            self._stats.misses += 1
-            logger.debug("Cache miss: %s (not in cache)", tool_name)
-            return None
-        
-        # Check TTL expiration
-        age = time.monotonic() - entry.created_at
-        if age > self._ttl:
-            self._cache.pop(key, None)
-            self._stats.expirations += 1
-            self._stats.misses += 1
-            logger.debug("Cache expired: %s (age=%.1fs)", tool_name, age)
-            return None
-        
-        # Cache hit - move to end for LRU and update stats
-        self._cache.move_to_end(key)
-        entry.hits += 1
-        self._stats.hits += 1
-        self._stats.total_saved_ms += self.ESTIMATED_EXEC_TIME_MS
+        with self._lock:
+            entry = self._cache.get(key)
+            
+            if entry is None:
+                self._stats.misses += 1
+                logger.debug("Cache miss: %s (not in cache)", tool_name)
+                return None
+            
+            # Check TTL expiration
+            age = time.monotonic() - entry.created_at
+            if age > self._ttl:
+                self._cache.pop(key, None)
+                self._stats.expirations += 1
+                self._stats.misses += 1
+                logger.debug("Cache expired: %s (age=%.1fs)", tool_name, age)
+                return None
+            
+            # Cache hit - move to end for LRU and update stats
+            self._cache.move_to_end(key)
+            entry.hits += 1
+            self._stats.hits += 1
+            self._stats.total_saved_ms += self.ESTIMATED_EXEC_TIME_MS
         
         logger.info(
             "✅ Cache HIT: %s (age=%.1fs, total_hits=%d, saved_ms=%.0f)",
@@ -308,7 +326,7 @@ class ToolResultCache:
         Returns:
             True if cached, False if not cacheable or disabled
         """
-        if not self._enabled or not self.is_cacheable(tool_name):
+        if not self._enabled or not self.is_cacheable(tool_name, kwargs):
             return False
         
         # Don't cache error results
@@ -318,21 +336,22 @@ class ToolResultCache:
             return False
         
         key = self._make_key(tool_name, kwargs)
-        
-        # Evict oldest if at capacity
-        while len(self._cache) >= self._max_size:
-            oldest_key, _ = self._cache.popitem(last=False)
-            self._stats.evictions += 1
-            logger.debug("Cache eviction: LRU entry removed")
-        
-        # Store new entry
-        self._cache[key] = CacheEntry(
-            result=result,
-            created_at=time.monotonic(),
-            tool_name=tool_name,
-            args_hash=key,
-        )
-        
+
+        with self._lock:
+            # Evict oldest if at capacity
+            while len(self._cache) >= self._max_size:
+                self._cache.popitem(last=False)
+                self._stats.evictions += 1
+                logger.debug("Cache eviction: LRU entry removed")
+
+            # Store new entry
+            self._cache[key] = CacheEntry(
+                result=result,
+                created_at=time.monotonic(),
+                tool_name=tool_name,
+                args_hash=key,
+            )
+
         logger.debug("Cache put: %s (cache_size=%d)", tool_name, len(self._cache))
         return True
     
@@ -346,32 +365,34 @@ class ToolResultCache:
         Returns:
             Number of entries invalidated
         """
-        if tool_name is None:
-            count = len(self._cache)
-            self._cache.clear()
-            logger.debug("Cache cleared: %d entries invalidated", count)
-            return count
+        with self._lock:
+            if tool_name is None:
+                count = len(self._cache)
+                self._cache.clear()
+                logger.debug("Cache cleared: %d entries invalidated", count)
+                return count
         
-        # Remove entries for specific tool
-        to_remove = [
-            key for key, entry in self._cache.items()
-            if entry.tool_name == tool_name
-        ]
-        for key in to_remove:
-            self._cache.pop(key, None)
-        
+            # Remove entries for specific tool
+            to_remove = [
+                key for key, entry in self._cache.items()
+                if entry.tool_name == tool_name
+            ]
+            for key in to_remove:
+                self._cache.pop(key, None)
+
         logger.debug("Cache invalidated: %s (%d entries)", tool_name, len(to_remove))
         return len(to_remove)
     
     def get_stats_summary(self) -> dict[str, Any]:
         """Get a summary of cache statistics for audit logging."""
-        return {
-            **self._stats.to_dict(),
-            "cache_size": len(self._cache),
-            "max_size": self._max_size,
-            "ttl_seconds": self._ttl,
-            "enabled": self._enabled,
-        }
+        with self._lock:
+            return {
+                **self._stats.to_dict(),
+                "cache_size": len(self._cache),
+                "max_size": self._max_size,
+                "ttl_seconds": self._ttl,
+                "enabled": self._enabled,
+            }
 
 
 # ════════════════════════════════════════════════════════════════════════════════
@@ -381,13 +402,16 @@ class ToolResultCache:
 # Lazy initialization on first access.
 
 _GLOBAL_CACHE: ToolResultCache | None = None
+_GLOBAL_CACHE_LOCK = threading.Lock()
 
 
 def get_tool_cache() -> ToolResultCache:
     """Get or create the global tool result cache."""
     global _GLOBAL_CACHE
     if _GLOBAL_CACHE is None:
-        _GLOBAL_CACHE = ToolResultCache()
+        with _GLOBAL_CACHE_LOCK:
+            if _GLOBAL_CACHE is None:
+                _GLOBAL_CACHE = ToolResultCache()
     return _GLOBAL_CACHE
 
 

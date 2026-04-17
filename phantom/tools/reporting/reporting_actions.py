@@ -26,6 +26,21 @@ _TITLE_ATTEMPT_COUNTS: dict[str, int] = {}
 _MAX_ATTEMPTS_PER_TITLE = 3
 
 
+def _resolve_current_agent_state() -> Any | None:
+    try:
+        from phantom.tools.context import get_current_agent_id
+
+        agent_id = (get_current_agent_id() or "").strip()
+        if not agent_id or agent_id in {"default", "unknown"}:
+            return None
+
+        from phantom.tools.agents_graph import agents_graph_actions
+
+        return agents_graph_actions._agent_states.get(agent_id)
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def _extract_vuln_class_from_report(title: str, cwe: str | None, description: str) -> str:
     """FIX 4: Extract vulnerability class for correlation engine."""
     title_lower = title.lower()
@@ -382,6 +397,75 @@ def _normalize_variant_field(value: str | None) -> str:
     return (value or "").strip().lower()
 
 
+_VAGUE_PROOF_PHRASES = (
+    "might be vulnerable",
+    "could be vulnerable",
+    "possibly vulnerable",
+    "may be exploitable",
+    "appears vulnerable",
+    "seems vulnerable",
+    "potential vulnerability",
+)
+
+
+_CONCRETE_PROOF_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"sent\s+.+?(payload|request)", re.IGNORECASE),
+    re.compile(r"observ(ed|ing)\s+.+?(response|status|body)", re.IGNORECASE),
+    re.compile(r"(status\s*code|http)\s*[:=]?\s*(200|201|204|301|302|400|401|403|404|500)", re.IGNORECASE),
+    re.compile(r"(extract(ed|ion)|dump(ed)?)\s+.+?(table|row|credential|token|cookie|data)", re.IGNORECASE),
+    re.compile(r"\b(uid=\d+|root:x:0:0|information_schema|union\s+select|alert\(|metadata\.google|169\.254\.169\.254)\b", re.IGNORECASE),
+)
+
+
+def _validate_exploit_proof_requirements(
+    confidence: str,
+    technical_analysis: str,
+    poc_description: str | None,
+    poc_script_code: str | None,
+) -> list[str]:
+    """Enforce proof requirements at runtime (not prompt-only)."""
+    errors: list[str] = []
+    confidence_norm = (confidence or "LIKELY").upper().strip()
+    if confidence_norm == "SUSPECTED":
+        return errors
+
+    combined = "\n".join(
+        [
+            technical_analysis or "",
+            poc_description or "",
+            poc_script_code or "",
+        ]
+    ).strip()
+
+    if not combined:
+        errors.append(
+            f"{confidence_norm} findings require concrete exploit evidence in technical_analysis/poc_description"
+        )
+        return errors
+
+    combined_lower = combined.lower()
+    has_vague_only = any(phrase in combined_lower for phrase in _VAGUE_PROOF_PHRASES)
+    has_concrete = any(pattern.search(combined) for pattern in _CONCRETE_PROOF_PATTERNS)
+
+    if confidence_norm == "VERIFIED":
+        if not has_concrete:
+            errors.append(
+                "VERIFIED findings require concrete proof artifacts (payload sent + observed exploitable outcome)"
+            )
+    elif confidence_norm == "LIKELY":
+        if not has_concrete:
+            errors.append(
+                "LIKELY findings require concrete observed behavior (include payload, response/status, and impact signal)"
+            )
+
+    if has_vague_only and not has_concrete:
+        errors.append(
+            "Evidence is too vague for LIKELY/VERIFIED confidence - provide concrete observations and artifacts"
+        )
+
+    return errors
+
+
 # ============================================================================
 # P0.2 ENHANCEMENT: Exploit Success Validation Patterns
 # ============================================================================
@@ -541,6 +625,17 @@ def _same_variant_surface(candidate: dict[str, Any], existing: dict[str, Any]) -
     return False
 
 
+_VALID_REPLAY_STATUS = {
+    "PENDING",
+    "SKIPPED",
+    "PASSED",
+    "FAILED",
+    "EXPLOIT_CONFIRMED",
+    "EXECUTION_ONLY",
+    "REQUIRES_BROWSER",
+}
+
+
 @register_tool(sandbox_execution=False)
 def create_vulnerability_report(  # noqa: PLR0912
     title: str,
@@ -641,61 +736,65 @@ def create_vulnerability_report(  # noqa: PLR0912
     if confidence not in _VALID_CONFIDENCE:
         confidence = "LIKELY"  # safe fallback
 
-_VALID_REPLAY_STATUS = {"PENDING", "SKIPPED", "PASSED", "FAILED", "EXPLOIT_CONFIRMED", "EXECUTION_ONLY", "REQUIRES_BROWSER"}
+    proof_errors = _validate_exploit_proof_requirements(
+        confidence=confidence,
+        technical_analysis=technical_analysis,
+        poc_description=poc_description,
+        poc_script_code=poc_script_code,
+    )
+    if proof_errors:
+        title_key = title.strip().lower()
+        _TITLE_ATTEMPT_COUNTS[title_key] = _TITLE_ATTEMPT_COUNTS.get(title_key, 0) + 1
+        attempt_count = _TITLE_ATTEMPT_COUNTS[title_key]
+        if attempt_count >= _MAX_ATTEMPTS_PER_TITLE:
+            return {
+                "success": False,
+                "message": (
+                    f"Proof validation failed ({attempt_count} attempts). Stop retrying with the same proof/confidence. "
+                    "Retry once with confidence=SUSPECTED and concise technical_analysis containing: "
+                    "payload sent, HTTP status, and observed exploit artifact."
+                ),
+                "errors": proof_errors,
+                "attempt_count": attempt_count,
+            }
+        return {
+            "success": False,
+            "message": "Proof validation failed",
+            "errors": proof_errors,
+            "attempt_count": attempt_count,
+        }
 
-
-def _build_replay_command(poc_code: str) -> str:
-    """Wrap PoC snippets into an executable command for terminal_execute.
-
-    If the content already looks like a shell/python invocation, pass it through.
-    Otherwise execute it as a Python heredoc so multiline scripts run correctly.
-    """
-    stripped = (poc_code or "").strip()
-    if not stripped:
-        return ""
-
-    first = stripped.splitlines()[0].strip().lower()
-    if first.startswith(("python", "curl", "bash", "sh", "pwsh", "powershell")):
-        return stripped
-    if stripped.startswith("#!/"):
-        body = "\n".join(stripped.splitlines()[1:]).strip()
-        if body:
-            return f"python -c {json.dumps(body)}"
-    return f"python -c {json.dumps(stripped)}"
-
-    # Rec 5 (ER-005): PoC auto-replay — execute poc_script_code in the sandbox
-    # before writing the report.  If replay succeeds, upgrade confidence to
-    # VERIFIED.  If it fails, keep user-supplied confidence but tag the report.
-    # Rec 5 / P1.2: PoC auto-replay — schedule as a background async task.
-    # The reporting tool is ALWAYS called from within the agent's running event
-    # loop, so run_until_complete() can never work.  Instead we schedule a
-    # background coroutine that updates replay_status on the tracer once done.
+    # Rec 5 (ER-005): PoC auto-replay — schedule as background async task.
     replay_status = "PENDING"
-    if poc_script_code and poc_script_code.strip():
+    if confidence in {"LIKELY", "VERIFIED"} and poc_script_code and poc_script_code.strip():
         import asyncio
 
         async def _background_replay(
-            _poc_code: str, _report_title: str, _confidence: str, _vuln_type: str
+            _poc_code: str,
+            _report_title: str,
+            _confidence: str,
+            _vuln_type: str,
+            _agent_state: Any | None,
         ) -> None:
-            """Run PoC in sandbox and update the tracer with the result."""
             _replay = "SKIPPED"
-            _replay_reason = ""
             try:
                 from phantom.tools.executor import execute_tool
 
                 replay_command = _build_replay_command(_poc_code)
                 if not replay_command:
-                    _replay = "SKIPPED"
-                    _replay_reason = "Empty PoC"
+                    return
+
+                if _agent_state is None:
                     return
 
                 replay_result = await execute_tool(
-                    "terminal_execute", command=replay_command, timeout=60,
+                    "terminal_execute",
+                    agent_state=_agent_state,
+                    command=replay_command,
+                    timeout=60,
+                    trusted_command=True,
                 )
                 replay_out = str(replay_result or "")
-                # Only treat as FAILED on execution-failure signals or empty output.
-                # Generic words like "error"/"fail" appear in legitimate exploit output
-                # (e.g. "SQL error", "authentication failed") and must NOT be matched.
                 _exec_failure_patterns = (
                     "command not found",
                     "no such file or directory",
@@ -704,29 +803,23 @@ def _build_replay_command(poc_code: str) -> str:
                     "modulenotfounderror:",
                     "segmentation fault",
                     "killed",
-                    "permission denied",  # Added
-                    "access is denied",   # Windows
-                    "not recognized as an internal or external command",  # Windows
+                    "permission denied",
+                    "access is denied",
+                    "not recognized as an internal or external command",
                 )
                 if not replay_out.strip():
                     _replay = "FAILED"
-                    _replay_reason = "No output from PoC"
                 elif any(p in replay_out.lower() for p in _exec_failure_patterns):
                     _replay = "FAILED"
-                    _replay_reason = "Execution error detected"
                 else:
-                    # P0.2 ENHANCEMENT: Validate EXPLOIT success, not just execution
-                    _replay, _replay_reason = _validate_exploit_success(_vuln_type, replay_out)
-            except Exception as e:  # noqa: BLE001
+                    _replay, _ = _validate_exploit_success(_vuln_type, replay_out)
+            except Exception:  # noqa: BLE001
                 _replay = "FAILED"
-                _replay_reason = f"Exception: {str(e)[:100]}"
 
-            # Update the vulnerability report telemetry with replay outcome
             try:
                 from phantom.telemetry.tracer import get_global_tracer
                 _tracer = get_global_tracer()
                 if _tracer and hasattr(_tracer, "update_vulnerability_replay"):
-                    # Only upgrade to VERIFIED if exploit was actually confirmed
                     new_confidence = _confidence
                     if _replay == "EXPLOIT_CONFIRMED":
                         new_confidence = "VERIFIED"
@@ -738,26 +831,49 @@ def _build_replay_command(poc_code: str) -> str:
             except Exception:  # noqa: BLE001
                 pass
 
-        # Extract vulnerability type from title or use generic
         _detected_vuln_type = ""
         title_lower = title.lower()
-        for vtype in ("sqli", "sql injection", "xss", "cross-site", "rce", "command injection", 
-                      "ssrf", "lfi", "file inclusion", "ssti", "template injection", "xxe"):
+        for vtype in (
+            "sqli",
+            "sql injection",
+            "xss",
+            "cross-site",
+            "rce",
+            "command injection",
+            "ssrf",
+            "lfi",
+            "file inclusion",
+            "ssti",
+            "template injection",
+            "xxe",
+        ):
             if vtype in title_lower:
-                _detected_vuln_type = vtype.split()[0]  # First word
+                _detected_vuln_type = vtype.split()[0]
                 break
         if not _detected_vuln_type:
             _detected_vuln_type = "unknown"
 
-        try:
-            loop = asyncio.get_running_loop()
-            # Schedule non-blocking — does NOT block report creation
-            task = loop.create_task(_background_replay(poc_script_code, title, confidence, _detected_vuln_type))
-            _background_tasks.add(task)
-            task.add_done_callback(lambda finished: _background_tasks.discard(finished))
-            replay_status = "PENDING"  # will be updated async
-        except RuntimeError:
+        replay_agent_state = _resolve_current_agent_state()
+
+        if replay_agent_state is None:
             replay_status = "SKIPPED"
+        else:
+            try:
+                loop = asyncio.get_running_loop()
+                task = loop.create_task(
+                    _background_replay(
+                        poc_script_code,
+                        title,
+                        confidence,
+                        _detected_vuln_type,
+                        replay_agent_state,
+                    )
+                )
+                _background_tasks.add(task)
+                task.add_done_callback(lambda finished: _background_tasks.discard(finished))
+                replay_status = "PENDING"
+            except RuntimeError:
+                replay_status = "SKIPPED"
     else:
         replay_status = "SKIPPED"
 
@@ -784,7 +900,7 @@ def _build_replay_command(poc_code: str) -> str:
         existing_reports = tracer.get_existing_vulnerabilities()
 
         if not parameter and endpoint:
-            from urllib.parse import urlparse, parse_qs
+            from urllib.parse import parse_qs
 
             ep = endpoint.strip()
             if "?" in ep:
@@ -811,8 +927,6 @@ def _build_replay_command(poc_code: str) -> str:
             duplicate_id = dedupe_result.get("duplicate_id", "")
             dedupe_confidence = float(dedupe_result.get("confidence") or 0.0)
 
-            # Keep high precision: only hard-block if the model is confident
-            # and the duplicate is on the same concrete surface.
             duplicate_report = None
             for report in existing_reports:
                 if report.get("id") == duplicate_id:
@@ -823,11 +937,8 @@ def _build_replay_command(poc_code: str) -> str:
                 candidate, duplicate_report or {}
             )
 
-            if not duplicate_id or dedupe_confidence < 0.90 or not same_surface:
-                duplicate_id = ""
-            else:
+            if duplicate_id and dedupe_confidence >= 0.90 and same_surface:
                 duplicate_title = (duplicate_report or {}).get("title", "Unknown")
-
                 return {
                     "success": False,
                     "message": (
@@ -869,19 +980,18 @@ def _build_replay_command(poc_code: str) -> str:
                 "message": "Failed to persist vulnerability report: tracer returned empty report_id",
             }
 
-        # Reset attempt counter on success
         title_key = title.strip().lower()
         _TITLE_ATTEMPT_COUNTS.pop(title_key, None)
 
-        # FIX 4: Add vulnerability to correlation engine for chain detection
         chain_suggestions = []
         try:
-            from phantom.tools.hypothesis.hypothesis_actions import _GLOBAL_CORRELATION_ENGINE
-            if _GLOBAL_CORRELATION_ENGINE is not None:
-                # Extract vulnerability class from title/CWE
+            from phantom.tools.hypothesis.hypothesis_actions import get_correlation_engine
+
+            correlation_engine = get_correlation_engine()
+            if correlation_engine is not None:
                 vuln_class = _extract_vuln_class_from_report(title, cwe, description)
                 if vuln_class:
-                    result = _GLOBAL_CORRELATION_ENGINE.add_finding(
+                    result = correlation_engine.add_finding(
                         vuln_class=vuln_class,
                         surface=endpoint or target,
                         severity=cvss_severity.lower(),
@@ -894,7 +1004,7 @@ def _build_replay_command(poc_code: str) -> str:
                     )
                     chain_suggestions = result.get("new_suggestions", [])
         except Exception:  # noqa: BLE001
-            pass  # Non-critical - don't fail report creation
+            pass
 
         response = {
             "success": True,
@@ -902,18 +1012,37 @@ def _build_replay_command(poc_code: str) -> str:
             "report_id": report_id,
             "severity": cvss_severity,
             "cvss_score": cvss_score,
-            # Rec 10: surface confidence and replay status to callers
+            "cvss_vector": cvss_vector,
             "confidence": confidence,
             "replay_status": replay_status,
             "attempt_count": 0,
         }
-        
-        # FIX 4: Include chain detection results
+
         if chain_suggestions:
             response["chain_opportunities"] = chain_suggestions
             response["message"] += f" | {len(chain_suggestions)} attack chain(s) identified!"
-        
+
         return response
 
     except (ImportError, AttributeError) as e:
         return {"success": False, "message": f"Failed to create vulnerability report: {e!s}"}
+
+
+def _build_replay_command(poc_code: str) -> str:
+    """Wrap PoC snippets into an executable command for terminal_execute.
+
+    If the content already looks like a shell/python invocation, pass it through.
+    Otherwise execute it as a Python heredoc so multiline scripts run correctly.
+    """
+    stripped = (poc_code or "").strip()
+    if not stripped:
+        return ""
+
+    first = stripped.splitlines()[0].strip().lower()
+    if first.startswith(("python", "curl", "bash", "sh", "pwsh", "powershell")):
+        return stripped
+    if stripped.startswith("#!/"):
+        body = "\n".join(stripped.splitlines()[1:]).strip()
+        if body:
+            return f"python -c {json.dumps(body)}"
+    return f"python -c {json.dumps(stripped)}"

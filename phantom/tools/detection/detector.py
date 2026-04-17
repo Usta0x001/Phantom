@@ -369,7 +369,7 @@ _detector = VulnerabilityDetector()
 from phantom.tools.registry import register_tool
 
 
-@register_tool
+@register_tool(sandbox_execution=False)
 def detect_pattern(
     response_body: str,
     patterns: list[str] | None = None,
@@ -410,7 +410,7 @@ def detect_pattern(
     return result.to_dict()
 
 
-@register_tool
+@register_tool(sandbox_execution=False)
 def detect_error_based(
     response_body: str,
     vuln_class: str,
@@ -445,7 +445,7 @@ def detect_error_based(
     return result.to_dict()
 
 
-@register_tool
+@register_tool(sandbox_execution=False)
 def detect_timing_based(
     baseline_time: float,
     test_time: float,
@@ -489,7 +489,7 @@ def detect_timing_based(
     return result.to_dict()
 
 
-@register_tool
+@register_tool(sandbox_execution=False)
 def detect_differential(
     baseline_response: dict[str, Any],
     test_response: dict[str, Any],

@@ -498,6 +498,11 @@ def v_validate_valid_tool_passes():
         ok, msg = _vta("scope_rules")
     assert ok is True and msg == ""
 
+def v_underscoreless_alias_is_normalized():
+    with _patch2("phantom.tools.executor.get_tool_names", return_value=["get_scan_status"]):
+        ok, msg = _vta("getscanstatus")
+    assert ok is True and msg == ""
+
 def v_prefixed_name_is_normalised():
     async def _run():
         with (
@@ -554,6 +559,7 @@ def v_tools_prompt_tool_names_intact():
     assert 'name="scope_rules"' in prompt
 
 check("validate_tool_availability(): bare name passes", v_validate_valid_tool_passes)
+check("validate_tool_availability(): underscoreless alias passes", v_underscoreless_alias_is_normalized)
 check("execute_tool_with_validation(): proxy_tools.scope_rules → scope_rules", v_prefixed_name_is_normalised)
 check("execute_tool_with_validation(): proxy_tools.nonexistent → error", v_unknown_prefixed_name_errors)
 check("get_tools_prompt(): section header uses <!-- comment -->", v_tools_prompt_uses_comment_headers)

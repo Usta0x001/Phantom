@@ -27,6 +27,7 @@ TOOL_CATEGORIES = {
     "agent_management": [
         "create_agent",
         "wait_for_message",
+        "wait_for_agents",
         "view_agent_graph",
         "send_message_to_agent",
         "agent_finish",
@@ -70,17 +71,28 @@ TOOL_CATEGORIES = {
         "check_scan_registry",
         "register_scan_target",
     ],
+    "memory": [
+        "get_scan_status",
+        "add_hypothesis",
+        "record_payload_test",
+        "confirm_hypothesis",
+        "reject_hypothesis",
+        "query_hypotheses",
+        "get_hypothesis_summary",
+        "has_tested_payload",
+    ],
 }
 
 
 TOOL_SUBSET_CATEGORIES = {
-    "minimal": ["web_testing", "terminal", "reporting", "python"],
+    "minimal": ["web_testing", "terminal", "browser", "reporting", "python"],
     "core": [
         "web_testing",
         "terminal",
         "browser",
         "reporting",
         "agent_management",
+        "memory",
         "files",
         "thinking",
         "python",
@@ -91,6 +103,7 @@ TOOL_SUBSET_CATEGORIES = {
         "browser",
         "reporting",
         "agent_management",
+        "memory",
         "files",
         "python",
     ],
@@ -100,6 +113,7 @@ TOOL_SUBSET_CATEGORIES = {
         "browser",
         "reporting",
         "agent_management",
+        "memory",
         "files",
         "thinking",
         "python",
@@ -112,9 +126,9 @@ DEFAULT_TOOL_CATEGORIES = {
     # FIX-5: Excluded 'files', 'notes', 'todo' from the default main_agent schema.
     # These are low-signal for pentesting but cost ~5K tokens per LLM call to describe.
     # 300 iterations * 5K tokens = 1.5M tokens saved per scan.
-    "main_agent": ["web_testing", "terminal", "browser", "reporting", "agent_management"],
-    "sub_agent": ["web_testing", "terminal", "browser", "files"],
-    "quick_scan": ["web_testing", "terminal", "reporting"],
+    "main_agent": ["web_testing", "terminal", "browser", "reporting", "agent_management", "memory"],
+    "sub_agent": ["web_testing", "terminal", "browser", "files", "memory"],
+    "quick_scan": ["web_testing", "terminal", "reporting", "memory"],
 }
 
 
@@ -251,6 +265,19 @@ def get_tools_for_subset_mode(mode: str) -> list[str]:
         needed_tools.update(TOOL_CATEGORIES.get(cat, []))
 
     return sorted(needed_tools.intersection(available))
+
+
+def get_related_tools_for_name(tool_name: str) -> list[str]:
+    """Return the tool family for a specific tool name."""
+    from phantom.tools.registry import get_tool_names
+
+    available = set(get_tool_names())
+    for tools in TOOL_CATEGORIES.values():
+        if tool_name in tools:
+            return sorted(set(tools).intersection(available))
+    if tool_name in available:
+        return [tool_name]
+    return []
 
 
 def get_minimal_tools() -> list[str]:

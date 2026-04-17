@@ -8,6 +8,7 @@ from typing import Any
 import litellm
 
 from phantom.config.config import Config, resolve_llm_config
+from phantom.llm.tracked_completion import tracked_acompletion, tracked_completion
 
 
 logger = logging.getLogger(__name__)
@@ -486,78 +487,6 @@ def _extract_structured_facts(messages: list[dict[str, Any]]) -> list[dict[str, 
     return facts
 
 
-def _hash_message(msg: dict[str, Any]) -> str:
-    try:
-        serialized = json.dumps(msg, sort_keys=True, ensure_ascii=False, default=str)
-    except Exception:
-        serialized = str(msg)
-    return __import__("hashlib").sha256(serialized.encode("utf-8", errors="ignore")).hexdigest()
-
-
-def _get_phase_retention_config(agent_state: Any | None) -> dict[str, int]:
-    phase = "recon"
-    scan_mode = "deep"
-    if agent_state is not None:
-        phase = str(getattr(agent_state, "current_phase", getattr(agent_state, "phase", phase))).lower()
-        if hasattr(agent_state, "current_phase") and hasattr(agent_state.current_phase, "value"):
-            phase = str(agent_state.current_phase.value).lower()
-        scan_mode = str(getattr(agent_state, "scan_mode", scan_mode)).lower()
-
-    if phase == "recon":
-        return {"keep_recent": 18, "chunk_size": 12, "anchor_cap": 12}
-    if phase == "testing":
-        return {"keep_recent": 20, "chunk_size": 10, "anchor_cap": 15}
-    if phase == "wrap_up":
-        return {"keep_recent": 24, "chunk_size": 8, "anchor_cap": 15}
-    if scan_mode == "stealth":
-        return {"keep_recent": 22, "chunk_size": 8, "anchor_cap": 10}
-    return {"keep_recent": MIN_RECENT_MESSAGES, "chunk_size": 10, "anchor_cap": 15}
-
-
-def _make_structured_summary(
-    messages: list[dict[str, Any]],
-    *,
-    phase: str,
-    facts: list[dict[str, Any]],
-    delta: list[dict[str, Any]],
-    model: str,
-) -> dict[str, Any]:
-    summary_lines = [
-        f"PHASE: {phase.upper()}",
-        f"MESSAGES: {len(messages)}",
-        f"FACTS: {len(facts)}",
-    ]
-    if delta:
-        summary_lines.append(f"DELTA: {len(delta)} new facts")
-    for fact in facts[:12]:
-        summary_lines.append(f"- {fact['type']}: {fact['value'][:180]}")
-    if delta:
-        summary_lines.append("DELTA FACTS:")
-        for fact in delta[:8]:
-            summary_lines.append(f"- {fact['type']}: {fact['value'][:180]}")
-
-    content = "\n".join(summary_lines)
-    return {
-        "role": "user",
-        "content": f"<context_summary message_count='{len(messages)}' phase='{phase}' format='structured'>{content}</context_summary>",
-        "_structured_facts": facts,
-        "_delta_facts": delta,
-        "_summary_model": model,
-    }
-
-
-def _normalize_summary_message(msg: dict[str, Any], *, phase: str, facts: list[dict[str, Any]], delta: list[dict[str, Any]], model: str) -> dict[str, Any]:
-    normalized = dict(msg)
-    content = str(normalized.get("content", ""))
-    if "<context_summary" not in content:
-        content = f"<context_summary message_count='{len(facts)}' phase='{phase}' format='structured'>{content}</context_summary>"
-        normalized["content"] = content
-    normalized["_structured_facts"] = facts
-    normalized["_delta_facts"] = delta
-    normalized["_summary_model"] = model
-    return normalized
-
-
 def _summarize_messages(
     messages: list[dict[str, Any]],
     model: str,
@@ -607,7 +536,7 @@ def _summarize_messages(
             len(messages),
             compressor_model,
         )
-        response = litellm.completion(**completion_args)
+        response = tracked_completion(**completion_args)
         summary = response.choices[0].message.content or ""
         if not summary.strip():
             # LLM returned empty content — fall through to the best-effort text fallback.
@@ -693,7 +622,7 @@ async def _async_summarize_messages(
             compressor_model,
         )
         # Use async completion for parallel processing
-        response = await litellm.acompletion(**completion_args)
+        response = await tracked_acompletion(**completion_args)
         summary = response.choices[0].message.content or ""
         if not summary.strip():
             raise ValueError("LLM returned empty summary")
@@ -786,12 +715,12 @@ def _handle_images(
     messages: list[dict[str, Any]],
     max_images: int,
     max_total_image_bytes: int,
-) -> tuple[int, int, int]:
-    messages = [{**msg} for msg in messages]
+) -> tuple[list[dict[str, Any]], int, int, int]:
+    transformed: list[dict[str, Any]] = [{**msg} for msg in messages]
     image_count = 0
     kept_image_bytes = 0
     evicted = 0
-    for msg in reversed(messages):
+    for msg in reversed(transformed):
         content = msg.get("content", [])
         if isinstance(content, list):
             copied_content = [dict(item) if isinstance(item, dict) else item for item in content]
@@ -814,7 +743,7 @@ def _handle_images(
                         kept_image_bytes += image_bytes
                         copied_content[index] = item
             msg["content"] = copied_content
-    return image_count, evicted, kept_image_bytes
+    return transformed, image_count, evicted, kept_image_bytes
 
 
 class MemoryCompressor:
@@ -893,10 +822,25 @@ class MemoryCompressor:
         if not messages:
             return messages
 
+        runtime_llm = getattr(agent_state, "_runtime_llm", None) if agent_state is not None else None
+        if runtime_llm is not None:
+            routed_model = getattr(runtime_llm.config, "litellm_model", None)
+            if routed_model and routed_model != self.model_name:
+                self.model_name = routed_model
+                ctx_window = _get_model_context_window(self.model_name)
+                fill_ratio = _get_context_fill_ratio(ctx_window)
+                self._max_total_tokens = min(
+                    MAX_CONTEXT_CEILING,
+                    max(
+                        MIN_RECENT_MESSAGES * 200,
+                        int(ctx_window * fill_ratio),
+                    ),
+                )
+
         phase, keep_recent, anchor_cap = _get_phase_retention(agent_state)
 
         image_payload_before = _estimate_image_payload_bytes(messages)
-        kept_images, evicted_images, image_payload_after = _handle_images(
+        processed_messages, kept_images, evicted_images, image_payload_after = _handle_images(
             messages,
             self.max_images,
             self.max_total_image_bytes,
@@ -904,7 +848,7 @@ class MemoryCompressor:
 
         system_msgs = []
         regular_msgs = []
-        for msg in messages:
+        for msg in processed_messages:
             if msg.get("role") == "system":
                 system_msgs.append(msg)
             else:
@@ -971,7 +915,7 @@ class MemoryCompressor:
                     agent_state.compression_state = compression_state
                 except Exception:
                     pass
-            return messages
+            return processed_messages
 
         # Pentager ChainSummarizer was here, but removed due to catastrophic forgetting
         # as it permanently deleted old messages rather than summarizing them.
@@ -1029,33 +973,23 @@ class MemoryCompressor:
         parallel_enabled = (Config.get("phantom_compressor_parallel") or "true").lower() in ("true", "1", "yes")
         
         if parallel_enabled and len(chunks) > 1:
-            # Use parallel compression for 4x speedup
+            # Use parallel compression when no loop is active. If called from
+            # an active event loop context, fall back to deterministic sequential
+            # processing instead of mutating the loop via nest_asyncio.
             try:
-                # Check if we're in an async context
                 asyncio.get_running_loop()
-                # We're in an async context - apply nest_asyncio to allow nested event loops
-                try:
-                    import nest_asyncio
-                    nest_asyncio.apply()
-                except ImportError:
-                    # nest_asyncio not available, fall back to sequential
-                    compressed = []
-                    for chunk in chunks:
-                        summary = _summarize_messages(chunk, model_name, self.timeout)
-                        if summary:
-                            compressed.append(summary)
-                            self.compression_calls += 1
-                else:
-                    compressed = asyncio.run(_parallel_summarize_chunks(
-                        chunks, model_name, self.timeout
-                    ))
-                    self.compression_calls += len(compressed)
             except RuntimeError:
-                # No running loop - create one for parallel compression
-                compressed = asyncio.run(_parallel_summarize_chunks(
-                    chunks, model_name, self.timeout
-                ))
+                compressed = asyncio.run(
+                    _parallel_summarize_chunks(chunks, model_name, self.timeout)
+                )
                 self.compression_calls += len(compressed)
+            else:
+                compressed = []
+                for chunk in chunks:
+                    summary = _summarize_messages(chunk, model_name, self.timeout)
+                    if summary:
+                        compressed.append(summary)
+                        self.compression_calls += 1
         else:
             # Sequential fallback for single chunk or when parallel is disabled
             compressed = []
@@ -1087,19 +1021,17 @@ class MemoryCompressor:
                     anchors.sort(
                         key=lambda item: (
                             float(item.get("evidence_score", item.get("confidence_score", 0.0)) or 0.0),
-                            item.get("added_cycle", 0),
+                            item.get("key", ""),
                         ),
                         reverse=True,
                     )
                     agent_state.finding_anchors = anchors[:anchor_cap]
+                if hasattr(agent_state, "prune_invalid_anchors"):
+                    agent_state.prune_invalid_anchors()
             except Exception:
                 pass
 
         result = system_msgs + compressed + recent_msgs
-        
-        # FIX BUG-7: Increment compression cycle for anchor expiration
-        if agent_state is not None and hasattr(agent_state, "increment_compression_cycle"):
-            agent_state.increment_compression_cycle()
         
         # Calculate compression metrics
         tokens_after = sum(

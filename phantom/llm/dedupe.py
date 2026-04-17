@@ -3,7 +3,7 @@ import logging
 import re
 from typing import Any
 
-import litellm
+from phantom.llm.tracked_completion import tracked_completion
 
 from phantom.config.config import Config, resolve_llm_config
 from phantom.llm.utils import resolve_phantom_model
@@ -277,7 +277,7 @@ def check_duplicate(
         if api_base:
             completion_kwargs["api_base"] = api_base
 
-        response = litellm.completion(**completion_kwargs)
+        response = tracked_completion(**completion_kwargs)
 
         content = response.choices[0].message.content
         if not content:

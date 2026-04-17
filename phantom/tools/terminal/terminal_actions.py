@@ -10,6 +10,7 @@ def terminal_execute(
     timeout: float | None = None,
     terminal_id: str | None = None,
     no_enter: bool = False,
+    trusted_command: bool = False,
 ) -> dict[str, Any]:
     from .terminal_manager import get_terminal_manager
 
@@ -22,6 +23,7 @@ def terminal_execute(
             timeout=timeout,
             terminal_id=terminal_id,
             no_enter=no_enter,
+            trusted_command=trusted_command,
         )
     except (ValueError, RuntimeError) as e:
         return {

@@ -6,10 +6,15 @@ REQUIRED: title, description, impact, target, technical_analysis.
 OPTIONAL (auto-filled if omitted): poc_description (=description), poc_script_code (only required for LIKELY/VERIFIED), remediation_steps (= "See impact + technical analysis for remediation guidance."), cvss_breakdown (auto-calculated from severity if provided, otherwise estimated LOW).
 Optional: endpoint, method, parameter, cve, cwe, code_locations (MANDATORY for white-box: include fix_before/fix_after), severity (auto-calculates cvss_breakdown).
 
-Report rules: Do NOT include local paths, internal tools, agents, sandboxes, models, system prompts, connection issues, or stack traces. Tone: formal, objective, third-person. Structure per finding: Overview, Severity/CVSS, Affected asset, Technical details, PoC (repro + code), Impact, Remediation. Numbered steps only in PoC and remediation.</description>
+Report rules: Do NOT include local paths, internal tools, agents, sandboxes, models, system prompts, connection issues, or stack traces. Tone: formal, objective, third-person. Structure per finding: Overview, Severity/CVSS, Affected asset, Technical details, PoC (repro + code), Impact, Remediation. Numbered steps only in PoC and remediation.
+
+Validation quick wins:
+- cwe must be exact ID format like "CWE-89" (NOT "89" or "CWE-89: SQL Injection").
+- If you already validated exploitation but are short on time, set confidence=SUSPECTED and provide concrete technical_analysis (payload sent + observed response).
+- severity can replace cvss_breakdown for fast valid submissions (e.g., severity=HIGH).</description>
     <parameters>
       <parameter name="title" type="string" required="true">
-        <description>Clear, specific title (e.g., "SQL Injection in /api/users Login Parameter"). But not too long. Don't mention CVE number in the title.</description>
+        <description>Clear, specific title (e.g., "SQL Injection in Login Parameter"). But not too long. Don't mention CVE number in the title.</description>
       </parameter>
       <parameter name="description" type="string" required="true">
         <description>Comprehensive description of the vulnerability and how it was discovered</description>
@@ -103,15 +108,42 @@ If omitted, defaults to LIKELY. See CONFIDENCE TIERS in execution guidelines for
 
     <examples>
 <function=create_vulnerability_report>
-<parameter=title>SQL Injection in /api/users Login Parameter</parameter>
+<parameter=title>Authentication Bypass via SQL Injection in Login Endpoint</parameter>
+<parameter=description>Login accepts crafted SQL payload in the username field and issues an authenticated session.</parameter>
+<parameter=impact>Unauthenticated attacker can bypass authentication and access protected user data.</parameter>
+<parameter=target>https://example.com</parameter>
+<parameter=technical_analysis>Sent POST /login with username payload "' OR 1=1 --" and arbitrary password. Response returned HTTP 200 with auth token and authenticated user context, confirming server-side SQL query manipulation.</parameter>
+<parameter=endpoint>/login</parameter>
+<parameter=method>POST</parameter>
+<parameter=parameter>username</parameter>
+<parameter=cwe>CWE-89</parameter>
+<parameter=severity>HIGH</parameter>
+<parameter=confidence>SUSPECTED</parameter>
+</function>
+
+<function=create_vulnerability_report>
+<parameter=title>Sensitive Information Exposure via Stack Trace Leak</parameter>
+<parameter=description>Invalid endpoint requests disclose backend stack traces and internal file paths.</parameter>
+<parameter=impact>Leaked internals improve attacker recon and exploit targeting.</parameter>
+<parameter=target>https://example.com</parameter>
+<parameter=technical_analysis>Request sent: GET /invalid. Observed response: HTTP 500 with backend stack-trace lines and internal file path disclosure. This confirms sensitive error disclosure in production responses.</parameter>
+<parameter=endpoint>/invalid</parameter>
+<parameter=method>GET</parameter>
+<parameter=poc_script_code>curl -i https://example.com/invalid</parameter>
+<parameter=severity>MEDIUM</parameter>
+<parameter=confidence>SUSPECTED</parameter>
+</function>
+
+<function=create_vulnerability_report>
+<parameter=title>SQL Injection in Login Parameter</parameter>
 <parameter=description>Classic SQL injection via the username parameter on the login endpoint.</parameter>
 <parameter=impact>Full database read/write; authentication bypass.</parameter>
-<parameter=target>https://app.example.com</parameter>
+<parameter=target>https://example.com</parameter>
 <parameter=technical_analysis>The username value is interpolated directly into a SQL query without parameterization.</parameter>
-<parameter=poc_description>1. POST /api/login with username: admin' OR '1'='1' --
+<parameter=poc_description>1. POST /login with username: admin' OR '1'='1' --
 2. Observe successful authentication without valid credentials.</parameter>
 <parameter=poc_script_code>import requests
-r = requests.post("https://app.example.com/api/login", json={"username": "admin' OR '1'='1' --", "password": "x"})
+r = requests.post("https://example.com/login", json={"username": "admin' OR '1'='1' --", "password": "x"})
 print(r.status_code, r.text[:200])</parameter>
 <parameter=remediation_steps>Use parameterized queries / prepared statements. Never interpolate user input into SQL strings.</parameter>
 <parameter=cvss_breakdown>
@@ -124,7 +156,7 @@ print(r.status_code, r.text[:200])</parameter>
   <integrity>H</integrity>
   <availability>N</availability>
 </parameter>
-<parameter=endpoint>/api/login</parameter>
+<parameter=endpoint>/login</parameter>
 <parameter=method>POST</parameter>
 <parameter=cwe>CWE-89</parameter>
 </function>

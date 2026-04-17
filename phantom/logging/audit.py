@@ -453,7 +453,22 @@ class AuditLogger:
             duration_ms: Execution time in milliseconds
             cache_hit: Whether result was served from cache (EFFICIENCY FIX CRIT-04)
         """
-        result_preview = str(result)[:4_096] if result is not None else None
+        result_for_preview = result
+        if isinstance(result, dict):
+            result_for_preview = dict(result)
+            screenshot = result_for_preview.get("screenshot")
+            if isinstance(screenshot, str) and screenshot:
+                result_for_preview["screenshot"] = (
+                    f"[omitted base64 screenshot; {len(screenshot)} chars]"
+                )
+
+        result_preview = str(result_for_preview)[:4_096] if result_for_preview is not None else None
+        if isinstance(result_preview, str):
+            result_preview = re.sub(
+                r"data:image/[^;]+;base64,[A-Za-z0-9+/=]{40,}",
+                "data:image/[omitted-base64]",
+                result_preview,
+            )
         self._write({
             "event_type": "tool.result",
             "actor": {"agent_id": agent_id},

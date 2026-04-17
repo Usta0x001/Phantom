@@ -128,20 +128,6 @@ class TestP32PayloadLearningVerification:
         assert "priority_score" not in summary
         assert "next_best_tests" not in summary
 
-    def test_dabs_score_equals_belief_plus_exploration_minus_redundancy(self):
-        ledger = HypothesisLedger()
-
-        hyp_id = ledger.add("/api/login::username", "sqli")
-        ledger.record_payload(hyp_id, "' OR 1=1--")
-        ledger.record_result(hyp_id, "testing", "signal")
-
-        scored = ledger.get_scored_hypotheses()
-        assert scored
-        top = next(item for item in scored if item["hypothesis_id"] == hyp_id)
-
-        expected = top["belief"] + top["exploration_bonus"] - top["redundancy"]
-        assert abs(top["priority_score"] - expected) < 1e-6
-
     def test_evidence_score_formula_is_deterministic(self):
         ledger = HypothesisLedger()
 
@@ -175,16 +161,6 @@ class TestP32PayloadLearningVerification:
         hyp_id = ledger.add("/api/new::q", "xss")
         assert abs(ledger.get_belief(hyp_id) - 0.5) < 1e-9
 
-    def test_scheduler_events_log_selection_and_propagation(self):
-        ledger = HypothesisLedger()
-        hyp_id = ledger.add("/api/login::username", "sqli")
-        ledger.record_result(hyp_id, "confirmed", "signal")
-        _ = ledger.get_scored_hypotheses()
-
-        events = ledger.get_scheduler_events()
-        assert any(event.get("event_type") == "belief_propagation" for event in events)
-        assert any(event.get("event_type") == "selection" for event in events)
-    
     def test_cross_surface_learning(self):
         """Verify: Payloads successful on one surface help with others"""
         ledger = HypothesisLedger()

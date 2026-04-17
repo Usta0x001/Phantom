@@ -45,6 +45,7 @@ class TerminalManager:
         timeout: float | None = None,
         terminal_id: str | None = None,
         no_enter: bool = False,
+        trusted_command: bool = False,
     ) -> dict[str, Any]:
         if terminal_id is None:
             terminal_id = self.default_terminal_id
@@ -52,7 +53,13 @@ class TerminalManager:
         session = self._get_or_create_session(terminal_id)
 
         try:
-            result = session.execute(command, is_input, timeout or self.default_timeout, no_enter)
+            result = session.execute(
+                command,
+                is_input,
+                timeout or self.default_timeout,
+                no_enter,
+                trusted_command=trusted_command,
+            )
 
             return {
                 "content": result["content"],

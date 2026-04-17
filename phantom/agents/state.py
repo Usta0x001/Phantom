@@ -20,7 +20,7 @@ class AgentState(BaseModel):
     sandbox_info: dict[str, Any] | None = None
 
     # SECURITY FIX: Hash-based message deduplication to prevent context poisoning
-    # Stores SHA-256 hashes of message content to detect duplicates
+    # Stores SHA-256 hashes of role+content to detect duplicates
     _message_hashes: set[str] = PrivateAttr(default_factory=set)
 
     def clear_sandbox(self) -> None:
@@ -68,9 +68,6 @@ class AgentState(BaseModel):
     MAX_FINDING_ANCHORS: int = 15
     MAX_ARCHIVED_MESSAGES: int = 200
     
-    # FIX BUG-7: Anchor expiration after 3 compression cycles
-    MAX_ANCHOR_AGE_CYCLES: int = 3
-    
     # PLAN FIX: Message expiration
     MAX_MESSAGES_BEFORE_CLEANUP: int = 50  # Keep last 50 messages, archive rest
 
@@ -84,8 +81,10 @@ class AgentState(BaseModel):
         self._message_hashes.clear()
         for msg in self.messages + self.archived_messages:
             content = msg.get("content", "")
+            role = msg.get("role", "")
             if isinstance(content, str):
-                self._message_hashes.add(hashlib.sha256(content.encode("utf-8")).hexdigest())
+                digest_input = f"{role}\x1f{content}"
+                self._message_hashes.add(hashlib.sha256(digest_input.encode("utf-8")).hexdigest())
     
     def cleanup_old_messages(self) -> int:
         """PLAN FIX: Remove old messages beyond MAX_MESSAGES_BEFORE_CLEANUP.
@@ -118,9 +117,6 @@ class AgentState(BaseModel):
             self.last_updated = datetime.now(UTC).isoformat()
         return removed
     
-    # Track compression cycles for anchor expiration
-    _compression_cycle: int = 0
-    
     def add_finding_anchor(self, anchor: dict[str, Any]) -> None:
         """Store a high-signal finding so it survives memory compression."""
         # FIX BUG 1: Validate anchor text is not empty, None, or whitespace
@@ -141,11 +137,12 @@ class AgentState(BaseModel):
                     existing.update(anchor)
                     existing["text"] = anchor_text
                     existing["evidence_score"] = new_score
-                    existing["added_cycle"] = self._compression_cycle
+                    if "status" not in existing:
+                        existing["status"] = "active"
                     self.finding_anchors.sort(
                         key=lambda item: (
                             float(item.get("evidence_score", item.get("confidence_score", 0.0)) or 0.0),
-                            item.get("added_cycle", 0),
+                            item.get("key", ""),
                         ),
                         reverse=True,
                     )
@@ -169,40 +166,31 @@ class AgentState(BaseModel):
                 return
             self.finding_anchors.pop(weakest_index)
         
-        # Store the anchor with cleaned text and compression cycle
+        # Store the anchor with cleaned text and validity status
         anchor["text"] = anchor_text
-        anchor["added_cycle"] = self._compression_cycle
+        if "status" not in anchor:
+            anchor["status"] = "active"
         self.finding_anchors.append(anchor)
         self.finding_anchors.sort(
             key=lambda item: (
                 float(item.get("evidence_score", item.get("confidence_score", 0.0)) or 0.0),
-                item.get("added_cycle", 0),
+                item.get("key", ""),
             ),
             reverse=True,
         )
         self.last_updated = datetime.now(UTC).isoformat()
-    
-    def expire_stale_anchors(self) -> int:
-        """FIX BUG-7: Remove anchors older than MAX_ANCHOR_AGE_CYCLES compression cycles.
-        
-        Returns number of anchors removed.
-        """
-        expired = 0
+
+    def prune_invalid_anchors(self) -> int:
+        removed = 0
         retained = []
         for anchor in self.finding_anchors:
-            added_cycle = anchor.get("added_cycle", 0)
-            age = self._compression_cycle - added_cycle
-            if age < self.MAX_ANCHOR_AGE_CYCLES:
-                retained.append(anchor)
-            else:
-                expired += 1
+            status = str(anchor.get("status", "active")).lower()
+            if status in {"invalidated", "superseded"}:
+                removed += 1
+                continue
+            retained.append(anchor)
         self.finding_anchors = retained
-        return expired
-    
-    def increment_compression_cycle(self) -> None:
-        """FIX BUG-7: Track compression cycles for anchor expiration."""
-        self._compression_cycle += 1
-        self.expire_stale_anchors()
+        return removed
 
     def increment_iteration(self) -> None:
         self.iteration += 1
@@ -214,7 +202,7 @@ class AgentState(BaseModel):
         # SECURITY FIX: Hash-based deduplication to prevent context poisoning
         # Uses SHA-256 hash to efficiently detect duplicate messages
         if isinstance(content, str):
-            content_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()
+            content_hash = hashlib.sha256(f"{role}\x1f{content}".encode("utf-8")).hexdigest()
             if content_hash in self._message_hashes:
                 return  # Duplicate message - skip to prevent flooding
             self._message_hashes.add(content_hash)
@@ -240,6 +228,7 @@ class AgentState(BaseModel):
                 "action": action,
             }
         )
+        self._trim_bounded_history(self.actions_taken, 200)
 
     def add_observation(self, observation: dict[str, Any]) -> None:
         self.observations.append(
@@ -249,10 +238,17 @@ class AgentState(BaseModel):
                 "observation": observation,
             }
         )
+        self._trim_bounded_history(self.observations, 200)
 
     def add_error(self, error: str) -> None:
         self.errors.append(f"Iteration {self.iteration}: {error}")
+        self._trim_bounded_history(self.errors, 100)
         self.last_updated = datetime.now(UTC).isoformat()
+
+    def _trim_bounded_history(self, items: list[Any], limit: int) -> None:
+        if len(items) <= limit:
+            return
+        del items[:-limit]
 
     def update_context(self, key: str, value: Any) -> None:
         self.context[key] = value

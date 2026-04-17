@@ -12,6 +12,7 @@ import re
 from typing import Any
 
 from phantom.config.config import Config
+from phantom.llm.tracked_completion import tracked_acompletion
 
 logger = logging.getLogger(__name__)
 
@@ -126,13 +127,11 @@ class Reflector:
         self.reflect_count += 1
         
         try:
-            import litellm
-            
             # SECURITY FIX: Sanitize context before sending to reflector model
             sanitized_context = _sanitize_reflector_context(context[:500])
             prompt = REFLECTOR_PROMPT.format(context=sanitized_context)
             
-            response = await litellm.acompletion(
+            response = await tracked_acompletion(
                 model=self.reflector_model,
                 messages=[{"role": "user", "content": prompt}],
                 max_tokens=100,  # Keep it short

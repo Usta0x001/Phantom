@@ -4,31 +4,52 @@ from types import SimpleNamespace
 import pytest
 
 
-def test_wave_c_runtime_allowlist_blocks_valid_registered_but_disallowed_tool() -> None:
+def test_wave_c_runtime_allowlist_no_longer_blocks_valid_registered_tool() -> None:
     from phantom.agents.state import AgentState
     from phantom.tools.executor import execute_tool_with_validation
 
     state = AgentState(task="wave-c-allowlist")
     state._runtime_llm = SimpleNamespace(runtime_allowed_tools={"get_scan_status"})
 
-    result = asyncio.run(execute_tool_with_validation("list_todos", state))
-    assert isinstance(result, str)
-    assert "not allowed for this run by runtime policy" in result
-    assert "Allowed tools:" in result
+    with pytest.raises(Exception, match="Tool not allowed"):
+        asyncio.run(
+            execute_tool_with_validation(
+                "list_todos",
+                state,
+                allowed_tools={"get_scan_status"},
+            )
+        )
 
 
 def test_wave_c_runtime_allowlist_allows_permitted_tool() -> None:
     from phantom.agents.state import AgentState
     from phantom.tools.executor import execute_tool_with_validation
+    from phantom.tools.scan_status.scan_status_actions import set_scan_status_context
 
     state = AgentState(task="wave-c-allowlist-ok")
     state._runtime_llm = SimpleNamespace(runtime_allowed_tools={"get_scan_status"})
+    set_scan_status_context(agent_state=state)
 
     result = asyncio.run(
-        execute_tool_with_validation("get_scan_status", state, include_recommendations=False)
+        execute_tool_with_validation(
+            "get_scan_status",
+            state,
+            allowed_tools={"get_scan_status"},
+            include_recommendations=False,
+        )
     )
     assert isinstance(result, dict)
     assert "scan_progress" in result
+
+
+def test_wave_c_runtime_allowlist_missing_fails_closed() -> None:
+    from phantom.agents.state import AgentState
+    from phantom.tools.executor import execute_tool_with_validation
+
+    state = AgentState(task="wave-c-allowlist-missing")
+
+    with pytest.raises(Exception, match="Tool not allowed"):
+        asyncio.run(execute_tool_with_validation("get_scan_status", state, include_recommendations=False))
 
 
 def test_wave_d_local_context_binding_sets_current_agent_id(
@@ -56,6 +77,7 @@ def test_wave_d_local_context_binding_sets_current_agent_id(
             execute_tool_with_validation(
                 "python_action",
                 state,
+                allowed_tools={"python_action"},
                 action="list_sessions",
             )
         )

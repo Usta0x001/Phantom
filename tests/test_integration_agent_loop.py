@@ -35,6 +35,15 @@ class TestAgentLoopBasics:
         # Should only be added once due to hash deduplication
         assert len(state.conversation_history) == 1
 
+    def test_agent_state_message_dedup_is_role_aware(self):
+        """Verify identical content from different roles is preserved."""
+        state = AgentState(task="test")
+
+        state.add_message("user", "Same text")
+        state.add_message("assistant", "Same text")
+
+        assert len(state.conversation_history) == 2
+
     def test_agent_state_add_different_messages(self):
         """Verify different messages are both added."""
         state = AgentState(task="test")
@@ -54,6 +63,20 @@ class TestAgentLoopBasics:
         # state2 should not see state1's message hashes
         assert state1._message_hashes != state2._message_hashes
         assert len(state2._message_hashes) == 0
+
+    def test_agent_state_bounded_history_trims_actions_and_observations(self):
+        """Verify action, observation, and error histories are bounded."""
+        state = AgentState(task="test")
+
+        for i in range(250):
+            state.add_action({"i": i})
+            state.add_observation({"i": i})
+        for i in range(120):
+            state.add_error(f"error {i}")
+
+        assert len(state.actions_taken) <= 200
+        assert len(state.observations) <= 200
+        assert len(state.errors) <= 100
 
 
 class TestHypothesisLedger:
@@ -110,6 +133,19 @@ class TestHypothesisLedger:
         
         ledger.update_status(h_id, "confirmed")
         assert ledger.get(h_id).status == "confirmed"
+
+    def test_hypothesis_belief_initialization_and_persistence(self):
+        """Verify DABS belief map initializes at 0.5 and survives serialization."""
+        from phantom.agents.hypothesis_ledger import HypothesisLedger
+
+        ledger = HypothesisLedger()
+        h_id = ledger.add("/api/login", "sqli")
+
+        assert abs(ledger.get_belief(h_id) - 0.5) < 1e-9
+
+        restored = HypothesisLedger.from_dict(ledger.to_dict())
+        assert abs(restored.get_belief(h_id) - 0.5) < 1e-9
+        assert h_id in restored.to_dict().get("belief_map", {})
 
 
 class TestCoverageTracker:
@@ -271,8 +307,8 @@ class TestMemoryCompression:
         compressor = MemoryCompressor(model_name="claude-3-haiku-20240307")
         messages = [{"role": "user", "content": f"msg {i} /api/test"} for i in range(140)]
 
-        # Stress several compression cycles; the anchor should persist because it's high-value.
-        for _ in range(state.MAX_ANCHOR_AGE_CYCLES - 1):
+        # Stress several compression cycles; anchor retention is validity-based.
+        for _ in range(5):
             compressor.compress_history(messages, state)
 
         assert any(a.get("key") == "rare-auth" for a in state.finding_anchors)

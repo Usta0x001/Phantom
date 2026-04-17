@@ -10,15 +10,15 @@ Key Principles (CRITICAL):
 
 from __future__ import annotations
 
-import asyncio
 import hashlib
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
-import httpx
+from phantom.tools.proxy.proxy_manager import get_proxy_manager
 
 
 @dataclass
@@ -200,53 +200,58 @@ class FuzzerManager:
         start_time = datetime.now(UTC)
 
         try:
+            manager = get_proxy_manager()
+
             # Build the request based on injection point
             if request.injection_point == "path":
                 url = request.url.replace("{FUZZ}", request.payload)
-                params = None
-                data = None
+                data = ""
             elif request.injection_point == "param":
-                url = request.url
-                params = {request.param_name: request.payload}
-                data = None
+                if not request.param_name:
+                    raise ValueError("param_name is required for param injection")
+                url = _upsert_query_param(request.url, request.param_name, request.payload)
+                data = ""
             elif request.injection_point == "header":
+                if not request.param_name:
+                    raise ValueError("param_name is required for header injection")
                 url = request.url
-                params = None
-                data = None
+                data = ""
                 headers = {**headers, request.param_name: request.payload}
             elif request.injection_point == "body":
                 url = request.url
-                params = None
                 data = request.payload
             else:
                 raise ValueError(f"Invalid injection_point: {request.injection_point}")
 
-            # Execute request
-            with httpx.Client(
-                follow_redirects=follow_redirects,
+            # Execute request through proxy path (with explicit policy fallback if configured).
+            response_data = manager.send_simple_request(
+                method=request.method,
+                url=url,
+                headers=headers,
+                body=data,
                 timeout=timeout_seconds,
-            ) as client:
-                response = client.request(
-                    method=request.method,
-                    url=url,
-                    params=params,
-                    data=data,
-                    headers=headers,
-                )
+                follow_redirects=follow_redirects,
+            )
+
+            if response_data.get("error"):
+                raise RuntimeError(str(response_data.get("error")))
+
+            status_code = response_data.get("status_code")
+            response_body = str(response_data.get("body") or "")
 
             # Calculate response time
             end_time = datetime.now(UTC)
             response_time_ms = (end_time - start_time).total_seconds() * 1000
 
             # Check for interesting markers
-            interesting = self._detect_interesting_markers(response)
+            interesting = self._detect_interesting_markers(status_code, response_body)
 
             return FuzzResult(
                 request_id=request.id,
                 payload=request.payload,
-                status_code=response.status_code,
+                status_code=int(status_code) if isinstance(status_code, int) else None,
                 response_time_ms=response_time_ms,
-                response_length=len(response.content),
+                response_length=len(response_body.encode("utf-8", errors="ignore")),
                 interesting_markers=interesting,
             )
 
@@ -263,7 +268,7 @@ class FuzzerManager:
                 error=str(e),
             )
 
-    def _detect_interesting_markers(self, response: httpx.Response) -> list[str]:
+    def _detect_interesting_markers(self, status_code: int | None, response_text: str) -> list[str]:
         """
         Detect interesting response characteristics.
 
@@ -272,17 +277,17 @@ class FuzzerManager:
         markers: list[str] = []
 
         # Status code anomalies
-        if response.status_code == 500:
+        if status_code == 500:
             markers.append("error_500")
-        elif response.status_code == 403:
+        elif status_code == 403:
             markers.append("forbidden_403")
-        elif response.status_code == 401:
+        elif status_code == 401:
             markers.append("unauthorized_401")
-        elif response.status_code in (200, 201):
+        elif status_code in (200, 201):
             markers.append("success_2xx")
 
         # Response content markers
-        content_lower = response.text.lower()
+        content_lower = response_text.lower()
 
         if "error" in content_lower or "exception" in content_lower:
             markers.append("error_in_response")
@@ -412,6 +417,24 @@ class FuzzerManager:
             total = sum(len(results) for results in self._results.values())
             self._results.clear()
             return {"cleared_count": total, "remaining_batches": 0}
+
+
+def _upsert_query_param(url: str, key: str, value: str) -> str:
+    """Add or replace query parameter in URL."""
+    parsed = urlsplit(url)
+    pairs = parse_qsl(parsed.query, keep_blank_values=True)
+    updated: list[tuple[str, str]] = []
+    replaced = False
+    for k, v in pairs:
+        if k == key and not replaced:
+            updated.append((key, value))
+            replaced = True
+        elif k != key:
+            updated.append((k, v))
+    if not replaced:
+        updated.append((key, value))
+    new_query = urlencode(updated, doseq=True)
+    return urlunsplit((parsed.scheme, parsed.netloc, parsed.path, new_query, parsed.fragment))
 
 
 def get_fuzzer_manager() -> FuzzerManager:

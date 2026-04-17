@@ -6,7 +6,13 @@ import threading
 from pathlib import Path
 from typing import Any, cast
 
-from playwright.async_api import Browser, BrowserContext, Page, Playwright, async_playwright
+try:
+    from playwright.async_api import Browser, BrowserContext, Page, Playwright, async_playwright
+    _PLAYWRIGHT_AVAILABLE = True
+except ImportError:  # pragma: no cover - optional dependency guard
+    Browser = BrowserContext = Page = Playwright = Any
+    async_playwright = None
+    _PLAYWRIGHT_AVAILABLE = False
 
 
 logger = logging.getLogger(__name__)
@@ -48,6 +54,9 @@ def _ensure_event_loop() -> None:
 
 
 async def _create_browser() -> Browser:
+    if not _PLAYWRIGHT_AVAILABLE:
+        raise RuntimeError("Playwright is not installed. Install with: pip install playwright")
+
     if _state.browser is not None and _state.browser.is_connected():
         return _state.browser
 

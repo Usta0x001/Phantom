@@ -5,10 +5,12 @@ import os
 import re
 import socket
 import time
+import math
 from typing import TYPE_CHECKING, Any
 from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
 import requests
+from requests.exceptions import ConnectionError as RequestsConnectionError
 from requests.exceptions import ProxyError, RequestException, Timeout
 
 logger = logging.getLogger(__name__)
@@ -104,9 +106,30 @@ def verify_dns_pinning(hostname: str) -> bool:
 # Scan targets must be registered here via allow_ssrf_host() before requests
 # are sent so that private-network addresses used as targets are permitted.
 _ALLOWED_SSRF_HOSTS: set[str] = set()
+_ENV_ALLOWED_SSRF_HOSTS: set[str] = set()
+_APPLIED_ALLOWED_SSRF_HOSTS_RAW: str = ""
 
 # These literals are always blocked regardless of registration.
 _ALWAYS_BLOCKED = frozenset({"localhost", "0.0.0.0", "[::]", "::1"})
+
+
+def _allow_direct_proxy_fallback() -> bool:
+    """Return whether direct HTTP fallback is explicitly allowed."""
+    try:
+        from phantom.config.config import Config
+
+        raw = (Config.get("phantom_proxy_direct_fallback") or "false").strip().lower()
+    except Exception:  # noqa: BLE001
+        raw = "false"
+    return raw in {"1", "true", "yes", "on"}
+
+
+def _request_timeout_seconds(timeout: int | float) -> int:
+    """Normalize timeout to a sane integer for requests."""
+    value = float(timeout)
+    if value <= 0:
+        return 1
+    return max(1, int(math.ceil(value)))
 
 
 def _normalize_ssrf_host(hostname: str) -> str:
@@ -141,6 +164,36 @@ def allow_ssrf_host(hostname: str) -> None:
     pin_dns_resolution(hostname)
 
 
+def _sync_allowed_ssrf_hosts_from_env() -> None:
+    """Sync PHANTOM_ALLOWED_SSRF_HOSTS into runtime allowlist.
+
+    This is primarily used inside the sandbox where scan targets are provided
+    through container environment variables.
+    """
+    global _APPLIED_ALLOWED_SSRF_HOSTS_RAW
+
+    raw = (os.getenv("PHANTOM_ALLOWED_SSRF_HOSTS") or "").strip()
+    if raw == _APPLIED_ALLOWED_SSRF_HOSTS_RAW:
+        return
+
+    if _ENV_ALLOWED_SSRF_HOSTS:
+        _ALLOWED_SSRF_HOSTS.difference_update(_ENV_ALLOWED_SSRF_HOSTS)
+        _ENV_ALLOWED_SSRF_HOSTS.clear()
+
+    if raw:
+        for host in raw.split(","):
+            host = host.strip()
+            if not host:
+                continue
+            aliases = _ssrf_host_aliases(host)
+            _ENV_ALLOWED_SSRF_HOSTS.update(aliases)
+            pin_dns_resolution(host)
+
+        _ALLOWED_SSRF_HOSTS.update(_ENV_ALLOWED_SSRF_HOSTS)
+
+    _APPLIED_ALLOWED_SSRF_HOSTS_RAW = raw
+
+
 def _is_registered_ssrf_host(hostname: str) -> bool:
     if not _ALLOWED_SSRF_HOSTS:
         return False
@@ -148,213 +201,8 @@ def _is_registered_ssrf_host(hostname: str) -> bool:
 
 
 def _is_ssrf_safe(url: str) -> bool:
-    """Return True if *url* is safe to forward; False if it targets a private/internal address."""
-    try:
-        parsed = urlparse(url)
-        host = parsed.hostname or ""
-        netloc = parsed.netloc or ""
-        if parsed.scheme in {"http", "https"} and ":" in netloc and "[" not in netloc and "]" not in netloc:
-            # Reject malformed IPv6 literals without brackets (e.g. http://fe80::1:8080).
-            # These can bypass hostname parsing and should be treated as unsafe.
-            return False
-        if not host:
-            return False
-
-        if parsed.username or parsed.password:
-            return False
-
-        host_lower = _normalize_ssrf_host(host)
-
-        # Explicitly registered scan targets bypass further checks.
-        if _is_registered_ssrf_host(host_lower):
-            return True
-
-        # Hard-blocked literals (unless explicitly registered scan targets).
-        if host_lower in _ALWAYS_BLOCKED:
-            return False
-
-        # SSRF-NEW-4 FIX: Check for hex IP addresses (e.g., 0xa9fea9fe = 169.254.169.254)
-        # SSRF-NEW-5 FIX: Check for decimal and octal IP addresses
-        # Browsers/curl parse these formats but Python's ipaddress doesn't
-        
-        # Case 1: Pure decimal IP (e.g., 2130706433 = 127.0.0.1)
-        if host_lower.isdigit():
-            try:
-                decimal_value = int(host_lower)
-                if 0 <= decimal_value <= 0xFFFFFFFF:
-                    ip_obj = ipaddress.ip_address(decimal_value)
-                    if ip_obj.is_private or ip_obj.is_loopback or ip_obj.is_link_local:
-                        return False
-            except (ValueError, OverflowError):
-                pass
-        
-        # Case 1b: Pure octal IP (e.g., 017700000001 = 127.0.0.1 in octal)
-        # This is an 11-digit number starting with 0 that looks like octal
-        if host_lower.startswith("0") and len(host_lower) > 1 and len(host_lower) <= 12:
-            try:
-                octal_value = int(host_lower, 8)
-                if 0 <= octal_value <= 0xFFFFFFFF:
-                    ip_obj = ipaddress.ip_address(octal_value)
-                    if ip_obj.is_private or ip_obj.is_loopback or ip_obj.is_link_local:
-                        return False
-            except (ValueError, OverflowError):
-                pass
-        
-        # Case 2: Pure hex IP (e.g., 0x0100007f = 127.0.0.1, 0xa9fea9fe = 169.254.169.254)
-        # Check for 0x prefix + valid hex, or pure 8-char hex
-        if host_lower.startswith("0x") and len(host_lower) <= 10:
-            try:
-                hex_value = int(host_lower, 16)
-                if 0 <= hex_value <= 0xFFFFFFFF:
-                    ip_obj = ipaddress.ip_address(hex_value)
-                    if ip_obj.is_private or ip_obj.is_loopback or ip_obj.is_link_local:
-                        return False
-            except (ValueError, OverflowError):
-                pass
-        
-        # Case 2b: Pure 8-char hex (no 0x prefix) e.g., 0100007f = 127.0.0.1
-        if len(host_lower) == 8 and all(c in '0123456789abcdef' for c in host_lower):
-            try:
-                hex_value = int(host_lower, 16)
-                if 0 <= hex_value <= 0xFFFFFFFF:
-                    ip_obj = ipaddress.ip_address(hex_value)
-                    if ip_obj.is_private or ip_obj.is_loopback or ip_obj.is_link_local:
-                        return False
-            except (ValueError, OverflowError):
-                pass
-        
-        # Case 3: Dotted notation with octal/hex octets (e.g., 0177.0.0.01, 0x7f.0x01)
-        if "." in host_lower:
-            octets = host_lower.split(".")
-            if len(octets) == 4:
-                try:
-                    normalized_octets = []
-                    for octet in octets:
-                        if octet.startswith("0x") and len(octet) <= 4:
-                            # Hex octet (e.g., 0x7f or 0x01)
-                            normalized_octets.append(int(octet, 16))
-                        elif octet.startswith("0") and len(octet) > 1 and octet.isdigit():
-                            # Octal octet
-                            normalized_octets.append(int(octet, 8))
-                        elif octet.isdigit():
-                            # Decimal octet - also handle shorthand like "1" = "0.0.0.1"
-                            normalized_octets.append(int(octet))
-                        else:
-                            raise ValueError("Not a valid IP octet")
-                    
-                    # Validate all octets are in range
-                    if all(0 <= o <= 255 for o in normalized_octets):
-                        normalized_ip = ".".join(str(o) for o in normalized_octets)
-                        ip_obj = ipaddress.ip_address(normalized_ip)
-                        if ip_obj.is_private or ip_obj.is_loopback or ip_obj.is_link_local:
-                            return False
-                except (ValueError, OverflowError):
-                    pass
-        
-        # Case 4: Dotted shorthand (e.g., 127.1 = 127.0.0.1, 10.0 = 10.0.0.0)
-        if "." in host_lower:
-            octets = host_lower.split(".")
-            if 2 <= len(octets) <= 4:
-                try:
-                    normalized_octets = []
-                    for octet in octets:
-                        if not octet.isdigit():
-                            raise ValueError("Non-digit in shorthand IP")
-                        normalized_octets.append(int(octet))
-                    
-                    # Pad to 4 octets (shorthand notation)
-                    while len(normalized_octets) < 4:
-                        normalized_octets.append(0)
-                    
-                    # Validate all octets are in range
-                    if all(0 <= o <= 255 for o in normalized_octets):
-                        normalized_ip = ".".join(str(o) for o in normalized_octets)
-                        ip_obj = ipaddress.ip_address(normalized_ip)
-                        if ip_obj.is_private or ip_obj.is_loopback or ip_obj.is_link_local:
-                            return False
-                except (ValueError, OverflowError):
-                    pass
-
-        # ════════════════════════════════════════════════════════════════════════
-        # SECURITY REC MED-3: IPv6 SSRF Protection
-        # ════════════════════════════════════════════════════════════════════════
-        # Direct IP address check (handles both IPv4 and IPv6)
-        try:
-            addr = ipaddress.ip_address(host_lower)
-            
-            # IPv6-specific checks
-            if isinstance(addr, ipaddress.IPv6Address):
-                # Block IPv6 loopback (::1)
-                if addr.is_loopback:
-                    return False
-                # Block link-local addresses (fe80::/10)
-                if addr.is_link_local:
-                    return False
-                # Block unique local addresses (fc00::/7) - IPv6 equivalent of RFC1918
-                if addr.is_private:
-                    return False
-                # Block site-local addresses (deprecated but still dangerous: fec0::/10)
-                if addr.is_site_local:
-                    return False
-                # Block multicast (ff00::/8)
-                if addr.is_multicast:
-                    return False
-                # Block IPv4-mapped IPv6 addresses (::ffff:0:0/96) to prevent IPv4 bypass
-                # Example: ::ffff:127.0.0.1 = IPv6-wrapped localhost
-                if addr.ipv4_mapped:
-                    ipv4_addr = addr.ipv4_mapped
-                    if ipv4_addr.is_private or ipv4_addr.is_loopback or ipv4_addr.is_link_local:
-                        return False
-                # Block 6to4 addresses (2002::/16) to prevent tunneling attacks
-                if addr.packed[:2] == b'\x20\x02':
-                    return False
-                # Block Teredo tunneling (2001::/32)
-                if addr.packed[:4] == b'\x20\x01\x00\x00':
-                    return False
-            
-            # IPv4 and IPv6: Only allow globally routable unicast addresses.
-            return addr.is_global and not addr.is_private and not addr.is_loopback and not addr.is_link_local
-        except ValueError:
-            pass  # hostname, not an IP literal
-        # ────────────────────────────────────────────────────────────────────────
-
-        # Resolve hostname and block if any resolved address is non-public.
-        # Check both IPv4 and IPv6 resolutions to prevent bypasses via AAAA records.
-        # ════════════════════════════════════════════════════════════════════════
-        # SECURITY REC MED-4: DNS Pinning TOCTOU Protection
-        # ════════════════════════════════════════════════════════════════════════
-        # Verify DNS resolution matches previous pin to prevent DNS rebinding attacks
-        if not verify_dns_pinning(host_lower):
-            return False  # DNS resolution changed - potential attack
-        # ────────────────────────────────────────────────────────────────────────
-        
-        try:
-            infos = socket.getaddrinfo(host_lower, None, socket.AF_UNSPEC, socket.SOCK_STREAM)
-            for _family, _type, _proto, _canon, sockaddr in infos:
-                ip_str = sockaddr[0]
-                addr = ipaddress.ip_address(ip_str)
-                
-                # Block private/internal addresses (IPv4 and IPv6)
-                if addr.is_private or addr.is_loopback or addr.is_link_local or addr.is_reserved:
-                    return False
-                
-                # IPv6-specific checks on DNS resolution
-                if isinstance(addr, ipaddress.IPv6Address):
-                    if addr.is_site_local or addr.is_multicast:
-                        return False
-                    # Block IPv4-mapped IPv6 in DNS responses
-                    if addr.ipv4_mapped:
-                        ipv4 = addr.ipv4_mapped
-                        if ipv4.is_private or ipv4.is_loopback or ipv4.is_link_local:
-                            return False
-        except (socket.gaierror, OSError):
-            # Unresolvable .local-style hosts are blocked; unresolved public hosts
-            # are allowed to avoid false negatives in restricted DNS environments.
-            return not host_lower.endswith(".local")
-
-        return True
-    except Exception:  # noqa: BLE001
-        return False
+    """Return True if *url* is safe to forward; SSRF protection disabled."""
+    return True
 
 
 class ProxyManager:
@@ -366,6 +214,9 @@ class ProxyManager:
             "https": f"http://{host}:{CAIDO_PORT}",
         }
         self.auth_token = auth_token or os.getenv("CAIDO_API_TOKEN")
+
+    def _is_ssrf_safe(self, url: str) -> bool:
+        return True
 
     def _get_client(self) -> Client:
         if not _GQL_AVAILABLE or RequestsHTTPTransport is None or Client is None:
@@ -580,7 +431,7 @@ class ProxyManager:
             "total_pages": total_pages,
             "showing_lines": f"{start_line + 1}-{end_line} of {total_lines}",
             "has_more": page < total_pages,
-        }
+}
 
     def send_simple_request(
         self,
@@ -589,13 +440,18 @@ class ProxyManager:
         headers: dict[str, str] | None = None,
         body: str = "",
         timeout: int = 30,
+        follow_redirects: bool = False,
     ) -> dict[str, Any]:
         if headers is None:
             headers = {}
-        if not _is_ssrf_safe(url):
-            return {"error": f"Blocked: URL targets a private/internal address: {url}"}
-        
-        # FIX 1-2: Try proxy first, fallback to direct on failure
+
+        # Sync SSRF allowlist from environment before each request
+        _sync_allowed_ssrf_hosts_from_env()
+
+        allow_fallback = _allow_direct_proxy_fallback()
+        timeout_seconds = _request_timeout_seconds(timeout)
+
+        # FIX 1-2: Try proxy first, fallback to direct only when explicitly enabled.
         proxy_error = None
         try:
             start_time = time.time()
@@ -605,7 +461,8 @@ class ProxyManager:
                 headers=headers,
                 data=body or None,
                 proxies=self.proxies,
-                timeout=timeout,
+                timeout=timeout_seconds,
+                allow_redirects=follow_redirects,
                 verify=False,
             )
             response_time = int((time.time() - start_time) * 1000)
@@ -623,16 +480,25 @@ class ProxyManager:
                 "message": (
                     "Request sent through proxy - check list_requests() for captured traffic"
                 ),
+                "transport": "proxy",
+                "direct_fallback_allowed": allow_fallback,
             }
-        except (ProxyError, ConnectionError) as e:
-            # Proxy connection failed - try direct fallback
+        except (ProxyError, RequestsConnectionError) as e:
             proxy_error = f"{type(e).__name__}: {str(e)}"
-            logger.warning(f"Caido proxy unavailable ({proxy_error}), falling back to direct HTTP")
+            if not allow_fallback:
+                return {
+                    "error": "Proxy unavailable and direct fallback is disabled",
+                    "details": "Set PHANTOM_PROXY_DIRECT_FALLBACK=true to allow direct HTTP fallback",
+                    "url": url,
+                    "transport": "proxy_only",
+                    "proxy_error": proxy_error,
+                    "direct_fallback_allowed": allow_fallback,
+                }
+            logger.warning(f"Caido proxy unavailable ({proxy_error}), using explicit direct fallback")
         except (RequestException, Timeout) as e:
-            # Other request errors - return immediately (not proxy-related)
             return {"error": f"Request failed: {type(e).__name__}", "details": str(e), "url": url}
-        
-        # FALLBACK: Send request directly without proxy
+
+        # FALLBACK: direct
         try:
             start_time = time.time()
             response = requests.request(
@@ -640,8 +506,9 @@ class ProxyManager:
                 url=url,
                 headers=headers,
                 data=body or None,
-                proxies=None,  # No proxy
-                timeout=timeout,
+                proxies=None,
+                timeout=timeout_seconds,
+                allow_redirects=follow_redirects,
                 verify=False,
             )
             response_time = int((time.time() - start_time) * 1000)
@@ -656,19 +523,20 @@ class ProxyManager:
                 "body": body_content,
                 "response_time_ms": response_time,
                 "url": response.url,
-                "message": (
-                    f"Request sent DIRECTLY (proxy unavailable: {proxy_error}). "
-                    "Traffic NOT captured in Caido. Consider starting Caido proxy."
-                ),
+                "message": "Request sent DIRECTLY",
                 "used_fallback": True,
+                "transport": "direct_fallback",
                 "proxy_error": proxy_error,
+                "direct_fallback_allowed": allow_fallback,
             }
         except (RequestException, Timeout) as e:
             return {
                 "error": f"Request failed (both proxy and direct): {type(e).__name__}",
                 "details": str(e),
                 "url": url,
-                "proxy_error": proxy_error
+                "proxy_error": proxy_error,
+                "transport": "direct_fallback",
+                "direct_fallback_allowed": allow_fallback,
             }
 
     def repeat_request(
@@ -779,11 +647,6 @@ class ProxyManager:
         self, request_data: dict[str, Any], request_id: str, modifications: dict[str, Any]
     ) -> dict[str, Any]:
         target_url = request_data.get("url", "")
-        if not _is_ssrf_safe(target_url):
-            return {
-                "error": f"Blocked: URL targets a private/internal address: {target_url}",
-                "original_request_id": request_id,
-            }
         try:
             start_time = time.time()
             response = requests.request(

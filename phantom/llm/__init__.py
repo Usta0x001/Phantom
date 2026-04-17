@@ -1,10 +1,10 @@
 import logging
 import warnings
+from typing import Any
 
 import litellm
 
 from .config import LLMConfig
-from .llm import LLM, LLMRequestFailedError
 
 
 __all__ = [
@@ -12,6 +12,16 @@ __all__ = [
     "LLMConfig",
     "LLMRequestFailedError",
 ]
+
+
+def __getattr__(name: str) -> Any:
+    if name in {"LLM", "LLMRequestFailedError"}:
+        from .llm import LLM, LLMRequestFailedError
+
+        if name == "LLM":
+            return LLM
+        return LLMRequestFailedError
+    raise AttributeError(name)
 
 # FIX #4: Suppress LiteLLM warnings and provider list messages
 litellm._logging._disable_debugging()

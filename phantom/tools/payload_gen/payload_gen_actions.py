@@ -34,6 +34,7 @@ import urllib.parse
 from dataclasses import dataclass, field
 from typing import Any
 
+from phantom.config.config import Config
 from phantom.tools.registry import register_tool
 
 
@@ -391,7 +392,7 @@ async def generate_ai_payloads(
     Returns:
         List of dynamically generated payloads with metadata
     """
-    from phantom.config.config import Config
+    from phantom.llm import LLMConfig
     from phantom.llm.llm import LLM
     
     # Build context prompt
@@ -430,32 +431,56 @@ OUTPUT FORMAT (JSON array):
 Generate exactly {count} payloads. Return ONLY valid JSON array, no explanation."""
 
     try:
-        llm = LLM()
-        response = await llm.chat(
-            messages=[
-                {"role": "system", "content": "You are an elite penetration tester. Generate context-aware exploit payloads as JSON."},
-                {"role": "user", "content": prompt}
-            ],
-            max_tokens=4000
-        )
-        
-        # Parse JSON response
+        llm = LLM(LLMConfig(scan_mode="standard"))
+        final_content = ""
+        async for chunk in llm.generate(
+            [
+                {
+                    "role": "system",
+                    "content": "You are an elite penetration tester. Generate context-aware exploit payloads as JSON.",
+                },
+                {"role": "user", "content": prompt},
+            ]
+        ):
+            if chunk.content:
+                final_content = chunk.content
+
+        if not final_content.strip():
+            raise RuntimeError("LLM returned empty response for AI payload generation")
+
         import json
-        import re
-        
-        # Try to extract JSON from response
-        json_match = re.search(r'\[.*\]', response.content, re.DOTALL)
-        if json_match:
-            payloads = json.loads(json_match.group())
-            return payloads
-        else:
-            # Try parsing whole response
-            payloads = json.loads(response.content)
-            return payloads
-            
+
+        cleaned = final_content.strip()
+        json_match = re.search(r"\[[\s\S]*\]", cleaned)
+        json_blob = json_match.group(0) if json_match else cleaned
+        parsed = json.loads(json_blob)
+        if not isinstance(parsed, list):
+            raise ValueError("AI payload generation response is not a JSON array")
+
+        normalized: list[dict[str, Any]] = []
+        for item in parsed:
+            if not isinstance(item, dict):
+                continue
+            payload_text = str(item.get("payload", "")).strip()
+            if not payload_text:
+                continue
+            normalized.append(
+                {
+                    "payload": payload_text,
+                    "context": str(item.get("context", context_dict.get("injection_context", "generic"))),
+                    "bypasses": item.get("bypasses", []) if isinstance(item.get("bypasses"), list) else [],
+                    "technique": str(item.get("technique", "ai_generated")),
+                    "category": "ai_generated",
+                }
+            )
+
+        if not normalized:
+            raise ValueError("AI payload generation returned no valid payload objects")
+
+        return normalized[:count]
+
     except Exception as e:
-        logger.warning(f"AI payload generation failed: {e}, falling back to static")
-        return []
+        raise RuntimeError(f"AI payload generation failed: {e}") from e
 
 
 # ============================================================================

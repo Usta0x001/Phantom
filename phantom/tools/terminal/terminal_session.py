@@ -389,7 +389,12 @@ class TerminalSession:
             time.sleep(self.POLL_INTERVAL)
 
     def execute(
-        self, command: str, is_input: bool = False, timeout: float = 10.0, no_enter: bool = False
+        self,
+        command: str,
+        is_input: bool = False,
+        timeout: float = 10.0,
+        no_enter: bool = False,
+        trusted_command: bool = False,
     ) -> dict[str, Any]:
         if not self._initialized:
             raise RuntimeError("Bash session is not initialized")
@@ -412,7 +417,7 @@ class TerminalSession:
 
         # C-04: quarantine mode — block shell metacharacters that enable injection
         # when the command originates from untrusted/high-risk-target data.
-        if self.quarantine and not is_special_key:
+        if self.quarantine and not is_special_key and not trusted_command:
             blocked = [c for c in self._QUARANTINE_METACHARACTERS if c in command]
             if blocked:
                 # ── Audit: log quarantine block ──────────────────────────────
@@ -432,7 +437,7 @@ class TerminalSession:
                     "content": (
                         f"[QUARANTINE] Command blocked: contains shell metacharacter(s) "
                         f"{blocked!r} which may enable injection. "
-                        f"Set PHANTOM_TERMINAL_QUARANTINE=false to allow complex shell commands."
+                        "Retry with trusted_command=true only for operator-authored commands."
                     ),
                     "status": "error",
                     "exit_code": 1,

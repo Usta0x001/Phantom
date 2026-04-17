@@ -1,6 +1,6 @@
 <tools>
   <tool name="browser_action">
-    <description>Perform browser actions using a Playwright-controlled browser with multiple tabs. The browser is PERSISTENT and remains active until explicitly closed.</description>
+    <description>Perform browser actions using a Playwright-controlled browser with multiple tabs, including launch, goto, click, type, execute_js, and selector actions like click_selector, fill_selector, wait_for_selector, and query_selector_all. The browser is PERSISTENT and remains active until explicitly closed.</description>
     <parameters>
       <parameter name="action" type="string" required="true">
       </parameter>

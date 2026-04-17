@@ -334,7 +334,7 @@ def _generate_recommended_payloads(
     return payloads
 
 
-@register_tool
+@register_tool(sandbox_execution=False)
 def auto_queue_cve_exploits(
     tech_stack: dict[str, Any],
     base_url: str,
@@ -622,7 +622,7 @@ def _generate_action(hypothesis: CVEExploitHypothesis) -> str:
         return f"Manual testing required for {hypothesis.vuln_class} - Review CVE {hypothesis.cve_id}"
 
 
-@register_tool
+@register_tool(sandbox_execution=False)
 def enrich_hypothesis_with_cve(
     hypothesis_id: str,
     cve_id: str,
@@ -694,7 +694,7 @@ def enrich_hypothesis_with_cve(
         }
 
 
-@register_tool
+@register_tool(sandbox_execution=False)
 def get_cve_exploitation_status(
     cve_id: str,
     hypothesis_ledger: Any = None

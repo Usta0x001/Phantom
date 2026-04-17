@@ -13,6 +13,7 @@ Or standalone: python phantom/tests/test_efficiency_fixes.py
 
 import asyncio
 import os
+import re
 import sys
 import time
 from unittest.mock import MagicMock, patch
@@ -70,6 +71,32 @@ def test_tool_cache_hit_miss():
     
     print("[PASS] Tool cache hit/miss behavior")
     return True
+
+
+def test_send_request_requires_get_and_auth_safe_headers():
+    from phantom.tools.cache import ToolResultCache
+
+    cache = ToolResultCache(max_size=10, ttl_seconds=60, enabled=True)
+
+    assert not cache.is_cacheable("send_request", {"method": "POST", "url": "https://example.com"})
+    assert not cache.is_cacheable(
+        "send_request",
+        {
+            "method": "GET",
+            "url": "https://example.com",
+            "headers": {"Authorization": "Bearer secret"},
+        },
+    )
+    assert cache.is_cacheable(
+        "send_request",
+        {"method": "GET", "url": "https://example.com", "headers": {"Accept": "text/html"}},
+    )
+
+
+def test_otel_flag_can_be_enabled():
+    from phantom.telemetry.flags import is_otel_enabled
+
+    assert isinstance(is_otel_enabled(), bool)
 
 
 def test_tool_cache_ttl_expiration():
@@ -230,6 +257,37 @@ def test_compression_config_vars():
     
     print("[PASS] Compression config vars")
     return True
+
+
+def test_terminal_execute_truncation_limit_is_bounded(monkeypatch):
+    from phantom.tools.executor import _get_truncation_limit
+
+    monkeypatch.setattr("phantom.tools.executor.Config.get", lambda _name: None)
+
+    assert _get_truncation_limit("terminal_execute") == 12000
+
+
+def test_memory_compressor_tracks_routed_model():
+    from types import SimpleNamespace
+
+    from phantom.llm.config import LLMConfig
+    from phantom.llm.llm import LLM
+    from phantom.llm.memory_compressor import MemoryCompressor
+
+    llm = LLM(LLMConfig(model_name="openai/gpt-4o-mini"), agent_name="PhantomAgent")
+    llm.config.litellm_model = "openai/Kimi-K2.5"
+    state = SimpleNamespace(_runtime_llm=llm)
+
+    compressor = MemoryCompressor(model_name="openai/gpt-4o-mini")
+    compressor.compress_history(
+        [
+            {"role": "user", "content": "Review the findings"},
+            {"role": "assistant", "content": "No issues yet"},
+        ],
+        state,
+    )
+
+    assert compressor.model_name == "openai/Kimi-K2.5"
 
 
 def test_extract_anchors_with_regex():

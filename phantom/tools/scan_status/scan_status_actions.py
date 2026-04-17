@@ -10,6 +10,7 @@ from __future__ import annotations
 import threading
 from typing import Any, TYPE_CHECKING
 
+from phantom.tools.context import get_current_agent_id
 from phantom.tools.registry import register_tool
 
 if TYPE_CHECKING:
@@ -19,31 +20,17 @@ if TYPE_CHECKING:
     from phantom.core.attack_graph import AttackGraph
 
 
-# Global references (set by base_agent.py during initialization)
-_GLOBAL_HYPOTHESIS_LEDGER: HypothesisLedger | None = None
-_GLOBAL_COVERAGE_TRACKER: CoverageTracker | None = None
-_GLOBAL_CORRELATION_ENGINE: CorrelationEngine | None = None
-_GLOBAL_ATTACK_GRAPH: AttackGraph | None = None  # FIX 5
-_GLOBAL_AGENT_STATE: Any | None = None
 _CONTEXT_BY_AGENT: dict[str, dict[str, Any]] = {}
 _CONTEXT_LOCK = threading.RLock()
 
 
 def clear_scan_status_context(agent_id: str | None = None) -> None:
-    global _GLOBAL_HYPOTHESIS_LEDGER, _GLOBAL_COVERAGE_TRACKER, _GLOBAL_CORRELATION_ENGINE, _GLOBAL_ATTACK_GRAPH, _GLOBAL_AGENT_STATE
     with _CONTEXT_LOCK:
         if agent_id is None:
-            _GLOBAL_HYPOTHESIS_LEDGER = None
-            _GLOBAL_COVERAGE_TRACKER = None
-            _GLOBAL_CORRELATION_ENGINE = None
-            _GLOBAL_ATTACK_GRAPH = None
-            _GLOBAL_AGENT_STATE = None
             _CONTEXT_BY_AGENT.clear()
             return
 
         _CONTEXT_BY_AGENT.pop(agent_id, None)
-        if _GLOBAL_AGENT_STATE is not None and getattr(_GLOBAL_AGENT_STATE, "agent_id", None) == agent_id:
-            _GLOBAL_AGENT_STATE = None
 
 
 def set_scan_status_context(
@@ -54,32 +41,23 @@ def set_scan_status_context(
     agent_state: Any | None = None,
 ) -> None:
     """Set the global context for scan status queries."""
-    global _GLOBAL_HYPOTHESIS_LEDGER, _GLOBAL_COVERAGE_TRACKER, _GLOBAL_CORRELATION_ENGINE, _GLOBAL_ATTACK_GRAPH, _GLOBAL_AGENT_STATE
-    with _CONTEXT_LOCK:
-        if hypothesis_ledger is not None:
-            _GLOBAL_HYPOTHESIS_LEDGER = hypothesis_ledger
-        if coverage_tracker is not None:
-            _GLOBAL_COVERAGE_TRACKER = coverage_tracker
-        if correlation_engine is not None:
-            _GLOBAL_CORRELATION_ENGINE = correlation_engine
-        if attack_graph is not None:
-            _GLOBAL_ATTACK_GRAPH = attack_graph
-        if agent_state is not None:
-            _GLOBAL_AGENT_STATE = agent_state
+    if agent_state is None or not getattr(agent_state, "agent_id", None):
+        raise ValueError("agent_id required")
 
-        # P1 HARDENING: keep agent-scoped context to prevent cross-agent overwrite.
-        agent_id = getattr(agent_state, "agent_id", None) if agent_state is not None else None
-        if isinstance(agent_id, str) and agent_id:
-            _CONTEXT_BY_AGENT[agent_id] = {
-                "hypothesis_ledger": hypothesis_ledger if hypothesis_ledger is not None else _GLOBAL_HYPOTHESIS_LEDGER,
-                "coverage_tracker": coverage_tracker if coverage_tracker is not None else _GLOBAL_COVERAGE_TRACKER,
-                "correlation_engine": correlation_engine if correlation_engine is not None else _GLOBAL_CORRELATION_ENGINE,
-                "attack_graph": attack_graph if attack_graph is not None else _GLOBAL_ATTACK_GRAPH,
-                "agent_state": agent_state,
-            }
+    with _CONTEXT_LOCK:
+        agent_id = str(agent_state.agent_id)
+        _CONTEXT_BY_AGENT[agent_id] = {
+            "hypothesis_ledger": hypothesis_ledger,
+            "coverage_tracker": coverage_tracker,
+            "correlation_engine": correlation_engine,
+            "attack_graph": attack_graph,
+            "agent_state": agent_state,
+        }
 
 
 def _resolve_context(agent_id: str | None = None) -> tuple[Any, Any, Any, Any, Any]:
+    if not agent_id:
+        raise ValueError("agent_id required")
     with _CONTEXT_LOCK:
         if agent_id and agent_id in _CONTEXT_BY_AGENT:
             ctx = _CONTEXT_BY_AGENT[agent_id]
@@ -91,13 +69,55 @@ def _resolve_context(agent_id: str | None = None) -> tuple[Any, Any, Any, Any, A
                 ctx.get("agent_state"),
             )
 
-        return (
-            _GLOBAL_HYPOTHESIS_LEDGER,
-            _GLOBAL_COVERAGE_TRACKER,
-            _GLOBAL_CORRELATION_ENGINE,
-            _GLOBAL_ATTACK_GRAPH,
-            _GLOBAL_AGENT_STATE,
-        )
+    raise ValueError(f"scan status context missing for agent_id={agent_id}")
+
+
+def _resolve_effective_agent_id(agent_id: str | None = None) -> str:
+    if agent_id:
+        return str(agent_id)
+
+    current_agent = (get_current_agent_id() or "").strip()
+    if current_agent and current_agent != "default":
+        return current_agent
+
+    with _CONTEXT_LOCK:
+        if len(_CONTEXT_BY_AGENT) == 1:
+            return next(iter(_CONTEXT_BY_AGENT.keys()))
+
+    raise ValueError("scan status context missing and no agent_id provided")
+
+
+def _empty_scan_status(include_recommendations: bool = True) -> dict[str, Any]:
+    result: dict[str, Any] = {
+        "scan_progress": {
+            "iteration": 0,
+            "max_iterations": 300,
+            "phase": "RECON",
+            "percent_complete": 0.0,
+        },
+        "findings": {
+            "confirmed_vulnerabilities": 0,
+            "actively_testing": 0,
+            "pending_hypotheses": 0,
+        },
+        "coverage": {
+            "surfaces_tested": 0,
+            "surfaces_remaining": 0,
+            "coverage_percent": 0.0,
+        },
+        "blocked_surfaces": [],
+        "top_hypotheses": [],
+        "archived_messages": {"count": 0, "recent": []},
+        "chain_opportunities": [],
+        "correlation_learning": None,
+        "recommended_next_action": (
+            "Continue systematic testing" if include_recommendations else None
+        ),
+        "warnings": [],
+    }
+    if not include_recommendations:
+        result["recommended_next_action"] = None
+    return result
 
 
 @register_tool(sandbox_execution=False)
@@ -124,8 +144,13 @@ def get_scan_status(include_recommendations: bool = True, agent_id: str | None =
     Example:
         get_scan_status(include_recommendations=True)
     """
-    # Get references (agent-scoped when available)
-    hypothesis_ledger, coverage_tracker, correlation_engine, attack_graph, state = _resolve_context(agent_id)
+    agent_id = _resolve_effective_agent_id(agent_id)
+
+    # Get references (agent-scoped only)
+    try:
+        hypothesis_ledger, coverage_tracker, correlation_engine, attack_graph, state = _resolve_context(agent_id)
+    except ValueError:
+        return _empty_scan_status(include_recommendations=include_recommendations)
     
     # Compute phase
     iteration = getattr(state, "iteration", 0) if state else 0
@@ -160,7 +185,7 @@ def get_scan_status(include_recommendations: bool = True, agent_id: str | None =
     top_hypotheses = []
     if hypothesis_ledger:
         try:
-            top_hypotheses = hypothesis_ledger.get_factual_prompt_summary(top_n=5)
+            top_hypotheses = hypothesis_ledger.get_scored_hypotheses()[:5]
         except Exception:  # noqa: BLE001
             top_hypotheses = []
 
@@ -243,8 +268,6 @@ def get_scan_status(include_recommendations: bool = True, agent_id: str | None =
         "chain_opportunities": chains,
         "correlation_learning": correlation_learning,
         "recommended_next_action": recommendation,
-        "decision_trace": hypothesis_ledger.get_scheduler_report().get("decision_trace") if hypothesis_ledger else None,
-        "strict_validation": hypothesis_ledger.get_scheduler_report().get("strict_validation") if hypothesis_ledger else None,
         "warnings": _get_warnings(iteration, max_iter, pending, chains)
     }
     
@@ -274,18 +297,38 @@ def _compute_recommendation(
     corr_engine: CorrelationEngine | None,
     phase: str
 ) -> str:
-    """Compute a factual status hint without selection logic."""
+    """Compute a recommendation string without taking execution decisions."""
     # Priority 1: Confirmed vulns with chains
     if corr_engine is not None:
         active_chains = corr_engine.get_active_suggestions()
         if active_chains:
-            return f"Chain suggestions available: {len(active_chains)}"
+            top = active_chains[0]
+            top_surface = None
+            for finding in corr_engine.get_findings():
+                if finding.id == top.trigger_finding_id:
+                    top_surface = finding.surface
+                    break
+            score = corr_engine.get_surface_success_score(
+                top.trigger_vuln_class,
+                top_surface or top.trigger_vuln_class,
+            )
+            return (
+                f"Chain suggestions available: {len(active_chains)} "
+                f"(score: {score:.2f})"
+            )
     
     # Hypothesis ledger facts only
     if hyp_ledger:
         summary = hyp_ledger.get_summary()
         open_count = len(summary.get("open_hypotheses", []))
         if open_count:
+            top = hyp_ledger.get_scored_hypotheses()
+            if top:
+                top_item = top[0]
+                return (
+                    f"Open hypotheses available: {open_count} "
+                    f"(score: {top_item.get('priority_score', 0):.3f}, belief: {top_item.get('belief', 0.5):.3f})"
+                )
             return f"Open hypotheses available: {open_count}"
     
     # Untested surfaces facts only

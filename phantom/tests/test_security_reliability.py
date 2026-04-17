@@ -119,6 +119,26 @@ class TestSSRFProtection(unittest.TestCase):
             result = _is_ssrf_safe(url)
             # Should pass because example.com is in allowed hosts
 
+    def test_env_allowed_ssrf_hosts_allows_local_target(self):
+        """PHANTOM_ALLOWED_SSRF_HOSTS should allow registered local lab hosts."""
+        import os
+        from phantom.tools.proxy import proxy_manager
+
+        previous = os.environ.get("PHANTOM_ALLOWED_SSRF_HOSTS")
+        try:
+            os.environ["PHANTOM_ALLOWED_SSRF_HOSTS"] = "host.docker.internal"
+            proxy_manager._ALLOWED_SSRF_HOSTS.clear()
+            proxy_manager._ENV_ALLOWED_SSRF_HOSTS.clear()
+            proxy_manager._APPLIED_ALLOWED_SSRF_HOSTS_RAW = ""
+
+            self.assertTrue(proxy_manager._is_ssrf_safe("http://host.docker.internal:3000"))
+            self.assertTrue(proxy_manager._is_ssrf_safe("http://127.0.0.1:3000"))
+        finally:
+            if previous is None:
+                os.environ.pop("PHANTOM_ALLOWED_SSRF_HOSTS", None)
+            else:
+                os.environ["PHANTOM_ALLOWED_SSRF_HOSTS"] = previous
+
 
 class TestCircuitBreaker(unittest.TestCase):
     """Test circuit breaker for LLM failures."""

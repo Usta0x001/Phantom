@@ -9,30 +9,18 @@ the context window.
 
 from __future__ import annotations
 
-import json
 import threading
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from pathlib import Path
 from typing import Any, Callable
 
 from phantom.config.config import Config
 from phantom.agents.correlation_engine import CorrelationEngine
-from phantom.core.dabs_kernel import (
-    DABSDecisionTrace,
-    clamp_belief,
-    exploration_term,
-    initial_belief,
-    propagation_lambda,
-    propagate_belief,
-    relation_strength,
-    redundancy_penalty,
-    score_hypothesis,
-    select_argmax,
-)
 
 
 _VALID_STATUSES = frozenset({"open", "testing", "confirmed", "rejected"})
+
+_DEFAULT_BELIEF = 0.5
 
 MAX_EVIDENCE_EVENTS = 24
 MAX_STATUS_TRANSITIONS = 24
@@ -141,7 +129,6 @@ _VULN_DEFAULT_SEVERITY: dict[str, str] = {
     "open_redirect": "low",
 }
 
-_DABS_DEFAULT_LAMBDA = 0.20
 _MAX_SCHEDULER_EVENTS = 2000
 
 ARCHITECTURE_DIAGRAM_TEXT = (
@@ -293,9 +280,6 @@ class HypothesisLedger:
         self._confirmation_callbacks: list[Callable[[str, Hypothesis], None]] = []
         self._correlation_engine: CorrelationEngine | None = None
         self._belief_map: dict[str, float] = {}
-        self._scheduler_events: list[dict[str, Any]] = []
-        self._selection_step: int = 0
-        self._propagation_step: int = 0
 
     def set_correlation_engine(self, engine: CorrelationEngine | None) -> None:
         """Attach optional correlation engine for learned ranking signals."""
@@ -323,21 +307,10 @@ class HypothesisLedger:
             return 0.5
 
     def _scheduler_mode(self) -> str:
-        raw = str(Config.get("phantom_scheduler_mode") or "dabs").strip().lower()
-        if raw in {"dabs", "flat", "heuristic", "fifo"}:
+        raw = str(Config.get("phantom_scheduler_mode") or "flat").strip().lower()
+        if raw in {"flat", "heuristic", "fifo"}:
             return raw
-        return "dabs"
-
-    def _propagation_lambda(self) -> float:
-        return propagation_lambda(Config.get("phantom_dabs_lambda"))
-
-    def _log_scheduler_event(self, event_type: str, payload: dict[str, Any]) -> None:
-        event = {
-            "timestamp": datetime.now(UTC).isoformat(),
-            "event_type": event_type,
-            "payload": payload,
-        }
-        _bounded_append(self._scheduler_events, event, _MAX_SCHEDULER_EVENTS)
+        return "flat"
 
     def compute_evidence_score(self, hyp: Hypothesis) -> float:
         n_for = float(len(hyp.evidence_for))
@@ -371,48 +344,12 @@ class HypothesisLedger:
         sev = _VULN_DEFAULT_SEVERITY.get(vuln_class.lower(), "medium")
         return _HEURISTIC_SEVERITY_WEIGHTS.get(sev, 0.5)
 
-    def _hypothesis_priority_vector(self, hyp: Hypothesis) -> dict[str, float]:
-        belief = self.get_belief(hyp.id)
-        exploration = self._exploration_bonus(hyp)
-        redundancy = self.compute_redundancy(hyp)
-        heuristic_prior = (
-            (0.5 * self._heuristic_severity_score(hyp.vuln_class))
-            + (0.3 * self._heuristic_endpoint_type_score(hyp.surface))
-            + (0.2 * max(0.0, 1.0 - redundancy))
-        )
-        return {
-            "belief": belief,
-            "exploration": exploration,
-            "redundancy": redundancy,
-            "heuristic_prior": heuristic_prior,
-        }
-
-    def _is_chain_related(self, a: str, b: str) -> bool:
+    def _chain_related(self, a: str, b: str) -> bool:
         if not a or not b:
             return False
         if a.lower() == b.lower():
             return True
         return frozenset((a.lower(), b.lower())) in _CHAIN_RELATIONS
-
-    def _relation_strength(self, source: Hypothesis, target: Hypothesis) -> float:
-        if source.id == target.id:
-            return 1.0
-
-        rel = 0.0
-        if source.vuln_class.lower() == target.vuln_class.lower():
-            rel += 0.45
-
-        src_base, src_param = _surface_signature(source.surface)
-        dst_base, dst_param = _surface_signature(target.surface)
-        if src_base and dst_base and src_base == dst_base:
-            rel += 0.35
-        if src_param and dst_param and src_param == dst_param:
-            rel += 0.20
-
-        if self._is_chain_related(source.vuln_class, target.vuln_class):
-            rel += 0.25
-
-        return round(max(0.0, min(rel, 1.0)), 6)
 
     def propagate_update(self, executed_hypothesis_id: str, outcome: str) -> None:
         normalized = str(outcome or "testing").strip().lower()
@@ -421,25 +358,6 @@ class HypothesisLedger:
         elif normalized == "rejected":
             delta = -1.0
         else:
-            delta = 0.0
-
-        if self._scheduler_mode() == "flat":
-            with self._lock:
-                executed = self._hypotheses.get(executed_hypothesis_id)
-                if executed is None:
-                    return
-                self._propagation_step += 1
-                self._log_scheduler_event(
-                    "belief_propagation",
-                    {
-                        "step": self._propagation_step,
-                        "executed_hypothesis_id": executed_hypothesis_id,
-                        "outcome": normalized,
-                        "delta": delta,
-                        "lambda": 0.0,
-                        "updates": [],
-                    },
-                )
             return
 
         with self._lock:
@@ -447,91 +365,39 @@ class HypothesisLedger:
             if executed is None:
                 return
 
-            if executed.id not in self._belief_map:
-                self._belief_map[executed.id] = initial_belief()
-
-            lam = self._propagation_lambda()
-            updates: list[dict[str, Any]] = []
             for hyp in self._hypotheses.values():
-                rel = self._relation_strength(executed, hyp)
+                if hyp.id == executed.id:
+                    continue
+                rel = 0.0
+                if executed.vuln_class.lower() == hyp.vuln_class.lower():
+                    rel += 0.45
+                src_base, src_param = _surface_signature(executed.surface)
+                dst_base, dst_param = _surface_signature(hyp.surface)
+                if src_base and dst_base and src_base == dst_base:
+                    rel += 0.35
+                if src_param and dst_param and src_param == dst_param:
+                    rel += 0.20
+                if self._chain_related(executed.vuln_class, hyp.vuln_class):
+                    rel += 0.25
+
                 if rel <= 0.0:
                     continue
 
-                old_belief = float(self._belief_map.get(hyp.id, initial_belief()))
-                new_belief = propagate_belief(old_belief, rel, delta, lam)
-                self._belief_map[hyp.id] = new_belief
-
-                updates.append(
-                    {
-                        "hypothesis_id": hyp.id,
-                        "relation": rel,
-                        "belief_before": round(old_belief, 6),
-                        "belief_after": round(new_belief, 6),
-                    }
-                )
-
-            self._propagation_step += 1
-            self._log_scheduler_event(
-                "belief_propagation",
-                {
-                    "step": self._propagation_step,
-                    "executed_hypothesis_id": executed_hypothesis_id,
-                    "outcome": normalized,
-                    "delta": delta,
-                    "lambda": lam,
-                    "updates": updates,
-                },
-            )
+                current = self._belief_map.get(hyp.id, _DEFAULT_BELIEF)
+                updated = max(0.0, min(1.0, current + (0.20 * rel * delta)))
+                self._belief_map[hyp.id] = round(updated, 6)
 
     def get_belief(self, hypothesis_id: str) -> float:
         with self._lock:
-            return float(self._belief_map.get(hypothesis_id, initial_belief()))
+            return float(self._belief_map.get(hypothesis_id, _DEFAULT_BELIEF))
 
     def get_belief_snapshot(self) -> dict[str, float]:
         with self._lock:
             return {hid: float(val) for hid, val in self._belief_map.items()}
 
-    def get_decision_trace(self) -> dict[str, Any]:
-        """Return the latest deterministic DABS decision trace."""
-        scored = self._compute_scored_hypotheses(log_selection=False)
-        return self._build_decision_trace(scored)
-
-    def _build_decision_trace(self, scored: list[dict[str, Any]]) -> dict[str, Any]:
-        selected = select_argmax(scored) if scored else None
-        trace = DABSDecisionTrace(
-            selected_hypothesis_id=selected,
-            scores=[
-                {
-                    "hypothesis_id": item["hypothesis_id"],
-                    "priority_score": item["priority_score"],
-                    "belief": item.get("belief", initial_belief()),
-                    "exploration": item.get("exploration_bonus", 0.0),
-                    "redundancy": item.get("redundancy", 0.0),
-                }
-                for item in scored
-            ],
-            belief_map=self.get_belief_snapshot(),
-            scheduler_mode=self._scheduler_mode(),
-            selection_step=self._selection_step,
-            propagation_step=self._propagation_step,
-            lambda_value=self._propagation_lambda(),
-        )
-        return trace.to_dict()
-
-    def get_scheduler_events(self, limit: int | None = None) -> list[dict[str, Any]]:
-        with self._lock:
-            events = list(self._scheduler_events)
-        if isinstance(limit, int) and limit > 0:
-            return events[-limit:]
-        return events
-
     def get_scheduler_report(self) -> dict[str, Any]:
         with self._lock:
             open_or_testing = [h for h in self._hypotheses.values() if h.status in {"open", "testing"}]
-
-        scored = self._compute_scored_hypotheses(log_selection=False)
-        trace = self._build_decision_trace(scored)
-        selected = trace.get("selected_hypothesis_id")
 
         return {
             "scheduler_mode": self._scheduler_mode(),
@@ -540,31 +406,12 @@ class HypothesisLedger:
                 "candidate_nodes": len(open_or_testing),
             },
             "belief_map": self.get_belief_snapshot(),
-            "selected_hypothesis_id": selected,
-            "events_recorded": len(self.get_scheduler_events()),
-            "decision_trace": trace,
-            "strict_validation": {
-                "no_external_ranking": self._scheduler_mode() in {"dabs", "flat", "heuristic", "fifo"},
-                "no_llm_scoring_path": True,
-                "dabs_only_selection_index": selected == select_argmax(scored),
-                "expert_outputs_append_only": True,
-                "graph_changes_affect_only_rel": True,
-            },
-            "architecture": ARCHITECTURE_DIAGRAM_TEXT,
+            "architecture": "hypothesis -> evidence -> correlation -> summary",
         }
 
-    def _export_scheduler_json(self, raw_path: str) -> None:
-        path = Path(raw_path)
-        payload = {
-            "scheduler_mode": self._scheduler_mode(),
-            "belief_map": self.get_belief_snapshot(),
-            "events": self.get_scheduler_events(),
-        }
-        try:
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-        except OSError:
-            return
+    def get_factual_prompt_summary(self, top_n: int = 10) -> str:
+        """Return a factual summary for prompt injection."""
+        return self.get_prioritized_summary(top_n=top_n)
 
     # ── Mutations ─────────────────────────────────────────────────────────────
 
@@ -811,8 +658,7 @@ class HypothesisLedger:
             self._record_confidence(hyp, self._confidence_from_evidence(hyp), reason=outcome)
             hyp.last_updated = datetime.now(UTC).isoformat()
 
-        if self._scheduler_mode() != "flat":
-            self.propagate_update(hyp_id, outcome)
+        self.propagate_update(hyp_id, outcome)
 
     def increment_iteration(self, hyp_id: str) -> None:
         """Increment the iterations-spent counter for a hypothesis."""
@@ -904,138 +750,66 @@ class HypothesisLedger:
         summary.sort(key=lambda entry: (entry["confidence"], entry["iterations_spent"]), reverse=True)
         return summary
 
-    def get_next_hypothesis(self) -> dict[str, Any] | None:
-        scored = self._compute_scored_hypotheses(log_selection=True)
-        if not scored:
-            return None
-        trace = self._build_decision_trace(scored)
-        selected_id = trace.get("selected_hypothesis_id")
-        if not selected_id:
-            return None
-        for item in scored:
-            if item.get("hypothesis_id") == selected_id:
-                return item
-        return None
-
     def get_scored_hypotheses(self) -> list[dict[str, Any]]:
-        """Return deterministic scheduler scores for open/testing hypotheses."""
-        return self._compute_scored_hypotheses(log_selection=True)
-
-    def _compute_scored_hypotheses(self, log_selection: bool) -> list[dict[str, Any]]:
-        """Compute deterministic scheduler scores.
-
-        When log_selection=False this method is side-effect free with respect to
-        scheduler event counters and trace logs.
-        """
-        mode = self._scheduler_mode()
+        """Return heuristic/flat/fifo scores for open/testing hypotheses."""
         with self._lock:
             hypotheses = [h for h in self._hypotheses.values() if h.status in {"open", "testing"}]
 
         if not hypotheses:
-            if log_selection:
-                self._selection_step += 1
-                self._log_scheduler_event(
-                    "selection",
-                    {
-                        "step": self._selection_step,
-                        "scheduler_mode": mode,
-                        "ordered_hypotheses": [],
-                    },
-                )
-            export_path = str(Config.get("phantom_scheduler_export_json") or "").strip()
-            if export_path:
-                self._export_scheduler_json(export_path)
             return []
 
+        mode = str(Config.get("phantom_scheduler_mode") or "flat").strip().lower()
+        if mode not in {"flat", "heuristic", "fifo"}:
+            mode = "flat"
+
         scored: list[dict[str, Any]] = []
-
         for h in hypotheses:
-            with self._lock:
-                self._belief_map.setdefault(h.id, 0.5)
-
-            vector = self._hypothesis_priority_vector(h)
-            exploration = vector["exploration"]
-            redundancy = vector["redundancy"]
-            belief = vector["belief"]
-            heuristic_prior = vector["heuristic_prior"]
+            belief = self.get_belief(h.id)
+            exploration = round(1.0 / float(1 + max(0, int(h.tests_executed))), 6)
+            redundancy = round(len(set(h.payload_families_tested)) / float(max(1, len(_payload_families_for_class(h.vuln_class)))), 6)
 
             if mode == "fifo":
-                total_score = -float(h.tests_executed)
-                score_factors = {
-                    "fifo_order": round(total_score, 6),
-                }
+                priority = -float(h.tests_executed)
+                factors = {"fifo_order": round(priority, 6)}
             elif mode == "heuristic":
-                total_score = heuristic_prior + exploration - redundancy
-                score_factors = {
+                heuristic_prior = (
+                    (0.5 * self._heuristic_severity_score(h.vuln_class))
+                    + (0.3 * self._heuristic_endpoint_type_score(h.surface))
+                    + (0.2 * max(0.0, 1.0 - redundancy))
+                )
+                priority = heuristic_prior + exploration - redundancy
+                factors = {
                     "heuristic_prior": round(heuristic_prior, 6),
                     "exploration": round(exploration, 6),
                     "redundancy": round(redundancy, 6),
                 }
             else:
-                total_score = score_hypothesis(
-                    belief=belief,
-                    tests_executed=h.tests_executed,
-                    tested_families=len(set(h.payload_families_tested)),
-                    total_families=len(_payload_families_for_class(h.vuln_class)),
-                )
-                score_factors = {
+                priority = belief + exploration - redundancy
+                factors = {
                     "belief": round(belief, 6),
                     "exploration": round(exploration, 6),
                     "redundancy": round(redundancy, 6),
-                    "kernel_exploration": round(exploration_term(h.tests_executed), 6),
-                    "kernel_redundancy": round(redundancy_penalty(len(set(h.payload_families_tested)), len(_payload_families_for_class(h.vuln_class))), 6),
                 }
 
-            scored.append(
-                {
-                    "hypothesis_id": h.id,
-                    "surface": h.surface,
-                    "vuln_class": h.vuln_class,
-                    "status": h.status,
-                    "payloads_tested": len(h.payloads_tested),
-                    "tests_executed": h.tests_executed,
-                    "iterations_spent": h.iterations_spent,
-                    "evidence_for": len(h.evidence_for),
-                    "evidence_against": len(h.evidence_against),
-                    "supporting_evidence": len(h.supporting_evidence),
-                    "confidence": round(self._confidence_from_evidence(h), 1),
-                    "payload_families_tested": list(h.payload_families_tested),
-                    "missing_payload_families": list(h.negative_space.get("missing_families", [])),
-                    "next_best_tests": self.get_next_best_tests(h.id, limit=3),
-                    "belief": round(belief, 6),
-                    "exploration_bonus": round(exploration, 6),
-                    "redundancy": round(redundancy, 6),
-                    "priority_score": round(total_score, 6),
-                    "score_factors": score_factors,
-                    "scheduler_mode": mode,
-                }
-            )
+            scored.append({
+                "hypothesis_id": h.id,
+                "surface": h.surface,
+                "vuln_class": h.vuln_class,
+                "status": h.status,
+                "payloads_tested": len(h.payloads_tested),
+                "tests_executed": h.tests_executed,
+                "iterations_spent": h.iterations_spent,
+                "priority_score": round(priority, 6),
+                "score_factors": factors,
+                "belief": round(belief, 6),
+                "exploration_bonus": round(exploration, 6),
+                "redundancy": round(redundancy, 6),
+                "payload_families_tested": list(h.payload_families_tested),
+                "missing_payload_families": list(h.negative_space.get("missing_families", [])),
+                "next_best_tests": self.get_next_best_tests(h.id, limit=3),
+            })
 
         scored.sort(key=lambda x: float(x["priority_score"]), reverse=True)
-        if log_selection:
-            self._selection_step += 1
-            self._log_scheduler_event(
-                "selection",
-                {
-                    "step": self._selection_step,
-                    "scheduler_mode": mode,
-                    "ordered_hypotheses": [
-                        {
-                            "hypothesis_id": item["hypothesis_id"],
-                            "priority_score": item["priority_score"],
-                            "belief": item.get("belief", 0.5),
-                            "exploration_bonus": item.get("exploration_bonus", 0.0),
-                            "redundancy": item.get("redundancy", 0.0),
-                        }
-                        for item in scored
-                    ],
-                },
-            )
-
-        export_path = str(Config.get("phantom_scheduler_export_json") or "").strip()
-        if export_path:
-            self._export_scheduler_json(export_path)
-
         return scored
 
     def get_next_best_tests(self, hypothesis_id: str, limit: int = 3) -> list[dict[str, Any]]:
@@ -1560,7 +1334,7 @@ class HypothesisLedger:
             return ""
 
         lines = ["[HYPOTHESIS LEDGER — factual summary]"]
-        lines.append(f"  (scheduler_mode={self._scheduler_mode()}; no ranking exposed)")
+        lines.append(f"  (scheduler_mode={self._scheduler_mode()})")
         lines.append("")
 
         for hyp in hyps[:top_n]:
@@ -1569,10 +1343,6 @@ class HypothesisLedger:
                 f"tests={hyp.tests_executed} conf={self._confidence_from_evidence(hyp):.1f} "
                 f"ev+={len(hyp.evidence_for)} ev-={len(hyp.evidence_against)}"
             )
-            next_items = self.get_next_best_tests(hyp.id, limit=2)
-            if next_items:
-                next_str = "; ".join(f"{item.get('family')}:{str(item.get('payload', ''))[:24]}" for item in next_items[:2])
-                lines.append(f"    next: {next_str}")
 
         # Summary stats
         with self._lock:
@@ -1585,14 +1355,6 @@ class HypothesisLedger:
         lines.append("[END LEDGER SUMMARY]")
 
         return "\n".join(lines)
-
-    def get_factual_prompt_summary(self, top_n: int = 10) -> str:
-        """Return a prompt-safe factual summary with no ranking.
-
-        This is the only summary suitable for the expert layer or prompt
-        injection under strict separation.
-        """
-        return self.get_prioritized_summary(top_n=top_n)
 
     # ── Prompt Injection ──────────────────────────────────────────────────────
 
@@ -1638,16 +1400,12 @@ class HypothesisLedger:
             conf = self._confidence_from_evidence(h)
             trend = h.confidence_history[-1]["trend"] if h.confidence_history else "new"
             families = ",".join(h.payload_families_tested[:3])
-            next_tests = self.get_next_best_tests(h.id, limit=2)
-            next_str = "; ".join(f"{item['family']}:{item['payload'][:24]}" for item in next_tests)
             line = (
                 f"  {h.id} | {h.status.upper():10s} | {h.vuln_class:15s} | "
                 f"{h.surface[:50]} | payloads={tested_count} tests={h.tests_executed} "
                 f"sup={supporting_count} ev+={ev_for} ev-={ev_against} conf={conf:.1f}/{trend} families={families}"
             )
             lines.append(line)
-            if next_str:
-                lines.append(f"    next: {next_str}")
 
         with self._lock:
             all_hyps = list(self._hypotheses.values())
@@ -1671,9 +1429,6 @@ class HypothesisLedger:
                 "counter": self._counter,
                 "hypotheses": {k: v.to_dict() for k, v in self._hypotheses.items()},
                 "belief_map": dict(self._belief_map),
-                "scheduler_events": list(self._scheduler_events),
-                "selection_step": self._selection_step,
-                "propagation_step": self._propagation_step,
             }
 
     @classmethod
@@ -1691,19 +1446,6 @@ class HypothesisLedger:
                     continue
         for hyp_id in ledger._hypotheses:
             ledger._belief_map.setdefault(hyp_id, 0.5)
-
-        raw_events = d.get("scheduler_events", [])
-        if isinstance(raw_events, list):
-            ledger._scheduler_events = [item for item in raw_events if isinstance(item, dict)][-_MAX_SCHEDULER_EVENTS:]
-
-        try:
-            ledger._selection_step = int(d.get("selection_step", 0))
-        except (TypeError, ValueError):
-            ledger._selection_step = 0
-        try:
-            ledger._propagation_step = int(d.get("propagation_step", 0))
-        except (TypeError, ValueError):
-            ledger._propagation_step = 0
         return ledger
 
     def __len__(self) -> int:

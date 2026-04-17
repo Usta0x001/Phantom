@@ -4,6 +4,7 @@ from phantom.tools.scan_status.scan_status_actions import get_scan_status, set_s
 
 
 class _MockState:
+    agent_id = "agent-corr-status"
     iteration = 12
     max_iterations = 100
 
@@ -62,4 +63,19 @@ def test_recommendation_exposes_correlation_confidence() -> None:
 
     status = get_scan_status(include_recommendations=True)
     rec = str(status.get("recommended_next_action", ""))
-    assert "corr:" in rec or "learned confidence" in rec
+    assert "belief" in rec or "score:" in rec
+
+
+def test_scan_status_without_agent_id_uses_single_context() -> None:
+    ledger = HypothesisLedger()
+    corr = CorrelationEngine()
+
+    set_scan_status_context(
+        hypothesis_ledger=ledger,
+        correlation_engine=corr,
+        agent_state=_MockState(),
+    )
+
+    status = get_scan_status(include_recommendations=False)
+    assert isinstance(status, dict)
+    assert "scan_progress" in status

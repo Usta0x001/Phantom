@@ -2,14 +2,16 @@ import asyncio
 import json
 import logging
 import os
+import re
 import time
+import threading
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from typing import Any
 
 import litellm
 from jinja2 import Environment, FileSystemLoader, select_autoescape
-from litellm import acompletion, completion_cost, stream_chunk_builder, supports_reasoning
+from litellm import completion_cost, stream_chunk_builder, supports_reasoning
 from litellm.utils import supports_prompt_caching, supports_vision
 
 logger = logging.getLogger(__name__)
@@ -17,6 +19,7 @@ logger = logging.getLogger(__name__)
 from phantom.config import Config
 from phantom.llm.config import LLMConfig
 from phantom.llm.memory_compressor import MemoryCompressor
+from phantom.llm.tracked_completion import tracked_acompletion
 from phantom.llm.utils import (
     _truncate_to_first_function,
     fix_incomplete_tool_call,
@@ -28,6 +31,9 @@ from phantom.skills import load_skills
 from phantom.tools import get_tools_prompt
 from phantom.tools.dynamic_tools import (
     get_tool_subset_categories,
+    get_related_tools_for_name,
+    get_tools_for_context,
+    get_tools_for_task,
     get_tools_for_subset_mode,
     get_tools_prompt_subset,
 )
@@ -58,8 +64,8 @@ class RequestStats:
     output_tokens: int = 0
     cached_tokens: int = 0
     cost: float = 0.0
-    requests: int = 0           # all attempted calls (including timed-out)
-    completed_requests: int = 0  # calls that returned a response with usage data
+    requests: int = 0           # calls with accounted token usage
+    completed_requests: int = 0  # compatibility mirror of requests
 
     def to_dict(self) -> dict[str, int | float]:
         return {
@@ -71,9 +77,296 @@ class RequestStats:
             "completed_requests": self.completed_requests,
         }
 
+    def reset(self) -> None:
+        self.input_tokens = 0
+        self.output_tokens = 0
+        self.cached_tokens = 0
+        self.cost = 0.0
+        self.requests = 0
+        self.completed_requests = 0
+
 _GLOBAL_TOTAL_STATS = RequestStats()
 _GLOBAL_PER_MODEL_STATS: dict[str, RequestStats] = {}
 _GLOBAL_RATE_LIMIT_UNTIL: float = 0.0
+_GLOBAL_STATS_LOCK = threading.Lock()
+
+_GLOBAL_TOKEN_DRIFT_EVENTS: list[dict[str, int | float | str]] = []
+_GLOBAL_USAGE_EVENTS: list[dict[str, int | float | str]] = []
+
+
+def reset_global_llm_stats() -> None:
+    with _GLOBAL_STATS_LOCK:
+        _GLOBAL_TOTAL_STATS.reset()
+        _GLOBAL_PER_MODEL_STATS.clear()
+        _GLOBAL_TOKEN_DRIFT_EVENTS.clear()
+        _GLOBAL_USAGE_EVENTS.clear()
+
+
+def _record_token_drift(
+    model_name: str,
+    estimated_tokens: int,
+    actual_prompt_tokens: int,
+    actual_completion_tokens: int,
+    accounted_input_tokens: int,
+    accounted_output_tokens: int,
+    accounted_cost: float,
+) -> None:
+    drift = max(actual_prompt_tokens, 0) - max(estimated_tokens, 0)
+    threshold_raw = Config.get("phantom_token_drift_warn_threshold") or "2000"
+    try:
+        threshold = max(int(threshold_raw), 1)
+    except ValueError:
+        threshold = 2000
+
+    event = {
+        "model": model_name,
+        "estimated_tokens": int(max(estimated_tokens, 0)),
+        "actual_prompt_tokens": int(max(actual_prompt_tokens, 0)),
+        "actual_completion_tokens": int(max(actual_completion_tokens, 0)),
+        "accounted_input_tokens": int(max(accounted_input_tokens, 0)),
+        "accounted_output_tokens": int(max(accounted_output_tokens, 0)),
+        "accounted_total_tokens": int(max(accounted_input_tokens, 0) + max(accounted_output_tokens, 0)),
+        "accounted_cost": float(max(accounted_cost, 0.0)),
+        "drift": int(drift),
+    }
+    with _GLOBAL_STATS_LOCK:
+        _GLOBAL_TOKEN_DRIFT_EVENTS.append(event)
+        if len(_GLOBAL_TOKEN_DRIFT_EVENTS) > 200:
+            del _GLOBAL_TOKEN_DRIFT_EVENTS[:-200]
+
+    if abs(drift) > threshold:
+        logger.warning(
+            "token drift exceeds threshold model=%s estimated=%d actual_prompt=%d actual_completion=%d drift=%d threshold=%d",
+            model_name,
+            estimated_tokens,
+            actual_prompt_tokens,
+            actual_completion_tokens,
+            drift,
+            threshold,
+        )
+
+
+def get_token_drift_events() -> list[dict[str, int | float | str]]:
+    with _GLOBAL_STATS_LOCK:
+        return list(_GLOBAL_TOKEN_DRIFT_EVENTS)
+
+
+def get_usage_events() -> list[dict[str, int | float | str]]:
+    with _GLOBAL_STATS_LOCK:
+        return list(_GLOBAL_USAGE_EVENTS)
+
+
+def _estimate_input_tokens_for_model(
+    model_name: str,
+    messages: list[dict[str, Any]] | None,
+) -> int:
+    if not messages:
+        return 0
+    try:
+        estimated = litellm.token_counter(model=model_name, messages=messages)
+        return max(int(estimated), 1)
+    except Exception:  # noqa: BLE001
+        try:
+            serialized = json.dumps(messages, ensure_ascii=False, default=str)
+        except Exception:  # noqa: BLE001
+            serialized = str(messages)
+        return max(len(serialized) // 4, 1)
+
+
+def _estimate_output_tokens_for_response(response: Any) -> int:
+    content = ""
+    try:
+        if hasattr(response, "choices") and response.choices:
+            first_choice = response.choices[0]
+            if hasattr(first_choice, "message") and first_choice.message:
+                message = first_choice.message
+                content = getattr(message, "content", "") or ""
+                if isinstance(content, list):
+                    text_parts = [
+                        str(part.get("text", ""))
+                        for part in content
+                        if isinstance(part, dict)
+                    ]
+                    content = "\n".join(p for p in text_parts if p)
+    except Exception:  # noqa: BLE001
+        content = ""
+
+    if not content:
+        return 0
+    return max(len(content) // 4, 1)
+
+
+def _extract_cost_for_model(model_name: str, response: Any) -> float:
+    if hasattr(response, "usage") and response.usage:
+        direct_cost = getattr(response.usage, "cost", None)
+        if direct_cost is not None:
+            return float(direct_cost)
+
+    try:
+        rate_in = float(Config.get("phantom_cost_per_1m_input") or "0")
+        rate_out = float(Config.get("phantom_cost_per_1m_output") or "0")
+        if rate_in > 0 or rate_out > 0:
+            usage = getattr(response, "usage", None) or {}
+            tok_in = getattr(usage, "prompt_tokens", 0) or 0
+            tok_out = getattr(usage, "completion_tokens", 0) or 0
+            cached = 0
+            prompt_details = getattr(usage, "prompt_tokens_details", None)
+            if prompt_details is not None:
+                cached = getattr(prompt_details, "cached_tokens", 0) or 0
+            tok_in = max(0, tok_in - min(cached, tok_in))
+            return (tok_in * rate_in + tok_out * rate_out) / 1_000_000
+    except Exception:  # noqa: BLE001
+        pass
+
+    try:
+        if hasattr(response, "_hidden_params"):
+            response._hidden_params.pop("custom_llm_provider", None)
+        cost = completion_cost(response, model=model_name) or 0.0
+        if cost > 0:
+            return cost
+    except Exception:  # noqa: BLE001
+        pass
+
+    try:
+        usage = getattr(response, "usage", None)
+        tok_in = getattr(usage, "prompt_tokens", 0) or 0
+        tok_out = getattr(usage, "completion_tokens", 0) or 0
+        cached = 0
+        prompt_details = getattr(usage, "prompt_tokens_details", None)
+        if prompt_details is not None:
+            cached = getattr(prompt_details, "cached_tokens", 0) or 0
+        tok_in = max(0, tok_in - min(cached, tok_in))
+        if tok_in or tok_out:
+            bare = model_name.split("/", 1)[-1] if "/" in model_name else model_name
+            candidates = [model_name, bare, bare.lower(), model_name.lower()]
+            model_cost_lower = {k.lower(): v for k, v in litellm.model_cost.items()}
+            for candidate in candidates:
+                info = litellm.model_cost.get(candidate) or model_cost_lower.get(
+                    candidate.lower()
+                )
+                if info:
+                    r_in = info.get("input_cost_per_token", 0) or 0
+                    r_out = info.get("output_cost_per_token", 0) or 0
+                    if r_in or r_out:
+                        return (tok_in * r_in) + (tok_out * r_out)
+    except Exception:  # noqa: BLE001
+        pass
+    return 0.0
+
+
+def record_external_completion_usage(
+    response: Any,
+    model_name: str,
+    messages: list[dict[str, Any]] | None = None,
+    estimated_tokens: int | None = None,
+) -> None:
+    with _GLOBAL_STATS_LOCK:
+        _GLOBAL_TOTAL_STATS.requests += 1
+        if model_name not in _GLOBAL_PER_MODEL_STATS:
+            _GLOBAL_PER_MODEL_STATS[model_name] = RequestStats()
+        _GLOBAL_PER_MODEL_STATS[model_name].requests += 1
+
+    actual_prompt_tokens = 0
+    actual_completion_tokens = 0
+    cached_tokens = 0
+    input_tokens = 0
+    output_tokens = 0
+
+    if hasattr(response, "usage") and response.usage:
+        actual_prompt_tokens = getattr(response.usage, "prompt_tokens", 0) or 0
+        actual_completion_tokens = getattr(response.usage, "completion_tokens", 0) or 0
+        input_tokens = actual_prompt_tokens
+        output_tokens = actual_completion_tokens
+        if hasattr(response.usage, "prompt_tokens_details"):
+            prompt_details = response.usage.prompt_tokens_details
+            if hasattr(prompt_details, "cached_tokens"):
+                cached_tokens = prompt_details.cached_tokens or 0
+        if cached_tokens > input_tokens:
+            cached_tokens = input_tokens
+        input_tokens = max(0, input_tokens - cached_tokens)
+    else:
+        input_tokens = _estimate_input_tokens_for_model(model_name, messages)
+        output_tokens = _estimate_output_tokens_for_response(response)
+        actual_prompt_tokens = input_tokens
+        actual_completion_tokens = output_tokens
+
+    cost = _extract_cost_for_model(model_name, response)
+
+    with _GLOBAL_STATS_LOCK:
+        _GLOBAL_TOTAL_STATS.input_tokens += int(input_tokens)
+        _GLOBAL_TOTAL_STATS.output_tokens += int(output_tokens)
+        _GLOBAL_TOTAL_STATS.cached_tokens += int(cached_tokens)
+        _GLOBAL_TOTAL_STATS.cost += float(cost)
+        _GLOBAL_TOTAL_STATS.completed_requests += 1
+
+        if model_name not in _GLOBAL_PER_MODEL_STATS:
+            _GLOBAL_PER_MODEL_STATS[model_name] = RequestStats()
+        model_stats = _GLOBAL_PER_MODEL_STATS[model_name]
+        model_stats.input_tokens += int(input_tokens)
+        model_stats.output_tokens += int(output_tokens)
+        model_stats.cached_tokens += int(cached_tokens)
+        model_stats.cost += float(cost)
+        model_stats.completed_requests += 1
+
+        _GLOBAL_USAGE_EVENTS.append(
+            {
+                "model": model_name,
+                "input_tokens": int(input_tokens),
+                "output_tokens": int(output_tokens),
+                "cached_tokens": int(cached_tokens),
+                "total_tokens": int(input_tokens) + int(output_tokens),
+                "cost": float(cost),
+            }
+        )
+        if len(_GLOBAL_USAGE_EVENTS) > 500:
+            del _GLOBAL_USAGE_EVENTS[:-500]
+
+    _record_token_drift(
+        model_name=model_name,
+        estimated_tokens=int(estimated_tokens or 0),
+        actual_prompt_tokens=int(actual_prompt_tokens),
+        actual_completion_tokens=int(actual_completion_tokens),
+        accounted_input_tokens=int(input_tokens),
+        accounted_output_tokens=int(output_tokens),
+        accounted_cost=float(cost),
+    )
+
+
+def validate_llm_accounting_invariants() -> dict[str, Any]:
+    with _GLOBAL_STATS_LOCK:
+        total = _GLOBAL_TOTAL_STATS
+        usage_events = list(_GLOBAL_USAGE_EVENTS)
+        drift_event_count = len(_GLOBAL_TOKEN_DRIFT_EVENTS)
+
+    usage_event_count = len(usage_events)
+    summed_input = sum(int(e.get("input_tokens", 0) or 0) for e in usage_events)
+    summed_output = sum(int(e.get("output_tokens", 0) or 0) for e in usage_events)
+    summed_total = sum(int(e.get("total_tokens", 0) or 0) for e in usage_events)
+    summed_cost = sum(float(e.get("cost", 0.0) or 0.0) for e in usage_events)
+
+    checks = {
+        "accounted_calls_eq_actual_calls": total.completed_requests == total.requests,
+        "prompt_plus_completion_eq_total": summed_total == (summed_input + summed_output),
+        "cumulative_total_matches_events": (
+            total.input_tokens == summed_input
+            and total.output_tokens == summed_output
+            and abs(float(total.cost) - float(summed_cost)) < 1e-8
+        ),
+        "drift_events_recorded_for_calls": drift_event_count == usage_event_count,
+    }
+
+    return {
+        "checks": checks,
+        "summary": {
+            "requests": total.requests,
+            "completed_requests": total.completed_requests,
+            "usage_events": usage_event_count,
+            "drift_events": drift_event_count,
+            "input_tokens": total.input_tokens,
+            "output_tokens": total.output_tokens,
+            "cost": float(total.cost),
+        },
+    }
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -225,6 +518,7 @@ class LLM:
     def __init__(self, config: LLMConfig, agent_name: str | None = None):
         self.config = config
         self.agent_name = agent_name
+        self._prompt_agent_name = agent_name
         self.agent_id: str | None = None
         self._total_stats = _GLOBAL_TOTAL_STATS
         # Per-model breakdown: model_name -> RequestStats (only agent iteration calls)
@@ -233,8 +527,10 @@ class LLM:
         self._agent_calls: int = 0    # LLM calls during agent loop iterations
         self._error_calls: int = 0    # LLM calls that ended in an error (after retries)
         self.memory_compressor = MemoryCompressor(model_name=config.litellm_model)
+        self._prompt_cache: dict[tuple[str, str, tuple[str, ...]], str] = {}
+        self._extra_tool_names: set[str] = set()
         self.runtime_allowed_tools = self._resolve_runtime_allowed_tools()
-        self.system_prompt = self._load_system_prompt(agent_name)
+        self.system_prompt = self._load_system_prompt(self._prompt_agent_name)
 
         reasoning = Config.get("phantom_reasoning_effort")
         if reasoning:
@@ -265,9 +561,60 @@ class LLM:
         except ValueError:
             self._adaptive_threshold = 0.8
 
+    def _prompt_cache_key(self, agent_name: str | None, tool_names: tuple[str, ...]) -> tuple[str, str, tuple[str, ...]]:
+        return (
+            str(agent_name or ""),
+            str(self.config.scan_mode or ""),
+            tool_names,
+        )
+
+    def _select_tool_names(self, agent_name: str | None) -> list[str]:
+        subset_mode = (Config.get("phantom_tool_subset") or "core-fast").lower()
+        if subset_mode == "full":
+            from phantom.tools import get_tool_names
+
+            return get_tool_names()
+
+        task_description = ""
+        state = getattr(self, "_agent_state", None)
+        if state is not None:
+            task_description = str(getattr(state, "task", "") or "").strip()
+
+        selected: list[str] = []
+
+        if task_description:
+            task_tools = get_tools_for_task(task_description)
+            selected = get_tools_for_subset_mode(subset_mode)
+            if task_tools:
+                selected = sorted(set(selected).union(task_tools))
+        elif subset_mode == "full":
+            from phantom.tools import get_tool_names
+
+            selected = get_tool_names()
+        else:
+            selected = get_tools_for_subset_mode(subset_mode)
+
+        if self._extra_tool_names:
+            selected = sorted(set(selected).union(self._extra_tool_names))
+
+        # Keep runtime allowlist and prompt-exposed tools aligned to registered
+        # concrete tools (handles disabled modules like browser).
+        from phantom.tools import get_tool_names
+
+        available = set(get_tool_names())
+        if selected:
+            selected = sorted(set(selected).intersection(available))
+
+        return selected
+
     def _load_system_prompt(self, agent_name: str | None) -> str:
         if not agent_name:
             return ""
+
+        tool_names = tuple(sorted(self._select_tool_names(agent_name)))
+        cache_key = self._prompt_cache_key(agent_name, tool_names)
+        if cache_key in self._prompt_cache:
+            return self._prompt_cache[cache_key]
 
         try:
             prompt_dir = get_phantom_resource_path("agents", agent_name)
@@ -284,22 +631,13 @@ class LLM:
             skill_content = load_skills(skills_to_load)
             env.globals["get_skill"] = lambda name: skill_content.get(name, "")
 
-            subset_mode = (Config.get("phantom_tool_subset") or "full").lower()
-            if subset_mode == "full":
+            if len(tool_names) == 0:
                 tools_prompt_fn = get_tools_prompt
             else:
-                subset_cats = get_tool_subset_categories(subset_mode)
-                if subset_cats:
-                    needed_tools = set(get_tools_for_subset_mode(subset_mode))
-                    tools_prompt_fn = lambda: get_tools_prompt_subset(list(needed_tools))
-                else:
-                    tools_prompt_fn = get_tools_prompt
+                tools_prompt_fn = lambda: get_tools_prompt_subset(list(tool_names))
 
             template_name = "system_prompt.jinja"
-            try:
-                template = env.get_template(template_name)
-            except Exception:
-                template = env.get_template("system_prompt.jinja")
+            template = env.get_template(template_name)
 
             result = template.render(
                 get_tools_prompt=tools_prompt_fn,
@@ -310,29 +648,72 @@ class LLM:
             prompt = str(result)
             if not prompt.strip():
                 logger.error("System prompt rendered empty for agent %s", agent_name)
-            return prompt
+                prompt = self._build_fallback_system_prompt(tool_names)
         except Exception:  # noqa: BLE001
             logger.error("Failed to load system prompt for agent %s", agent_name, exc_info=True)
-            return ""
+            prompt = self._build_fallback_system_prompt(tool_names)
+
+        self._prompt_cache[cache_key] = prompt
+        return prompt
+
+    def _build_fallback_system_prompt(self, tool_names: tuple[str, ...]) -> str:
+        try:
+            if tool_names:
+                tools_prompt = get_tools_prompt_subset(list(tool_names))
+            else:
+                tools_prompt = get_tools_prompt()
+        except Exception:  # noqa: BLE001
+            tools_prompt = ""
+
+        return (
+            "You are Phantom, an autonomous penetration-testing agent.\n"
+            "Follow runtime tool contracts strictly.\n"
+            "Use this exact tool format:\n"
+            "<function=get_scan_status></function>\n"
+            "<function=send_request>\n"
+            "<parameter=method>GET</parameter>\n"
+            "<parameter=url>https://target.example</parameter>\n"
+            "</function>\n\n"
+            f"{tools_prompt}"
+        )
+
+    def refresh_tool_prompt(self) -> None:
+        """Rebuild system prompt and allowed tools from current agent state."""
+        self.runtime_allowed_tools = self._resolve_runtime_allowed_tools()
+        self.system_prompt = self._load_system_prompt(self._prompt_agent_name)
+
+    def _apply_scan_mode_change(self, new_mode: str) -> None:
+        if self.config.scan_mode == new_mode:
+            return
+        self.config.scan_mode = new_mode
+
+        state = getattr(self, "_agent_state", None)
+        if state is not None and hasattr(state, "scan_mode"):
+            try:
+                state.scan_mode = new_mode
+            except Exception:
+                pass
+
+        self.refresh_tool_prompt()
 
     def _resolve_runtime_allowed_tools(self) -> set[str] | None:
-        subset_mode = (Config.get("phantom_tool_subset") or "full").lower()
-        if subset_mode == "full":
+        tool_names = self._select_tool_names(self._prompt_agent_name)
+        if not tool_names:
             return None
-
-        subset_tools = get_tools_for_subset_mode(subset_mode)
-        return set(subset_tools)
+        return set(tool_names)
 
     def set_agent_identity(self, agent_name: str | None, agent_id: str | None) -> None:
         if agent_name:
             self.agent_name = agent_name
         if agent_id:
             self.agent_id = agent_id
+        self.refresh_tool_prompt()
 
     def set_agent_state(self, agent_state: Any) -> None:
         """Attach the agent state so compress_history and anchor injection can use it."""
         self._agent_state = agent_state
         setattr(agent_state, "_runtime_llm", self)
+        self.refresh_tool_prompt()
 
     async def generate(
         self, conversation_history: list[dict[str, Any]]
@@ -369,7 +750,6 @@ class LLM:
 
         primary_exhausted = False
         _last_error: Exception | None = None
-        _compress_attempted = False  # last-chance compress flag for undetected 400 overflow
         # 429 errors get a separate, higher retry budget to survive long rate-limit windows
         ratelimit_max_retries = int(Config.get("phantom_llm_ratelimit_max_retries") or "10")
         for attempt in range(ratelimit_max_retries + 1):
@@ -384,19 +764,6 @@ class LLM:
                 self.config.litellm_model = original_model
                 raise
             except Exception as e:  # noqa: BLE001
-                if self._is_context_too_large(e):
-                    # Shrink context aggressively and retry immediately (no sleep)
-                    logger.warning(
-                        "Context too large for model %s — force-compressing and retrying "
-                        "(attempt %d/%d)",
-                        self.config.scan_mode,
-                        attempt + 1,
-                        max_retries,
-                    )
-                    messages = await self._force_compress_messages(messages)
-                    if self._is_anthropic() and self.config.enable_prompt_caching:
-                        messages = self._add_cache_control(messages)
-                    continue
                 # Extract error code once — used for exhaustion check and backoff
                 code = getattr(e, "status_code", None) or getattr(
                     getattr(e, "response", None), "status_code", None
@@ -410,21 +777,6 @@ class LLM:
                 else:
                     effective_max = max_retries
                 if attempt >= effective_max or not self._should_retry(e):
-                    # Last-chance: a 400 that wasn't recognised as context-too-large
-                    # (provider phrased it differently) — compress once and retry.
-                    # This is the primary cause of "All retries exhausted" in SQL agents.
-                    if code == 400 and not _compress_attempted:
-                        _compress_attempted = True
-                        logger.warning(
-                            "400 error for model %s — attempting last-chance force-compress "
-                            "in case this is an unrecognised context overflow: %s",
-                            self.config.scan_mode,
-                            str(e)[:200],
-                        )
-                        messages = await self._force_compress_messages(messages)
-                        if self._is_anthropic() and self.config.enable_prompt_caching:
-                            messages = self._add_cache_control(messages)
-                        continue  # one more attempt
                     _last_error = e
                     primary_exhausted = True
                     break
@@ -479,6 +831,8 @@ class LLM:
             self.config.litellm_model = original_model
             self._error_calls += 1
             last_err_str = f": {_last_error}" if _last_error else ""
+            if _is_circuit_breaker_enabled():
+                _CIRCUIT_BREAKER.record_failure()
             raise LLMRequestFailedError(
                 f"All retries exhausted for primary model{last_err_str}"
             )
@@ -488,11 +842,12 @@ class LLM:
         chunks: list[Any] = []
         done_streaming = 0
         rebuilt: Any | None = None  # holds stream_chunk_builder result to avoid double call
-
-        cost_before = self._total_stats.cost
-        tokens_in_before = self._total_stats.input_tokens
-        tokens_out_before = self._total_stats.output_tokens
-        self._total_stats.requests += 1
+        usage_delta: dict[str, int | float] = {
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "cached_tokens": 0,
+            "cost": 0.0,
+        }
 
         # ── Audit: log the outgoing request ───────────────────────────────────
         from phantom.logging.audit import get_audit_logger as _get_audit
@@ -508,7 +863,11 @@ class LLM:
         _audit_t0 = time.monotonic()
         # ─────────────────────────────────────────────────────────────────────
 
-        response = await acompletion(**self._build_completion_args(messages), stream=True)
+        response = await tracked_acompletion(
+            **self._build_completion_args(messages),
+            stream=True,
+            reducer=self._safe_reduce_messages,
+        )
 
         async for chunk in response:
             chunks.append(chunk)
@@ -531,30 +890,43 @@ class LLM:
 
         if chunks:
             rebuilt = stream_chunk_builder(chunks)
-            self._update_usage_stats(rebuilt)
-            self._update_per_model_stats(rebuilt)
-            request_cost = self._total_stats.cost - cost_before
+            usage_delta = self._update_usage_stats(rebuilt, messages)
+            self._update_per_model_stats(usage_delta)
+            _record_token_drift(
+                model_name=self.config.litellm_model or "unknown",
+                estimated_tokens=self._estimate_input_tokens(messages),
+                actual_prompt_tokens=int(usage_delta.get("actual_prompt_tokens", 0) or 0),
+                actual_completion_tokens=int(usage_delta.get("actual_completion_tokens", 0) or 0),
+                accounted_input_tokens=int(usage_delta.get("input_tokens", 0) or 0),
+                accounted_output_tokens=int(usage_delta.get("output_tokens", 0) or 0),
+                accounted_cost=float(usage_delta.get("cost", 0.0) or 0.0),
+            )
+            request_cost = float(usage_delta.get("cost", 0.0) or 0.0)
+            with _GLOBAL_STATS_LOCK:
+                total_input_tokens = self._total_stats.input_tokens
+                total_output_tokens = self._total_stats.output_tokens
+                total_cost = self._total_stats.cost
             logger.info(
                 "llm_call model=%s scan_mode=%s tokens_in=%d tokens_out=%d "
                 "request_cost=$%.4f cumulative_cost=$%.4f",
                 self.config.litellm_model,
                 self.config.scan_mode,
-                self._total_stats.input_tokens,
-                self._total_stats.output_tokens,
+                total_input_tokens,
+                total_output_tokens,
                 request_cost,
-                self._total_stats.cost,
+                total_cost,
             )
-            self._check_per_request_budget(cost_before)
+            self._check_per_request_budget(request_cost)
 
         # RELIABILITY REC MED-5: Record successful LLM call - close circuit
         if _is_circuit_breaker_enabled():
             _CIRCUIT_BREAKER.record_success()
 
         accumulated = normalize_tool_format(accumulated)
-        accumulated = fix_incomplete_tool_call(_truncate_to_first_function(accumulated))
-        # Strip thinking blocks so their embedded tool calls (e.g. create_vulnerability_report
-        # inside a think tool's thought parameter) do not bypass deduplication checks.
+        # Strip thinking blocks before truncation so embedded tool calls do not
+        # hide the real execution payload.
         accumulated = strip_thinking_blocks(accumulated)
+        accumulated = fix_incomplete_tool_call(_truncate_to_first_function(accumulated))
         _parsed_tools = parse_tool_invocations(accumulated)
 
         # AUDIT-FIX-09: When the LLM produces text that looks like a tool call
@@ -563,10 +935,45 @@ class LLM:
         _xml_markers = ["<function=", "<invoke ", "</function>"]
         _looks_like_tool = any(m in accumulated for m in _xml_markers)
         if _looks_like_tool and not _parsed_tools:
+            available_tools = []
+            try:
+                from phantom.tools.registry import get_tool_names as _get_tool_names
+
+                available_tools = sorted(_get_tool_names())
+            except Exception:
+                available_tools = []
+
+            examples: list[str] = []
+            if "get_scan_status" in available_tools:
+                examples.append("<function=get_scan_status></function>")
+            if "send_request" in available_tools:
+                examples.append(
+                    "<function=send_request><parameter=method>GET</parameter>"
+                    "<parameter=url>http://example.com</parameter></function>"
+                )
+            if "python_action" in available_tools:
+                examples.append(
+                    "<function=python_action><parameter=action>new_session</parameter>"
+                    "<parameter=code>import requests</parameter></function>"
+                )
+
+            available_preview = ", ".join(available_tools[:25])
+            if len(available_tools) > 25:
+                available_preview += ", ..."
+
+            malformed_notice = (
+                "[SYSTEM: Tool call malformed and NOT executed. Use exact XML tags and a REAL registered tool name.\n"
+                "Rules:\n"
+                "- Format: <function=get_scan_status></function> or <function=send_request><parameter=method>GET</parameter><parameter=url>http://example.com</parameter></function>\n"
+                "- Tool names are snake_case. Do NOT flatten underscores or invent aliases.\n"
+                "- If no args required, still call: <function=get_scan_status></function>.\n"
+                f"Available tools (subset): {available_preview}]\n"
+            )
+            if examples:
+                malformed_notice += "[SYSTEM: Valid examples]\n" + "\n".join(examples) + "\n"
+
             accumulated = (
-                "[SYSTEM: Your tool call was malformed and NOT executed. "
-                "Reformat using: <function=tool_name><parameter=name>value</parameter></function>]\n"
-                + accumulated
+                malformed_notice + accumulated
             )
 
         # ── Audit: log the completed response ────────────────────────────────
@@ -577,9 +984,9 @@ class LLM:
                 model=self.config.litellm_model,
                 response_text=accumulated,
                 tool_invocations=_parsed_tools,
-                tokens_in=self._total_stats.input_tokens - tokens_in_before,
-                tokens_out=self._total_stats.output_tokens - tokens_out_before,
-                cost_usd=self._total_stats.cost - cost_before,
+                tokens_in=int(usage_delta.get("input_tokens", 0) or 0),
+                tokens_out=int(usage_delta.get("output_tokens", 0) or 0),
+                cost_usd=float(usage_delta.get("cost", 0.0) or 0.0),
                 duration_ms=(time.monotonic() - _audit_t0) * 1000,
             )
         # ─────────────────────────────────────────────────────────────────────
@@ -609,6 +1016,13 @@ class LLM:
                 }
             )
 
+        # Remove thinking blocks before compression/truncation so embedded tool
+        # calls do not get dropped or hidden before parsing.
+        for msg in messages:
+            content = msg.get("content")
+            if isinstance(content, str):
+                msg["content"] = strip_thinking_blocks(content)
+
         # Run compression in a thread to avoid blocking the async event loop.
         # The sync compress_history call can take 30s+ per chunk when LLM summarisation fires.
         _state = getattr(self, "_agent_state", None)
@@ -618,7 +1032,19 @@ class LLM:
                 _archive = list(_state.get_archived_messages())
             except Exception:
                 _archive = []
-        compression_input = conversation_history + _archive
+        # Keep chronological order: archived history is older than live history.
+        # Previous order (conversation + archive) inverted timeline and confused
+        # the compressor's recent/old split.
+        compression_input = _archive + conversation_history
+        compression_input = [
+            {
+                **msg,
+                "content": strip_thinking_blocks(msg.get("content", ""))
+                if isinstance(msg.get("content", ""), str)
+                else msg.get("content", ""),
+            }
+            for msg in compression_input
+        ]
         compressed = list(
             await asyncio.to_thread(
                 self.memory_compressor.compress_history, compression_input, _state
@@ -762,14 +1188,14 @@ class LLM:
                 continue
             if attempt == 1:
                 before_chars, before_tokens = chars, est_tokens
-                current = await self._force_compress_messages(current)
+                current = self._safe_reduce_messages(current)
                 if self._is_anthropic() and self.config.enable_prompt_caching:
                     current = self._add_cache_control(current)
                 after_chars, after_tokens = self._estimate_request_size(current)
                 if _audit:
                     _audit.log_preflight_reduction(
                         agent_id=_agent_id,
-                        stage="force_compress",
+                        stage="safe_reduce",
                         attempt=attempt + 1,
                         chars_before=before_chars,
                         chars_after=after_chars,
@@ -781,15 +1207,12 @@ class LLM:
                 continue
             if attempt == 2:
                 before_chars, before_tokens = chars, est_tokens
-                system_msgs = [m for m in current if m.get("role") == "system"]
-                non_system = [m for m in current if m.get("role") != "system"]
-                keep = min(max(12, len(non_system) // 2), len(non_system))
-                current = system_msgs + non_system[-keep:]
+                current = self._safe_reduce_messages(current)
                 after_chars, after_tokens = self._estimate_request_size(current)
                 if _audit:
                     _audit.log_preflight_reduction(
                         agent_id=_agent_id,
-                        stage="trim_history",
+                        stage="safe_reduce",
                         attempt=attempt + 1,
                         chars_before=before_chars,
                         chars_after=after_chars,
@@ -801,6 +1224,8 @@ class LLM:
                 continue
 
         final_chars, final_tokens = self._estimate_request_size(current)
+        if _is_circuit_breaker_enabled():
+            _CIRCUIT_BREAKER.record_failure()
         raise LLMRequestFailedError(
             "Request preflight hard cap exceeded: "
             f"chars={final_chars} (limit={max_request_chars}), "
@@ -914,7 +1339,7 @@ class LLM:
                         "Auto-downgrading scan mode %s → %s due to 90%% budget",
                         self.config.scan_mode, new_mode
                     )
-                    self.config.scan_mode = new_mode
+                    self._apply_scan_mode_change(new_mode)
             
             # Log to audit
             try:
@@ -948,11 +1373,13 @@ class LLM:
                     current_cost, max_cost,
                 )
                 return
+            if _is_circuit_breaker_enabled():
+                _CIRCUIT_BREAKER.record_failure()
             raise LLMRequestFailedError(
                 f"Budget exceeded: ${current_cost:.4f} >= max ${max_cost:.4f}"
             )
 
-    def _check_per_request_budget(self, cost_before: float) -> None:
+    def _check_per_request_budget(self, request_cost: float) -> None:
         """Hard-stop if a single LLM call exceeds PHANTOM_PER_REQUEST_CEILING."""
         ceiling_str = Config.get("phantom_per_request_ceiling")
         if not ceiling_str:
@@ -961,11 +1388,43 @@ class LLM:
             ceiling = float(ceiling_str)
         except ValueError:
             return
-        request_cost = self._total_stats.cost - cost_before
         if request_cost > ceiling:
+            if _is_circuit_breaker_enabled():
+                _CIRCUIT_BREAKER.record_failure()
             raise LLMRequestFailedError(
                 f"Per-request budget exceeded: ${request_cost:.4f} > ceiling ${ceiling:.4f}"
             )
+
+    def _safe_reduce_messages(self, messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        system_msgs = [m for m in messages if m.get("role") == "system"]
+        non_system = [m for m in messages if m.get("role") != "system"]
+
+        pinned: list[dict[str, Any]] = []
+        state = getattr(self, "_agent_state", None)
+        anchors = []
+        if state is not None:
+            anchors = list(getattr(state, "finding_anchors", []) or [])
+
+        if anchors:
+            anchor_lines = []
+            for anchor in anchors[:15]:
+                status = str(anchor.get("status", "active")).lower()
+                if status in {"invalidated", "superseded"}:
+                    continue
+                text = str(anchor.get("text", "")).strip()
+                if text:
+                    anchor_lines.append(f"- {text[:600]}")
+            if anchor_lines:
+                pinned.append(
+                    {
+                        "role": "user",
+                        "content": "<pinned_facts>\n" + "\n".join(anchor_lines) + "\n</pinned_facts>",
+                    }
+                )
+
+        keep_recent = max(12, int(Config.get("phantom_safe_reduce_last_k") or "20"))
+        recent = non_system[-keep_recent:]
+        return system_msgs + pinned + recent
 
     def _build_completion_args(self, messages: list[dict[str, Any]]) -> dict[str, Any]:
         if not self._supports_vision():
@@ -1014,22 +1473,25 @@ class LLM:
             pass
         return None
 
-    def _update_per_model_stats(self, response: Any) -> None:
+    def _update_per_model_stats(self, usage_delta: dict[str, int | float]) -> None:
         """Track per-model token/cost breakdown (agent calls only)."""
         try:
+            input_tokens = int(usage_delta.get("input_tokens", 0) or 0)
+            output_tokens = int(usage_delta.get("output_tokens", 0) or 0)
+            cached_tokens = int(usage_delta.get("cached_tokens", 0) or 0)
+            cost = float(usage_delta.get("cost", 0.0) or 0.0)
+
             model_key = self.config.litellm_model or "unknown"
-            if model_key not in self._per_model_stats:
-                self._per_model_stats[model_key] = RequestStats()
-            stats = self._per_model_stats[model_key]
-            if hasattr(response, "usage") and response.usage:
-                stats.input_tokens += getattr(response.usage, "prompt_tokens", 0) or 0
-                stats.output_tokens += getattr(response.usage, "completion_tokens", 0) or 0
-                cached = 0
-                if hasattr(response.usage, "prompt_tokens_details"):
-                    cached = getattr(response.usage.prompt_tokens_details, "cached_tokens", 0) or 0
-                stats.cached_tokens += cached
-                stats.cost += self._extract_cost(response)
-            stats.requests += 1
+            with _GLOBAL_STATS_LOCK:
+                if model_key not in self._per_model_stats:
+                    self._per_model_stats[model_key] = RequestStats()
+                stats = self._per_model_stats[model_key]
+                stats.input_tokens += input_tokens
+                stats.output_tokens += output_tokens
+                stats.cached_tokens += cached_tokens
+                stats.cost += cost
+                stats.requests += 1
+                stats.completed_requests += 1
         except Exception:  # noqa: BLE001, S110  # nosec B110
             pass
 
@@ -1094,19 +1556,72 @@ class LLM:
                     self.config.scan_mode,
                     new_mode,
                 )
-                self.config.scan_mode = new_mode
+                self._apply_scan_mode_change(new_mode)
 
-    def _update_usage_stats(self, response: Any) -> None:
+    def _estimate_input_tokens(self, messages: list[dict[str, Any]] | None) -> int:
+        if not messages:
+            return 0
+
+        try:
+            estimated = litellm.token_counter(model=self.config.litellm_model, messages=messages)
+            return max(int(estimated), 1)
+        except Exception:  # noqa: BLE001
+            try:
+                serialized = json.dumps(messages, ensure_ascii=False, default=str)
+            except Exception:  # noqa: BLE001
+                serialized = str(messages)
+            return max(len(serialized) // 4, 1)
+
+    def _estimate_output_tokens(self, response: Any) -> int:
+        content = ""
+        try:
+            if hasattr(response, "choices") and response.choices:
+                first_choice = response.choices[0]
+                if hasattr(first_choice, "message") and first_choice.message:
+                    message = first_choice.message
+                    content = getattr(message, "content", "") or ""
+                    if isinstance(content, list):
+                        text_parts = [
+                            str(part.get("text", ""))
+                            for part in content
+                            if isinstance(part, dict)
+                        ]
+                        content = "\n".join(p for p in text_parts if p)
+        except Exception:  # noqa: BLE001
+            content = ""
+
+        if not content:
+            return 0
+        return max(len(content) // 4, 1)
+
+    def _update_usage_stats(
+        self,
+        response: Any,
+        messages: list[dict[str, Any]] | None = None,
+    ) -> dict[str, int | float]:
+        deltas: dict[str, int | float] = {
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "cached_tokens": 0,
+            "cost": 0.0,
+            "actual_prompt_tokens": 0,
+            "actual_completion_tokens": 0,
+        }
         try:
             if hasattr(response, "usage") and response.usage:
-                input_tokens = getattr(response.usage, "prompt_tokens", 0) or 0
-                output_tokens = getattr(response.usage, "completion_tokens", 0) or 0
+                actual_prompt_tokens = getattr(response.usage, "prompt_tokens", 0) or 0
+                actual_completion_tokens = getattr(response.usage, "completion_tokens", 0) or 0
+                input_tokens = actual_prompt_tokens
+                output_tokens = actual_completion_tokens
 
                 cached_tokens = 0
                 if hasattr(response.usage, "prompt_tokens_details"):
                     prompt_details = response.usage.prompt_tokens_details
                     if hasattr(prompt_details, "cached_tokens"):
                         cached_tokens = prompt_details.cached_tokens or 0
+                if cached_tokens > input_tokens:
+                    cached_tokens = input_tokens
+                input_tokens = max(0, input_tokens - cached_tokens)
 
                 cost = self._extract_cost(response)
             else:
@@ -1116,31 +1631,49 @@ class LLM:
                     "API response missing usage stats - estimating tokens (model=%s)",
                     self.config.litellm_model
                 )
-                input_tokens = 0  # Can't estimate input without message history
-                output_tokens = 0
+                input_tokens = self._estimate_input_tokens(messages)
+                output_tokens = self._estimate_output_tokens(response)
                 cached_tokens = 0
                 cost = 0.0
-                
-                # Try to estimate output tokens from response content
-                if hasattr(response, "choices") and response.choices:
-                    first_choice = response.choices[0]
-                    if hasattr(first_choice, "message") and first_choice.message:
-                        content = getattr(first_choice.message, "content", "") or ""
-                        # Rough estimate: 1 token ≈ 4 characters for English text
-                        output_tokens = max(1, len(content) // 4)
-                        logger.debug("Estimated output_tokens=%d from content length", output_tokens)
+                actual_prompt_tokens = input_tokens
+                actual_completion_tokens = output_tokens
 
                 cost = self._extract_cost(response)
 
-            self._total_stats.input_tokens += input_tokens
-            self._total_stats.output_tokens += output_tokens
-            self._total_stats.cached_tokens += cached_tokens
-            self._total_stats.cost += cost
-            if input_tokens or output_tokens:
+            deltas = {
+                "input_tokens": int(input_tokens),
+                "output_tokens": int(output_tokens),
+                "cached_tokens": int(cached_tokens),
+                "cost": float(cost),
+                "actual_prompt_tokens": int(actual_prompt_tokens),
+                "actual_completion_tokens": int(actual_completion_tokens),
+            }
+
+            with _GLOBAL_STATS_LOCK:
+                self._total_stats.requests += 1
+                self._total_stats.input_tokens += int(deltas["input_tokens"])
+                self._total_stats.output_tokens += int(deltas["output_tokens"])
+                self._total_stats.cached_tokens += int(deltas["cached_tokens"])
+                self._total_stats.cost += float(deltas["cost"])
                 self._total_stats.completed_requests += 1
 
+                _GLOBAL_USAGE_EVENTS.append(
+                    {
+                        "model": self.config.litellm_model or "unknown",
+                        "input_tokens": int(deltas["input_tokens"]),
+                        "output_tokens": int(deltas["output_tokens"]),
+                        "cached_tokens": int(deltas["cached_tokens"]),
+                        "total_tokens": int(deltas["input_tokens"]) + int(deltas["output_tokens"]),
+                        "cost": float(deltas["cost"]),
+                    }
+                )
+                if len(_GLOBAL_USAGE_EVENTS) > 500:
+                    del _GLOBAL_USAGE_EVENTS[:-500]
+
         except Exception:  # noqa: BLE001, S110  # nosec B110
-            pass
+            return deltas
+
+        return deltas
 
     def _extract_cost(self, response: Any) -> float:
         # 1. API-reported cost (if provider returns it directly)
@@ -1157,6 +1690,11 @@ class LLM:
                 usage = getattr(response, "usage", None) or {}
                 tok_in = getattr(usage, "prompt_tokens", 0) or 0
                 tok_out = getattr(usage, "completion_tokens", 0) or 0
+                cached = 0
+                prompt_details = getattr(usage, "prompt_tokens_details", None)
+                if prompt_details is not None:
+                    cached = getattr(prompt_details, "cached_tokens", 0) or 0
+                tok_in = max(0, tok_in - min(cached, tok_in))
                 return (tok_in * rate_in + tok_out * rate_out) / 1_000_000
         except Exception:  # noqa: BLE001
             pass
@@ -1175,6 +1713,11 @@ class LLM:
             usage = getattr(response, "usage", None)
             tok_in = getattr(usage, "prompt_tokens", 0) or 0
             tok_out = getattr(usage, "completion_tokens", 0) or 0
+            cached = 0
+            prompt_details = getattr(usage, "prompt_tokens_details", None)
+            if prompt_details is not None:
+                cached = getattr(prompt_details, "cached_tokens", 0) or 0
+            tok_in = max(0, tok_in - min(cached, tok_in))
             if tok_in or tok_out:
                 model_key = self.config.litellm_model or ""
                 bare = model_key.split("/", 1)[-1] if "/" in model_key else model_key
@@ -1242,36 +1785,6 @@ class LLM:
                 msg,
             )
         )
-
-    async def _force_compress_messages(
-        self, messages: list[dict[str, Any]]
-    ) -> list[dict[str, Any]]:
-        """Aggressively halve the non-system messages to recover from a context overflow."""
-        from phantom.llm.memory_compressor import _summarize_messages, MIN_RECENT_MESSAGES
-
-        system_msgs = [m for m in messages if m.get("role") == "system"]
-        non_system = [m for m in messages if m.get("role") != "system"]
-
-        if len(non_system) <= MIN_RECENT_MESSAGES:
-            # Nothing we can compress further — just keep the tail
-            return system_msgs + non_system[-MIN_RECENT_MESSAGES:]
-
-        # Summarize the entire older half into one message
-        keep_count = max(MIN_RECENT_MESSAGES, len(non_system) // 2)
-        to_compress = non_system[:-keep_count]
-        recent = non_system[-keep_count:]
-
-        if to_compress:
-            compress_timeout = int(Config.get("phantom_memory_compressor_timeout") or "120")
-            summary = await asyncio.to_thread(
-                _summarize_messages,
-                to_compress,
-                self.config.litellm_model,
-                compress_timeout,
-            )
-            self.memory_compressor.compression_calls += 1
-            return system_msgs + [summary] + recent
-        return system_msgs + recent
 
     def _should_retry(self, e: Exception) -> bool:
         lower_msg = str(e).lower()

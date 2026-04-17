@@ -1,6 +1,7 @@
 import inspect
 import logging
 import os
+import re
 from collections.abc import Callable
 from functools import wraps
 from inspect import signature
@@ -17,6 +18,14 @@ _tools_by_name: dict[str, Callable[..., Any]] = {}
 _tool_param_schemas: dict[str, dict[str, Any]] = {}
 logger = logging.getLogger(__name__)
 
+RICH_TOOL_NAMES = {
+    "create_vulnerability_report",
+    "create_elite_report",
+    "generate_smart_payloads",
+    "auto_queue_cve_exploits",
+    "agent_finish",
+    "browser_action",
+}
 
 class ImplementedInClientSideOnlyError(Exception):
     def __init__(
@@ -42,6 +51,7 @@ def _process_dynamic_content(content: str) -> str:
             )
 
     return content
+_TOOL_BLOCK_RE = re.compile(r'<tool\b[^>]*\bname="([^"]+)"[^>]*>(.*?)</tool>', re.DOTALL)
 
 
 def _load_xml_schema(path: Path) -> Any:
@@ -51,36 +61,13 @@ def _load_xml_schema(path: Path) -> Any:
         content = path.read_text(encoding="utf-8")
 
         content = _process_dynamic_content(content)
+        tools_dict: dict[str, str] = {}
 
-        start_tag = '<tool name="'
-        end_tag = "</tool>"
-        tools_dict = {}
-
-        pos = 0
-        while True:
-            start_pos = content.find(start_tag, pos)
-            if start_pos == -1:
-                break
-
-            name_start = start_pos + len(start_tag)
-            name_end = content.find('"', name_start)
-            if name_end == -1:
-                break
-            tool_name = content[name_start:name_end]
-
-            end_pos = content.find(end_tag, name_end)
-            if end_pos == -1:
-                break
-            end_pos += len(end_tag)
-
-            tool_element = content[start_pos:end_pos]
-            tools_dict[tool_name] = tool_element
-
-            pos = end_pos
-
-            if pos >= len(content):
-                break
-    except (IndexError, ValueError, UnicodeError) as e:
+        for tool_match in _TOOL_BLOCK_RE.finditer(content):
+            tool_name = tool_match.group(1)
+            tool_block = tool_match.group(0)
+            tools_dict[tool_name] = tool_block.strip()
+    except (IndexError, ValueError, UnicodeError, re.error) as e:
         logger.warning(f"Error loading schema file {path}: {e}")
         return None
     else:
@@ -260,7 +247,8 @@ def get_tool_param_schema(name: str) -> dict[str, Any] | None:
 
 
 def needs_agent_state(tool_name: str) -> bool:
-    tool_func = get_tool_by_name(tool_name)
+    normalized_name = tool_name.replace("-", "_")
+    tool_func = get_tool_by_name(normalized_name)
     if not tool_func:
         return False
     sig = signature(tool_func)

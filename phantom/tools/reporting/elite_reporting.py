@@ -383,7 +383,7 @@ def _generate_remediation_timeline(severity: str, complexity: str) -> str:
     return timeline_map.get((severity, complexity), "30 days")
 
 
-@register_tool
+@register_tool(sandbox_execution=False)
 def create_elite_report(
     title: str,
     severity: str,
@@ -586,7 +586,7 @@ def create_elite_report(
         }
 
 
-@register_tool
+@register_tool(sandbox_execution=False)
 def export_elite_report(
     report: dict[str, Any],
     output_dir: str,

@@ -38,7 +38,7 @@ class CheckpointData(BaseModel):
     # ── Runtime metrics snapshot at checkpoint time ──────────────────────────
     llm_stats_at_checkpoint: dict[str, Any] = Field(default_factory=dict)
     # Format mirrors Tracer.get_total_llm_stats():
-    # {total: {input_tokens, output_tokens, cached_tokens, cost, requests}, total_tokens: int}
+    # {total: {input_tokens, output_tokens, cached_tokens, cost, requests, completed_requests}, total_tokens: int}
 
     # Per-model breakdown for analytics (keyed by model name)
     per_model_stats: dict[str, dict[str, Any]] = Field(default_factory=dict)

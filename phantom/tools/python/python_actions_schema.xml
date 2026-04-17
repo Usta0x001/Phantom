@@ -23,7 +23,7 @@
       - Correlating multiple requests for advanced attack scenarios</details>
     <parameters>
       <parameter name="action" type="string" required="true">
-        <description>The Python action to perform:     - new_session: Create a new Python interpreter session. This MUST be the first       action for each session.     - execute: Execute Python code in the specified session.     - close: Close the specified session instance.     - list_sessions: List all active Python sessions.</description>
+        <description>The Python action to perform:     - new_session: Create a new Python interpreter session. This MUST be the first       action for each session.     - execute: Execute Python code in the specified session.     - close: Close the specified session instance.     - inspect current sessions: show active Python sessions.</description>
       </parameter>
       <parameter name="code" type="string" required="false">
         <description>Required for 'new_session' (as initial code) and 'execute' actions. The Python code to execute.</description>

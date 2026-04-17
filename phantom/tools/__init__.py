@@ -24,6 +24,9 @@ from .registry import (
 
 SANDBOX_MODE = os.getenv("PHANTOM_SANDBOX_MODE", "false").lower() == "true"
 
+TOOL_SUBSET_MODE = (Config.get("phantom_tool_subset") or "full").strip().lower()
+EXTENDED_TOOLS_ENABLED = TOOL_SUBSET_MODE == "full"
+
 HAS_PERPLEXITY_API = bool(Config.get("perplexity_api_key"))
 
 DISABLE_BROWSER = (Config.get("phantom_disable_browser") or "false").lower() == "true"
@@ -36,49 +39,44 @@ if not SANDBOX_MODE:
     from .file_edit import *  # noqa: F403
     from .finish import *  # noqa: F403
     from .fuzzer import *  # noqa: F403
-    from .notes import *  # noqa: F403
-    from .oast import *  # noqa: F403
     from .proxy import *  # noqa: F403
     from .python import *  # noqa: F403
     from .reporting import *  # noqa: F403
+    from .terminal import *  # noqa: F403
+    from .todo import *  # noqa: F403
+    from .thinking import *  # noqa: F403
+
+    # Hypothesis ledger - critical for tracking tested hypotheses
+    from .hypothesis import *  # noqa: F403
+
+    # Scan status - critical for LLM reasoning
+    from .scan_status import *  # noqa: F403
+
+    from .notes import *  # noqa: F403
+    from .oast import *  # noqa: F403
     from .scan_registry import *  # noqa: F403
     from .session import *  # noqa: F403
-    from .terminal import *  # noqa: F403
-    from .thinking import *  # noqa: F403
-    from .todo import *  # noqa: F403
-    if HAS_PERPLEXITY_API:
-        from .web_search import *  # noqa: F403
-    
-    # Phase 1 Enhancement Tools - Passive OSINT, CVE correlation, WAF detection
+    from .web_search import *  # noqa: F403
+
+    # Phase 1 Enhancement Tools
     from .osint import *  # noqa: F403
     from .vuln_intel import *  # noqa: F403
     from .waf import *  # noqa: F403
-    
-    # Phase 2 Enhancement Tools - Web App Pentesting
+
+    # Phase 2 Enhancement Tools
     from .payload_gen import *  # noqa: F403
     from .response_analysis import *  # noqa: F403
     from .session_mgmt import *  # noqa: F403
-    
-    # Hypothesis ledger - critical for tracking tested hypotheses
-    from .hypothesis import *  # noqa: F403
-    
-    # FIX 6: Detection module - pattern, error, timing, and differential analysis
+
+    # Detection module
     from .detection import *  # noqa: F403
-    
-    # Scan status - critical for LLM reasoning
-    from .scan_status import *  # noqa: F403
-else:
-    if not DISABLE_BROWSER:
-        from .browser import *  # noqa: F403
+
+    # Always register non-browser core tools in non-sandbox mode.
     from .file_edit import *  # noqa: F403
     from .fuzzer import *  # noqa: F403
-    from .oast import *  # noqa: F403
     from .proxy import *  # noqa: F403
     from .python import *  # noqa: F403
     from .terminal import *  # noqa: F403
-    
-    # Scan status - critical for LLM reasoning
-    from .scan_status import *  # noqa: F403
 
 __all__ = [
     "ImplementedInClientSideOnlyError",

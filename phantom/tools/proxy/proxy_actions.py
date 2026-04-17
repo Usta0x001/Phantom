@@ -54,13 +54,14 @@ def send_request(
     headers: dict[str, str] | None = None,
     body: str = "",
     timeout: int = 30,
+    follow_redirects: bool = False,
 ) -> dict[str, Any]:
     from .proxy_manager import get_proxy_manager
 
     if headers is None:
         headers = {}
     manager = get_proxy_manager()
-    return manager.send_simple_request(method, url, headers, body, timeout)
+    return manager.send_simple_request(method, url, headers, body, timeout, follow_redirects)
 
 
 @register_tool

@@ -284,19 +284,40 @@ def create_agent(
             return {
                 "success": False,
                 "error": (
-                    "Cannot specify more than 5 skills for an agent (use comma-separated format)"
+                    "Cannot specify more than 5 skills for an agent. "
+                    "Valid skills: authentication_jwt, sql_injection, xss, rce, ssrf, idor, open_redirect, path_traversal_lfi_rfi, "
+                    "information_disclosure, business_logic, csrf, nosql_injection, race_conditions, insecure_file_uploads, "
+                    "broken_function_level_authorization, subdomain_takeover, waf_bypass, xxe, mass_assignment, prototype_pollution, "
+                    "recon, deep, standard, quick, stealth, api_only, nextjs, fastapi, graphql, nestjs"
                 ),
                 "agent_id": None,
             }
 
+        # Validate skills exist
+        if skill_list:
+            from phantom.skills import validate_skill_names
+            validation = validate_skill_names(skill_list)
+            if validation["invalid"]:
+                return {
+                    "success": False,
+                    "error": (
+                        f"Invalid skills: {validation['invalid']}. "
+                        "Valid skills: authentication_jwt, sql_injection, xss, rce, ssrf, idor, open_redirect, path_traversal_lfi_rfi, "
+                        "information_disclosure, business_logic, csrf, nosql_injection, race_conditions, insecure_file_uploads, "
+                        "broken_function_level_authorization, subdomain_takeover, waf_bypass, xxe, mass_assignment, prototype_pollution, "
+                        "recon, deep, standard, quick, stealth, api_only, nextjs, fastapi, graphql, nestjs"
+                    ),
+                    "agent_id": None,
+                }
+
         # FIX-7: Enforce sub-agent context validation.
         # If the parent agent fails to pass context, the sub-agent will pointlessly
         # repeat the exact same recon steps. We force the LLM to write a real brief.
-        if not context_summary or len(context_summary.strip()) < 100:
+        if not context_summary or len(context_summary.strip()) < 200:
             return {
                 "success": False,
                 "error": (
-                    "Validation Failed: 'context_summary' is required and must be at least 100 characters. "
+                    "Validation Failed: 'context_summary' is required and must be at least 200 characters. "
                     "You MUST provide a detailed briefing for the sub-agent including discovered URLs, "
                     "parameters, session tokens, and exact attack instructions."
                 ),
@@ -806,6 +827,7 @@ def send_user_message_to_agent(agent_id: str, message: str) -> dict[str, Any]:
             }
 
         agent_node = _agent_graph["nodes"][agent_id]
+        agent_instance = _agent_instances.get(agent_id)
 
         if agent_id not in _agent_messages:
             _agent_messages[agent_id] = []
@@ -825,6 +847,26 @@ def send_user_message_to_agent(agent_id: str, message: str) -> dict[str, Any]:
         }
 
         _agent_messages[agent_id].append(message_data)
+
+        # Mirror the message into the live agent state immediately so the next
+        # model turn sees it even if the polling loop has not yet consumed the queue.
+        if agent_instance and hasattr(agent_instance, "state"):
+            try:
+                agent_state = agent_instance.state
+                if hasattr(agent_state, "resume_from_waiting") and agent_state.is_waiting_for_input():
+                    agent_state.resume_from_waiting()
+                agent_state.add_message("user", message)
+            except Exception:  # noqa: BLE001
+                pass
+
+        try:
+            from phantom.telemetry.tracer import get_global_tracer
+
+            tracer = get_global_tracer()
+            if tracer:
+                tracer.update_agent_status(agent_id, "running")
+        except (ImportError, AttributeError):
+            pass
 
         return {
             "success": True,

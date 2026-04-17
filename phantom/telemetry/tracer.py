@@ -44,6 +44,11 @@ def set_global_tracer(tracer: "Tracer") -> None:
     _global_tracer = tracer
 
 
+def clear_global_tracer() -> None:
+    global _global_tracer  # noqa: PLW0603
+    _global_tracer = None
+
+
 class Tracer:
     def __init__(self, run_name: str | None = None):
         self.run_name = run_name
@@ -86,6 +91,12 @@ class Tracer:
         self.vulnerability_found_callback: Callable[[dict[str, Any]], None] | None = None
 
         self._setup_telemetry()
+        try:
+            from phantom.llm.llm import reset_global_llm_stats
+
+            reset_global_llm_stats()
+        except Exception:  # noqa: BLE001
+            pass
         self._emit_run_started_event()
 
         # ── Audit logger: initialise per-run audit log (PHANTOM_AUDIT_LOG=true) ──
@@ -982,21 +993,23 @@ class Tracer:
         )
 
     def get_total_llm_stats(self) -> dict[str, Any]:
-        from phantom.llm.llm import _GLOBAL_TOTAL_STATS
+        from phantom.llm.llm import _GLOBAL_STATS_LOCK, _GLOBAL_TOTAL_STATS
 
-        stats = _GLOBAL_TOTAL_STATS
-        total_stats = {
-            "input_tokens": stats.input_tokens,
-            "output_tokens": stats.output_tokens,
-            "cached_tokens": stats.cached_tokens,
-            "cost": round(stats.cost, 4),
-            "requests": stats.requests,
-        }
+        with _GLOBAL_STATS_LOCK:
+            stats = _GLOBAL_TOTAL_STATS
+            total_stats = {
+                "input_tokens": stats.input_tokens,
+                "output_tokens": stats.output_tokens,
+                "cached_tokens": stats.cached_tokens,
+                "cost": round(stats.cost, 4),
+                "requests": stats.requests,
+                "completed_requests": stats.completed_requests,
+            }
 
-        return {
-            "total": total_stats,
-            "total_tokens": total_stats["input_tokens"] + total_stats["output_tokens"],
-        }
+            return {
+                "total": total_stats,
+                "total_tokens": total_stats["input_tokens"] + total_stats["output_tokens"],
+            }
 
     def _get_vuln_severity_counts(self) -> dict[str, int]:
         """Count vulnerabilities by severity level."""
@@ -1011,18 +1024,20 @@ class Tracer:
 
     def get_per_model_stats(self) -> dict[str, dict[str, Any]]:
         """Aggregate per-model RequestStats, deduplicating shared RequestStats objects."""
-        from phantom.llm.llm import _GLOBAL_PER_MODEL_STATS
+        from phantom.llm.llm import _GLOBAL_PER_MODEL_STATS, _GLOBAL_STATS_LOCK
 
-        result: dict[str, dict[str, Any]] = {}
-        for model_name, stats in _GLOBAL_PER_MODEL_STATS.items():
-            result[model_name] = {
-                "input_tokens": stats.input_tokens,
-                "output_tokens": stats.output_tokens,
-                "cached_tokens": stats.cached_tokens,
-                "cost": round(stats.cost, 4),
-                "requests": stats.requests,
-            }
-        return result
+        with _GLOBAL_STATS_LOCK:
+            result: dict[str, dict[str, Any]] = {}
+            for model_name, stats in _GLOBAL_PER_MODEL_STATS.items():
+                result[model_name] = {
+                    "input_tokens": stats.input_tokens,
+                    "output_tokens": stats.output_tokens,
+                    "cached_tokens": stats.cached_tokens,
+                    "cost": round(stats.cost, 4),
+                    "requests": stats.requests,
+                    "completed_requests": stats.completed_requests,
+                }
+            return result
 
     @property
     def compression_calls(self) -> int:
@@ -1106,4 +1121,23 @@ class Tracer:
         return self.interrupted_content.pop(agent_id, None)
 
     def cleanup(self) -> None:
+        try:
+            from phantom.tools.scan_status.scan_status_actions import clear_scan_status_context
+
+            clear_scan_status_context()
+        except Exception:
+            pass
+        try:
+            from phantom.tools.hypothesis.hypothesis_actions import clear_hypothesis_context
+
+            clear_hypothesis_context()
+        except Exception:
+            pass
+        clear_global_tracer()
+        try:
+            from phantom.tools.cache import reset_tool_cache
+
+            reset_tool_cache()
+        except Exception:
+            pass
         self.save_run_data(mark_complete=True)

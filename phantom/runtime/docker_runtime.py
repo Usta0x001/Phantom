@@ -251,6 +251,8 @@ class DockerRuntime(AbstractRuntime):
                         "TOOL_SERVER_TOKEN": self._tool_server_token,
                         "PHANTOM_SANDBOX_EXECUTION_TIMEOUT": str(execution_timeout),
                         "HOST_GATEWAY": HOST_GATEWAY_HOSTNAME,
+                        # Allow SSRF to target hosts (docker internal addresses)
+                        "PHANTOM_ALLOWED_SSRF_HOSTS": "host.docker.internal,localhost,127.0.0.1",
                     },
                     extra_hosts={HOST_GATEWAY_HOSTNAME: "host-gateway"},
                     tty=True,
@@ -391,11 +393,19 @@ class DockerRuntime(AbstractRuntime):
         extracted: list[str] = []
         for target_info in targets:
             if isinstance(target_info, dict):
+                details = target_info.get("details", {})
+                if not isinstance(details, dict):
+                    details = {}
                 # Try different keys where host might be stored
                 host = (
                     target_info.get("host")
                     or target_info.get("hostname")
                     or target_info.get("ip")
+                    or details.get("target_url")
+                    or details.get("host")
+                    or details.get("hostname")
+                    or details.get("ip")
+                    or target_info.get("target_url")
                     or target_info.get("original", "")
                 )
                 if host:

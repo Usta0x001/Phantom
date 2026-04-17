@@ -1,4 +1,5 @@
 import html
+import asyncio
 import inspect
 import logging
 import os
@@ -7,7 +8,6 @@ import time
 import base64
 import hashlib
 import io
-import threading
 import unicodedata as _unicodedata
 from datetime import UTC, datetime
 from pathlib import Path
@@ -17,6 +17,7 @@ from urllib.parse import unquote as _url_unquote
 import httpx
 
 from phantom.config import Config
+from phantom.llm.tracked_completion import tracked_acompletion
 
 
 logger = logging.getLogger(__name__)
@@ -30,9 +31,6 @@ logger = logging.getLogger(__name__)
 # tool executions to reduce detection risk.
 
 _STEALTH_DELAY_SECONDS = 2.0  # Minimum delay between requests in stealth mode
-_stealth_last_request_time: float = 0.0
-_stealth_lock = threading.Lock()
-_current_scan_mode: str | None = None  # Set by agent at scan start
 
 # Tools that make outbound HTTP requests and should be rate-limited in stealth mode
 _HTTP_TOOLS = frozenset({
@@ -55,43 +53,39 @@ _HTTP_TOOLS = frozenset({
 })
 
 
-def set_scan_mode(mode: str) -> None:
-    """Set the current scan mode for stealth rate limiting. Called by agent at start."""
-    global _current_scan_mode
-    _current_scan_mode = mode
-
-
-def get_scan_mode() -> str | None:
-    """Get the current scan mode."""
-    return _current_scan_mode
-
-
-def _apply_stealth_rate_limit(tool_name: str) -> None:
+async def _apply_stealth_rate_limit(tool_name: str, agent_state: Any | None) -> None:
     """
     FEAT-001: Apply rate limiting delay for stealth mode.
     
     This ensures a minimum delay between HTTP-related tool executions
     to reduce the chance of triggering rate limiting, WAF detection, or IDS alerts.
     """
-    global _stealth_last_request_time
-    
+    scan_mode = str(getattr(agent_state, "scan_mode", "") or "").lower()
+
     # Only apply in stealth mode
-    if _current_scan_mode != "stealth":
+    if scan_mode != "stealth":
         return
     
     # Only rate-limit HTTP-related tools
     if tool_name not in _HTTP_TOOLS:
         return
     
-    with _stealth_lock:
-        current_time = time.monotonic()
-        time_since_last = current_time - _stealth_last_request_time
-        
-        if time_since_last < _STEALTH_DELAY_SECONDS:
-            sleep_time = _STEALTH_DELAY_SECONDS - time_since_last
-            time.sleep(sleep_time)
-        
-        _stealth_last_request_time = time.monotonic()
+    if agent_state is None:
+        return
+
+    context = getattr(agent_state, "context", None)
+    if not isinstance(context, dict):
+        return
+
+    current_time = time.monotonic()
+    last_request_time = float(context.get("_stealth_last_request_time", 0.0) or 0.0)
+    time_since_last = current_time - last_request_time
+
+    if time_since_last < _STEALTH_DELAY_SECONDS:
+        sleep_time = _STEALTH_DELAY_SECONDS - time_since_last
+        await asyncio.sleep(sleep_time)
+
+    context["_stealth_last_request_time"] = time.monotonic()
 # ════════════════════════════════════════════════════════════════════════════════
 
 
@@ -108,6 +102,31 @@ from .registry import (
     needs_agent_state,
     should_execute_in_sandbox,
 )
+
+
+def _resolve_canonical_tool_name(tool_name: str | None) -> str | None:
+    if tool_name is None:
+        return None
+
+    candidate = tool_name.strip()
+    if not candidate:
+        return None
+
+    if "." in candidate:
+        candidate = candidate.split(".")[-1]
+
+    candidate = candidate.replace("-", "_")
+    available_tools = get_tool_names()
+
+    if candidate in available_tools:
+        return candidate
+
+    collapsed = candidate.replace("_", "").lower()
+    for name in available_tools:
+        if name.replace("_", "").lower() == collapsed:
+            return name
+
+    return candidate
 
 
 # ════════════════════════════════════════════════════════════════════════════════
@@ -367,8 +386,6 @@ SANDBOX_EXECUTION_TIMEOUT = _SERVER_TIMEOUT + 30
 SANDBOX_CONNECT_TIMEOUT = float(Config.get("phantom_sandbox_connect_timeout") or "10")
 
 _HIGH_SIGNAL_MARKERS = (
-    "<script",
-    "javascript:",
     "onerror=",
     "onload=",
     "sql",
@@ -376,12 +393,6 @@ _HIGH_SIGNAL_MARKERS = (
     "traceback",
     "exception",
     "jwt",
-    "bearer",
-    "set-cookie",
-    "content-security-policy",
-    "x-frame-options",
-    "strict-transport-security",
-    "authorization",
     "csrf",
     "redirect",
     "unauthorized",
@@ -427,7 +438,7 @@ async def execute_tool(tool_name: str, agent_state: Any | None = None, **kwargs:
     # FEAT-001: Stealth Rate Limiting
     # ════════════════════════════════════════════════════════════════════════
     # Apply rate limiting before execution for stealth mode
-    _apply_stealth_rate_limit(tool_name)
+    await _apply_stealth_rate_limit(tool_name, agent_state)
     # ─────────────────────────────────────────────────────────────────────────────
     
     # ════════════════════════════════════════════════════════════════════════
@@ -491,7 +502,7 @@ async def execute_tool(tool_name: str, agent_state: Any | None = None, **kwargs:
     # Expected savings: 21% reduction in redundant calls, $0.15-0.30/scan
     _cache = get_tool_cache()
     try:
-        if _cache.is_cacheable(tool_name):
+        if _cache.is_cacheable(tool_name, kwargs):
             cached_result = _cache.get(tool_name, kwargs)
             if cached_result is not None:
                 # Cache hit - log and return immediately
@@ -516,7 +527,7 @@ async def execute_tool(tool_name: str, agent_state: Any | None = None, **kwargs:
             # ════════════════════════════════════════════════════════════════════
             # EFFICIENCY FIX CRIT-04: Cache successful results for idempotent tools
             # ════════════════════════════════════════════════════════════════════
-            if _cache.is_cacheable(tool_name):
+            if _cache.is_cacheable(tool_name, kwargs):
                 _cache.put(tool_name, kwargs, result)
             # ──────────────────────────────────────────────────────────────────
 
@@ -530,7 +541,12 @@ async def execute_tool(tool_name: str, agent_state: Any | None = None, **kwargs:
                     cache_hit=False,
                 )
             return result
-        except Exception:
+        except Exception as e:
+            _mark_tool_pipeline_issue(
+                agent_state,
+                "tool_execution_failed",
+                f"Tool '{tool_name}' execution failed: {e}",
+            )
             if _audit and _exec_id:
                 import traceback as _tb
 
@@ -605,7 +621,10 @@ async def _execute_tool_in_sandbox(tool_name: str, agent_state: Any, **kwargs: A
 
 
 async def _execute_tool_locally(tool_name: str, agent_state: Any | None, **kwargs: Any) -> Any:
-    tool_func = get_tool_by_name(tool_name)
+    normalized_name = _resolve_canonical_tool_name(tool_name)
+    if normalized_name is None:
+        raise ValueError("Tool name is missing")
+    tool_func = get_tool_by_name(normalized_name)
     if not tool_func:
         raise ValueError(f"Tool '{tool_name}' not found")
 
@@ -626,9 +645,43 @@ def validate_tool_availability(tool_name: str | None) -> tuple[bool, str]:
         available = ", ".join(sorted(get_tool_names()))
         return False, f"Tool name is missing. Available tools: {available}"
 
-    if tool_name not in get_tool_names():
+    normalized_name = _resolve_canonical_tool_name(tool_name)
+    if normalized_name is None:
         available = ", ".join(sorted(get_tool_names()))
-        return False, f"Tool '{tool_name}' is not available. Available tools: {available}"
+        return False, f"Tool name is missing. Available tools: {available}"
+    available_tools = get_tool_names()
+    
+    if normalized_name not in available_tools:
+        sorted_tools = sorted(available_tools)
+        available_preview = ", ".join(sorted_tools[:25])
+        if len(sorted_tools) > 25:
+            available_preview += ", ..."
+        suggestion = ""
+        for t in available_tools:
+            if t.replace("_", "") == normalized_name.replace("_", ""):
+                suggestion = f" Did you mean '{t}'?"
+                break
+
+        retry_tools = [
+            name
+            for name in (
+                "get_scan_status",
+                "send_request",
+                "python_action",
+                "terminal_execute",
+                "create_vulnerability_report",
+            )
+            if name in available_tools
+        ]
+        if retry_tools:
+            retry_hint = f" Retry immediately with an exact tool name, e.g. {', '.join(retry_tools[:3])}."
+        else:
+            retry_hint = " Retry immediately with an exact registered tool name."
+
+        return (
+            False,
+            f"Tool '{tool_name}' is not available. Available tools: {available_preview}.{suggestion}{retry_hint}",
+        )
 
     return True, ""
 
@@ -668,45 +721,45 @@ def _format_schema_hint(tool_name: str, required: set[str], optional: set[str]) 
     return "\n".join(parts)
 
 
-def _get_runtime_allowed_tools(agent_state: Any | None) -> set[str] | None:
+def _mark_tool_pipeline_issue(agent_state: Any | None, issue_type: str, message: str) -> None:
+    logger.warning("Tool pipeline issue (%s): %s", issue_type, message)
+
     if agent_state is None:
-        return None
+        return
 
-    llm = getattr(agent_state, "_runtime_llm", None)
-    if llm is None:
-        return None
+    try:
+        if hasattr(agent_state, "context") and hasattr(agent_state, "update_context"):
+            issues = agent_state.context.get("tool_pipeline_issues", [])
+            if not isinstance(issues, list):
+                issues = []
+            issues.append({"type": issue_type, "message": message[:300]})
+            agent_state.update_context("tool_pipeline_issues", issues[-20:])
+            agent_state.update_context("tool_pipeline_issue_count", len(issues))
+            return
 
-    allowed = getattr(llm, "runtime_allowed_tools", None)
-    if allowed is None:
-        return None
-    if isinstance(allowed, set):
-        return allowed
-    if isinstance(allowed, list):
-        return {str(item) for item in allowed}
-    return None
+        setattr(agent_state, "tool_pipeline_issue", issue_type)
+    except Exception:
+        logger.debug("Failed to persist tool pipeline issue", exc_info=True)
 
 
 async def execute_tool_with_validation(
-    tool_name: str | None, agent_state: Any | None = None, **kwargs: Any
+    tool_name: str | None,
+    agent_state: Any | None = None,
+    allowed_tools: set[str] | None = None,
+    **kwargs: Any,
 ) -> Any:
-    # Normalize tool name: strip module prefix added by some LLMs
-    # e.g. "proxy_tools.scope_rules" → "scope_rules"
-    if tool_name and "." in tool_name:
-        stripped = tool_name.split(".")[-1]
-        if stripped in get_tool_names():
-            tool_name = stripped
+    tool_name = _resolve_canonical_tool_name(tool_name)
+
+    if allowed_tools is None:
+        raise Exception("Tool not allowed")
 
     is_valid, error_msg = validate_tool_availability(tool_name)
     if not is_valid:
         return f"Error: {error_msg}"
 
-    allowed_tools = _get_runtime_allowed_tools(agent_state)
-    if allowed_tools is not None and tool_name not in allowed_tools:
-        allowed = ", ".join(sorted(allowed_tools))
-        return (
-            f"Error: Tool '{tool_name}' is not allowed for this run by runtime policy. "
-            f"Allowed tools: {allowed}"
-        )
+    if tool_name not in allowed_tools:
+        raise Exception("Tool not allowed")
+    assert tool_name in allowed_tools
 
     arg_error = _validate_tool_arguments(tool_name, kwargs)
     if arg_error:
@@ -745,8 +798,20 @@ async def execute_tool_with_validation(
 async def execute_tool_invocation(tool_inv: dict[str, Any], agent_state: Any | None = None) -> Any:
     tool_name = tool_inv.get("toolName")
     tool_args = tool_inv.get("args", {})
+    allowed_tools = tool_inv.get("allowedTools")
+    if isinstance(allowed_tools, list):
+        normalized_allowed_tools = set(str(name) for name in allowed_tools)
+    elif isinstance(allowed_tools, set):
+        normalized_allowed_tools = set(str(name) for name in allowed_tools)
+    else:
+        normalized_allowed_tools = None
 
-    return await execute_tool_with_validation(tool_name, agent_state, **tool_args)
+    return await execute_tool_with_validation(
+        tool_name,
+        agent_state,
+        allowed_tools=normalized_allowed_tools,
+        **tool_args,
+    )
 
 
 def _check_error_result(result: Any) -> tuple[bool, Any]:
@@ -990,9 +1055,9 @@ def _get_truncation_limit(tool_name: str) -> int:
         "curl":                     3000,   # curl: increased from 2000
         "ffuf":                     5000,   # directory fuzzer: increased from 3000
         "nikto":                    6000,   # nikto: increased from 4000
-        "terminal_execute":       100000,   # FIX: increased from 32000 (was 5000)
-        "exec_terminal":          100000,   # FIX: match terminal_execute
-        "terminal":               100000,   # FIX: match terminal_execute
+        "terminal_execute":       12000,    # shell wrapper: keep context compact for follow-up turns
+        "exec_terminal":          12000,    # FIX: match terminal_execute
+        "terminal":               12000,    # FIX: match terminal_execute
         "browser_action":         12000,   # browser: increased from 6000
         "nuclei":                  50000,   # FIX: increased from 6000 (was 10000) - preserve full POCs
         "run_nuclei":              50000,   # FIX: match nuclei
@@ -1058,8 +1123,6 @@ async def _auto_summarize_result(result_text: str, tool_name: str) -> str:
         return result_text
 
     try:
-        import litellm
-
         prompt = (
             "Summarize this security tool output for an autonomous pentest agent. "
             "Preserve: confirmed findings, endpoints, parameters, payloads, response codes, and errors. "
@@ -1068,7 +1131,7 @@ async def _auto_summarize_result(result_text: str, tool_name: str) -> str:
             "Output:\n"
             f"{result_text[:120000]}"
         )
-        response = await litellm.acompletion(
+        response = await tracked_acompletion(
             model=SUMMARIZE_MODEL,
             messages=[{"role": "user", "content": prompt}],
             max_tokens=700,
@@ -1470,7 +1533,7 @@ async def _execute_single_tool(
     tracer: Any | None,
     agent_id: str,
     image_slots_remaining: int,
-) -> tuple[str, list[dict[str, Any]], bool, int]:
+) -> tuple[str, list[dict[str, Any]], bool, int, bool]:
     tool_name = tool_inv.get("toolName", "unknown")
     args = tool_inv.get("args", {})
     execution_id = None
@@ -1505,11 +1568,12 @@ async def _execute_single_tool(
     finally:
         reset_current_agent_id(agent_token)
 
-    observation_xml, images, meta = _format_tool_result_with_meta(
+    raw_observation_xml, images, meta = _format_tool_result_with_meta(
         tool_name,
         result,
         image_slots_remaining=image_slots_remaining,
     )
+    observation_xml = raw_observation_xml
 
     needs_llm_summary = bool(meta.get("needs_llm_summary"))
     if needs_llm_summary:
@@ -1519,7 +1583,7 @@ async def _execute_single_tool(
 
     _auto_record_hypothesis(
         tool_inv=tool_inv,
-        observation_xml=observation_xml,
+        observation_xml=raw_observation_xml,
         agent_state=agent_state,
         owner_agent=owner_agent,
         vuln_signals=meta.get("vuln_signals", []),
@@ -1540,7 +1604,7 @@ async def _execute_single_tool(
             )
 
     images_used = int(meta.get("images_attached") or 0)
-    return observation_xml, images, should_agent_finish, images_used
+    return observation_xml, images, should_agent_finish, images_used, is_error
 
 
 def _get_tracer_and_agent_id(agent_state: Any | None) -> tuple[Any | None, str]:
@@ -1564,16 +1628,21 @@ async def process_tool_invocations(
     conversation_history: list[dict[str, Any]],
     agent_state: Any | None = None,
     owner_agent: Any | None = None,
+    allowed_tools: set[str] | None = None,
 ) -> bool:
     observation_parts: list[str] = []
     all_images: list[dict[str, Any]] = []
     should_agent_finish = False
+    batch_had_error = False
     image_slots_remaining = _parse_int("phantom_browser_image_max_per_turn", 1)
 
     tracer, agent_id = _get_tracer_and_agent_id(agent_state)
 
     for tool_inv in tool_invocations:
-        observation_xml, images, tool_should_finish, images_used = await _execute_single_tool(
+        tool_inv = dict(tool_inv)
+        if allowed_tools is not None:
+            tool_inv["allowedTools"] = sorted(allowed_tools)
+        observation_xml, images, tool_should_finish, images_used, tool_had_error = await _execute_single_tool(
             tool_inv,
             agent_state,
             owner_agent,
@@ -1584,6 +1653,7 @@ async def process_tool_invocations(
         observation_parts.append(observation_xml)
         all_images.extend(images)
         image_slots_remaining = max(0, image_slots_remaining - images_used)
+        batch_had_error = batch_had_error or tool_had_error
 
         if tool_should_finish:
             should_agent_finish = True
@@ -1595,6 +1665,12 @@ async def process_tool_invocations(
     else:
         observation_content = "Tool Results:\n\n" + "\n\n".join(observation_parts)
         conversation_history.append({"role": "user", "content": observation_content})
+
+    if agent_state is not None and hasattr(agent_state, "update_context"):
+        try:
+            agent_state.update_context("last_tool_batch_had_error", batch_had_error)
+        except Exception:  # noqa: BLE001
+            pass
 
     return should_agent_finish
 
@@ -1608,7 +1684,9 @@ def _auto_record_hypothesis(
 ) -> None:
     """Automatically populate HypothesisLedger from tool results.
 
-    Single deterministic path used by the tool execution pipeline.
+    Hardened behavior:
+    - Only create/update hypotheses from explicit, strong vulnerability signals.
+    - Ignore weak or scanner-only hints to prevent ledger pollution.
     """
     import re as _re_hyp
 
@@ -1657,8 +1735,21 @@ def _auto_record_hypothesis(
         signals = [s for s in (vuln_signals or []) if isinstance(s, str) and s.strip()]
 
         signal_vclass = ""
+        strong_signal_lines: list[str] = []
         for sig in signals:
             sig_head = sig.split(":", 1)[0].strip().lower()
+            sig_text = sig.strip()
+            is_strong = (
+                "confirmed" in sig_head
+                or sig_head in {"sql_injection"}
+                or "vulnerable" in sig_text.lower()
+                or "injectable" in sig_text.lower()
+            )
+            # Ignore weak/heuristic-only categories.
+            if any(tag in sig_head for tag in ("potential", "scanner_", "_reflected", "xss_potential")):
+                is_strong = False
+            if is_strong:
+                strong_signal_lines.append(sig_text)
             if "sql" in sig_head:
                 signal_vclass = "sqli"
                 break
@@ -1681,43 +1772,28 @@ def _auto_record_hypothesis(
                 signal_vclass = "open_redirect"
                 break
 
+        # Do not auto-create hypotheses from weak/noisy signals.
+        if not strong_signal_lines:
+            return
+
         # Backward compatibility: legacy gate tests expect signals-only paths to
         # use "auto_extraction" class when no owner agent is wired.
-        if signals and owner_agent is None:
+        if strong_signal_lines and owner_agent is None:
             vuln_class = "auto_extraction"
         elif signal_vclass:
             vuln_class = signal_vclass
-        elif any(
-            kw in obs_lower
-            for kw in ("sql_injection", "is vulnerable", "injectable", "sqlmap", "back-end dbms")
-        ):
-            vuln_class = "sqli"
-        elif any(kw in obs_lower for kw in ("xss", "<script", "reflected", "alert(")):
-            vuln_class = "xss"
-        elif any(kw in obs_lower for kw in ("rce", "uid=", "www-data", "whoami")):
-            vuln_class = "rce"
-        elif any(kw in obs_lower for kw in ("ssrf", "169.254.169.254", "metadata")):
-            vuln_class = "ssrf"
-        elif any(kw in obs_lower for kw in ("idor", "unauthorized", "broken access")):
-            vuln_class = "idor"
-        elif any(kw in obs_lower for kw in ("open redirect", "redirect")):
-            vuln_class = "open_redirect"
-        elif any(kw in obs_lower for kw in ("xxe", "xml external")):
-            vuln_class = "xxe"
-        elif any(kw in obs_lower for kw in ("[critical]", "[high]")):
-            vuln_class = "scanner_finding"
         else:
-            vuln_class = "recon"
+            return
 
         hyp_id = ledger.add(surface, vuln_class)
 
-        if signals:
-            for sig in signals:
+        if strong_signal_lines:
+            for sig in strong_signal_lines:
                 ledger.record_payload(hyp_id, sig.strip()[:200])
             ledger.record_result(
                 hyp_id,
                 "testing",
-                "Automatically extracted from tool output",
+                "Auto-recorded from strong tool signal",
             )
 
         payload = ""
@@ -1728,15 +1804,13 @@ def _auto_record_hypothesis(
         if payload:
             ledger.record_payload(hyp_id, payload)
 
-        if vuln_class != "recon":
-            evidence_snip = ""
-            for line in observation_xml.split("\n"):
-                ll = line.lower()
-                if any(
-                    kw in ll for kw in ("vulnerable", "injectable", "confirmed", "critical", "reflected")
-                ):
-                    evidence_snip = line.strip()[:300]
-                    break
+        evidence_snip = ""
+        for line in observation_xml.split("\n"):
+            ll = line.lower()
+            if any(kw in ll for kw in ("vulnerable", "injectable", "confirmed")):
+                evidence_snip = line.strip()[:300]
+                break
+        if evidence_snip:
             ledger.record_result(hyp_id, "testing", evidence_snip)
 
         if coverage_tracker is not None:
@@ -1750,10 +1824,14 @@ def _auto_record_hypothesis(
                         "ACCESS_OR_WAF_BLOCKED",
                         vuln_class=vuln_class,
                     )
-            except Exception:
-                pass
+            except Exception as exc:
+                _mark_tool_pipeline_issue(
+                    agent_state,
+                    "coverage_tracker_update_failed",
+                    f"coverage_tracker update failed for {tool_name}: {exc}",
+                )
 
-        should_correlate = bool(signals) or any(
+        should_correlate = bool(strong_signal_lines) or any(
             kw in obs_lower for kw in ("confirmed", "extracted", "authentication bypass", "accepted")
         )
         if correlation_engine is not None and vuln_class != "recon" and should_correlate:
@@ -1769,8 +1847,12 @@ def _auto_record_hypothesis(
                     severity=severity,
                     details={"source": tool_name, "hypothesis_id": hyp_id},
                 )
-            except Exception:
-                pass
+            except Exception as exc:
+                _mark_tool_pipeline_issue(
+                    agent_state,
+                    "correlation_engine_update_failed",
+                    f"correlation_engine update failed for {tool_name}: {exc}",
+                )
 
         if attack_graph is not None and vuln_class != "recon":
             try:
@@ -1797,11 +1879,20 @@ def _auto_record_hypothesis(
                     )
                 if not attack_graph._graph.has_edge(vuln_node, target_node):
                     attack_graph.add_edge(vuln_node, target_node, AttackEdgeType.AFFECTS)
-            except Exception:
-                pass
+            except Exception as exc:
+                _mark_tool_pipeline_issue(
+                    agent_state,
+                    "attack_graph_update_failed",
+                    f"attack_graph update failed for {tool_name}: {exc}",
+                )
 
-    except Exception:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001
         # Never let auto-recording crash the tool pipeline.
+        _mark_tool_pipeline_issue(
+            agent_state,
+            "auto_recording_failed",
+            f"auto_recording failed for {tool_name}: {exc}",
+        )
         return
 
 

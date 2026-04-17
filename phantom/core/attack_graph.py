@@ -507,11 +507,18 @@ def build_attack_graph_from_vulnerabilities(
                 "discovered_at": getattr(vuln, 'discovered_at', None),
             },
         )
-    
-    # TODO: Add logic to infer relationships between vulnerabilities
-    # This could be based on:
-    # 1. Hypothesis ledger data (which hypotheses enabled others)
-    # 2. Vulnerability metadata (e.g., "requires authentication" -> auth bypass vuln)
-    # 3. Attack surface analysis (same endpoint, related parameters)
+
+    if hypothesis_ledger is not None:
+        try:
+            hyps = hypothesis_ledger.get_all()
+            for src in hyps.values():
+                for dst in hyps.values():
+                    if src.id == dst.id:
+                        continue
+                    if src.vuln_class.lower() == dst.vuln_class.lower() or src.surface.split("::", 1)[0] == dst.surface.split("::", 1)[0]:
+                        if src.id in graph._nodes and dst.id in graph._nodes:
+                            graph.add_relationship(src.id, dst.id, AttackEdgeType.ENABLES, weight=0.5)
+        except Exception:
+            pass
     
     return graph

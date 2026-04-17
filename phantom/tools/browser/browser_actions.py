@@ -1,6 +1,10 @@
+import importlib.util
 from typing import TYPE_CHECKING, Any, Literal, NoReturn
 
 from phantom.tools.registry import register_tool
+
+
+_PLAYWRIGHT_AVAILABLE = importlib.util.find_spec("playwright") is not None
 
 
 if TYPE_CHECKING:
@@ -80,6 +84,32 @@ def _validate_file_path(action_name: str, file_path: str | None) -> None:
 def _validate_selector(action_name: str, selector: str | None) -> None:
     if not selector:
         raise ValueError(f"selector parameter is required for {action_name} action")
+
+
+def _resolve_action_name(
+    action: str,
+    coordinate: str | None = None,
+    selector: str | None = None,
+) -> str:
+    action_name = (action or "").strip().strip('"').strip("'").strip().lower()
+
+    alias_map = {
+        "fill": "fill_selector",
+        "input": "fill_selector",
+        "type_selector": "fill_selector",
+        "click_element": "click_selector",
+        "tap_selector": "click_selector",
+        "wait_selector": "wait_for_selector",
+        "query_selector": "query_selector_all",
+    }
+    action_name = alias_map.get(action_name, action_name)
+
+    if action_name == "click" and not coordinate and selector:
+        return "click_selector"
+    if action_name == "type" and selector:
+        return "fill_selector"
+
+    return action_name
 
 
 def _handle_navigation_actions(
@@ -214,7 +244,7 @@ def _handle_selector_actions(
     raise ValueError(f"Unknown selector action: {action}")
 
 
-@register_tool
+@register_tool(sandbox_execution=False)
 def browser_action(
     action: BrowserAction,
     url: str | None = None,
@@ -231,9 +261,18 @@ def browser_action(
     timeout: float | None = None,
     wait_state: str | None = None,
 ) -> dict[str, Any]:
+    if not _PLAYWRIGHT_AVAILABLE:
+        return {
+            "error": "Playwright is not installed. Install with: pip install playwright",
+            "tab_id": tab_id,
+            "screenshot": "",
+            "is_running": False,
+        }
+
     from .tab_manager import get_browser_tab_manager
 
     manager = get_browser_tab_manager()
+    resolved_action = _resolve_action_name(action, coordinate, selector)
 
     try:
         navigation_actions = {"launch", "goto", "back", "forward"}
@@ -262,22 +301,41 @@ def browser_action(
             "query_selector_all",
         }
 
-        if action in navigation_actions:
-            return _handle_navigation_actions(manager, action, url, tab_id)
-        if action in interaction_actions:
-            return _handle_interaction_actions(manager, action, coordinate, text, key, tab_id)
-        if action in tab_actions:
-            return _handle_tab_actions(manager, action, url, tab_id)
-        if action in utility_actions:
-            return _handle_utility_actions(
-                manager, action, duration, js_code, file_path, tab_id, clear
+        if resolved_action in navigation_actions:
+            return _handle_navigation_actions(manager, resolved_action, url, tab_id)
+        if resolved_action in interaction_actions:
+            return _handle_interaction_actions(
+                manager,
+                resolved_action,
+                coordinate,
+                text,
+                key,
+                tab_id,
             )
-        if action in selector_actions:
+        if resolved_action in tab_actions:
+            return _handle_tab_actions(manager, resolved_action, url, tab_id)
+        if resolved_action in utility_actions:
+            return _handle_utility_actions(
+                manager,
+                resolved_action,
+                duration,
+                js_code,
+                file_path,
+                tab_id,
+                clear,
+            )
+        if resolved_action in selector_actions:
             return _handle_selector_actions(
-                manager, action, selector, text, tab_id, timeout, wait_state
+                manager,
+                resolved_action,
+                selector,
+                text,
+                tab_id,
+                timeout,
+                wait_state,
             )
 
-        _raise_unknown_action(action)
+        _raise_unknown_action(resolved_action)
 
     except (ValueError, RuntimeError) as e:
         return {

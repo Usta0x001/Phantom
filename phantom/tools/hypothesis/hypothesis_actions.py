@@ -17,6 +17,7 @@ from __future__ import annotations
 import threading
 from typing import Any, TYPE_CHECKING
 
+from phantom.tools.context import get_current_agent_id
 from phantom.tools.registry import register_tool
 
 if TYPE_CHECKING:
@@ -29,33 +30,23 @@ _LEDGERS_BY_AGENT: dict[str, HypothesisLedger] = {}
 _CORRELATION_BY_AGENT: dict[str, CorrelationEngine] = {}
 _HYPOTHESIS_CONTEXT_LOCK = threading.RLock()
 
-# Backward-compatibility globals (legacy callers/tests)
-_GLOBAL_LEDGER: HypothesisLedger | None = None
-_GLOBAL_CORRELATION_ENGINE: CorrelationEngine | None = None
-
 
 def _resolve_agent_id(agent_id: str | None = None) -> str:
     if agent_id and str(agent_id).strip():
         return str(agent_id).strip()
-    try:
-        from phantom.tools.context import get_current_agent_id
 
-        resolved = get_current_agent_id()
-        if resolved and str(resolved).strip():
-            return str(resolved).strip()
-    except Exception:  # noqa: BLE001
-        pass
-    return "default"
+    current = (get_current_agent_id() or "").strip()
+    if current and current != "default":
+        return current
+
+    raise ValueError("agent_id required")
 
 
 def set_correlation_engine(engine: CorrelationEngine, agent_id: str | None = None) -> None:
     """Set the correlation engine for a specific agent context."""
-    global _GLOBAL_CORRELATION_ENGINE
     resolved = _resolve_agent_id(agent_id)
     with _HYPOTHESIS_CONTEXT_LOCK:
         _CORRELATION_BY_AGENT[resolved] = engine
-        if resolved == "default":
-            _GLOBAL_CORRELATION_ENGINE = engine
 
 
 def set_ledger(ledger: HypothesisLedger, agent_id: str | None = None) -> None:
@@ -65,12 +56,9 @@ def set_ledger(ledger: HypothesisLedger, agent_id: str | None = None) -> None:
         ledger: The HypothesisLedger instance
         agent_id: The agent ID to associate with this ledger (default: "default")
     """
-    global _GLOBAL_LEDGER
     resolved = _resolve_agent_id(agent_id)
     with _HYPOTHESIS_CONTEXT_LOCK:
         _LEDGERS_BY_AGENT[resolved] = ledger
-        if resolved == "default":
-            _GLOBAL_LEDGER = ledger
 
 
 def get_ledger(agent_id: str | None = None) -> HypothesisLedger | None:
@@ -84,64 +72,57 @@ def get_ledger(agent_id: str | None = None) -> HypothesisLedger | None:
     """
     resolved = _resolve_agent_id(agent_id)
     with _HYPOTHESIS_CONTEXT_LOCK:
-        if resolved in _LEDGERS_BY_AGENT:
-            return _LEDGERS_BY_AGENT[resolved]
-        if resolved != "default" and "default" in _LEDGERS_BY_AGENT:
-            return _LEDGERS_BY_AGENT["default"]
-        return _GLOBAL_LEDGER
+        return _LEDGERS_BY_AGENT.get(resolved)
 
 
 def get_correlation_engine(agent_id: str | None = None) -> CorrelationEngine | None:
     """Get the correlation engine for a specific agent context."""
     resolved = _resolve_agent_id(agent_id)
     with _HYPOTHESIS_CONTEXT_LOCK:
-        if resolved in _CORRELATION_BY_AGENT:
-            return _CORRELATION_BY_AGENT[resolved]
-        if resolved != "default" and "default" in _CORRELATION_BY_AGENT:
-            return _CORRELATION_BY_AGENT["default"]
-        return _GLOBAL_CORRELATION_ENGINE
+        return _CORRELATION_BY_AGENT.get(resolved)
 
 
 def clear_hypothesis_context(agent_id: str | None = None) -> None:
     """Clear hypothesis/correlation context (all or one agent)."""
-    global _GLOBAL_LEDGER, _GLOBAL_CORRELATION_ENGINE
     if agent_id is None:
         with _HYPOTHESIS_CONTEXT_LOCK:
             _LEDGERS_BY_AGENT.clear()
             _CORRELATION_BY_AGENT.clear()
-            _GLOBAL_LEDGER = None
-            _GLOBAL_CORRELATION_ENGINE = None
         return
 
     resolved = _resolve_agent_id(agent_id)
     with _HYPOTHESIS_CONTEXT_LOCK:
         _LEDGERS_BY_AGENT.pop(resolved, None)
         _CORRELATION_BY_AGENT.pop(resolved, None)
-        if resolved == "default":
-            _GLOBAL_LEDGER = None
-            _GLOBAL_CORRELATION_ENGINE = None
 
 
 def _get_active_ledger() -> HypothesisLedger | None:
     """Get the active ledger - tries new dict-based approach first, falls back to global."""
-    return get_ledger()
+    try:
+        from phantom.tools.context import get_current_agent_id
+
+        current_agent_id = get_current_agent_id()
+    except Exception:
+        current_agent_id = None
+    if not current_agent_id or current_agent_id == "default":
+        raise ValueError("agent_id required")
+    return get_ledger(current_agent_id)
 
 
 def _get_active_correlation_engine() -> CorrelationEngine | None:
     """Get correlation engine for the current agent context."""
-    return get_correlation_engine()
+    try:
+        from phantom.tools.context import get_current_agent_id
+
+        current_agent_id = get_current_agent_id()
+    except Exception:
+        current_agent_id = None
+    if not current_agent_id or current_agent_id == "default":
+        raise ValueError("agent_id required")
+    return get_correlation_engine(current_agent_id)
 
 
-# Backward compatibility alias - for setting global when not using agent_id
-def set_global_ledger(ledger: HypothesisLedger) -> None:
-    """Set the global hypothesis ledger instance (backward compatibility)."""
-    global _GLOBAL_LEDGER
-    with _HYPOTHESIS_CONTEXT_LOCK:
-        _GLOBAL_LEDGER = ledger
-        _LEDGERS_BY_AGENT["default"] = ledger
-
-
-@register_tool
+@register_tool(sandbox_execution=False)
 def add_hypothesis(surface: str, vuln_class: str) -> dict[str, Any]:
     """
     Add a new hypothesis to the ledger.
@@ -192,7 +173,7 @@ def add_hypothesis(surface: str, vuln_class: str) -> dict[str, Any]:
     }
 
 
-@register_tool
+@register_tool(sandbox_execution=False)
 async def record_payload_test(
     hypothesis_id: str,
     payload: str,
@@ -278,7 +259,7 @@ async def record_payload_test(
     }
 
 
-@register_tool
+@register_tool(sandbox_execution=False)
 async def confirm_hypothesis(hypothesis_id: str, evidence: str) -> dict[str, Any]:
     """
     Confirm a hypothesis as a valid vulnerability.
@@ -376,7 +357,7 @@ async def confirm_hypothesis(hypothesis_id: str, evidence: str) -> dict[str, Any
     # This code was unreachable because return statement above exits function
 
 
-@register_tool
+@register_tool(sandbox_execution=False)
 async def reject_hypothesis(hypothesis_id: str, reason: str) -> dict[str, Any]:
     """
     Mark a hypothesis as rejected (not vulnerable).
@@ -430,7 +411,7 @@ async def reject_hypothesis(hypothesis_id: str, reason: str) -> dict[str, Any]:
     }
 
 
-@register_tool
+@register_tool(sandbox_execution=False)
 def query_hypotheses(
     status: str | None = None,
     vuln_class: str | None = None,
@@ -491,7 +472,7 @@ def query_hypotheses(
     }
 
 
-@register_tool
+@register_tool(sandbox_execution=False)
 def get_hypothesis_summary() -> dict[str, Any]:
     """
     Get a summary of all hypotheses in the ledger.
@@ -518,7 +499,6 @@ def get_hypothesis_summary() -> dict[str, Any]:
     
     summary = _ledger.get_summary()
     
-    # Get top confirmed and open
     all_hyps = _ledger.get_all()
     confirmed = [h.to_dict() for h in all_hyps.values() if h.status == "confirmed"]
     open_hyps = [h.to_dict() for h in all_hyps.values() if h.status == "open"]
@@ -530,13 +510,13 @@ def get_hypothesis_summary() -> dict[str, Any]:
         "by_vuln_class": summary.get("by_class", {}),
         "top_confirmed": confirmed[:5],
         "top_open": open_hyps[:10],
-        "prioritized_summary": _ledger.get_factual_prompt_summary(top_n=10),
+        "prioritized_summary": _ledger.get_prioritized_summary(top_n=10),
         "scheduler_report": _ledger.get_scheduler_report(),
         "message": f"Ledger contains {summary.get('total', 0)} hypotheses",
     }
 
 
-@register_tool
+@register_tool(sandbox_execution=False)
 def has_tested_payload(surface: str, vuln_class: str, payload: str) -> dict[str, Any]:
     """
     Check if a payload has already been tested for a surface/vuln_class.

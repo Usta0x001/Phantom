@@ -21,7 +21,7 @@ def test_wave_a_scan_status_recommendation_handles_discovered_surface() -> None:
         phase="TESTING",
     )
 
-    assert recommendation.startswith("Test untested surface:")
+    assert recommendation.startswith("Untested surfaces remain:")
     assert "/api/users/{id}" in recommendation
 
 
@@ -45,7 +45,7 @@ def test_wave_a_auto_hypothesis_uses_agent_ledger_not_legacy_global() -> None:
         tool_inv=tool_inv,
         observation_xml="vulnerable injectable sqlmap back-end dbms",
         agent_state=agent_state,
-        vuln_signals=["sql_injection signal found"],
+        vuln_signals=["SQL_INJECTION: parameter is vulnerable"],
     )
 
     all_hypotheses = ledger.get_all()
@@ -53,7 +53,7 @@ def test_wave_a_auto_hypothesis_uses_agent_ledger_not_legacy_global() -> None:
     hyp = next(iter(all_hypotheses.values()))
     assert hyp.vuln_class == "auto_extraction"
     assert hyp.status == "testing"
-    assert any("sql_injection" in payload for payload in hyp.payloads_tested)
+    assert any("sql_injection" in payload.lower() for payload in hyp.payloads_tested)
 
 
 @pytest.mark.asyncio

@@ -207,7 +207,8 @@ echo "✅ Container ready"
 # Restrict outbound traffic to only authorized destinations.
 # HOST_GATEWAY is passed via env by docker_runtime.py (e.g. "host.docker.internal").
 if command -v iptables >/dev/null 2>&1 && [ -n "$HOST_GATEWAY" ]; then
-  GATEWAY_IP=$(getent hosts "$HOST_GATEWAY" 2>/dev/null | awk '{print $1}' | head -1)
+  # Resolve IPv4 only (iptables defaults to IPv4)
+  GATEWAY_IP=$(getent hosts "$HOST_GATEWAY" 2>/dev/null | grep -v ':' | awk '{print $1}' | head -1)
   if [ -n "$GATEWAY_IP" ]; then
     # Allow loopback (tool_server, Caido proxy)
     sudo iptables -A OUTPUT -o lo -j ACCEPT 2>/dev/null || true

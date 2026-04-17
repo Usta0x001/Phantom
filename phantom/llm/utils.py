@@ -113,6 +113,14 @@ def parse_tool_invocations(content: str) -> list[dict[str, Any]] | None:
             param_value = html.unescape(param_value)
             args[param_name] = param_value
 
+        if not args:
+            incomplete_match = re.search(r"<parameter=([^>]+)>(.*)$", fn_body, re.DOTALL)
+            if incomplete_match:
+                param_name = incomplete_match.group(1).strip()
+                if re.fullmatch(r"[a-zA-Z_][a-zA-Z0-9_]*", param_name):
+                    param_value = html.unescape(incomplete_match.group(2).strip())
+                    args[param_name] = param_value
+
         tool_invocations.append({"toolName": fn_name, "args": args})
 
     return tool_invocations if tool_invocations else None

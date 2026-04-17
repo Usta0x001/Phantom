@@ -6,7 +6,7 @@ from prove_correlation_ablation import run_ablation, write_report
 def test_run_ablation_returns_expected_metrics() -> None:
     report = run_ablation()
 
-    assert report["comparison"] == "no_correlation_vs_learned_correlation"
+    assert report["comparison"] == "dabs_baseline_vs_dabs_with_signal_injection"
     assert report["scenario_count"] >= 5
     assert "summary" in report
     assert "scenarios" in report
@@ -38,8 +38,8 @@ def test_write_report_creates_json_and_markdown(tmp_path: Path) -> None:
     json_text = json_path.read_text(encoding="utf-8")
     md_text = md_path.read_text(encoding="utf-8")
 
-    assert "correlation_ablation_report" in str(json_path)
+    assert "dabs_ablation_report" in str(json_path)
     assert "comparison" in json_text
-    assert "Correlation Ablation Report" in md_text
+    assert "DABS Ablation Report" in md_text
     assert "Rank shift 95% CI" in md_text
     assert "Per-Scenario Learning Snapshot" in md_text

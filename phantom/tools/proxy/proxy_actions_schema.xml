@@ -104,7 +104,12 @@
   </tool>
 
   <tool name="send_request">
-    <description>Send a simple HTTP request through proxy.</description>
+    <description>Send a simple HTTP request through proxy.
+
+    IMPORTANT behavior:
+    - Requests to private/internal addresses may be blocked by runtime policy even if scope_rules allowlist matches.
+    - If you see error "Blocked: URL targets a private/internal address", pivot to python_action with requests.Session for target interaction, or configure PHANTOM_ALLOWED_SSRF_HOSTS/target scope at runtime startup.
+    - scope_rules controls proxy filtering/capture, not SSRF safety policy bypass.</description>
     <parameters>
       <parameter name="method" type="string" required="true">
         <description>HTTP method (GET, POST, etc.)</description>
@@ -121,7 +126,23 @@
       <parameter name="timeout" type="integer" required="false">
         <description>Request timeout</description>
       </parameter>
+      <parameter name="follow_redirects" type="boolean" required="false">
+        <description>Whether to follow HTTP redirects automatically.</description>
+      </parameter>
     </parameters>
+    <examples>
+  # Standard request through proxy
+  <function=send_request>
+  <parameter=method>GET</parameter>
+  <parameter=url>https://example.com/health</parameter>
+  </function>
+
+  # If private/internal target is blocked, pivot to python_action
+  <function=python_action>
+  <parameter=action>new_session</parameter>
+  <parameter=code>import requests; s=requests.Session()</parameter>
+  </function>
+    </examples>
   </tool>
 
   <tool name="repeat_request">
@@ -159,7 +180,11 @@
   </tool>
 
   <tool name="scope_rules">
-    <description>Manage proxy scope patterns for domain/file filtering using Caido's scope system.</description>
+    <description>Manage proxy scope patterns for domain/file filtering using Caido's scope system.
+
+    Quick guidance:
+    - For docker-internal targets use host globs like "*.docker.internal".
+     - Invalid patterns include URL forms like "http://app.internal:3000/*" and host:port forms like "app.internal:3000".</description>
     <parameters>
       <parameter name="action" type="string" required="true">
         <description>Scope action:
@@ -204,6 +229,17 @@
   <parameter=allowlist>["api.example.com", "*.api.com"]</parameter>
   <parameter=denylist>["*.gif", "*.jpg", "*.png", "*.css", "*.js"]</parameter>
   </function>
+
+  # Valid host glob for docker-internal domains
+  <function=scope_rules>
+  <parameter=action>create</parameter>
+  <parameter=scope_name>JuiceShop</parameter>
+  <parameter=allowlist>["*.docker.internal"]</parameter>
+  </function>
+
+  # INVALID patterns (forbidden examples):
+  # "http://app.internal:3000/*"  (contains scheme/port/path)
+  # "app.internal:3000"                (contains port)
     </examples>
   </tool>
 

@@ -1,9 +1,9 @@
 """
-Deterministic ablation runner for correlation-guided hypothesis ranking.
+Deterministic ablation runner for DABS belief-driven scheduling.
 
 Compares:
-- Baseline ranking (no correlation engine attached)
-- Learned ranking (correlation engine attached with outcome priors)
+- Baseline DABS ranking (no external correlation priors injected)
+- Learned DABS ranking (same scheduler with deterministic signal injection)
 
 Outputs:
 - JSON report with raw metrics
@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import random
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -109,34 +110,59 @@ def _bootstrap_ci(values: list[float], samples: int = 2000, seed: int = RANDOM_S
 def _run_scenario(scenario: Scenario) -> dict[str, Any]:
     base_ledger, ids = _build_common_ledger()
 
-    baseline_ledger = _clone_ledger(base_ledger)
-    baseline_scored = baseline_ledger.get_scored_hypotheses()
-    baseline_ranks = _rank_map(baseline_scored)
-    baseline_scores = _score_map(baseline_scored)
+    prev_mode = os.environ.get("PHANTOM_SCHEDULER_MODE")
+    try:
+        os.environ["PHANTOM_SCHEDULER_MODE"] = "dabs"
+        baseline_ledger = _clone_ledger(base_ledger)
+        baseline_scored = baseline_ledger.get_scored_hypotheses()
+        baseline_ranks = _rank_map(baseline_scored)
+        baseline_scores = _score_map(baseline_scored)
 
-    learned_ledger = _clone_ledger(base_ledger)
-    corr_engine = CorrelationEngine()
-    learned_ledger.set_correlation_engine(corr_engine)
+        os.environ["PHANTOM_SCHEDULER_MODE"] = "dabs"
+        learned_ledger = _clone_ledger(base_ledger)
+        corr_engine = CorrelationEngine()
+        learned_ledger.set_correlation_engine(corr_engine)
 
-    for vuln_class, surface, family in scenario.positive_signals:
-        corr_engine.record_outcome(
-            vuln_class=vuln_class,
-            surface=surface,
-            outcome="confirmed",
-            payload_family=family,
-        )
+        for vuln_class, surface, family in scenario.positive_signals:
+            corr_engine.record_outcome(
+                vuln_class=vuln_class,
+                surface=surface,
+                outcome="confirmed",
+                payload_family=family,
+            )
 
-    for vuln_class, surface, family in scenario.negative_signals:
-        corr_engine.record_outcome(
-            vuln_class=vuln_class,
-            surface=surface,
-            outcome="rejected",
-            payload_family=family,
-        )
+        for vuln_class, surface, family in scenario.negative_signals:
+            corr_engine.record_outcome(
+                vuln_class=vuln_class,
+                surface=surface,
+                outcome="rejected",
+                payload_family=family,
+            )
 
-    learned_scored = learned_ledger.get_scored_hypotheses()
-    learned_ranks = _rank_map(learned_scored)
-    learned_scores = _score_map(learned_scored)
+        applied_positive = 0
+        for vuln_class, surface, _family in scenario.positive_signals:
+            hyp = learned_ledger.find_by_surface_and_class(surface, vuln_class)
+            if hyp is None:
+                continue
+            learned_ledger.propagate_update(hyp.id, "confirmed")
+            applied_positive += 1
+
+        applied_negative = 0
+        for vuln_class, surface, _family in scenario.negative_signals:
+            hyp = learned_ledger.find_by_surface_and_class(surface, vuln_class)
+            if hyp is None:
+                continue
+            learned_ledger.propagate_update(hyp.id, "rejected")
+            applied_negative += 1
+
+        learned_scored = learned_ledger.get_scored_hypotheses()
+        learned_ranks = _rank_map(learned_scored)
+        learned_scores = _score_map(learned_scored)
+    finally:
+        if prev_mode is None:
+            os.environ.pop("PHANTOM_SCHEDULER_MODE", None)
+        else:
+            os.environ["PHANTOM_SCHEDULER_MODE"] = prev_mode
 
     target_id = ids[scenario.target_hypothesis_id]
     baseline_rank = int(baseline_ranks[target_id])
@@ -169,6 +195,10 @@ def _run_scenario(scenario: Scenario) -> dict[str, Any]:
             "expected_win_uplift": expected_uplift,
         },
         "learning_metrics": corr_engine.get_learning_metrics(top_n=3),
+        "dabs_signal_application": {
+            "positive_signals_applied": applied_positive,
+            "negative_signals_applied": applied_negative,
+        },
         "top_baseline": baseline_scored[:3],
         "top_learned": learned_scored[:3],
     }
@@ -231,7 +261,7 @@ def run_ablation() -> dict[str, Any]:
 
     return {
         "generated_at": datetime.now(UTC).isoformat(),
-        "comparison": "no_correlation_vs_learned_correlation",
+        "comparison": "dabs_baseline_vs_dabs_with_signal_injection",
         "scenario_count": len(results),
         "summary": {
             "total_redundant_tests_avoided": total_redundant_avoided,
@@ -246,7 +276,7 @@ def run_ablation() -> dict[str, Any]:
 
 def _render_markdown(report: dict[str, Any]) -> str:
     lines = []
-    lines.append("# Correlation Ablation Report")
+    lines.append("# DABS Ablation Report")
     lines.append("")
     lines.append(f"Generated at: `{report['generated_at']}`")
     lines.append(f"Comparison: `{report['comparison']}`")
@@ -312,7 +342,7 @@ def _render_markdown(report: dict[str, Any]) -> str:
     lines.append("")
     lines.append("## Notes")
     lines.append("")
-    lines.append("- `rank_shift > 0` means the target moved earlier in the queue under learned correlations.")
+    lines.append("- `rank_shift > 0` means the target moved earlier in the queue under DABS signal injection.")
     lines.append("- `redundant_tests_avoided` estimates how many earlier-ranked tests can be skipped before targeting the likely winner.")
     lines.append("- `expected_win_uplift` is a normalized score-delta proxy for improved expected payoff.")
 
@@ -323,8 +353,8 @@ def write_report(output_dir: Path) -> tuple[Path, Path, dict[str, Any]]:
     output_dir.mkdir(parents=True, exist_ok=True)
 
     report = run_ablation()
-    json_path = output_dir / "correlation_ablation_report.json"
-    md_path = output_dir / "correlation_ablation_report.md"
+    json_path = output_dir / "dabs_ablation_report.json"
+    md_path = output_dir / "dabs_ablation_report.md"
 
     json_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
     md_path.write_text(_render_markdown(report), encoding="utf-8")
@@ -333,7 +363,7 @@ def write_report(output_dir: Path) -> tuple[Path, Path, dict[str, Any]]:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Run correlation ablation and generate thesis evidence report.")
+    parser = argparse.ArgumentParser(description="Run DABS ablation and generate thesis evidence report.")
     parser.add_argument(
         "--output-dir",
         default="thesis_output/ablation",
@@ -344,7 +374,7 @@ def main() -> int:
     output_dir = Path(args.output_dir)
     json_path, md_path, report = write_report(output_dir)
 
-    print("Correlation ablation complete")
+    print("DABS ablation complete")
     print(f"Scenarios: {report['scenario_count']}")
     print(f"JSON: {json_path}")
     print(f"Markdown: {md_path}")

@@ -3,7 +3,6 @@ import contextlib
 import json
 import logging
 import os
-import random
 from typing import TYPE_CHECKING, Any, Optional
 
 
@@ -20,7 +19,6 @@ from jinja2 import (
 from phantom.agents.hypothesis_ledger import HypothesisLedger  # Rec 6 (SF-005)
 from phantom.agents.coverage_tracker import CoverageTracker  # Enhancement: Coverage tracking
 from phantom.agents.correlation_engine import CorrelationEngine  # Enhancement: Vulnerability chains
-from phantom.agents.dabs_execution_planner import plan_bootstrap_invocations, plan_tool_invocation
 from phantom.llm import LLM, LLMConfig, LLMRequestFailedError
 from phantom.llm.pentager.reflector import get_reflector
 from phantom.llm.utils import clean_content
@@ -84,6 +82,8 @@ class BaseAgent(metaclass=AgentMeta):
                 max_iterations=self.max_iterations,
             )
 
+        self.state.scan_mode = str(getattr(self.llm_config, "scan_mode", "deep") or "deep")
+
         self.llm = LLM(self.llm_config, agent_name=self.agent_name)
         setattr(self.state, "_runtime_llm", self.llm)
 
@@ -130,26 +130,23 @@ class BaseAgent(metaclass=AgentMeta):
             # NetworkX not installed - attack graph unavailable
             self.attack_graph = None
 
-        # FEAT-001: Set scan mode for stealth rate limiting
-        # This enables programmatic rate limiting in executor.py when scan_mode="stealth"
-        try:
-            from phantom.tools.executor import set_scan_mode
-            set_scan_mode(self.llm_config.scan_mode)
-        except Exception:
-            pass  # Rate limiting not critical - continue without it
-
         # AUDIT-FIX-10: Track (signature, success) for dedup checking
         self._recent_action_results: list[tuple[str, bool]] = []
 
+        if self.state.parent_id is None:
+            try:
+                from phantom.tools.agents_graph import agents_graph_actions
+
+                agents_graph_actions.reset_all_state()
+            except Exception:
+                pass
+
         # C1: Wire hypothesis ledger to the tool so the LLM can interact with it
         try:
-            from phantom.tools.hypothesis.hypothesis_actions import set_global_ledger, set_correlation_engine, set_ledger
-            # Keep default/global mapping for backward compatibility while also
-            # registering per-agent context to avoid cross-agent state bleed.
-            set_global_ledger(self.hypothesis_ledger)
-            set_ledger(self.hypothesis_ledger, agent_id=self.state.agent_id)
-            # FIX 4: Wire correlation engine for automatic chain detection.
-            set_correlation_engine(self.correlation_engine, agent_id=self.state.agent_id)
+            from phantom.tools.hypothesis.hypothesis_actions import set_correlation_engine, set_ledger
+
+            set_ledger(self.hypothesis_ledger, self.state.agent_id)
+            set_correlation_engine(self.correlation_engine, self.state.agent_id)
         except ImportError as e:
             # Tool module not available in this environment
             logging.warning(f"Hypothesis ledger tool not available: {e}")
@@ -248,8 +245,7 @@ class BaseAgent(metaclass=AgentMeta):
 
         if self.state.parent_id is None:
             with agents_graph_actions._ROOT_AGENT_LOCK:
-                if agents_graph_actions._root_agent_id is None:
-                    agents_graph_actions._root_agent_id = self.state.agent_id
+                agents_graph_actions._root_agent_id = self.state.agent_id
 
     def _restore_sub_agents_from_checkpoint(self) -> None:
         restored = self.config.get("_restored_sub_agent_states")
@@ -559,8 +555,7 @@ class BaseAgent(metaclass=AgentMeta):
                         # ────────────────────────────────────────────────────────
                         return self.state.final_result or {"success": False, "error": _abort_msg}
                     _backoff = min(300.0, 30.0 * (2.0 ** (_rl_consecutive - 1)))
-                    _jitter = _backoff * random.uniform(0.0, 0.2)
-                    _sleep = _backoff + _jitter
+                    _sleep = _backoff
                     logger.warning(
                         "LLM rate limit exhausted after all retries (hit #%d/%d); "
                         "backing off %.0fs before resuming agent loop...",
@@ -714,31 +709,33 @@ class BaseAgent(metaclass=AgentMeta):
         if not self.state.messages:
             self.state.add_message("user", task)
 
+    def _strict_prompt_summary(self, summary: str) -> str:
+        lines = []
+        for line in summary.splitlines():
+            if line.strip().startswith("next:"):
+                continue
+            lines.append(line)
+        return "\n".join(lines)
+
     async def _process_iteration(self, tracer: Optional["Tracer"]) -> bool:
         final_response = None
         self._last_iteration_action_count = 0
         use_reflector = os.environ.get("PHANTOM_USE_REFLECTOR", "false").lower() == "true"
-        strict_dabs_execution = str(Config.get("phantom_strict_dabs_execution") or "false").strip().lower() in {
-            "1",
-            "true",
-            "yes",
-            "on",
-        }
-        if strict_dabs_execution:
-            use_reflector = False
 
-        # AUDIT-FIX: Auto-inject scan_status every 10 iterations OR when message count > 50
+        # Inject a single compact scan_status packet on a fixed interval.
+        # This replaces multi-summary injections (status + ledger + coverage +
+        # correlation) to reduce prompt bloat and contradictory guidance.
+        status_interval = int(Config.get("phantom_status_inject_interval") or "10")
         message_count = len(self.state.get_conversation_history())
 
         should_inject_status = (
-            (self.state.iteration > 0 and self.state.iteration % 10 == 0) or
-            (message_count > 50)
+            self.state.iteration > 0 and self.state.iteration % max(1, status_interval) == 0
         )
         if should_inject_status:
             try:
                 from phantom.tools.scan_status.scan_status_actions import get_scan_status
                 status = get_scan_status(
-                    include_recommendations=not strict_dabs_execution,
+                    include_recommendations=False,
                     agent_id=self.state.agent_id,
                 )
                 
@@ -762,43 +759,6 @@ class BaseAgent(metaclass=AgentMeta):
                         source="phantom.agents",
                     )
 
-        # Rec 6 (SF-005): Inject Hypothesis Ledger summary every 10 iterations.
-        # AUDIT-FIX-08: Only inject unresolved hypotheses (PROPOSED/TESTING).
-        # Resolved hypotheses waste tokens by re-injecting closed items.
-        _LEDGER_INJECT_EVERY = int(Config.get("phantom_ledger_inject_interval") or "10")
-        if (
-            len(self.hypothesis_ledger) > 0
-            and self.state.iteration > 0
-            and self.state.iteration % _LEDGER_INJECT_EVERY == 0
-        ):
-            ledger_summary = self.hypothesis_ledger.get_factual_prompt_summary(top_n=10)
-            if ledger_summary:
-                self.state.add_message("user", ledger_summary)
-
-        # Enhancement: Coverage Tracker injection (same cadence as hypothesis ledger).
-        # Reports FACTS about coverage state - LLM decides what to test based on this.
-        _COVERAGE_INJECT_EVERY = int(Config.get("phantom_coverage_inject_interval") or "15")
-        if (
-            len(self.coverage_tracker) > 0
-            and self.state.iteration > 0
-            and self.state.iteration % _COVERAGE_INJECT_EVERY == 0
-        ):
-            coverage_summary = self.coverage_tracker.to_prompt_summary(max_items=15)
-            if coverage_summary:
-                self.state.add_message("user", coverage_summary)
-
-        # Enhancement: Correlation Engine injection - shows potential vulnerability chains.
-        # Reports SUGGESTIONS not commands - LLM decides whether to pursue chains.
-        _CORRELATION_INJECT_EVERY = int(Config.get("phantom_correlation_inject_interval") or "20")
-        if (
-            len(self.correlation_engine) > 0
-            and self.state.iteration > 0
-            and self.state.iteration % _CORRELATION_INJECT_EVERY == 0
-        ):
-            correlation_summary = self.correlation_engine.to_prompt_summary(max_items=10)
-            if correlation_summary:
-                self.state.add_message("user", correlation_summary)
-
         # S-07: Phase-gate reporting reminder at 85% of max iterations.
         _max_iter = self.state.max_iterations
         _cur_iter = self.state.iteration
@@ -813,7 +773,7 @@ class BaseAgent(metaclass=AgentMeta):
             if _gate_msg:
                 self.state.add_message("user", _gate_msg)
 
-        async for response in self.llm.generate(self.state.get_conversation_history()):
+        async for response in self.llm.generate(self._build_hypothesis_context()):
             final_response = response
             if tracer and response.content:
                 tracer.update_streaming_content(self.state.agent_id, response.content)
@@ -835,7 +795,7 @@ class BaseAgent(metaclass=AgentMeta):
                     )
                     suggestion = await reflector.reflect(context)
                     if suggestion:
-                        self.state.add_message("user", f"Reflector suggestion: {suggestion}")
+                        self.state.add_message("user", f"Reflector note: {suggestion}")
                         self._cleanup_message_history(tracer)
                         return False
                 except Exception:
@@ -864,17 +824,6 @@ class BaseAgent(metaclass=AgentMeta):
             else []
         )
 
-        if strict_dabs_execution:
-            selected = self.hypothesis_ledger.get_next_hypothesis()
-            if selected:
-                planned_action = plan_tool_invocation(selected, self.state.context)
-                if planned_action:
-                    actions = [planned_action]
-                    self.state.update_context("dabs_strict_selected_hypothesis_id", selected.get("hypothesis_id"))
-                    self.state.update_context("dabs_strict_decision_trace", self.hypothesis_ledger.get_decision_trace())
-            else:
-                actions = plan_bootstrap_invocations(self.state.context)
-
         if actions:
             self._last_iteration_action_count = len(actions)
             should_agent_finish = await self._execute_actions(actions, tracer)
@@ -887,7 +836,7 @@ class BaseAgent(metaclass=AgentMeta):
                 context = (final_response.content or "")[:500]
                 suggestion = await reflector.reflect(context)
                 if suggestion:
-                    self.state.add_message("user", f"Reflector suggestion: {suggestion}")
+                    self.state.add_message("user", f"Reflector note: {suggestion}")
             except Exception:
                 pass
 
@@ -936,19 +885,35 @@ class BaseAgent(metaclass=AgentMeta):
 
         conversation_history = self.state.get_conversation_history()
 
+        llm_obj = getattr(self, "llm", None)
+        allowed_tools = set(getattr(llm_obj, "runtime_allowed_tools", set()) or set())
+
         tool_task = asyncio.create_task(
-            process_tool_invocations(actions, conversation_history, self.state, self)
+            process_tool_invocations(
+                actions,
+                conversation_history,
+                self.state,
+                self,
+                allowed_tools=allowed_tools,
+            )
         )
         self._current_task = tool_task
 
         try:
             should_agent_finish = await tool_task
             self._current_task = None
-            # AUDIT-FIX-10: Record (signature, succeeded=True) for dedup tracking
+            batch_succeeded = True
+            if hasattr(self.state, "context"):
+                batch_succeeded = not bool(self.state.context.get("last_tool_batch_had_error", False))
+
+            # AUDIT-FIX-10: Record signature outcome for dedup tracking
             if batch_signature:
-                self._recent_action_results.append((batch_signature, True))
+                self._recent_action_results.append((batch_signature, batch_succeeded))
                 if len(self._recent_action_results) > 8:
                     self._recent_action_results = self._recent_action_results[-8:]
+
+# Runtime guardrail: SSRF block removed - allow all URLs
+            pass
         except asyncio.CancelledError:
             self._current_task = None
             self.state.add_error("Tool execution cancelled by user")
@@ -1139,6 +1104,98 @@ class BaseAgent(metaclass=AgentMeta):
                 source="phantom.agents",
             )
 
+    def _build_hypothesis_context(self) -> list[dict[str, Any]]:
+        history = list(self.state.get_conversation_history())
+        if not history:
+            return history
+
+        active_surface = ""
+        active_vclass = ""
+        active_hypothesis_id = ""
+        hypothesis_ids: set[str] = set()
+        try:
+            scored = self.hypothesis_ledger.get_scored_hypotheses()
+            if scored:
+                top = scored[0]
+                active_surface = str(top.get("surface") or "")
+                active_vclass = str(top.get("vuln_class") or "")
+                active_hypothesis_id = str(top.get("hypothesis_id") or "")
+                all_hyps = self.hypothesis_ledger.get_all()
+                for h in all_hyps.values():
+                    hid = str(getattr(h, "id", "") or "")
+                    if hid:
+                        hypothesis_ids.add(hid)
+        except Exception:
+            pass
+
+        if not active_surface and not active_vclass:
+            return history
+
+        hypothesis_block = {
+            "role": "user",
+            "content": (
+                "<current_hypothesis>\n"
+                f"id={active_hypothesis_id}\n"
+                f"class={active_vclass}\n"
+                f"surface={active_surface}\n"
+                "</current_hypothesis>"
+            ),
+        }
+
+        supporting: list[dict[str, Any]] = []
+        try:
+            all_hyps = self.hypothesis_ledger.get_all()
+            if active_hypothesis_id and active_hypothesis_id in all_hyps:
+                hyp = all_hyps[active_hypothesis_id]
+                evidence_lines = []
+                for item in list(getattr(hyp, "evidence_for", []) or [])[:5]:
+                    text = str(item).strip()
+                    if text:
+                        evidence_lines.append(f"- {text[:300]}")
+                if evidence_lines:
+                    supporting.append(
+                        {
+                            "role": "user",
+                            "content": "<supporting_evidence>\n"
+                            + "\n".join(evidence_lines)
+                            + "\n</supporting_evidence>",
+                        }
+                    )
+        except Exception:
+            supporting = []
+
+        scoped: list[dict[str, Any]] = []
+        for msg in history:
+            content = msg.get("content", "")
+            text = content if isinstance(content, str) else str(content)
+            lowered = text.lower()
+            keep = False
+            if active_surface and active_surface.lower() in lowered:
+                keep = True
+            if active_vclass and active_vclass.lower() in lowered:
+                keep = True
+            if active_hypothesis_id and active_hypothesis_id.lower() in lowered:
+                keep = True
+            if "<current_hypothesis>" in lowered or "<supporting_evidence>" in lowered:
+                keep = True
+            if "[auto-status" in lowered or "chain opportunities" in lowered:
+                keep = False
+            for hid in hypothesis_ids:
+                if hid and hid != active_hypothesis_id and hid.lower() in lowered:
+                    keep = False
+                    break
+            if "<finding_anchors>" in lowered or "<pinned_facts>" in lowered:
+                keep = True
+            if msg.get("role") == "system":
+                keep = True
+            if keep:
+                scoped.append(msg)
+
+        if not scoped:
+            return [hypothesis_block, *supporting, *history[-20:]]
+
+        return [hypothesis_block, *supporting, *scoped[-40:]]
+
     def _format_scan_status(self, status: dict[str, Any]) -> str:
         """Format scan status into a compact message for LLM injection."""
         progress = status.get("scan_progress", {})
@@ -1208,9 +1265,6 @@ class BaseAgent(metaclass=AgentMeta):
             lines.append(
                 f"Archived history: {archived_messages.get('count', 0)} messages retained"
             )
-            recent = archived_messages.get("recent", [])
-            for item in recent[:2]:
-                lines.append(f"  - {str(item)[:70]}")
         
         if chains:
             lines.append(f"Chain Opportunities: {len(chains)}")

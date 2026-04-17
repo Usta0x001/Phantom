@@ -6,7 +6,7 @@
         <description>Whether to include suggested next action.</description>
       </parameter>
       <parameter name="agent_id" type="string" required="false">
-        <description>Optional agent ID for agent-scoped context resolution.</description>
+        <description>Optional explicit agent ID; omitted value auto-resolves from current runtime agent context.</description>
       </parameter>
     </parameters>
   </tool>
