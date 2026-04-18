@@ -40,6 +40,17 @@ COPY phantom/tools/security/  phantom/tools/security/
 RUN /app/venv/bin/pip install --no-cache-dir --quiet libtmux pyte openhands-aci numpydoc 2>/dev/null || true && \
     rm -rf /root/.cache/pip /tmp/pip-* 2>/dev/null || true
 
+# ─── Install security tools for pentesting ───────────────────────────────────
+# wpscan - WordPress vulnerability scanner
+RUN /app/venv/bin/pip install --no-cache-dir --quiet wpscan 2>/dev/null || true
+
+# Install additional wordlists and tools if not present
+RUN mkdir -p /home/pentester/tools/wordlists /home/pentester/.wtf && \
+    curl -sL "https://github.com/danielmiessler/SecLists/archive/refs/heads/master.zip" -o /tmp/seclists.zip && \
+    unzip -q -o /tmp/seclists.zip -d /tmp && \
+    mv /tmp/SecLists-master/* /home/pentester/tools/wordlists/ 2>/dev/null || true && \
+    rm -rf /tmp/seclists.zip /tmp/SecLists-master 2>/dev/null || true
+
 # Fix Windows CRLF line endings on all copied Python and shell files
 RUN find /app/phantom -name '*.py' -exec sed -i 's/\r$//' {} + 2>/dev/null || true
 

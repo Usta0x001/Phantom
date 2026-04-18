@@ -384,7 +384,7 @@ _SERVER_TIMEOUT = float(Config.get("phantom_sandbox_execution_timeout") or "120"
 AUTO_SUMMARIZE_THRESHOLD = int(Config.get("phantom_auto_summarize_threshold") or "16000")
 SUMMARIZE_MODEL = Config.get("phantom_summarize_llm") or "gpt-4o-mini"
 SANDBOX_EXECUTION_TIMEOUT = _SERVER_TIMEOUT + 30
-SANDBOX_CONNECT_TIMEOUT = float(Config.get("phantom_sandbox_connect_timeout") or "10")
+SANDBOX_CONNECT_TIMEOUT = float(Config.get("phantom_sandbox_connect_timeout") or "5")
 
 _HIGH_SIGNAL_MARKERS = (
     "onerror=",
