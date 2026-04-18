@@ -1,12 +1,15 @@
 import sys
 sys.path.insert(0, ".")
 
+from pathlib import Path
+from jinja2 import Environment, FileSystemLoader, select_autoescape
+
+
 def test_system_prompt_length():
     """Test the system prompt rendered length."""
-    from phantom.llm.config import LLMConfig
     from phantom.llm.llm import LLM
     
-    llm = LLM(LLMConfig(model_name="openai/gpt-4o-mini"), agent_name="PhantomAgent")
+    llm = LLM()
     prompt = llm._load_system_prompt("PhantomAgent")
     
     print(f"System prompt length: {len(prompt):,} characters")
