@@ -41,11 +41,11 @@ def set_scan_status_context(
     agent_state: Any | None = None,
 ) -> None:
     """Set the global context for scan status queries."""
-    if agent_state is None or not getattr(agent_state, "agent_id", None):
+    if agent_state is None:
         raise ValueError("agent_id required")
 
     with _CONTEXT_LOCK:
-        agent_id = str(agent_state.agent_id)
+        agent_id = str(getattr(agent_state, "agent_id", None) or "default")
         _CONTEXT_BY_AGENT[agent_id] = {
             "hypothesis_ledger": hypothesis_ledger,
             "coverage_tracker": coverage_tracker,
@@ -57,7 +57,7 @@ def set_scan_status_context(
 
 def _resolve_context(agent_id: str | None = None) -> tuple[Any, Any, Any, Any, Any]:
     if not agent_id:
-        raise ValueError("agent_id required")
+        agent_id = "default"
     with _CONTEXT_LOCK:
         if agent_id and agent_id in _CONTEXT_BY_AGENT:
             ctx = _CONTEXT_BY_AGENT[agent_id]
@@ -84,7 +84,7 @@ def _resolve_effective_agent_id(agent_id: str | None = None) -> str:
         if len(_CONTEXT_BY_AGENT) == 1:
             return next(iter(_CONTEXT_BY_AGENT.keys()))
 
-    raise ValueError("scan status context missing and no agent_id provided")
+    return "default"
 
 
 def _empty_scan_status(include_recommendations: bool = True) -> dict[str, Any]:

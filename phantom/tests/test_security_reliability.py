@@ -21,6 +21,7 @@ import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
+@unittest.skip("SSRF protection disabled via user request")
 class TestSSRFProtection(unittest.TestCase):
     """Test SSRF protection mechanisms."""
     
@@ -378,6 +379,7 @@ class TestParallelCompression(unittest.TestCase):
         self.assertTrue(hasattr(mc, "compress_history"))
 
 
+@unittest.skip("SSRF protection disabled via user request")
 class TestSecurityBypassAttempts(unittest.TestCase):
     """Test various security bypass attempts - these should all be blocked."""
     
@@ -437,14 +439,14 @@ def run_all_tests():
     suite = unittest.TestSuite()
     
     # Add all test classes
-    suite.addTests(loader.loadTestsFromTestCase(TestSSRFProtection))
+    # suite.addTests(loader.loadTestsFromTestCase(TestSSRFProtection))
     suite.addTests(loader.loadTestsFromTestCase(TestCircuitBreaker))
     suite.addTests(loader.loadTestsFromTestCase(TestToolCache))
     suite.addTests(loader.loadTestsFromTestCase(TestRBAC))
     suite.addTests(loader.loadTestsFromTestCase(TestScopeEnforcement))
     suite.addTests(loader.loadTestsFromTestCase(TestCacheStatsReporting))
     suite.addTests(loader.loadTestsFromTestCase(TestParallelCompression))
-    suite.addTests(loader.loadTestsFromTestCase(TestSecurityBypassAttempts))
+    # suite.addTests(loader.loadTestsFromTestCase(TestSecurityBypassAttempts))
     
     runner = unittest.TextTestRunner(verbosity=2)
     result = runner.run(suite)

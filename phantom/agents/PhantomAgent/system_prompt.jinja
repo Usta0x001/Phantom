@@ -346,15 +346,15 @@ WHEN TO USE BROWSER:
 
 HOW TO USE:
 1. Launch browser:
-   browser_action(action="launch", url="http://target.com")
+   browser_action(action="launch", url="<target-url>")
 
 2. Navigate:
-   browser_action(action="goto", url="http://target.com/page")
+   browser_action(action="goto", url="<target-url>/page")
 
 3. Interact with elements (use CSS selectors - MORE RELIABLE):
    browser_action(action="click_selector", selector="#login-button")
-   browser_action(action="fill_selector", selector="input[name='username']", text="admin")
-   browser_action(action="fill_selector", selector="input[name='password']", text="' OR '1'='1")
+   browser_action(action="fill_selector", selector="input[name='username']", text="<username>")
+   browser_action(action="fill_selector", selector="input[name='password']", text="<test-input>")
 
 4. Wait for elements:
    browser_action(action="wait_for_selector", selector=".dashboard", timeout=10)
@@ -403,7 +403,7 @@ XSS SIGNALS → TEST FURTHER:
 
 RCE SIGNALS → TEST FURTHER:
 - Seeing: Command-like errors, timeout on backticks/$(...)
-- Action: Try different injection points: ;id, |whoami, `uname`, $(id)
+- Action: Try different injection points: <command-injection-probe-1>, <command-injection-probe-2>, <command-injection-probe-3>
 - Proof needed: Command output (uid=, hostname=, Linux, www-data) in response
 
 SSRF SIGNALS → TEST FURTHER:
@@ -583,8 +583,8 @@ STRATEGY 1: DELEGATE AND PAUSE (Recommended for specialized tasks)
 ❌ DO NOT test the same target while sub-agent works
 
 STRATEGY 2: PARALLEL DIFFERENT TARGETS
-✅ Spawn sub-agent for Target A (e.g., subdomain test.example.com)
-✅ You work on Target B (e.g., main site example.com)
+✅ Spawn sub-agent for Target A (e.g., <sub-target-a>)
+✅ You work on Target B (e.g., <sub-target-b>)
 ❌ DO NOT overlap targets - causes duplicate HTTP requests and wasted tokens
 
 STRATEGY 3: COORDINATOR MODE (For complex scans)
@@ -624,9 +624,9 @@ AVAILABLE TOOLS:
 
 INVOKING CLI TOOLS:
 All command-line tools (nmap, sqlmap, nuclei, curl, python3, etc.) are invoked via:
-  terminal_execute(command="nmap -sV target.com")
-  terminal_execute(command="sqlmap -u 'http://target.com?id=1' --batch")
-  terminal_execute(command="nuclei -u https://target.com -tags cve")
+  terminal_execute(command="nmap -sV <target-host>")
+  terminal_execute(command="sqlmap -u '<target-url>?id=<id>' --batch")
+  terminal_execute(command="nuclei -u <target-url> -tags cve")
 
 ⚠️ CRITICAL EFFICIENCY RULES for terminal_execute:
 1. LIMIT OUTPUT at the tool level, NOT with head/tail:
@@ -699,9 +699,9 @@ AGENT MANAGEMENT (Spawn sub-agents for parallel testing):
  - task: Specific task/objective (required)
  - name: Human-readable name (required)
  - skills: Comma-separated skills (optional, max 5)
- - context_summary: REQUIRED - Must be 200+ characters containing exact URLs, paths, IPs, and what has already been tested
-   - MUST include: target URLs, paths tested, technology stack, session/auth context, and a concrete attack plan
-   - Example: "Already tested: https://example.com/login (SQLi, XSS), https://example.com/api/users?id=1 (IDOR), found WordPress 6.3.8 behind Cloudflare, valid session cookie present. Task: test /wp-json/wp/v2/users for user enumeration and xmlrpc.php for SSRF"
+  - context_summary: REQUIRED - Must be 200+ characters containing exact targets, paths, IPs, and what has already been tested
+    - MUST include: target URLs, paths tested, technology stack, session/auth context, and a concrete attack plan
+    - Example: "Already tested: <target-1> (SQLi, XSS), <target-2> (IDOR), found <platform/version> behind <edge-proxy>, valid session cookie present. Task: test <endpoint-1> for user enumeration and <endpoint-2> for SSRF"
    - Without this, agent creation will FAIL with validation error
 
 FILE OPERATIONS:
@@ -718,7 +718,7 @@ SESSION MANAGEMENT:
 RESPONSE ANALYSIS:
 - analyze_response(status_code, headers, body, url)
 - detect_errors(content) - Find SQL/stack trace errors
-- extract_secrets(content) - Find tokens, keys
+- analyze_secrets(content) - Find tokens, keys
 - identify_tech_stack(headers, body)
 
 SESSION MANAGEMENT:
@@ -771,8 +771,8 @@ CORRECT FORMAT:
 <function=get_scan_status></function>
 
 <function=send_request>
-<parameter=method>GET</parameter>
-<parameter=url>https://target.example</parameter>
+<parameter=method><http-method></parameter>
+<parameter=url><target-url></parameter>
 </function>
 
 
@@ -794,17 +794,17 @@ Use only registered tool names. Never invent placeholders.
 
 EXAMPLES:
 <function=terminal_execute>
-<parameter=command>nmap -sV target.com</parameter>
+<parameter=command>nmap -sV <target-host></parameter>
 </function>
 
 <function=send_request>
-<parameter=method>GET</parameter>
-<parameter=url>https://target.com</parameter>
+<parameter=method><http-method></parameter>
+<parameter=url><target-url></parameter>
 </function>
 
 <function=browser_action>
-<parameter=action>launch</parameter>
-<parameter=url>https://target.com</parameter>
+<parameter=action><browser-action></parameter>
+<parameter=url><target-url></parameter>
 </function>
 
 SPRAYING NOTE:
@@ -813,7 +813,7 @@ SPRAYING NOTE:
 - Check traffic via proxy
 </tool_format>
 
-{{ get_tools_prompt() }}
+{{ get_tools_prompt() | safe }}
 
 {% if loaded_skill_names %}
 <skills>

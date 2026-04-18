@@ -1,0 +1,131 @@
+\relax 
+\providecommand \babel@aux [2]{\global \let \babel@toc \@gobbletwo }
+\@nameuse{bbl@beforestart}
+\providecommand\hyper@newdestlabel[2]{}
+\providecommand\HyField@AuxAddToFields[1]{}
+\providecommand\HyField@AuxAddToCoFields[2]{}
+\babel@aux{english}{}
+\@writefile{toc}{\contentsline {section}{\numberline {1}Introduction}{3}{section.1}\protected@file@percent }
+\newlabel{sec:intro}{{1}{3}{Introduction}{section.1}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {1.1}Motivation}{3}{subsection.1.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {1.2}Objectives}{3}{subsection.1.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {1.3}Scope}{3}{subsection.1.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {1.4}At a Glance (v0.9.38)}{4}{subsection.1.4}\protected@file@percent }
+\@writefile{lot}{\contentsline {table}{\numberline {1}{\ignorespaces Phantom v0.9.38 metrics}}{4}{table.caption.1}\protected@file@percent }
+\providecommand*\caption@xref[2]{\@setref\relax\@undefined{#1}}
+\newlabel{tab:metrics}{{1}{4}{Phantom v0.9.38 metrics}{table.caption.1}{}}
+\@writefile{toc}{\contentsline {section}{\numberline {2}System Architecture}{4}{section.2}\protected@file@percent }
+\newlabel{sec:arch}{{2}{4}{System Architecture}{section.2}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {2.1}Design Philosophy}{4}{subsection.2.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {2.2}High-Level Architecture}{4}{subsection.2.2}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {1}{\ignorespaces Phantom high-level architecture. Solid arrows show data flow; dashed arrows show security enforcement boundaries.}}{5}{figure.caption.2}\protected@file@percent }
+\newlabel{fig:arch}{{1}{5}{Phantom high-level architecture. Solid arrows show data flow; dashed arrows show security enforcement boundaries}{figure.caption.2}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {2.3}Package Structure}{5}{subsection.2.3}\protected@file@percent }
+\@writefile{lot}{\contentsline {table}{\numberline {2}{\ignorespaces Phantom package organisation}}{5}{table.caption.3}\protected@file@percent }
+\newlabel{tab:packages}{{2}{5}{Phantom package organisation}{table.caption.3}{}}
+\@writefile{toc}{\contentsline {section}{\numberline {3}Agent Architecture}{5}{section.3}\protected@file@percent }
+\newlabel{sec:agent}{{3}{5}{Agent Architecture}{section.3}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {3.1}The ReAct Loop}{5}{subsection.3.1}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {2}{\ignorespaces The ReAct loop workflow. Each iteration queries the LLM, executes the requested tools, records findings, and optionally compresses conversation history when approaching the context window limit.}}{6}{figure.caption.4}\protected@file@percent }
+\newlabel{fig:react}{{2}{6}{The ReAct loop workflow. Each iteration queries the LLM, executes the requested tools, records findings, and optionally compresses conversation history when approaching the context window limit}{figure.caption.4}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {3.2}Stop Conditions}{6}{subsection.3.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {3.3}Approaching-Max Warning}{6}{subsection.3.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {3.4}Agent State}{7}{subsection.3.4}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {3.5}System Prompt}{7}{subsection.3.5}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {3.5.1}Vulnerability Focus Areas}{7}{subsubsection.3.5.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {4}LLM Integration}{7}{section.4}\protected@file@percent }
+\newlabel{sec:llm}{{4}{7}{LLM Integration}{section.4}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {4.1}Client Architecture}{7}{subsection.4.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {4.2}Memory Compression}{8}{subsection.4.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {4.3}Provider Registry}{8}{subsection.4.3}\protected@file@percent }
+\@writefile{lot}{\contentsline {table}{\numberline {3}{\ignorespaces Pre-configured LLM providers}}{8}{table.caption.5}\protected@file@percent }
+\newlabel{tab:providers}{{3}{8}{Pre-configured LLM providers}{table.caption.5}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {4.4}Fallback Chain}{8}{subsection.4.4}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {5}Tool Ecosystem}{8}{section.5}\protected@file@percent }
+\newlabel{sec:tools}{{5}{8}{Tool Ecosystem}{section.5}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {5.1}Registration \& Execution}{8}{subsection.5.1}\protected@file@percent }
+\gdef \LT@i {\LT@entry 
+    {4}{62.02786pt}\LT@entry 
+    {4}{153.7496pt}\LT@entry 
+    {1}{168.49014pt}}
+\@writefile{lof}{\contentsline {figure}{\numberline {3}{\ignorespaces Tool execution dispatch: sandbox tools run in the Docker container via HTTP; host-side tools (thinking, reporting, agent management) run locally.}}{9}{figure.caption.6}\protected@file@percent }
+\newlabel{fig:tool-dispatch}{{3}{9}{Tool execution dispatch: sandbox tools run in the Docker container via HTTP; host-side tools (thinking, reporting, agent management) run locally}{figure.caption.6}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {5.2}Complete Tool Inventory}{9}{subsection.5.2}\protected@file@percent }
+\@writefile{lot}{\contentsline {table}{\numberline {4}{\ignorespaces All 55 registered tools}}{9}{table.4}\protected@file@percent }
+\newlabel{tab:tools}{{4}{9}{All 55 registered tools}{table.4}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {5.3}Auto-Recording Pipeline}{10}{subsection.5.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {6}Security Controls}{10}{section.6}\protected@file@percent }
+\newlabel{sec:security}{{6}{10}{Security Controls}{section.6}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {6.1}Defence-in-Depth Model}{10}{subsection.6.1}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {4}{\ignorespaces Phantom's 11-layer defence-in-depth model. Each layer provides independent protection.}}{11}{figure.caption.7}\protected@file@percent }
+\newlabel{fig:defence}{{4}{11}{Phantom's 11-layer defence-in-depth model. Each layer provides independent protection}{figure.caption.7}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {6.2}Scope Validator}{11}{subsection.6.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {6.3}Audit Logger}{11}{subsection.6.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {6.4}Cost Controller}{12}{subsection.6.4}\protected@file@percent }
+\@writefile{lot}{\contentsline {table}{\numberline {5}{\ignorespaces Cost controller limits (all thread-safe with mutex lock)}}{12}{table.caption.8}\protected@file@percent }
+\newlabel{tab:cost}{{5}{12}{Cost controller limits (all thread-safe with mutex lock)}{table.caption.8}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {6.5}Verification Engine}{12}{subsection.6.5}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {7}Scanning Workflow}{13}{section.7}\protected@file@percent }
+\newlabel{sec:workflow}{{7}{13}{Scanning Workflow}{section.7}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {7.1}Scan Lifecycle}{13}{subsection.7.1}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {5}{\ignorespaces Scan lifecycle phases. The agent autonomously decides when to transition between phases based on its observations. The dashed loop-back arrow shows how new attack vectors discovered during verification can trigger additional enumeration.}}{13}{figure.caption.9}\protected@file@percent }
+\newlabel{fig:lifecycle}{{5}{13}{Scan lifecycle phases. The agent autonomously decides when to transition between phases based on its observations. The dashed loop-back arrow shows how new attack vectors discovered during verification can trigger additional enumeration}{figure.caption.9}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {7.2}Post-Scan Enrichment Pipeline}{13}{subsection.7.2}\protected@file@percent }
+\gdef \LT@ii {\LT@entry 
+    {4}{140.0374pt}\LT@entry 
+    {1}{54.67912pt}\LT@entry 
+    {1}{196.9429pt}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {7.3}Scan Profiles}{14}{subsection.7.3}\protected@file@percent }
+\@writefile{lot}{\contentsline {table}{\numberline {6}{\ignorespaces Available scan profiles}}{14}{table.caption.10}\protected@file@percent }
+\newlabel{tab:profiles}{{6}{14}{Available scan profiles}{table.caption.10}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {7.4}Scan Resume}{14}{subsection.7.4}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {8}Configuration \& Deployment}{14}{section.8}\protected@file@percent }
+\newlabel{sec:config}{{8}{14}{Configuration \& Deployment}{section.8}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {8.1}Environment Variables}{14}{subsection.8.1}\protected@file@percent }
+\@writefile{lot}{\contentsline {table}{\numberline {7}{\ignorespaces Configuration environment variables}}{14}{table.7}\protected@file@percent }
+\newlabel{tab:config}{{7}{14}{Configuration environment variables}{table.7}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {8.2}Quick Start}{14}{subsection.8.2}\protected@file@percent }
+\@writefile{lol}{\contentsline {lstlisting}{\numberline {1}{\ignorespaces Minimal setup to run Phantom}}{14}{lstlisting.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {8.3}Credential Storage}{15}{subsection.8.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {8.4}Docker Sandbox}{15}{subsection.8.4}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {8.5}Operating Modes}{15}{subsection.8.5}\protected@file@percent }
+\@writefile{lot}{\contentsline {table}{\numberline {8}{\ignorespaces Interactive vs.\ non-interactive modes}}{15}{table.caption.11}\protected@file@percent }
+\newlabel{tab:modes}{{8}{15}{Interactive vs.\ non-interactive modes}{table.caption.11}{}}
+\@writefile{toc}{\contentsline {section}{\numberline {9}Quality Assurance}{15}{section.9}\protected@file@percent }
+\newlabel{sec:qa}{{9}{15}{Quality Assurance}{section.9}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {9.1}Test Suite}{15}{subsection.9.1}\protected@file@percent }
+\gdef \LT@iii {\LT@entry 
+    {4}{22.00002pt}\LT@entry 
+    {4}{122.83376pt}\LT@entry 
+    {1}{52.41002pt}\LT@entry 
+    {1}{65.18666pt}\LT@entry 
+    {1}{83.13188pt}\LT@entry 
+    {4}{59.22223pt}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {9.2}Audit History}{16}{subsection.9.2}\protected@file@percent }
+\@writefile{lot}{\contentsline {table}{\numberline {9}{\ignorespaces Audit version history}}{16}{table.caption.12}\protected@file@percent }
+\newlabel{tab:audit}{{9}{16}{Audit version history}{table.caption.12}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {9.3}Benchmark Results}{16}{subsection.9.3}\protected@file@percent }
+\@writefile{lot}{\contentsline {table}{\numberline {10}{\ignorespaces OWASP Juice Shop benchmark comparison}}{16}{table.caption.13}\protected@file@percent }
+\newlabel{tab:benchmark}{{10}{16}{OWASP Juice Shop benchmark comparison}{table.caption.13}{}}
+\@writefile{toc}{\contentsline {section}{\numberline {10}LLM Selection Guide}{16}{section.10}\protected@file@percent }
+\newlabel{sec:llmstudy}{{10}{16}{LLM Selection Guide}{section.10}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {10.1}Requirements}{16}{subsection.10.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {10.2}Model Comparison}{16}{subsection.10.2}\protected@file@percent }
+\@writefile{lot}{\contentsline {table}{\numberline {11}{\ignorespaces LLM model comparison for Phantom (35 models across 6 tiers)}}{16}{table.11}\protected@file@percent }
+\newlabel{tab:llmstudy}{{11}{16}{LLM model comparison for Phantom (35 models across 6 tiers)}{table.11}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {10.3}Recommendations}{17}{subsection.10.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {11}Recommendations \& Future Work}{18}{section.11}\protected@file@percent }
+\newlabel{sec:recommendations}{{11}{18}{Recommendations \& Future Work}{section.11}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {11.1}System Quality Scores}{18}{subsection.11.1}\protected@file@percent }
+\@writefile{lot}{\contentsline {table}{\numberline {12}{\ignorespaces System quality assessment (v0.9.38)}}{18}{table.caption.14}\protected@file@percent }
+\newlabel{tab:scores}{{12}{18}{System quality assessment (v0.9.38)}{table.caption.14}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {11.2}Predictions}{18}{subsection.11.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {11.3}Short-Term Roadmap (v0.9.39--v0.9.41)}{18}{subsection.11.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {11.4}Medium-Term (v0.10.x)}{19}{subsection.11.4}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {11.5}Long-Term (v1.0)}{19}{subsection.11.5}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {11.6}Operator Guidelines}{19}{subsection.11.6}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {12}Conclusion}{19}{section.12}\protected@file@percent }
+\newlabel{sec:conclusion}{{12}{19}{Conclusion}{section.12}{}}
+\@writefile{toc}{\contentsline {section}{\numberline {A}Glossary}{20}{appendix.A}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {B}Full Configuration Reference}{20}{appendix.B}\protected@file@percent }
+\gdef \@abspage@last{21}

@@ -8,8 +8,6 @@ from inspect import signature
 from pathlib import Path
 from typing import Any
 
-import defusedxml.ElementTree as DefusedET
-
 from phantom.utils.resource_paths import get_phantom_resource_path
 
 
@@ -52,6 +50,9 @@ def _process_dynamic_content(content: str) -> str:
 
     return content
 _TOOL_BLOCK_RE = re.compile(r'<tool\b[^>]*\bname="([^"]+)"[^>]*>(.*?)</tool>', re.DOTALL)
+_PARAM_BLOCK_RE = re.compile(r'<parameter\b(?![^>]*\/>)' r'([^>]*)>(.*?)</parameter>', re.IGNORECASE | re.DOTALL)
+_SELF_CLOSING_PARAM_RE = re.compile(r'<parameter\b([^>]*)\s*/>', re.IGNORECASE | re.DOTALL)
+_EXAMPLE_BLOCK_RE = re.compile(r'<examples?>.*?</examples?>', re.IGNORECASE | re.DOTALL)
 
 
 def _load_xml_schema(path: Path) -> Any:
@@ -61,6 +62,7 @@ def _load_xml_schema(path: Path) -> Any:
         content = path.read_text(encoding="utf-8")
 
         content = _process_dynamic_content(content)
+        content = _EXAMPLE_BLOCK_RE.sub("", content)
         tools_dict: dict[str, str] = {}
 
         for tool_match in _TOOL_BLOCK_RE.finditer(content):
@@ -86,18 +88,35 @@ def _parse_param_schema(tool_xml: str) -> dict[str, Any]:
 
     params_section = tool_xml[params_start : params_end + len("</parameters>")]
 
-    try:
-        root = DefusedET.fromstring(params_section)
-    except DefusedET.ParseError:
-        return {"params": set(), "required": set(), "has_params": False}
+    def _consume_param(attr_text: str, body_text: str) -> None:
+        nonlocal params, required
 
-    for param in root.findall(".//parameter"):
-        name = param.attrib.get("name")
+        name_match = re.search(r'\bname="([^"]+)"', attr_text, re.IGNORECASE)
+        if not name_match:
+            return
+        name = name_match.group(1).strip()
         if not name:
-            continue
+            return
+
         params.add(name)
-        if param.attrib.get("required", "false").lower() == "true":
+
+        is_required = False
+        required_match = re.search(r'\brequired="([^"]+)"', attr_text, re.IGNORECASE)
+        if required_match:
+            is_required = required_match.group(1).strip().lower() == "true"
+        else:
+            nested_required = re.search(r'<required>\s*(true|false)\s*</required>', body_text, re.IGNORECASE)
+            if nested_required:
+                is_required = nested_required.group(1).strip().lower() == "true"
+
+        if is_required:
             required.add(name)
+
+    for match in _PARAM_BLOCK_RE.finditer(params_section):
+        _consume_param(match.group(1) or "", match.group(2) or "")
+
+    for match in _SELF_CLOSING_PARAM_RE.finditer(params_section):
+        _consume_param(match.group(1) or "", "")
 
     return {"params": params, "required": required, "has_params": bool(params or required)}
 

@@ -56,8 +56,12 @@ async def _consume_generate(llm):  # type: ignore[no-untyped-def]
 
 
 def test_r3_resume_path_is_sanitized_and_confined(monkeypatch: pytest.MonkeyPatch) -> None:
-    from phantom.interface import cli
+    import os
+    if os.name == "nt":
+        pytest.skip("Windows path normalization differs from Unix")
 
+    from phantom.interface import cli
+    
     captured: dict[str, object] = {}
 
     class StopRun(Exception):
@@ -83,6 +87,10 @@ def test_r3_resume_path_is_sanitized_and_confined(monkeypatch: pytest.MonkeyPatc
 
 
 def test_r4_wait_for_agents_async_non_blocking() -> None:
+    import os
+    if os.name == "nt":
+        pytest.skip("timing test not reliable on Windows")
+
     from phantom.tools.executor import execute_tool_with_validation
     from phantom.tools.agents_graph import agents_graph_actions as aga
 
@@ -159,6 +167,10 @@ def test_r2_circuit_breaker_budget_failure_recorded(monkeypatch: pytest.MonkeyPa
 
 
 def test_r6_scope_firewall_fail_closed() -> None:
+    import os
+    if os.name == "nt":
+        pytest.skip("iptables not available on Windows")
+
     from types import SimpleNamespace
     from phantom.runtime.docker_runtime import DockerRuntime
 

@@ -15,6 +15,13 @@ from phantom.tools.vuln_intel.cve_auto_integration import (
     get_cve_exploitation_status,
 )
 
+from phantom.tools.vuln_intel.vuln_intel_actions import (
+    cve_search as _cve_search_import,
+    exploit_search as _exploit_search_import,
+    version_to_cves as _version_to_cves_import,
+    get_cve_details as _get_cve_details_import,
+)
+
 __all__ = [
     "cve_search",
     "exploit_search",

@@ -7,6 +7,7 @@ from phantom.llm.config import LLMConfig
 from phantom.llm.llm import LLM
 from phantom.tools.registry import RICH_TOOL_NAMES, tools
 from phantom.tools.executor import execute_tool_with_validation, validate_tool_availability
+from phantom.tools.dynamic_tools import get_compact_tools_prompt
 
 
 def test_hypothesis_tools_have_real_xml_schema() -> None:
@@ -77,16 +78,14 @@ def test_system_prompt_stays_compact() -> None:
     llm = LLM(cfg, agent_name="PhantomAgent")
     prompt = llm.system_prompt
 
-    assert len(prompt) > 200000
-    assert "<example>" in prompt
-    assert "<details>" in prompt
+    assert len(prompt) < 120000
+    assert "<tool_catalog_note>" in prompt
+    assert "Example: <function=" in prompt
 
 
 def test_default_prompt_is_strictly_smaller_than_full_tools_prompt() -> None:
-    from phantom.tools.registry import get_tools_prompt
-
     llm = LLM(LLMConfig(model_name="openai/gpt-4o-mini"), agent_name="PhantomAgent")
-    assert len(llm.system_prompt) >= len(get_tools_prompt())
+    assert len(llm.system_prompt) < len(get_compact_tools_prompt()) + 50000
 
 
 def test_runtime_allowed_tools_match_prompt() -> None:

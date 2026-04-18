@@ -9,6 +9,7 @@ the context window.
 
 from __future__ import annotations
 
+import re
 import threading
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -160,6 +161,27 @@ def _payload_families_for_class(vuln_class: str) -> list[str]:
     return list(_DEFAULT_PAYLOAD_FAMILIES)
 
 
+_URL_ID_RE: re.Pattern[str] = re.compile(
+    r"/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"  # UUID
+    r"|\/\d{1,20}(?=/|$)"  # numeric path segment
+    , re.IGNORECASE
+)
+
+
+def _normalise_surface(surface: str) -> str:
+    """Collapse parameterised URL path segments into {id} tokens.
+
+    /api/user/1   -> /api/user/{id}
+    /api/user/2   -> /api/user/{id}  (same as above)
+    /item/abc-123-def -> unchanged (not numeric)
+    """
+    base, _, param = surface.strip().partition("::")
+    normalised_base = _URL_ID_RE.sub("/{id}", base)
+    if param:
+        return f"{normalised_base}::{param}"
+    return normalised_base
+
+
 def _surface_signature(surface: str) -> tuple[str, str]:
     surface_lower = surface.strip().lower()
     base, _, param = surface_lower.partition("::")
@@ -307,10 +329,12 @@ class HypothesisLedger:
             return 0.5
 
     def _scheduler_mode(self) -> str:
-        raw = str(Config.get("phantom_scheduler_mode") or "flat").strip().lower()
+        # FIX B3: Default changed from 'flat' to 'heuristic' so critical
+        # endpoints (admin, auth) are always scored above low-value ones.
+        raw = str(Config.get("phantom_scheduler_mode") or "heuristic").strip().lower()
         if raw in {"flat", "heuristic", "fifo"}:
             return raw
-        return "flat"
+        return "heuristic"
 
     def compute_evidence_score(self, hyp: Hypothesis) -> float:
         n_for = float(len(hyp.evidence_for))
@@ -369,15 +393,26 @@ class HypothesisLedger:
                 if hyp.id == executed.id:
                     continue
                 rel = 0.0
-                if executed.vuln_class.lower() == hyp.vuln_class.lower():
-                    rel += 0.45
+
+                same_class = executed.vuln_class.lower() == hyp.vuln_class.lower()
                 src_base, src_param = _surface_signature(executed.surface)
                 dst_base, dst_param = _surface_signature(hyp.surface)
-                if src_base and dst_base and src_base == dst_base:
-                    rel += 0.35
-                if src_param and dst_param and src_param == dst_param:
-                    rel += 0.20
-                if self._chain_related(executed.vuln_class, hyp.vuln_class):
+                same_base = bool(src_base and dst_base and src_base == dst_base)
+                same_param = bool(src_param and dst_param and src_param == dst_param)
+
+                if same_class:
+                    rel += 0.45
+                if same_base:
+                    # FIX B11: On rejection, only propagate surface-locality
+                    # signals when the vuln class is the same.  Rejecting SQLi
+                    # on /api/search tells us nothing about RCE on /api/search.
+                    if delta > 0 or same_class:
+                        rel += 0.35
+                if same_param:
+                    if delta > 0 or same_class:
+                        rel += 0.20
+                # FIX B11: Chain-relation bonus is directional — only on confirmation.
+                if delta > 0 and self._chain_related(executed.vuln_class, hyp.vuln_class):
                     rel += 0.25
 
                 if rel <= 0.0:
@@ -416,11 +451,17 @@ class HypothesisLedger:
     # ── Mutations ─────────────────────────────────────────────────────────────
 
     def add(self, surface: str, vuln_class: str) -> str:
-        """Register a new hypothesis; return its ID.  No-ops on duplicates."""
+        """Register a new hypothesis; return its ID.  No-ops on duplicates.
+
+        FIX B1: Dedup is done on a *normalised* surface template so that
+        /api/user/1 and /api/user/2 resolve to the same hypothesis.
+        The original surface string is preserved on the first registration.
+        """
+        normalised = _normalise_surface(surface)
         with self._lock:
-            # Dedup by surface + class
+            # Dedup by normalised surface + class
             for hyp in self._hypotheses.values():
-                if hyp.surface == surface and hyp.vuln_class == vuln_class:
+                if _normalise_surface(hyp.surface) == normalised and hyp.vuln_class == vuln_class:
                     self._belief_map.setdefault(hyp.id, 0.5)
                     return hyp.id
             self._counter += 1
@@ -621,33 +662,54 @@ class HypothesisLedger:
         Update hypothesis status.
         outcome: 'confirmed' | 'rejected' | 'testing'
         successful_payload: If outcome='confirmed', the payload that worked
-        
-        P2.1 ENHANCEMENT: Evidence is validated for quality. Weak evidence
-        is tagged but not rejected, allowing the system to flag questionable
-        confirmations without blocking legitimate ones.
+
+        FIX B6: When outcome=='confirmed' and evidence is weak (tagged
+        [WEAK_EVIDENCE] by _validate_evidence_quality), the status is
+        downgraded to 'testing' instead of 'confirmed'. Strong evidence
+        still confirms normally.
+
+        FIX B-B: tests_executed is incremented only once per call, not
+        again by increment_iteration when the agent loop already called
+        record_result for the same iteration.
         """
         with self._lock:
             hyp = self._hypotheses.get(hyp_id)
             if not hyp:
                 return
-            if outcome in _VALID_STATUSES:
-                hyp.tests_executed += 1
-            if outcome in _VALID_STATUSES and outcome != hyp.status:
-                self._record_status_transition(hyp, outcome, evidence)
-                hyp.status = outcome
+
+            # Validate evidence quality before deciding final outcome
+            effective_outcome = outcome
+            validated_evidence = evidence
             if evidence:
-                # P2.1: Validate evidence quality
-                _, validated_evidence = self._validate_evidence_quality(evidence, outcome)
-                self._record_evidence_event(hyp, f"{outcome}_evidence", validated_evidence)
-                
-                if outcome == "confirmed":
+                is_valid, validated_evidence = self._validate_evidence_quality(evidence, outcome)
+                # FIX B6: Downgrade 'confirmed' to 'testing' when only weak evidence
+                if (
+                    outcome == "confirmed"
+                    and validated_evidence.startswith("[WEAK_EVIDENCE]")
+                ):
+                    effective_outcome = "testing"
+
+            # FIX B-B: Increment tests_executed exactly once per record_result call.
+            # (increment_iteration exists for iterations where no explicit result
+            # is recorded — it must NOT be called on the same iteration as record_result)
+            if effective_outcome in _VALID_STATUSES:
+                hyp.tests_executed += 1
+
+            if effective_outcome in _VALID_STATUSES and effective_outcome != hyp.status:
+                self._record_status_transition(hyp, effective_outcome, validated_evidence)
+                hyp.status = effective_outcome
+
+            if validated_evidence:
+                self._record_evidence_event(hyp, f"{effective_outcome}_evidence", validated_evidence)
+                if effective_outcome == "confirmed":
                     hyp.evidence_for.append(validated_evidence)
-                elif outcome == "rejected":
+                elif effective_outcome == "rejected":
                     hyp.evidence_against.append(validated_evidence)
                 else:
                     hyp.supporting_evidence.append(validated_evidence)
-            # P3.2: Record successful payload
-            if outcome == "confirmed" and successful_payload:
+
+            # P3.2: Record successful payload (only on genuine confirmation)
+            if effective_outcome == "confirmed" and successful_payload:
                 if successful_payload not in hyp.successful_payloads:
                     hyp.successful_payloads.append(successful_payload)
                 family = self._make_payload_family(hyp.vuln_class, successful_payload)
@@ -655,18 +717,23 @@ class HypothesisLedger:
                 self._record_evidence_event(hyp, "successful_payload", successful_payload)
                 if family not in hyp.payload_families_tested:
                     hyp.payload_families_tested.append(family)
-            self._record_confidence(hyp, self._confidence_from_evidence(hyp), reason=outcome)
+
+            self._record_confidence(hyp, self._confidence_from_evidence(hyp), reason=effective_outcome)
             hyp.last_updated = datetime.now(UTC).isoformat()
 
-        self.propagate_update(hyp_id, outcome)
+        self.propagate_update(hyp_id, effective_outcome)
 
     def increment_iteration(self, hyp_id: str) -> None:
-        """Increment the iterations-spent counter for a hypothesis."""
+        """Increment the iterations-spent counter for a hypothesis.
+
+        FIX B-B: Only increments *iterations_spent*, NOT tests_executed.
+        tests_executed is incremented exactly once inside record_result.
+        Calling both on the same iteration would double-count.
+        """
         with self._lock:
             hyp = self._hypotheses.get(hyp_id)
             if hyp:
                 hyp.iterations_spent += 1
-                hyp.tests_executed += 1
                 self._record_confidence(hyp, self._confidence_from_evidence(hyp), reason="iteration")
                 hyp.last_updated = datetime.now(UTC).isoformat()
 
@@ -678,10 +745,15 @@ class HypothesisLedger:
         vuln_class: str,
         payload: str | None = None,
     ) -> bool:
-        """Return True if surface+class (optionally with specific payload) was tested."""
+        """Return True if surface+class (optionally with specific payload) was tested.
+
+        Uses normalised surface matching so /api/user/99 returns True when
+        /api/user/1 was previously tested (same URL template).
+        """
+        normalised = _normalise_surface(surface)
         with self._lock:
             for hyp in self._hypotheses.values():
-                if hyp.surface != surface or hyp.vuln_class != vuln_class:
+                if _normalise_surface(hyp.surface) != normalised or hyp.vuln_class != vuln_class:
                     continue
                 if payload is None:
                     return bool(hyp.payloads_tested or hyp.tests_executed or hyp.evidence_history)
@@ -758,9 +830,9 @@ class HypothesisLedger:
         if not hypotheses:
             return []
 
-        mode = str(Config.get("phantom_scheduler_mode") or "flat").strip().lower()
-        if mode not in {"flat", "heuristic", "fifo"}:
-            mode = "flat"
+        # FIX B3: Use _scheduler_mode() to respect the heuristic default,
+        # instead of the old hardcoded 'flat' fallback.
+        mode = self._scheduler_mode()
 
         scored: list[dict[str, Any]] = []
         for h in hypotheses:
@@ -799,6 +871,9 @@ class HypothesisLedger:
                 "payloads_tested": len(h.payloads_tested),
                 "tests_executed": h.tests_executed,
                 "iterations_spent": h.iterations_spent,
+                # FIX B3a: expose both 'priority' (expected by test/agent code)
+                # and 'priority_score' (legacy key kept for backward compat).
+                "priority": round(priority, 6),
                 "priority_score": round(priority, 6),
                 "score_factors": factors,
                 "belief": round(belief, 6),

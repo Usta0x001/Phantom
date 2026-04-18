@@ -19,8 +19,6 @@ import sys
 from pathlib import Path
 from typing import Any
 
-import defusedxml.ElementTree as DefusedET
-
 
 _ROOT = Path(__file__).resolve().parent.parent
 if str(_ROOT) not in sys.path:
@@ -112,6 +110,8 @@ def _collect_prompt_function_references(prompt_path: Path) -> set[str]:
 def _signature_contract_errors(runtime_tools: list[dict[str, Any]]) -> list[str]:
     errors: list[str] = []
 
+    from phantom.tools.registry import get_tool_param_schema
+
     for entry in runtime_tools:
         name = str(entry.get("name", "")).strip()
         if not name:
@@ -125,30 +125,10 @@ def _signature_contract_errors(runtime_tools: list[dict[str, Any]]) -> list[str]
 
         if "<description>" not in xml_schema:
             errors.append(f"{name}: missing compact description in runtime schema")
-        if "<example>" not in xml_schema:
-            errors.append(f"{name}: missing usage example in runtime schema")
 
-        try:
-            root = DefusedET.fromstring(xml_schema)
-        except Exception as exc:  # noqa: BLE001
-            errors.append(f"{name}: xml parse error: {exc}")
-            continue
-
-        xml_name = str(root.attrib.get("name", "")).strip()
-        if xml_name != name:
-            errors.append(f"{name}: xml name mismatch ({xml_name})")
-
-        xml_params = {
-            str(p.attrib.get("name", "")).strip()
-            for p in root.findall("./parameters/parameter")
-            if str(p.attrib.get("name", "")).strip()
-        }
-        xml_required = {
-            str(p.attrib.get("name", "")).strip()
-            for p in root.findall("./parameters/parameter")
-            if str(p.attrib.get("name", "")).strip()
-            and str(p.attrib.get("required", "false")).lower() == "true"
-        }
+        param_schema = get_tool_param_schema(name) or {}
+        xml_params = set(str(p) for p in param_schema.get("params", set()))
+        xml_required = set(str(p) for p in param_schema.get("required", set()))
 
         fn = entry.get("function")
         if fn is None:

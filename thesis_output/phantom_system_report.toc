@@ -1,0 +1,61 @@
+\babel@toc {english}{}\relax 
+\contentsline {section}{\numberline {1}Introduction}{3}{section.1}%
+\contentsline {subsection}{\numberline {1.1}Motivation}{3}{subsection.1.1}%
+\contentsline {subsection}{\numberline {1.2}Objectives}{3}{subsection.1.2}%
+\contentsline {subsection}{\numberline {1.3}Scope}{3}{subsection.1.3}%
+\contentsline {subsection}{\numberline {1.4}At a Glance (v0.9.38)}{4}{subsection.1.4}%
+\contentsline {section}{\numberline {2}System Architecture}{4}{section.2}%
+\contentsline {subsection}{\numberline {2.1}Design Philosophy}{4}{subsection.2.1}%
+\contentsline {subsection}{\numberline {2.2}High-Level Architecture}{4}{subsection.2.2}%
+\contentsline {subsection}{\numberline {2.3}Package Structure}{5}{subsection.2.3}%
+\contentsline {section}{\numberline {3}Agent Architecture}{5}{section.3}%
+\contentsline {subsection}{\numberline {3.1}The ReAct Loop}{5}{subsection.3.1}%
+\contentsline {subsection}{\numberline {3.2}Stop Conditions}{6}{subsection.3.2}%
+\contentsline {subsection}{\numberline {3.3}Approaching-Max Warning}{6}{subsection.3.3}%
+\contentsline {subsection}{\numberline {3.4}Agent State}{7}{subsection.3.4}%
+\contentsline {subsection}{\numberline {3.5}System Prompt}{7}{subsection.3.5}%
+\contentsline {subsubsection}{\numberline {3.5.1}Vulnerability Focus Areas}{7}{subsubsection.3.5.1}%
+\contentsline {section}{\numberline {4}LLM Integration}{7}{section.4}%
+\contentsline {subsection}{\numberline {4.1}Client Architecture}{7}{subsection.4.1}%
+\contentsline {subsection}{\numberline {4.2}Memory Compression}{8}{subsection.4.2}%
+\contentsline {subsection}{\numberline {4.3}Provider Registry}{8}{subsection.4.3}%
+\contentsline {subsection}{\numberline {4.4}Fallback Chain}{8}{subsection.4.4}%
+\contentsline {section}{\numberline {5}Tool Ecosystem}{8}{section.5}%
+\contentsline {subsection}{\numberline {5.1}Registration \& Execution}{8}{subsection.5.1}%
+\contentsline {subsection}{\numberline {5.2}Complete Tool Inventory}{9}{subsection.5.2}%
+\contentsline {subsection}{\numberline {5.3}Auto-Recording Pipeline}{10}{subsection.5.3}%
+\contentsline {section}{\numberline {6}Security Controls}{10}{section.6}%
+\contentsline {subsection}{\numberline {6.1}Defence-in-Depth Model}{10}{subsection.6.1}%
+\contentsline {subsection}{\numberline {6.2}Scope Validator}{11}{subsection.6.2}%
+\contentsline {subsection}{\numberline {6.3}Audit Logger}{11}{subsection.6.3}%
+\contentsline {subsection}{\numberline {6.4}Cost Controller}{12}{subsection.6.4}%
+\contentsline {subsection}{\numberline {6.5}Verification Engine}{12}{subsection.6.5}%
+\contentsline {section}{\numberline {7}Scanning Workflow}{13}{section.7}%
+\contentsline {subsection}{\numberline {7.1}Scan Lifecycle}{13}{subsection.7.1}%
+\contentsline {subsection}{\numberline {7.2}Post-Scan Enrichment Pipeline}{13}{subsection.7.2}%
+\contentsline {subsection}{\numberline {7.3}Scan Profiles}{14}{subsection.7.3}%
+\contentsline {subsection}{\numberline {7.4}Scan Resume}{14}{subsection.7.4}%
+\contentsline {section}{\numberline {8}Configuration \& Deployment}{14}{section.8}%
+\contentsline {subsection}{\numberline {8.1}Environment Variables}{14}{subsection.8.1}%
+\contentsline {subsection}{\numberline {8.2}Quick Start}{14}{subsection.8.2}%
+\contentsline {subsection}{\numberline {8.3}Credential Storage}{15}{subsection.8.3}%
+\contentsline {subsection}{\numberline {8.4}Docker Sandbox}{15}{subsection.8.4}%
+\contentsline {subsection}{\numberline {8.5}Operating Modes}{15}{subsection.8.5}%
+\contentsline {section}{\numberline {9}Quality Assurance}{15}{section.9}%
+\contentsline {subsection}{\numberline {9.1}Test Suite}{15}{subsection.9.1}%
+\contentsline {subsection}{\numberline {9.2}Audit History}{16}{subsection.9.2}%
+\contentsline {subsection}{\numberline {9.3}Benchmark Results}{16}{subsection.9.3}%
+\contentsline {section}{\numberline {10}LLM Selection Guide}{16}{section.10}%
+\contentsline {subsection}{\numberline {10.1}Requirements}{16}{subsection.10.1}%
+\contentsline {subsection}{\numberline {10.2}Model Comparison}{16}{subsection.10.2}%
+\contentsline {subsection}{\numberline {10.3}Recommendations}{17}{subsection.10.3}%
+\contentsline {section}{\numberline {11}Recommendations \& Future Work}{18}{section.11}%
+\contentsline {subsection}{\numberline {11.1}System Quality Scores}{18}{subsection.11.1}%
+\contentsline {subsection}{\numberline {11.2}Predictions}{18}{subsection.11.2}%
+\contentsline {subsection}{\numberline {11.3}Short-Term Roadmap (v0.9.39--v0.9.41)}{18}{subsection.11.3}%
+\contentsline {subsection}{\numberline {11.4}Medium-Term (v0.10.x)}{19}{subsection.11.4}%
+\contentsline {subsection}{\numberline {11.5}Long-Term (v1.0)}{19}{subsection.11.5}%
+\contentsline {subsection}{\numberline {11.6}Operator Guidelines}{19}{subsection.11.6}%
+\contentsline {section}{\numberline {12}Conclusion}{19}{section.12}%
+\contentsline {section}{\numberline {A}Glossary}{20}{appendix.A}%
+\contentsline {section}{\numberline {B}Full Configuration Reference}{20}{appendix.B}%

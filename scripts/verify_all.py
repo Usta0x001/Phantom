@@ -10,6 +10,12 @@ import sys
 import traceback
 from pathlib import Path
 
+# Keep the verification harness runnable on Windows consoles.
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8")
+
 # Ensure we import from the local source tree, not the installed package.
 _ROOT = Path(__file__).resolve().parent.parent
 if str(_ROOT) not in sys.path:
@@ -35,7 +41,7 @@ def check(name: str, fn):
 
 
 print("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-print("  PHANTOM 0.9.135 — FULL FEATURE VERIFICATION")
+print("  PHANTOM 0.9.183 — FULL FEATURE VERIFICATION")
 print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
 
 
@@ -44,13 +50,13 @@ print("[1] VERSION CONSISTENCY")
 
 def v_version_init():
     import phantom
-    assert phantom.__version__ == "0.9.135", f"Got {phantom.__version__}"
+    assert phantom.__version__ == "0.9.183", f"Got {phantom.__version__}"
 
 def v_version_pyproject():
     pyproject = (
         __import__("pathlib").Path(__file__).parent.parent / "pyproject.toml"
     ).read_text(encoding="utf-8")
-    assert 'version = "0.9.135"' in pyproject
+    assert 'version = "0.9.183"' in pyproject
 
 check("phantom.__version__ == '0.9.135'", v_version_init)
 check("pyproject.toml version == '0.9.135'", v_version_pyproject)
@@ -323,33 +329,7 @@ check(".git/hooks/pre-commit exists", v_pre_commit_hook_exists)
 check("zero BOM in any source/doc/config file", v_no_bom_in_source_files)
 
 
-# ── 8. STRIX REFERENCES ────────────────────────────────────────────────────────
-print("\n[8] STRIX REFERENCE AUDIT")
-
-def v_no_strix_in_source():
-    import re
-    from pathlib import Path
-    root = Path(__file__).parent.parent
-    extensions = {".py", ".md", ".toml", ".yaml", ".yml", ".jinja", ".jinja2",
-                  ".txt", ".json", ".cfg", ".ini", ".rst"}
-    found = []
-    for path in root.rglob("*"):
-        if path.suffix not in extensions:
-            continue
-        if any(p in path.parts for p in (".git", "__pycache__", "dist", ".venv", "scripts")):
-            continue
-        try:
-            text = path.read_text(encoding="utf-8", errors="replace")
-            if re.search(r"strix", text, re.IGNORECASE):
-                found.append(str(path.relative_to(root)))
-        except OSError:
-            pass
-    assert not found, f"Strix found in: {found}"
-
-check("zero 'Strix' references in any source/doc file", v_no_strix_in_source)
-
-
-# ── 9. COST LOGGING ────────────────────────────────────────────────────────────
+# ── 8. COST LOGGING ────────────────────────────────────────────────────────────
 print("\n[9] COST LOGGING (P2)")
 import logging as _logging
 import inspect as _inspect

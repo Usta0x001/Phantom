@@ -78,7 +78,7 @@ _TOOL_CATEGORIES: dict[str, ToolCategory] = {
     "get_proxy_history": ToolCategory.READ,
     "proxy_history": ToolCategory.READ,
     "get_request_details": ToolCategory.READ,
-    "send_request": ToolCategory.READ,
+    "send_request": ToolCategory.WRITE,
     "get_tool_help": ToolCategory.READ,
     "list_tools": ToolCategory.READ,
     "get_scan_status": ToolCategory.READ,

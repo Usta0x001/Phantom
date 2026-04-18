@@ -171,6 +171,7 @@ _PROMPT_INJECTION_PATTERNS: list[re.Pattern[str]] = [
     # System prompt manipulation
     re.compile(r"</?system\s*>", re.IGNORECASE),
     re.compile(r"\[/?system\]", re.IGNORECASE),
+    re.compile(r"\[SYSTEM[ \:]", re.IGNORECASE),
     re.compile(r"<</?SYS>>", re.IGNORECASE),
     # Instruction override attempts
     re.compile(r"ignore\s+(all\s+)?previous\s+instructions?", re.IGNORECASE),

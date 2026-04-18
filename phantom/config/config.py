@@ -99,7 +99,7 @@ class Config:
     phantom_dabs_lambda = "0.20"                    # PHANTOM_DABS_LAMBDA - propagation strength [0,1]
     phantom_scheduler_export_json = None             # PHANTOM_SCHEDULER_EXPORT_JSON - optional scheduler trace path
     # Tool-level role-based access control
-    phantom_rbac_enabled = "false"                 # PHANTOM_RBAC_ENABLED - off by default
+    phantom_rbac_enabled = "true"                 # PHANTOM_RBAC_ENABLED - on by default
     phantom_rbac_default_role = "senior_pentester" # PHANTOM_RBAC_DEFAULT_ROLE
     # ════════════════════════════════════════════════════════════════════════════
     # OSINT & Vulnerability Intelligence API Keys (Phase 1 Enhancements)

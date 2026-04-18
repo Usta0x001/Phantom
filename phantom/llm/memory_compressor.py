@@ -759,9 +759,8 @@ class MemoryCompressor:
             Config.get("phantom_max_total_image_bytes") or str(max_total_image_bytes)
         )
         self.model_name = model_name or Config.get("phantom_llm")
-        # R-04 regression fix: Strix used 120s timeout; Phantom reduced to 30s,
-        # but this is too short for local models (Ollama). Increased to 180s
-        # to accommodate slower local inference.
+        # R-04 regression fix: Old versions used 30s timeout which was too short 
+        # for local models (Ollama). Increased to 180s to accommodate slower local inference.
         self.timeout = timeout or int(Config.get("phantom_memory_compressor_timeout") or "180")
 
         if not self.model_name:

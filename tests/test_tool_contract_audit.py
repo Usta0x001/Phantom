@@ -31,4 +31,5 @@ def test_tool_contract_audit_full_mode_has_no_errors() -> None:
 
 def test_runtime_schemas_include_description_and_example() -> None:
     report = _run("full")
-    assert not report["errors"]
+    assert report["runtime_count"] == report["xml_declared_count"]
+    assert not report["runtime_not_in_xml"]

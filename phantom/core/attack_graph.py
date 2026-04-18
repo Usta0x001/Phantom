@@ -517,7 +517,8 @@ def build_attack_graph_from_vulnerabilities(
                         continue
                     if src.vuln_class.lower() == dst.vuln_class.lower() or src.surface.split("::", 1)[0] == dst.surface.split("::", 1)[0]:
                         if src.id in graph._nodes and dst.id in graph._nodes:
-                            graph.add_relationship(src.id, dst.id, AttackEdgeType.ENABLES, weight=0.5)
+                            # FIX B-E: method is add_edge(), not add_relationship()
+                            graph.add_edge(src.id, dst.id, AttackEdgeType.ENABLES, weight=0.5)
         except Exception:
             pass
     

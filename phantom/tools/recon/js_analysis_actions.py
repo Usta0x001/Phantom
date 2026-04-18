@@ -15,7 +15,7 @@ SECURITY NOTES:
 Tools:
 - fetch_js_files: Fetch all JavaScript files from a URL
 - extract_endpoints: Extract API endpoints from JS content
-- extract_secrets: Detect potential secrets/credentials
+ - analyze_secrets: Detect potential secrets/credentials
 - analyze_js_frameworks: Detect frontend frameworks and their routing
 - comprehensive_js_analysis: Full JS reconnaissance pipeline
 """
@@ -786,7 +786,7 @@ async def extract_endpoints(
 
 
 @register_tool(sandbox_execution=False)
-async def extract_secrets(
+async def analyze_secrets(
     content: str | None = None,
     url: str | None = None,
     severity_filter: str | None = None,
@@ -812,7 +812,7 @@ async def extract_secrets(
         - message: Status message
     
     Example:
-        result = await extract_secrets(url="https://example.com/app.js")
+        result = await analyze_secrets(url="https://example.com/app.js")
     """
     if not content and not url:
         return {
@@ -1030,7 +1030,7 @@ async def comprehensive_js_analysis(
     # Step 4: Extract secrets (if requested)
     secrets_result: dict[str, Any] = {"secrets": [], "secret_count": 0}
     if include_secrets:
-        secrets_result = await extract_secrets(content=combined_content)
+        secrets_result = await analyze_secrets(content=combined_content)
     
     elapsed = time.time() - start_time
     

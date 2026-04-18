@@ -105,7 +105,7 @@
         </example>
     </tool>
 
-    <tool name="extract_secrets">
+    <tool name="analyze_secrets">
         <description>
             Detect potential secrets, API keys, and credentials in JavaScript.
             
@@ -154,7 +154,7 @@
             - severity_breakdown: Count by severity level
         </returns>
         <example>
-            extract_secrets(url="https://example.com/config.js", severity_filter="high")
+            analyze_secrets(url="https://example.com/config.js", severity_filter="high")
             → Returns high-severity secrets like AWS keys, Stripe keys
         </example>
     </tool>

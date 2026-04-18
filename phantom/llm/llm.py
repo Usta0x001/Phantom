@@ -30,6 +30,8 @@ from phantom.llm.utils import (
 from phantom.skills import load_skills
 from phantom.tools import get_tools_prompt
 from phantom.tools.dynamic_tools import (
+    get_compact_tools_prompt,
+    get_compact_tools_prompt_subset,
     get_tool_subset_categories,
     get_related_tools_for_name,
     get_tools_for_context,
@@ -400,6 +402,7 @@ class CircuitBreaker:
     _state: CircuitState = field(default_factory=lambda: CircuitState.CLOSED)
     _failure_count: int = 0
     _last_failure_time: float = 0.0
+    _lock: threading.Lock = field(default_factory=threading.Lock)
     
     def __post_init__(self) -> None:
         """Initialize from config if available."""
@@ -423,22 +426,24 @@ class CircuitBreaker:
     
     def record_success(self) -> None:
         """Record successful request - resets failure counter and closes circuit."""
-        self._failure_count = 0
-        self._state = CircuitState.CLOSED
+        with self._lock:
+            self._failure_count = 0
+            self._state = CircuitState.CLOSED
     
     def record_failure(self) -> None:
         """Record failed request - may open circuit if threshold exceeded."""
-        self._failure_count += 1
-        self._last_failure_time = time.monotonic()
-        
-        if self._failure_count >= self.failure_threshold:
-            self._state = CircuitState.OPEN
-            logger.warning(
-                "Circuit breaker OPEN: %d consecutive LLM failures. "
-                "Blocking requests for %.0fs to prevent cascading failures.",
-                self._failure_count,
-                self.timeout_seconds,
-            )
+        with self._lock:
+            self._failure_count += 1
+            self._last_failure_time = time.monotonic()
+            
+            if self._failure_count >= self.failure_threshold:
+                self._state = CircuitState.OPEN
+                logger.warning(
+                    "Circuit breaker OPEN: %d consecutive LLM failures. "
+                    "Blocking requests for %.0fs to prevent cascading failures.",
+                    self._failure_count,
+                    self.timeout_seconds,
+                )
     
     def allow_request(self) -> bool:
         """Check if a request should be allowed based on circuit state.
@@ -446,32 +451,35 @@ class CircuitBreaker:
         Returns:
             True if request allowed, False if blocked by open circuit
         """
-        if self._state == CircuitState.CLOSED:
+        with self._lock:
+            if self._state == CircuitState.CLOSED:
+                return True
+            
+            if self._state == CircuitState.OPEN:
+                # Check if timeout elapsed - transition to HALF_OPEN for testing
+                elapsed = time.monotonic() - self._last_failure_time
+                if elapsed >= self.timeout_seconds:
+                    self._state = CircuitState.HALF_OPEN
+                    logger.info(
+                        "Circuit breaker HALF_OPEN: Testing LLM recovery after %.0fs cooldown.",
+                        elapsed,
+                    )
+                    return True  # Allow one test request
+                return False  # Still in timeout - block request
+            
+            # HALF_OPEN: allow request (will close on success or reopen on failure)
             return True
-        
-        if self._state == CircuitState.OPEN:
-            # Check if timeout elapsed - transition to HALF_OPEN for testing
-            elapsed = time.monotonic() - self._last_failure_time
-            if elapsed >= self.timeout_seconds:
-                self._state = CircuitState.HALF_OPEN
-                logger.info(
-                    "Circuit breaker HALF_OPEN: Testing LLM recovery after %.0fs cooldown.",
-                    elapsed,
-                )
-                return True  # Allow one test request
-            return False  # Still in timeout - block request
-        
-        # HALF_OPEN: allow request (will close on success or reopen on failure)
-        return True
     
     def get_state(self) -> CircuitState:
         """Get current circuit state."""
-        return self._state
+        with self._lock:
+            return self._state
     
     def reset(self) -> None:
         """Manually reset circuit to CLOSED state."""
-        self._failure_count = 0
-        self._state = CircuitState.CLOSED
+        with self._lock:
+            self._failure_count = 0
+            self._state = CircuitState.CLOSED
 
 
 # Global circuit breaker instance (per-process singleton)
@@ -621,7 +629,7 @@ class LLM:
             skills_dir = get_phantom_resource_path("skills")
             env = Environment(
                 loader=FileSystemLoader([prompt_dir, skills_dir]),
-                autoescape=select_autoescape(enabled_extensions=(), default_for_string=False),
+                autoescape=select_autoescape(enabled_extensions=('jinja', 'html', 'htm', 'xml'), default_for_string=False),
             )
 
             skills_to_load = [
@@ -632,9 +640,9 @@ class LLM:
             env.globals["get_skill"] = lambda name: skill_content.get(name, "")
 
             if len(tool_names) == 0:
-                tools_prompt_fn = get_tools_prompt
+                tools_prompt_fn = get_compact_tools_prompt
             else:
-                tools_prompt_fn = lambda: get_tools_prompt_subset(list(tool_names))
+                tools_prompt_fn = lambda: get_compact_tools_prompt_subset(list(tool_names))
 
             template_name = "system_prompt.jinja"
             template = env.get_template(template_name)
@@ -661,7 +669,7 @@ class LLM:
             if tool_names:
                 tools_prompt = get_tools_prompt_subset(list(tool_names))
             else:
-                tools_prompt = get_tools_prompt()
+                tools_prompt = get_compact_tools_prompt()
         except Exception:  # noqa: BLE001
             tools_prompt = ""
 
@@ -799,7 +807,8 @@ class LLM:
                         "Rate limit hit (attempt %d/%d); backing off %.0fs globally...",
                         attempt + 1, ratelimit_max_retries, wait,
                     )
-                    _GLOBAL_RATE_LIMIT_UNTIL = max(_GLOBAL_RATE_LIMIT_UNTIL, time.monotonic() + wait)
+                    with _GLOBAL_STATS_LOCK:
+                        _GLOBAL_RATE_LIMIT_UNTIL = max(_GLOBAL_RATE_LIMIT_UNTIL, time.monotonic() + wait)
                 else:
                     wait = min(10, 2 * (2**attempt))
                 await asyncio.sleep(wait)
@@ -1235,8 +1244,7 @@ class LLM:
     def _get_max_tokens(self) -> int | None:
         """Return an explicit output-token cap ONLY when the user has set one.
 
-        R-01 regression fix: Strix never passed max_tokens, letting the model
-        use its full output budget.  Phantom added hard caps (4k/6k/8k) which
+        Phantom originally added hard caps (4k/6k/8k) which
         truncated the model mid-thought before it could call
         create_vulnerability_report — the #1 root cause of 0 findings.
 
@@ -1246,7 +1254,7 @@ class LLM:
         env_val = Config.get("llm_max_tokens")
         if env_val:
             return int(env_val)
-        return None  # let the model use its full output budget (Strix behaviour)
+        return None  # let the model use its full output budget
 
     def _check_budget(self) -> None:
         """Check budget and apply graceful degradation at thresholds.
@@ -1438,7 +1446,6 @@ class LLM:
         }
 
         # R-01: Only pass max_tokens if explicitly configured via env var.
-        # Strix never capped output; Phantom's caps caused truncated responses.
         _max_tok = self._get_max_tokens()
         if _max_tok is not None:
             args["max_tokens"] = _max_tok

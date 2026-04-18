@@ -50,6 +50,9 @@
             <parameter name="custom_wordlist" type="array" required="false">
                 Custom list of paths to test
             </parameter>
+            <parameter name="follow_redirects" type="boolean" required="false" default="false">
+                Follow HTTP redirects
+            </parameter>
             <parameter name="exclude_status" type="array" required="false">
                 Status codes to exclude from results (e.g., [404, 500])
             </parameter>

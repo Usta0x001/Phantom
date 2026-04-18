@@ -42,6 +42,7 @@ if not SANDBOX_MODE:
     from .proxy import *  # noqa: F403
     from .python import *  # noqa: F403
     from .reporting import *  # noqa: F403
+    from .recon import *  # noqa: F403
     from .terminal import *  # noqa: F403
     from .todo import *  # noqa: F403
     from .thinking import *  # noqa: F403
@@ -67,6 +68,7 @@ if not SANDBOX_MODE:
     from .payload_gen import *  # noqa: F403
     from .response_analysis import *  # noqa: F403
     from .session_mgmt import *  # noqa: F403
+    from .api_schema import *  # noqa: F403
 
     # Detection module
     from .detection import *  # noqa: F403

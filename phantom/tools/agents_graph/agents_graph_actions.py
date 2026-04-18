@@ -467,12 +467,14 @@ def create_agent(
 
         # FIX 5: Always inject Recon Briefing / Context Summary if provided
         if context_summary and context_summary.strip():
+            from phantom.tools.executor import _semantic_sanitize_output
+            safe_summary = _semantic_sanitize_output(context_summary.strip())
             inherited_messages.append({
                 "role": "user",
                 "content": (
                     "<recon_briefing>\n"
                     "Your parent agent provided this vital established context. DO NOT REPEAT RECONNAISSANCE for these items (e.g. do not re-curl or re-browser unless necessary):\n"
-                    + context_summary.strip()
+                    + safe_summary
                     + "\n</recon_briefing>"
                 )
             })

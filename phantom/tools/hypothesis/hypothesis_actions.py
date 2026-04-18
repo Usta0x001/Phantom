@@ -39,7 +39,7 @@ def _resolve_agent_id(agent_id: str | None = None) -> str:
     if current and current != "default":
         return current
 
-    raise ValueError("agent_id required")
+    return "default"
 
 
 def set_correlation_engine(engine: CorrelationEngine, agent_id: str | None = None) -> None:
@@ -59,6 +59,11 @@ def set_ledger(ledger: HypothesisLedger, agent_id: str | None = None) -> None:
     resolved = _resolve_agent_id(agent_id)
     with _HYPOTHESIS_CONTEXT_LOCK:
         _LEDGERS_BY_AGENT[resolved] = ledger
+
+
+def set_global_ledger(ledger: HypothesisLedger) -> None:
+    """Backward-compatible alias for tests and older call sites."""
+    set_ledger(ledger, "default")
 
 
 def get_ledger(agent_id: str | None = None) -> HypothesisLedger | None:
@@ -104,9 +109,7 @@ def _get_active_ledger() -> HypothesisLedger | None:
         current_agent_id = get_current_agent_id()
     except Exception:
         current_agent_id = None
-    if not current_agent_id or current_agent_id == "default":
-        raise ValueError("agent_id required")
-    return get_ledger(current_agent_id)
+    return get_ledger(current_agent_id or "default")
 
 
 def _get_active_correlation_engine() -> CorrelationEngine | None:
@@ -117,9 +120,7 @@ def _get_active_correlation_engine() -> CorrelationEngine | None:
         current_agent_id = get_current_agent_id()
     except Exception:
         current_agent_id = None
-    if not current_agent_id or current_agent_id == "default":
-        raise ValueError("agent_id required")
-    return get_correlation_engine(current_agent_id)
+    return get_correlation_engine(current_agent_id or "default")
 
 
 @register_tool(sandbox_execution=False)

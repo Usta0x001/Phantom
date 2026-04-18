@@ -123,9 +123,8 @@ def test_send_request_schema_is_not_compacted_in_prompt() -> None:
     prompt = llm.system_prompt
 
     assert '<tool name="send_request">' in prompt
-    assert '<parameter name="method" type="string" required="true">' in prompt
-    assert '<parameter name="headers" type="dict" required="false">' in prompt
-    assert '<examples>' in prompt
+    assert 'Params: method*' in prompt
+    assert 'Example: <function=send_request>' in prompt
     assert '<function=send_request>' in prompt
     assert '<function=python_action>' in prompt
 

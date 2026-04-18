@@ -81,20 +81,22 @@ class PhantomAgent(BaseAgent):
         if repositories:
             task_parts.append("\n\nRepositories:")
             for repo in repositories:
+                safe_url = _sanitize_skill_content(repo['url'])
                 if repo["workspace_path"]:
-                    task_parts.append(f"- {repo['url']} (available at: {repo['workspace_path']})")
+                    safe_path = _sanitize_skill_content(repo['workspace_path'])
+                    task_parts.append(f"- {safe_url} (available at: {safe_path})")
                 else:
-                    task_parts.append(f"- {repo['url']}")
+                    task_parts.append(f"- {safe_url}")
 
         if local_code:
             task_parts.append("\n\nLocal Codebases:")
             task_parts.extend(
-                f"- {code['path']} (available at: {code['workspace_path']})" for code in local_code
+                f"- {_sanitize_skill_content(code['path'])} (available at: {_sanitize_skill_content(code['workspace_path'])})" for code in local_code
             )
 
         if urls:
             task_parts.append("\n\nURLs:")
-            task_parts.extend(f"- {url}" for url in urls)
+            task_parts.extend(f"- {_sanitize_skill_content(url)}" for url in urls)
 
         if ip_addresses:
             task_parts.append("\n\nIP Addresses:")

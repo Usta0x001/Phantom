@@ -167,7 +167,12 @@ class CoverageTracker:
         Record that a test was performed on a surface.
 
         Returns the surface ID for reference.
+
+        FIX B13: vuln_class is lowercased before storage and lookup so that
+        'SQLi', 'sqli', and 'SQLI' are treated identically.
         """
+        # FIX B13: normalise case once at entry
+        vuln_class = vuln_class.lower()
         with self._lock:
             surface_key = f"{surface_type}:{surface}"
             surface_id = f"S-{hashlib.md5(surface_key.encode()).hexdigest()[:8].upper()}"
@@ -192,7 +197,7 @@ class CoverageTracker:
 
             tested = self._tested[surface_id]
 
-            # Record the test
+            # Record the test (already lowercased above)
             if vuln_class not in tested.vuln_classes_tested:
                 tested.vuln_classes_tested.append(vuln_class)
             tested.test_count += 1
@@ -215,53 +220,56 @@ class CoverageTracker:
     ) -> str:
         """
         FEAT-002: Record a test failure reason on a surface.
-        
+
+        FIX B-D: Failures are tracked in a separate _failure_only set so
+        they do NOT appear in get_tested_surfaces() / has_been_tested().
+        A surface blocked by WAF is NOT the same as a surface that was
+        successfully tested — they must not be confused.
+
         This tracks WHY tests failed (WAF blocked, rate limited, 403, etc.) so the
         agent doesn't retry futile attacks after memory compression.
-        
-        Common failure_reasons:
-        - WAF_BLOCKED: Web Application Firewall blocked the request
-        - RATE_LIMITED: Target returned 429 or similar
-        - ACCESS_DENIED: 401/403 response
-        - NOT_FOUND: 404 - endpoint doesn't exist
-        - TIMEOUT: Request timed out
-        - CONNECTION_REFUSED: Target refused connection
-        
+
         Returns the surface ID.
         """
         with self._lock:
             surface_key = f"{surface_type}:{surface}"
             surface_id = f"S-{hashlib.md5(surface_key.encode()).hexdigest()[:8].upper()}"
-            
-            # Ensure surface exists in tested
-            if surface_id not in self._tested:
-                # Promote from discovered if needed
-                if surface_id in self._discovered:
-                    discovered = self._discovered.pop(surface_id)
-                    self._tested[surface_id] = TestedItem(
-                        id=surface_id,
-                        surface=discovered.surface,
-                        surface_type=discovered.surface_type,
-                        discovered_at=discovered.discovered_at,
-                    )
-                else:
-                    self._tested[surface_id] = TestedItem(
-                        id=surface_id,
-                        surface=surface,
-                        surface_type=surface_type,
-                    )
-            
-            tested = self._tested[surface_id]
-            
-            # Record the failure reason
+
+            # FIX B-D: Only push to _tested if already there (i.e. was actually tested
+            # before the failure).  If it was purely a failure, keep it in _failure_only
+            # so it never appears as a successfully-tested surface.
+            if surface_id in self._tested:
+                # Surface was already tested: annotate the existing entry
+                target = self._tested[surface_id]
+            elif surface_id in self._discovered:
+                # Surface was discovered but never fully tested: record failure there
+                self._discovered[surface_id].notes = (
+                    getattr(self._discovered[surface_id], 'notes', None) or []
+                )
+                self._discovered[surface_id].notes.append(f"FAILURE: {failure_reason}")
+                return surface_id
+            else:
+                # Pure failure entry: use a lightweight failure-only store
+                if not hasattr(self, '_failure_only'):
+                    self._failure_only: dict[str, dict] = {}
+                entry = self._failure_only.setdefault(surface_id, {
+                    "surface": surface,
+                    "surface_type": surface_type,
+                    "failure_reasons": [],
+                })
+                reason_with_class = f"[{vuln_class}] {failure_reason}" if vuln_class else failure_reason
+                if reason_with_class not in entry["failure_reasons"]:
+                    entry["failure_reasons"].append(reason_with_class)
+                return surface_id
+
+            # Record the failure reason on the already-tested item
             reason_with_class = f"[{vuln_class}] {failure_reason}" if vuln_class else failure_reason
-            if reason_with_class not in tested.failure_reasons:
-                tested.failure_reasons.append(reason_with_class)
-                # Keep failure reasons limited
-                if len(tested.failure_reasons) > 10:
-                    tested.failure_reasons = tested.failure_reasons[-10:]
-            
-            tested.last_tested = datetime.now(UTC).isoformat()
+            if reason_with_class not in target.failure_reasons:
+                target.failure_reasons.append(reason_with_class)
+                if len(target.failure_reasons) > 10:
+                    target.failure_reasons = target.failure_reasons[-10:]
+
+            target.last_tested = datetime.now(UTC).isoformat()
             return surface_id
 
     def get_blocked_surfaces(self) -> list[dict[str, Any]]:
@@ -395,7 +403,10 @@ class CoverageTracker:
         surface_type: str,
         vuln_class: str | None = None,
     ) -> bool:
-        """Check if a surface has been tested (optionally for a specific vuln class)."""
+        """Check if a surface has been tested (optionally for a specific vuln class).
+
+        FIX B13: vuln_class lookup is lowercased to match the normalised storage.
+        """
         with self._lock:
             surface_key = f"{surface_type}:{surface}"
             surface_id = f"S-{hashlib.md5(surface_key.encode()).hexdigest()[:8].upper()}"
@@ -406,7 +417,8 @@ class CoverageTracker:
             if vuln_class is None:
                 return True
 
-            return vuln_class in self._tested[surface_id].vuln_classes_tested
+            # FIX B13: compare lowercase so 'SQLi' == 'sqli'
+            return vuln_class.lower() in self._tested[surface_id].vuln_classes_tested
 
     # ── Prompt Summary (for LLM context injection) ────────────────────────────
 

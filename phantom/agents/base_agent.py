@@ -848,12 +848,17 @@ class BaseAgent(metaclass=AgentMeta):
         """Execute actions and return True if agent should finish."""
         # Avoid blind repetition of identical action batches across consecutive iterations.
         # This reduces dead-end payload retries without changing tool semantics.
+        def _strip(v):
+            if isinstance(v, str): return v.strip()
+            if isinstance(v, dict): return {k: _strip(val) for k, val in v.items()}
+            if isinstance(v, list): return [_strip(val) for val in v]
+            return v
         try:
             batch_signature = json.dumps(
                 [
                     {
                         "toolName": action.get("toolName"),
-                        "args": action.get("args", {}),
+                        "args": _strip(action.get("args", {})),
                     }
                     for action in actions
                 ],
@@ -1165,11 +1170,27 @@ class BaseAgent(metaclass=AgentMeta):
             supporting = []
 
         scoped: list[dict[str, Any]] = []
+        from phantom.llm.memory_compressor import _ANCHOR_KEYWORDS
+        
         for msg in history:
             content = msg.get("content", "")
             text = content if isinstance(content, str) else str(content)
             lowered = text.lower()
             keep = False
+            mentions_other_hypothesis = False
+            for hid in hypothesis_ids:
+                if hid and hid != active_hypothesis_id and hid.lower() in lowered:
+                    mentions_other_hypothesis = True
+                    break
+
+            if mentions_other_hypothesis:
+                continue
+            
+            # FIX A1: If it contains a core finding anchor, always keep it regardless of surface
+            has_anchor = any(k in lowered for k in _ANCHOR_KEYWORDS)
+            if has_anchor:
+                keep = True
+                
             if active_surface and active_surface.lower() in lowered:
                 keep = True
             if active_vclass and active_vclass.lower() in lowered:
@@ -1180,10 +1201,11 @@ class BaseAgent(metaclass=AgentMeta):
                 keep = True
             if "[auto-status" in lowered or "chain opportunities" in lowered:
                 keep = False
-            for hid in hypothesis_ids:
-                if hid and hid != active_hypothesis_id and hid.lower() in lowered:
-                    keep = False
-                    break
+
+            # FIX A1 (cont): Override exclusion if it's a finding anchor
+            if has_anchor:
+                keep = True
+                
             if "<finding_anchors>" in lowered or "<pinned_facts>" in lowered:
                 keep = True
             if msg.get("role") == "system":
