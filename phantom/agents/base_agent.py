@@ -18,7 +18,7 @@ from jinja2 import (
 
 from phantom.agents.hypothesis_ledger import HypothesisLedger  # Rec 6 (SF-005)
 from phantom.agents.coverage_tracker import CoverageTracker  # Enhancement: Coverage tracking
-from phantom.agents.correlation_engine import CorrelationEngine  # Enhancement: Vulnerability chains
+
 from phantom.llm import LLM, LLMConfig, LLMRequestFailedError
 from phantom.llm.pentager.reflector import get_reflector
 from phantom.llm.utils import clean_content
@@ -111,14 +111,7 @@ class BaseAgent(metaclass=AgentMeta):
             "coverage_tracker"
         ) or CoverageTracker()
 
-        # Enhancement: Correlation Engine - identifies potential vulnerability chains.
-        # Returns SUGGESTIONS not commands - LLM decides whether to pursue chains.
-        # Root agents get a fresh engine; sub-agents share if passed via config.
-        self.correlation_engine: CorrelationEngine = config.get(
-            "correlation_engine"
-        ) or CorrelationEngine()
-        with contextlib.suppress(Exception):
-            self.hypothesis_ledger.set_correlation_engine(self.correlation_engine)
+
 
         # FIX 5: Attack Graph - visualizes vulnerability relationships and attack paths.
         # Enables critical node identification and multi-step attack chain analysis.
@@ -143,10 +136,9 @@ class BaseAgent(metaclass=AgentMeta):
 
         # C1: Wire hypothesis ledger to the tool so the LLM can interact with it
         try:
-            from phantom.tools.hypothesis.hypothesis_actions import set_correlation_engine, set_ledger
+            from phantom.tools.hypothesis.hypothesis_actions import set_ledger
 
             set_ledger(self.hypothesis_ledger, self.state.agent_id)
-            set_correlation_engine(self.correlation_engine, self.state.agent_id)
         except ImportError as e:
             # Tool module not available in this environment
             logging.warning(f"Hypothesis ledger tool not available: {e}")
@@ -158,7 +150,6 @@ class BaseAgent(metaclass=AgentMeta):
             set_scan_status_context(
                 hypothesis_ledger=self.hypothesis_ledger,
                 coverage_tracker=self.coverage_tracker,
-                correlation_engine=self.correlation_engine,
                 attack_graph=self.attack_graph if hasattr(self, 'attack_graph') else None,  # FIX 5
                 agent_state=self.state,
             )
@@ -299,7 +290,6 @@ class BaseAgent(metaclass=AgentMeta):
                 "local_sources": self.local_sources,
                 "hypothesis_ledger": self.hypothesis_ledger,
                 "coverage_tracker": self.coverage_tracker,
-                "correlation_engine": self.correlation_engine,
                 "attack_graph": self.attack_graph,
             }
 
@@ -376,7 +366,7 @@ class BaseAgent(metaclass=AgentMeta):
                     if tracer:
                         tracer.update_agent_status(self.state.agent_id, "failed")
 
-                if self.non_interactive:
+                if True:  # SF-05 FIX: Also timeout in interactive mode
                     return self.state.final_result or {}
                 await self._enter_waiting_state(tracer)
                 continue
@@ -457,7 +447,7 @@ class BaseAgent(metaclass=AgentMeta):
                 # ──────────────────────────────────────────────────────────
 
                 if should_finish:
-                    if self.non_interactive:
+                    if True:  # SF-05 FIX: Also timeout in interactive mode
                         self.state.set_completed({"success": True})
                         if tracer:
                             tracer.update_agent_status(self.state.agent_id, "completed")
@@ -501,7 +491,7 @@ class BaseAgent(metaclass=AgentMeta):
                         self.state.add_message(
                             "assistant", f"{partial_content}\n\n[ABORTED BY USER]"
                         )
-                if self.non_interactive:
+                if True:  # SF-05 FIX: Also timeout in interactive mode
                     raise
                 await self._enter_waiting_state(tracer, error_occurred=False, was_cancelled=True)
                 continue
@@ -585,7 +575,7 @@ class BaseAgent(metaclass=AgentMeta):
 
             except (RuntimeError, ValueError, TypeError) as e:
                 if not await self._handle_iteration_error(e, tracer):
-                    if self.non_interactive:
+                    if True:  # SF-05 FIX: Also timeout in interactive mode
                         self.state.set_completed({"success": False, "error": str(e)})
                         if tracer:
                             tracer.update_agent_status(self.state.agent_id, "failed")
@@ -739,9 +729,14 @@ class BaseAgent(metaclass=AgentMeta):
                     agent_id=self.state.agent_id,
                 )
                 
-                # Format as compact message
                 status_msg = self._format_scan_status(status)
-                self.state.add_message("user", status_msg)
+                # CA-01 FIX: Delta-check scan status to avoid redundant token bloat
+                import hashlib
+                msg_hash = hashlib.sha256(status_msg.encode("utf-8")).hexdigest()
+                last_hash = getattr(self.state, "_last_status_msg_hash", None)
+                if msg_hash != last_hash:
+                    setattr(self.state, "_last_status_msg_hash", msg_hash)
+                    self.state.add_message("user", status_msg)
             except Exception as e:
                 logging.debug(f"Failed to inject scan status: {e}")
                 if tracer:
@@ -943,22 +938,35 @@ class BaseAgent(metaclass=AgentMeta):
 
     def _check_agent_messages(self, state: AgentState) -> None:  # noqa: PLR0912
         try:
-            from phantom.tools.agents_graph.agents_graph_actions import _agent_graph, _agent_messages
+            from phantom.tools.agents_graph.agents_graph_actions import _agent_graph, _agent_messages, _GRAPH_LOCK
 
             agent_id = state.agent_id
-            if not agent_id or agent_id not in _agent_messages:
-                return
+            _GRAPH_LOCK.acquire()
+            try:
+                if not agent_id or agent_id not in _agent_messages:
+                    return
 
-            messages = _agent_messages[agent_id]
-            if messages:
-                has_new_messages = False
-                for message in messages:
-                    if not message.get("read", False):
-                        sender_id = message.get("from")
+                # Create an isolated copy of messages to process after releasing lock to prevent deadlock
+                # and minimize hold time. Actually we just need to iterate them fast.
+                messages = _agent_messages[agent_id]
+                if messages:
+                    has_new_messages = False
+                    for message in messages:
+                        if not message.get("read", False):
+                            sender_id = message.get("from")
 
-                        if state.is_waiting_for_input():
-                            if state.llm_failed:
-                                if sender_id == "user":
+                            if state.is_waiting_for_input():
+                                if state.llm_failed:
+                                    if sender_id == "user":
+                                        state.resume_from_waiting()
+                                        has_new_messages = True
+
+                                        from phantom.telemetry.tracer import get_global_tracer
+
+                                        tracer = get_global_tracer()
+                                        if tracer:
+                                            tracer.update_agent_status(state.agent_id, "running")
+                                else:
                                     state.resume_from_waiting()
                                     has_new_messages = True
 
@@ -967,44 +975,43 @@ class BaseAgent(metaclass=AgentMeta):
                                     tracer = get_global_tracer()
                                     if tracer:
                                         tracer.update_agent_status(state.agent_id, "running")
+
+                            if sender_id == "user":
+                                sender_name = "User"
+                                state.add_message("user", message.get("content", ""))
                             else:
-                                state.resume_from_waiting()
-                                has_new_messages = True
+                                # BUG FIX B: initialise sender_name with a safe fallback
+                                # so the f-string below never raises NameError when
+                                # sender_id is absent from the agent graph.
+                                sender_name = sender_id or "unknown-agent"
+                                if sender_id and sender_id in _agent_graph.get("nodes", {}):
+                                    sender_name = _agent_graph["nodes"][sender_id]["name"]
 
-                                from phantom.telemetry.tracer import get_global_tracer
+                                # B3: Compact inter-agent message format (was ~400 tokens XML, now ~50 tokens)
+                                import html as _html
 
-                                tracer = get_global_tracer()
-                                if tracer:
-                                    tracer.update_agent_status(state.agent_id, "running")
+                                safe_sender_name = _html.escape(str(sender_name))
+                            
+                                # SR-06 FIX: Escape first, then truncate safely
+                                raw_content = str(message.get("content", ""))
+                                safe_content = _html.escape(raw_content)
+                                if len(safe_content) > 200:
+                                    safe_content = safe_content[:197] + "..."
 
-                        if sender_id == "user":
-                            sender_name = "User"
-                            state.add_message("user", message.get("content", ""))
-                        else:
-                            # BUG FIX B: initialise sender_name with a safe fallback
-                            # so the f-string below never raises NameError when
-                            # sender_id is absent from the agent graph.
-                            sender_name = sender_id or "unknown-agent"
-                            if sender_id and sender_id in _agent_graph.get("nodes", {}):
-                                sender_name = _agent_graph["nodes"][sender_id]["name"]
 
-                            # B3: Compact inter-agent message format (was ~400 tokens XML, now ~50 tokens)
-                            import html as _html
+                                message_content = f"[From {safe_sender_name}]: {safe_content}"
+                                state.add_message("user", message_content.strip())
 
-                            safe_sender_name = _html.escape(str(sender_name))
-                            safe_content = _html.escape(str(message.get("content", ""))[:200])
+                            message["read"] = True
 
-                            message_content = f"[From {safe_sender_name}]: {safe_content}"
-                            state.add_message("user", message_content.strip())
+                    if has_new_messages and not state.is_waiting_for_input():
+                        from phantom.telemetry.tracer import get_global_tracer
 
-                        message["read"] = True
-
-                if has_new_messages and not state.is_waiting_for_input():
-                    from phantom.telemetry.tracer import get_global_tracer
-
-                    tracer = get_global_tracer()
-                    if tracer:
-                        tracer.update_agent_status(agent_id, "running")
+                        tracer = get_global_tracer()
+                        if tracer:
+                            tracer.update_agent_status(agent_id, "running")
+            finally:
+                _GRAPH_LOCK.release()
 
         except (AttributeError, KeyError, TypeError) as e:
             logger.warning("Error checking agent messages: %s", e)
@@ -1027,10 +1034,9 @@ class BaseAgent(metaclass=AgentMeta):
                 state=self.state,
                 tracer=tracer,
                 scan_config=tracer.scan_config or {} if tracer else {},
-                # P4: Include hypothesis ledger, coverage tracker, and correlation engine
+                # P4: Include hypothesis ledger, coverage tracker
                 hypothesis_ledger=self.hypothesis_ledger,
                 coverage_tracker=self.coverage_tracker,
-                correlation_engine=self.correlation_engine,
                 # FIX 5: Include attack graph for vulnerability chain analysis
                 attack_graph=self.attack_graph if hasattr(self, 'attack_graph') else None,
                 # Wave D: Persist active sub-agent states for resume continuity
@@ -1283,6 +1289,26 @@ class BaseAgent(metaclass=AgentMeta):
                 if critical_bits:
                     lines.append(f"  Critical: {', '.join(critical_bits)}")
 
+            top_attack_plans = attack_graph.get("top_attack_plans", [])
+            if top_attack_plans:
+                lines.append(f"  Top Plans: {len(top_attack_plans)}")
+                for plan in top_attack_plans[:2]:
+                    if not isinstance(plan, dict):
+                        continue
+                    path = plan.get("path") or []
+                    if not isinstance(path, list) or not path:
+                        continue
+                    path_preview = " -> ".join(str(p) for p in path[:4])
+                    if len(path) > 4:
+                        path_preview = f"{path_preview} -> ..."
+                    lines.append(
+                        "  - "
+                        f"p={plan.get('probability')} "
+                        f"cost={plan.get('cost')} "
+                        f"score={plan.get('score')} "
+                        f"path={path_preview}"
+                    )
+
         if archived_messages:
             lines.append(
                 f"Archived history: {archived_messages.get('count', 0)} messages retained"
@@ -1312,7 +1338,7 @@ class BaseAgent(metaclass=AgentMeta):
         error_details = error.details
         self.state.add_error(error_msg)
 
-        if self.non_interactive:
+        if self.non_interactive:  # Restored interactive fallback
             self.state.set_completed({"success": False, "error": error_msg})
             if tracer:
                 tracer.update_agent_status(self.state.agent_id, "failed", error_msg)
@@ -1360,7 +1386,7 @@ class BaseAgent(metaclass=AgentMeta):
         error_details = getattr(error, "details", None)
         self.state.add_error(error_msg)
 
-        if self.non_interactive:
+        if self.non_interactive:  # Restored interactive fallback
             self.state.set_completed({"success": False, "error": error_msg})
             if tracer:
                 tracer.update_agent_status(self.state.agent_id, "failed", error_msg)

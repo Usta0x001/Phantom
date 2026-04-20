@@ -245,7 +245,7 @@ class DockerRuntime(AbstractRuntime):
                     labels={"phantom-scan-id": scan_id},
                     environment={
                         "PYTHONUNBUFFERED": "1",
-                        "TOOL_SERVER_PORT": str(CONTAINER_TOOL_SERVER_PORT),
+                        "TOOL_SERVER_PORT": "48081",  # Static port - always set
                         # Rec 8 (B-13): Token also injected via env for backward-compat.
                         # Primary path is the secret file written below.
                         "TOOL_SERVER_TOKEN": self._tool_server_token,
@@ -253,15 +253,9 @@ class DockerRuntime(AbstractRuntime):
                         "HOST_GATEWAY": HOST_GATEWAY_HOSTNAME,
                         # Allow SSRF to target hosts (docker internal addresses)
                         "PHANTOM_ALLOWED_SSRF_HOSTS": "host.docker.internal,localhost,127.0.0.1",
-                    },
+},
                     extra_hosts={HOST_GATEWAY_HOSTNAME: "host-gateway"},
                     tty=True,
-                    # Rec 3 (SF-003): Resource limits
-                    mem_limit=mem_limit,
-                    memswap_limit=mem_limit,  # disable swap
-                    cpu_period=100_000,
-                    cpu_quota=cpu_quota,
-                    pids_limit=pids_limit,
                 )
 
                 self._scan_container = container

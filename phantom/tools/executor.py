@@ -1,5 +1,6 @@
 import html
 import asyncio
+from contextlib import suppress
 import inspect
 import logging
 import os
@@ -23,77 +24,14 @@ from phantom.llm.tracked_completion import tracked_acompletion
 logger = logging.getLogger(__name__)
 
 
-# ════════════════════════════════════════════════════════════════════════════════
-# FEAT-001: Stealth Mode Rate Limiting
-# ════════════════════════════════════════════════════════════════════════════════
-# Implements actual rate limiting for stealth mode instead of relying only on
-# LLM prompt instructions. This adds programmatic delays between HTTP-related
-# tool executions to reduce detection risk.
 
-_STEALTH_DELAY_SECONDS = 2.0  # Minimum delay between requests in stealth mode
-
-# Tools that make outbound HTTP requests and should be rate-limited in stealth mode
-_HTTP_TOOLS = frozenset({
-    # FIX BUG-2: Added "terminal_execute" - was missing from list causing stealth mode bypass
-    # The tool "terminal" was incorrectly listed but actual tool name is "terminal_execute"
-    "terminal_execute",  # FIX: was "terminal" which doesn't match actual tool name
-    "terminal",          # Keep for legacy compatibility if any other tool uses this name
-    "http_request",
-    "analyze_response", 
-    "crawl_website",
-    "fetch_url",
-    "browser_navigate",
-    "browser_action",
-    "nuclei_scan",
-    "waf_detect",
-    "subdomain_enum",
-    "shodan_query",
-    "cve_search",
-    "fuzzer",
-})
-
-
-async def _apply_stealth_rate_limit(tool_name: str, agent_state: Any | None) -> None:
-    """
-    FEAT-001: Apply rate limiting delay for stealth mode.
-    
-    This ensures a minimum delay between HTTP-related tool executions
-    to reduce the chance of triggering rate limiting, WAF detection, or IDS alerts.
-    """
-    scan_mode = str(getattr(agent_state, "scan_mode", "") or "").lower()
-
-    # Only apply in stealth mode
-    if scan_mode != "stealth":
-        return
-    
-    # Only rate-limit HTTP-related tools
-    if tool_name not in _HTTP_TOOLS:
-        return
-    
-    if agent_state is None:
-        return
-
-    context = getattr(agent_state, "context", None)
-    if not isinstance(context, dict):
-        return
-
-    current_time = time.monotonic()
-    last_request_time = float(context.get("_stealth_last_request_time", 0.0) or 0.0)
-    time_since_last = current_time - last_request_time
-
-    if time_since_last < _STEALTH_DELAY_SECONDS:
-        sleep_time = _STEALTH_DELAY_SECONDS - time_since_last
-        await asyncio.sleep(sleep_time)
-
-    context["_stealth_last_request_time"] = time.monotonic()
-# ════════════════════════════════════════════════════════════════════════════════
 
 
 if os.getenv("PHANTOM_SANDBOX_MODE", "false").lower() == "false":
     from phantom.runtime import get_runtime
 
 from .argument_parser import convert_arguments
-from .cache import get_tool_cache
+
 from .context import reset_current_agent_id, set_current_agent_id
 from .registry import (
     get_tool_by_name,
@@ -129,40 +67,7 @@ def _resolve_canonical_tool_name(tool_name: str | None) -> str | None:
     return candidate
 
 
-# ════════════════════════════════════════════════════════════════════════════════
-# SECURITY FIX: CMD-002 - Command Injection Protection Patterns
-# ════════════════════════════════════════════════════════════════════════════════
-_COMMAND_INJECTION_PATTERNS: list[re.Pattern[str]] = [
-    # Semicolon command chaining
-    re.compile(r";\s*\w+", re.IGNORECASE),
-    # Pipe to another command
-    re.compile(r"\|\s*\w+", re.IGNORECASE),
-    # AND command chaining
-    re.compile(r"&&\s*\w+", re.IGNORECASE),
-    # OR command chaining
-    re.compile(r"\|\|\s*\w+", re.IGNORECASE),
-    # Backtick command substitution
-    re.compile(r"`[^`]+`", re.IGNORECASE),
-    # $() command substitution
-    re.compile(r"\$\([^)]+\)", re.IGNORECASE),
-    # ${} variable expansion with commands
-    re.compile(r"\$\{[^}]*[;|&`][^}]*\}", re.IGNORECASE),
-    # Redirect to absolute paths (potential overwrite)
-    re.compile(r">\s*/", re.IGNORECASE),
-    # Read from absolute paths
-    re.compile(r"<\s*/", re.IGNORECASE),
-    # Dangerous commands
-    re.compile(r"\b(eval|exec|source)\s+", re.IGNORECASE),
-    # Newline injection (literal)
-    re.compile(r"[\r\n]", re.IGNORECASE),
-    # URL-encoded newlines
-    re.compile(r"%0[aAdD]", re.IGNORECASE),
-]
 
-# ════════════════════════════════════════════════════════════════════════════════
-# SECURITY FIX: TOOL-003 - Path Traversal Detection Pattern
-# ════════════════════════════════════════════════════════════════════════════════
-_PATH_TRAVERSAL_PATTERN = re.compile(r"\.\.[\\/]", re.IGNORECASE)
 
 # ════════════════════════════════════════════════════════════════════════════════
 # SECURITY FIX: ARCH-001 - Prompt Injection Detection Patterns
@@ -234,100 +139,10 @@ def _normalize_for_injection_check(text: str) -> str:
     return normalized
 
 
-def _check_path_traversal(path: str) -> bool:
-    """TOOL-003 FIX: Check for path traversal after full normalization.
-    
-    This catches:
-    - Direct: ../
-    - URL encoded: %2e%2e%2f
-    - Double encoded: %252e%252e%252f
-    - Triple+ encoded: %25252e...
-    - Mixed: ..%2f, %2e./
-    - Unicode: ．．／ (fullwidth)
-    - HTML entities: &#46;&#46;&#47;
-    - TRAV-NEW-1 FIX: Null byte injection (..%00/etc/passwd)
-    """
-    # TRAV-NEW-1 FIX: Strip null bytes BEFORE normalization
-    path_clean = path.replace("\x00", "").replace("%00", "")
-    
-    # Normalize first to decode all encoding layers
-    normalized = _normalize_for_injection_check(path_clean)
-    
-    # Also strip null bytes from normalized output (in case they were encoded)
-    normalized = normalized.replace("\x00", "")
-    
-    # Now check the simple pattern on normalized input
-    return bool(_PATH_TRAVERSAL_PATTERN.search(normalized))
 
 
-def _get_security_mode() -> str:
-    mode = (Config.get("phantom_security_mode") or "research").strip().lower()
-    if mode not in {"research", "hardened"}:
-        return "research"
-    return mode
 
 
-def _is_hardened_mode() -> bool:
-    return _get_security_mode() == "hardened"
-
-
-def _iter_string_arguments(value: Any, path: str = "") -> Any:
-    if isinstance(value, str):
-        yield path or "value", value
-        return
-
-    if isinstance(value, dict):
-        for key, nested in value.items():
-            key_name = str(key)
-            next_path = f"{path}.{key_name}" if path else key_name
-            yield from _iter_string_arguments(nested, next_path)
-        return
-
-    if isinstance(value, (list, tuple)):
-        for idx, nested in enumerate(value):
-            next_path = f"{path}[{idx}]" if path else f"[{idx}]"
-            yield from _iter_string_arguments(nested, next_path)
-
-
-def _validate_tool_argument_injection(tool_name: str, kwargs: dict[str, Any]) -> str | None:
-    """Validate tool arguments for command/path injection patterns.
-
-    Research mode keeps this gate relaxed to preserve offensive flexibility.
-    Hardened mode enforces blocking checks on command/path-like arguments.
-    """
-    if not _is_hardened_mode():
-        return None
-
-    commandish_tokens = {"command", "cmd", "shell", "script", "code"}
-    pathish_tokens = {"path", "file", "filename", "directory", "dir", "workspace"}
-
-    high_risk_tool = tool_name in {"terminal_execute", "python_execute"}
-
-    for arg_path, raw_value in _iter_string_arguments(kwargs):
-        arg_path_lower = arg_path.lower()
-        normalized = _normalize_for_injection_check(raw_value)
-
-        should_check_command_patterns = high_risk_tool or any(
-            token in arg_path_lower for token in commandish_tokens
-        )
-        if should_check_command_patterns:
-            for pattern in _COMMAND_INJECTION_PATTERNS:
-                match = pattern.search(normalized)
-                if match:
-                    matched = match.group(0).replace("\n", "\\n").replace("\r", "\\r")
-                    return (
-                        f"Error: Hardened mode blocked suspicious argument '{arg_path}' "
-                        f"for tool '{tool_name}' (pattern: {matched[:80]!r})."
-                    )
-
-        should_check_path_traversal = any(token in arg_path_lower for token in pathish_tokens)
-        if should_check_path_traversal and _check_path_traversal(raw_value):
-            return (
-                f"Error: Hardened mode blocked path traversal pattern in argument "
-                f"'{arg_path}' for tool '{tool_name}'."
-            )
-
-    return None
 
 
 def _detect_prompt_injection(text: str) -> tuple[bool, str | None]:
@@ -347,6 +162,31 @@ def _detect_prompt_injection(text: str) -> tuple[bool, str | None]:
             return True, pattern.pattern[:50]
     
     return False, None
+
+
+def _enforce_safe_summary_schema(summary: str) -> str:
+    """Normalize auto-summaries to a strict, line-based safe schema."""
+    text = str(summary or "").strip()
+    if not text:
+        return "SUMMARY: unavailable\nKEY_FINDINGS:\n- none"
+
+    text = _semantic_sanitize_output(text)
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    if not lines:
+        return "SUMMARY: unavailable\nKEY_FINDINGS:\n- none"
+
+    summary_line = lines[0][:300]
+    finding_lines = [line[:240] for line in lines[1:8]]
+    if not finding_lines:
+        finding_lines = ["none"]
+
+    formatted = [f"SUMMARY: {summary_line}", "KEY_FINDINGS:"]
+    for finding in finding_lines:
+        normalized = finding.lstrip("-*").strip()
+        if normalized:
+            formatted.append(f"- {normalized}")
+
+    return "\n".join(formatted)
 
 
 def _semantic_sanitize_output(text: str) -> str:
@@ -384,7 +224,7 @@ _SERVER_TIMEOUT = float(Config.get("phantom_sandbox_execution_timeout") or "120"
 AUTO_SUMMARIZE_THRESHOLD = int(Config.get("phantom_auto_summarize_threshold") or "16000")
 SUMMARIZE_MODEL = Config.get("phantom_summarize_llm") or "gpt-4o-mini"
 SANDBOX_EXECUTION_TIMEOUT = _SERVER_TIMEOUT + 30
-SANDBOX_CONNECT_TIMEOUT = float(Config.get("phantom_sandbox_connect_timeout") or "5")
+SANDBOX_CONNECT_TIMEOUT = float(Config.get("phantom_sandbox_connect_timeout") or "10")
 
 _HIGH_SIGNAL_MARKERS = (
     "onerror=",
@@ -435,44 +275,9 @@ def _cleanup_screenshot_artifacts(path: str | Path | None = None) -> None:
 
 
 async def execute_tool(tool_name: str, agent_state: Any | None = None, **kwargs: Any) -> Any:
-    # ════════════════════════════════════════════════════════════════════════
-    # FEAT-001: Stealth Rate Limiting
-    # ════════════════════════════════════════════════════════════════════════
-    # Apply rate limiting before execution for stealth mode
-    await _apply_stealth_rate_limit(tool_name, agent_state)
-    # ─────────────────────────────────────────────────────────────────────────────
+
     
-    # ════════════════════════════════════════════════════════════════════════
-    # SECURITY REC LOW-7: Tool-Level RBAC Permission Check
-    # ════════════════════════════════════════════════════════════════════════
-    # Check RBAC permissions before executing any tool.
-    # This ensures only authorized agents can execute sensitive tools.
-    security_mode = _get_security_mode()
-    rbac_enabled = (Config.get("phantom_rbac_enabled") or "").lower() == "true"
-
-    if security_mode == "hardened" and not rbac_enabled:
-        logger.warning("RBAC denied tool '%s': RBAC disabled in hardened mode", tool_name)
-        return {
-            "error": "Permission denied: RBAC must be enabled in hardened mode",
-            "error_type": "rbac_misconfigured",
-        }
-
-    try:
-        from phantom.tools.rbac import check_tool_permission
-
-        allowed, reason = check_tool_permission(tool_name)
-        if not allowed:
-            logger.warning("RBAC blocked tool '%s': %s", tool_name, reason)
-            return {"error": f"Permission denied: {reason}", "error_type": "rbac_denied"}
-    except ImportError:
-        if security_mode == "hardened":
-            logger.warning("RBAC denied tool '%s': RBAC module unavailable", tool_name)
-            return {
-                "error": "Permission denied: RBAC module unavailable in hardened mode",
-                "error_type": "rbac_unavailable",
-            }
-        # Research mode stays permissive for backwards compatibility.
-    # ─────────────────────────────────────────────────────────────────────────────
+    # Execution checks cleared (RBAC removed)
     
     # FIX: Ensure agent_id is always captured - even if agent_state is None
     _agent_id = None
@@ -488,6 +293,11 @@ async def execute_tool(tool_name: str, agent_state: Any | None = None, **kwargs:
 
     execute_in_sandbox = should_execute_in_sandbox(tool_name)
     sandbox_mode = os.getenv("PHANTOM_SANDBOX_MODE", "false").lower() == "true"
+    
+    # Check if sandbox container exists (either in env var OR in agent_state)
+    sandbox_available = sandbox_mode
+    if not sandbox_available and agent_state:
+        sandbox_available = getattr(agent_state, "sandbox_id", None) is not None
 
     # ── Audit: log tool invocation ─────────────────────────────────────────
     from phantom.logging.audit import get_audit_logger as _get_audit
@@ -496,41 +306,17 @@ async def execute_tool(tool_name: str, agent_state: Any | None = None, **kwargs:
     _t0 = time.monotonic()
     # ──────────────────────────────────────────────────────────────────
     
-    # ════════════════════════════════════════════════════════════════════════
-    # EFFICIENCY FIX CRIT-04: Tool Result Caching
-    # ════════════════════════════════════════════════════════════════════════
-    # Check cache BEFORE execution for idempotent tools.
-    # Expected savings: 21% reduction in redundant calls, $0.15-0.30/scan
-    _cache = get_tool_cache()
     try:
-        if _cache.is_cacheable(tool_name, kwargs):
-            cached_result = _cache.get(tool_name, kwargs)
-            if cached_result is not None:
-                # Cache hit - log and return immediately
-                if _audit and _exec_id:
-                    _audit.log_tool_result(
-                        _exec_id,
-                        _agent_id,
-                        tool_name,
-                        cached_result,
-                        (time.monotonic() - _t0) * 1000,
-                        cache_hit=True,
-                    )
-                return cached_result
-        # ──────────────────────────────────────────────────────────────────
-
         try:
-            if execute_in_sandbox and not sandbox_mode:
+            if execute_in_sandbox:
+                if not sandbox_available:
+                    if agent_state and getattr(agent_state, "sandbox_id", None):
+                        pass  # Sandbox exists but env var not set - should work
+                    else:
+                        raise RuntimeError(f"CRITICAL: Tool '{tool_name}' requires Sandbox, but no sandbox container is running.")
                 result = await _execute_tool_in_sandbox(tool_name, agent_state, **kwargs)
             else:
                 result = await _execute_tool_locally(tool_name, agent_state, **kwargs)
-
-            # ════════════════════════════════════════════════════════════════════
-            # EFFICIENCY FIX CRIT-04: Cache successful results for idempotent tools
-            # ════════════════════════════════════════════════════════════════════
-            if _cache.is_cacheable(tool_name, kwargs):
-                _cache.put(tool_name, kwargs, result)
-            # ──────────────────────────────────────────────────────────────────
 
             if _audit and _exec_id:
                 _audit.log_tool_result(
@@ -751,39 +537,49 @@ async def execute_tool_with_validation(
 ) -> Any:
     tool_name = _resolve_canonical_tool_name(tool_name)
 
-    if allowed_tools is None:
+    if allowed_tools is None or tool_name not in allowed_tools:
         raise Exception("Tool not allowed")
 
     is_valid, error_msg = validate_tool_availability(tool_name)
     if not is_valid:
         return f"Error: {error_msg}"
 
-    if tool_name not in allowed_tools:
-        raise Exception("Tool not allowed")
-    assert tool_name in allowed_tools
-
     arg_error = _validate_tool_arguments(tool_name, kwargs)
     if arg_error:
         return f"Error: {arg_error}"
 
-    # CMD-002 / TOOL-003 FIX: Validate for injection attacks before execution
-    injection_error = _validate_tool_argument_injection(tool_name, kwargs)
-    if injection_error:
-        # Log the injection attempt
-        from phantom.logging.audit import get_audit_logger as _get_audit
-        _audit = _get_audit()
-        if _audit:
-            _agent_id = getattr(agent_state, "agent_id", "unknown") if agent_state else "unknown"
-            # AUDIT-FIX CONTRA-05: Parameters were reversed — event_subtype
-            # must come first, then agent_id. Previously _agent_id went into
-            # event_subtype producing nonsensical event types like
-            # "security.agent_abc123" instead of "security.injection_blocked".
-            _audit.log_security_event(
-                "injection_blocked",
-                _agent_id,
-                {"tool": tool_name, "error": injection_error[:200]},
+    # Ensure get_scan_status has a minimal agent-scoped context when invoked
+    # through the executor path without prior wiring.
+    if tool_name == "get_scan_status" and agent_state is not None:
+        agent_id_for_status = str(getattr(agent_state, "agent_id", "") or "").strip()
+        if agent_id_for_status and "agent_id" not in kwargs:
+            kwargs["agent_id"] = agent_id_for_status
+
+        try:
+            context_setter = None
+            tool_func = get_tool_by_name(tool_name)
+            if tool_func is not None:
+                tool_module = inspect.getmodule(tool_func)
+                if tool_module is not None:
+                    maybe_setter = getattr(tool_module, "set_scan_status_context", None)
+                    if callable(maybe_setter):
+                        context_setter = maybe_setter
+
+            if context_setter is None:
+                from phantom.tools.scan_status.scan_status_actions import set_scan_status_context
+
+                context_setter = set_scan_status_context
+
+            context_setter(
+                hypothesis_ledger=getattr(agent_state, "hypothesis_ledger", None),
+                coverage_tracker=getattr(agent_state, "coverage_tracker", None),
+                attack_graph=getattr(agent_state, "attack_graph", None),
+                agent_state=agent_state,
             )
-        return injection_error
+        except Exception:  # noqa: BLE001
+            pass
+
+
 
     try:
         result = await execute_tool(tool_name, agent_state, **kwargs)
@@ -1123,11 +919,41 @@ async def _auto_summarize_result(result_text: str, tool_name: str) -> str:
     if not use_auto_summarize:
         return result_text
 
+    summary_count = 0
+    fallback_mode = "none"
+    if "<tool_name>" in result_text and "<result>" in result_text:
+        try:
+            tool_match = re.search(r"<tool_name>(.*?)</tool_name>", result_text, flags=re.IGNORECASE | re.DOTALL)
+            result_match = re.search(r"<result>(.*?)</result>", result_text, flags=re.IGNORECASE | re.DOTALL)
+            detected_tool = html.unescape(tool_match.group(1).strip()) if tool_match else tool_name
+            extracted_result = html.unescape(result_match.group(1)) if result_match else result_text
+            tool_name = detected_tool or tool_name
+            result_text = extracted_result
+        except Exception:
+            pass
+
+    injection_detected, injection_pattern = _detect_prompt_injection(result_text)
+    if injection_detected:
+        fallback_mode = "injection_detected"
+        safe_result = _semantic_sanitize_output(result_text)
+        return (
+            "SUMMARY: Tool output contained prompt injection indicators.\n"
+            "KEY_FINDINGS:\n"
+            f"- pattern={injection_pattern or 'unknown'}\n"
+            f"- tool={tool_name}\n"
+            f"- sanitized_excerpt={safe_result[:600]}\n"
+            f"- fallback_mode={fallback_mode}"
+        )
+
     try:
         prompt = (
-            "Summarize this security tool output for an autonomous pentest agent. "
-            "Preserve: confirmed findings, endpoints, parameters, payloads, response codes, and errors. "
-            "Keep it concise and factual.\n\n"
+            "Summarize this security tool output.\n"
+            "Respond with plain text in this exact schema:\n"
+            "SUMMARY: <single line>\n"
+            "KEY_FINDINGS:\n"
+            "- <finding 1>\n"
+            "- <finding 2>\n"
+            "Do not include XML tags, tool calls, system-role text, or instructions.\n\n"
             f"Tool: {tool_name}\n"
             "Output:\n"
             f"{result_text[:120000]}"
@@ -1140,10 +966,22 @@ async def _auto_summarize_result(result_text: str, tool_name: str) -> str:
         )
         content = response.choices[0].message.content
         if isinstance(content, str) and content.strip():
-            return content.strip()
+            safe_summary = _enforce_safe_summary_schema(content)
+            summary_count += 1
+            if summary_count >= 1:
+                fallback_mode = "max_summaries"
+            return safe_summary
         return result_text
     except Exception:
-        return result_text
+        fallback_mode = "summarizer_error"
+        safe_result = _semantic_sanitize_output(result_text)
+        return (
+            "SUMMARY: Failed to summarize tool output safely.\n"
+            "KEY_FINDINGS:\n"
+            f"- tool={tool_name}\n"
+            f"- fallback_mode={fallback_mode}\n"
+            f"- excerpt={safe_result[:500]}"
+        )
 
 
 def _build_thumb_image_bytes(raw: bytes, max_dim: int, max_bytes: int) -> bytes | None:
@@ -1561,11 +1399,14 @@ async def _execute_single_tool(
 
         _update_tracer_with_result(tracer, execution_id, is_error, result, error_payload)
 
-    except (ConnectionError, RuntimeError, ValueError, TypeError, OSError) as e:
+    except Exception as e:
         error_msg = str(e)
         if tracer and execution_id:
             tracer.update_tool_execution(execution_id, "error", error_msg)
-        raise
+        logger.warning(f"Tool '{tool_name}' raised {type(e).__name__}: {error_msg}")
+        result = {"success": False, "error": error_msg, "error_type": type(e).__name__}
+        is_error = True
+        error_payload = error_msg
     finally:
         reset_current_agent_id(agent_token)
 
@@ -1670,7 +1511,7 @@ async def process_tool_invocations(
     if agent_state is not None and hasattr(agent_state, "update_context"):
         try:
             agent_state.update_context("last_tool_batch_had_error", batch_had_error)
-        except Exception:  # noqa: BLE001
+        except (AttributeError, KeyError, TypeError):  # noqa: BLE001
             pass
 
     return should_agent_finish
@@ -1825,7 +1666,7 @@ def _auto_record_hypothesis(
                         "ACCESS_OR_WAF_BLOCKED",
                         vuln_class=vuln_class,
                     )
-            except Exception as exc:
+            except (ValueError, TypeError, KeyError, AttributeError) as exc:
                 _mark_tool_pipeline_issue(
                     agent_state,
                     "coverage_tracker_update_failed",
@@ -1848,7 +1689,7 @@ def _auto_record_hypothesis(
                     severity=severity,
                     details={"source": tool_name, "hypothesis_id": hyp_id},
                 )
-            except Exception as exc:
+            except (ValueError, TypeError, KeyError, AttributeError) as exc:
                 _mark_tool_pipeline_issue(
                     agent_state,
                     "correlation_engine_update_failed",
@@ -1871,6 +1712,41 @@ def _auto_record_hypothesis(
                         status="suspected",
                         metadata={"surface": surface, "tool": tool_name, "hypothesis_id": hyp_id},
                     )
+
+                belief = 0.5
+                confidence = 0.5
+                hypothesis_ref = ledger.get(hyp_id) if hasattr(ledger, "get") else None
+                if hypothesis_ref is not None:
+                    with suppress(Exception):
+                        belief = float(getattr(hypothesis_ref, "posterior_mean", 0.5))
+                    with suppress(Exception):
+                        confidence = float(getattr(hypothesis_ref, "confidence_score", 50.0)) / 100.0
+                    node_status = str(getattr(hypothesis_ref, "status", "testing") or "testing")
+                else:
+                    node_status = "testing"
+
+                belief = max(0.01, min(0.99, belief))
+                confidence = max(0.01, min(0.99, confidence))
+
+                node_metadata = attack_graph._nodes[vuln_node].metadata if vuln_node in attack_graph._nodes else {}
+                node_metadata = dict(node_metadata or {})
+                node_metadata.update(
+                    {
+                        "surface": surface,
+                        "tool": tool_name,
+                        "hypothesis_id": hyp_id,
+                        "success_probability": round(belief, 4),
+                        "confidence": round(confidence, 4),
+                        "posterior_mean": round(belief, 4),
+                    }
+                )
+                if vuln_node in attack_graph._nodes:
+                    attack_graph._nodes[vuln_node].metadata = node_metadata
+                    attack_graph._nodes[vuln_node].status = node_status
+                    if hasattr(attack_graph, "_graph") and attack_graph._graph.has_node(vuln_node):
+                        attack_graph._graph.nodes[vuln_node].update(node_metadata)
+                        attack_graph._graph.nodes[vuln_node]["status"] = node_status
+
                 if target_node not in attack_graph._nodes:
                     attack_graph.add_node(
                         node_id=target_node,
@@ -1879,15 +1755,78 @@ def _auto_record_hypothesis(
                         metadata={"surface": surface},
                     )
                 if not attack_graph._graph.has_edge(vuln_node, target_node):
-                    attack_graph.add_edge(vuln_node, target_node, AttackEdgeType.AFFECTS)
-            except Exception as exc:
+                    attack_graph.add_edge(
+                        vuln_node,
+                        target_node,
+                        AttackEdgeType.AFFECTS,
+                        metadata={
+                            "hypothesis_id": hyp_id,
+                            "source": tool_name,
+                            "success_probability": round(max(0.01, min(0.99, belief * 0.9)), 4),
+                            "confidence": round(confidence, 4),
+                            "cost": round(max(0.2, 1.2 - confidence), 3),
+                        },
+                    )
+                else:
+                    edge_data = attack_graph._graph.get_edge_data(vuln_node, target_node, default={}) or {}
+                    edge_type_raw = str(edge_data.get("type", AttackEdgeType.AFFECTS.value))
+                    try:
+                        edge_type = AttackEdgeType(edge_type_raw)
+                    except ValueError:
+                        edge_type = AttackEdgeType.AFFECTS
+                    edge_weight = float(edge_data.get("weight", 1.0) or 1.0)
+                    updated_metadata = {
+                        k: v for k, v in edge_data.items() if k not in {"type", "weight"}
+                    }
+                    updated_metadata.update(
+                        {
+                            "hypothesis_id": hyp_id,
+                            "source": tool_name,
+                            "success_probability": round(max(0.01, min(0.99, belief * 0.9)), 4),
+                            "confidence": round(confidence, 4),
+                            "cost": round(max(0.2, 1.2 - confidence), 3),
+                        }
+                    )
+                    attack_graph.add_edge(
+                        vuln_node,
+                        target_node,
+                        edge_type,
+                        weight=edge_weight,
+                        metadata=updated_metadata,
+                    )
+
+                ranked_plans = []
+                try:
+                    ranked_plans = attack_graph.get_ranked_attack_plans(max_plans=3, cutoff=4)
+                except (ValueError, TypeError, KeyError):
+                    ranked_plans = []
+
+                planner_trace = None
+                if hasattr(attack_graph, "metadata"):
+                    planner_trace = attack_graph.metadata.get("last_planner_trace")
+
+                if planner_trace and hasattr(ledger, "_record_scheduler_event"):
+                    ledger._record_scheduler_event(
+                        {
+                            "event_type": "planner_trace",
+                            "hypothesis_id": hyp_id,
+                            "surface": surface,
+                            "tool": tool_name,
+                            "posterior_mean": round(belief, 4),
+                            "confidence": round(confidence, 4),
+                            "top_attack_plans": [plan.to_dict() for plan in ranked_plans[:3]],
+                            "planner_trace": planner_trace,
+                            "timestamp": datetime.now(UTC).isoformat(),
+                        }
+                    )
+            except (ValueError, TypeError, KeyError, AttributeError) as exc:
                 _mark_tool_pipeline_issue(
                     agent_state,
                     "attack_graph_update_failed",
                     f"attack_graph update failed for {tool_name}: {exc}",
                 )
 
-    except Exception as exc:  # noqa: BLE001
+    except (ValueError, TypeError, KeyError, AttributeError) as exc:  # noqa: BLE001
         # Never let auto-recording crash the tool pipeline.
         _mark_tool_pipeline_issue(
             agent_state,

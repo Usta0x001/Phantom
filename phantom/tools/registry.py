@@ -121,6 +121,28 @@ def _parse_param_schema(tool_xml: str) -> dict[str, Any]:
     return {"params": params, "required": required, "has_params": bool(params or required)}
 
 
+def _infer_param_schema_from_signature(func: Callable[..., Any]) -> dict[str, Any]:
+    params: set[str] = set()
+    required: set[str] = set()
+
+    try:
+        sig = signature(func)
+    except (TypeError, ValueError):
+        return {"params": set(), "required": set(), "has_params": False}
+
+    for name, param in sig.parameters.items():
+        if name == "agent_state":
+            continue
+        if param.kind in {param.VAR_POSITIONAL, param.VAR_KEYWORD}:
+            continue
+
+        params.add(name)
+        if param.default is inspect._empty:
+            required.add(name)
+
+    return {"params": params, "required": required, "has_params": bool(params or required)}
+
+
 def _get_module_name(func: Callable[..., Any]) -> str:
     module = inspect.getmodule(func)
     if not module:
@@ -204,31 +226,30 @@ def register_tool(
             "sandbox_execution": sandbox_execution,
         }
 
-        sandbox_mode = os.getenv("PHANTOM_SANDBOX_MODE", "false").lower() == "true"
-        if not sandbox_mode:
-            try:
-                schema_xml = _resolve_schema_for_tool(f)
+        try:
+            schema_xml = _resolve_schema_for_tool(f)
 
-                if schema_xml is not None:
-                    func_dict["xml_schema"] = schema_xml
-                else:
-                    func_dict["xml_schema"] = (
-                        f'<tool name="{f.__name__}">' 
-                        "<description>Schema not found for tool.</description>"
-                        "</tool>"
-                    )
-            except (TypeError, FileNotFoundError) as e:
-                logger.warning(f"Error loading schema for {f.__name__}: {e}")
+            if schema_xml is not None:
+                func_dict["xml_schema"] = schema_xml
+            else:
                 func_dict["xml_schema"] = (
                     f'<tool name="{f.__name__}">'
-                    "<description>Error loading schema.</description>"
+                    "<description>Schema not found for tool.</description>"
                     "</tool>"
                 )
+        except (TypeError, FileNotFoundError) as e:
+            logger.warning(f"Error loading schema for {f.__name__}: {e}")
+            func_dict["xml_schema"] = (
+                f'<tool name="{f.__name__}">'
+                "<description>Error loading schema.</description>"
+                "</tool>"
+            )
 
-        if not sandbox_mode:
-            xml_schema = func_dict.get("xml_schema")
-            param_schema = _parse_param_schema(xml_schema if isinstance(xml_schema, str) else "")
-            _tool_param_schemas[str(func_dict["name"])] = param_schema
+        xml_schema = func_dict.get("xml_schema")
+        param_schema = _parse_param_schema(xml_schema if isinstance(xml_schema, str) else "")
+        if not param_schema.get("has_params"):
+            param_schema = _infer_param_schema_from_signature(f)
+        _tool_param_schemas[str(func_dict["name"])] = param_schema
 
         tools.append(func_dict)
         _tools_by_name[str(func_dict["name"])] = f
