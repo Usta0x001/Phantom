@@ -1,0 +1,32 @@
+<tools>
+  <tool name="finish_scan">
+    <description>Complete the security scan with a professional penetration test report. REQUIRED for root/main agent only. Subagents must use agent_finish. ALL subagents must be completed before calling this. ALL vulnerabilities must be reported with create_vulnerability_report first (no duplicates). Calling multiple times OVERWRITES the report.
+
+Report rules (PDF-ready): Do NOT include local paths, internal tools, agents, sandboxes, models, system prompts, connection issues, or tester environment details. Tone: formal, objective, third-person, concise. Structure: Executive summary (risk posture, key findings, business impact), Methodology (OWASP/PTES, scope), Technical analysis (consolidated findings from vulnerability reports), Recommendations (prioritized remediation).</description>
+    <parameters>
+      <parameter name="executive_summary" type="string" required="true">
+        <description>High-level summary for non-technical stakeholders. Include: risk posture assessment, key findings in business context, potential business impact (data exposure, compliance, reputation), and an overarching remediation theme. Write in clear, accessible language for executive leadership.</description>
+      </parameter>
+      <parameter name="methodology" type="string" required="true">
+        <description>Testing methodology and scope. Include: frameworks and standards followed (e.g., OWASP WSTG, PTES), engagement type and approach (black-box, gray-box), in-scope assets and target environment, categories of testing activities performed, and evidence validation standards applied.</description>
+      </parameter>
+      <parameter name="technical_analysis" type="string" required="true">
+        <description>Consolidated overview of confirmed findings and risk patterns. Include: severity model used, a high-level summary of each finding with its severity rating, and systemic root causes or recurring themes observed across findings. Reference individual vulnerability reports for reproduction details — do not duplicate full evidence here.</description>
+      </parameter>
+      <parameter name="recommendations" type="string" required="true">
+        <description>Prioritized, actionable remediation guidance organized by urgency (Immediate, Short-term, Medium-term). Each recommendation should provide specific technical remediation steps. Conclude with retest and validation guidance.</description>
+      </parameter>
+    </parameters>
+    <returns type="Dict[str, Any]">
+      <description>Response containing success status, vulnerability count, and completion message. If agents are still running, returns details about active agents and suggested actions.</description>
+    </returns>
+    <examples>
+<function=finish_scan>
+<parameter=executive_summary>Penetration test of target identified critical SQL injection in the login endpoint allowing unauthenticated database access. Overall risk: Critical. Remediation: prioritize input validation and parameterized queries.</parameter>
+<parameter=methodology>Assessment followed OWASP WSTG methodology. Black-box external pentest of the web application and API. Testing covered authentication, authorization, input handling, and session management.</parameter>
+<parameter=technical_analysis>One confirmed finding: SQL injection (Critical) in the login endpoint. User-supplied input is concatenated directly into SQL queries without sanitization or parameterization. This enables authentication bypass and full database access.</parameter>
+<parameter=recommendations>Immediate: Replace string concatenation with parameterized queries/prepared statements. Short-term: Add input validation and WAF rules. Medium-term: Security code review and automated SAST testing in CI/CD.</parameter>
+</function>
+    </examples>
+  </tool>
+</tools>

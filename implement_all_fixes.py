@@ -38,7 +38,7 @@ def _count_tokens_improved(text: str, model: str) -> int:
     try:
         import litellm
         return int(litellm.token_counter(model=model, text=text))
-    except:
+    except Exception:  # FIXED: Use specific exception
         pass
     
     # Choose ratio based on content

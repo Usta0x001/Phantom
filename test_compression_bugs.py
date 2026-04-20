@@ -153,7 +153,7 @@ def test_bug_6_token_count_inaccurate():
             actual = len(text)
             ratio = counted / max(actual, 1)
             print(f"  {name:<10}: {counted:>4} tokens for {actual:>3} chars ({ratio:.2f})")
-        except:
+        except Exception:  # FIXED: Use specific exception
             print(f"  {name:<10}: ERROR")
     
     print(f"\n[ISSUE] Fallback len(text)//4 is crude estimate")

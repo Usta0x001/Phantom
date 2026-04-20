@@ -39,7 +39,7 @@ inaccurate_count = 0
 for text in test_texts:
     try:
         counted = _count_tokens(text, model)
-    except:
+    except Exception:  # FIXED: Use specific exception
         counted = len(text) // 4
     actual = len(text)
     ratio = counted / actual if actual > 0 else 0

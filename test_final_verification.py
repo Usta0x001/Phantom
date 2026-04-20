@@ -36,7 +36,7 @@ def test_token_estimation():
     text = "密码token"  # Chinese
     try:
         count = _count_tokens(text, model)
-    except:
+    except Exception:  # FIXED: Use specific exception
         count = len(text) // 4
     
     # With fix: should use 0.5 ratio for non-ASCII

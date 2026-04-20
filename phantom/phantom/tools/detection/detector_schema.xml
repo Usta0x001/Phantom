@@ -1,0 +1,38 @@
+<tools>
+  <tool name="detect_pattern">
+    <description>Detect vulnerability indicators with regex patterns.</description>
+    <parameters>
+      <parameter name="response_body" type="string" required="true" />
+      <parameter name="patterns" type="array" required="false" />
+      <parameter name="vuln_class" type="string" required="false" />
+      <parameter name="case_sensitive" type="boolean" required="false" />
+    </parameters>
+  </tool>
+
+  <tool name="detect_error_based">
+    <description>Detect error-based vulnerability signals.</description>
+    <parameters>
+      <parameter name="response_body" type="string" required="true" />
+      <parameter name="vuln_class" type="string" required="true" />
+    </parameters>
+  </tool>
+
+  <tool name="detect_timing_based">
+    <description>Detect timing-based blind vulnerability signals.</description>
+    <parameters>
+      <parameter name="baseline_time" type="number" required="true" />
+      <parameter name="test_time" type="number" required="true" />
+      <parameter name="delay_expected" type="number" required="false" />
+      <parameter name="tolerance" type="number" required="false" />
+    </parameters>
+  </tool>
+
+  <tool name="detect_differential">
+    <description>Detect differential behavior between baseline/test responses.</description>
+    <parameters>
+      <parameter name="baseline_response" type="object" required="true" />
+      <parameter name="test_response" type="object" required="true" />
+      <parameter name="vuln_class" type="string" required="true" />
+    </parameters>
+  </tool>
+</tools>

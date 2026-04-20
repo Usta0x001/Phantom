@@ -43,13 +43,13 @@ errors = 0
 for name, text in test_cases:
     try:
         counted = _count_tokens(text, model)
-    except:
+    except Exception:  # FIXED: Use specific exception
         counted = len(text) // 4
     
     content = {"content": text}
     try:
         actual = _get_message_tokens(content, model)
-    except:
+    except Exception:  # FIXED: Use specific exception
         actual = len(text) // 4
     
     error = abs(counted - actual) / max(actual, 1) if actual > 0 else 0

@@ -62,7 +62,7 @@ print("\n[Test token counting accuracy]")
 for text in test_cases:
     try:
         counted = _count_tokens(text, model)
-    except:
+    except Exception:  # FIXED: Use specific exception
         counted = len(text) // 4
     
     print(f"  '{text[:20]}...' -> counted={counted}, chars={len(text)}")
