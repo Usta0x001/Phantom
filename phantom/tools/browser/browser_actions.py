@@ -244,7 +244,7 @@ def _handle_selector_actions(
     raise ValueError(f"Unknown selector action: {action}")
 
 
-@register_tool(sandbox_execution=False)
+@register_tool(sandbox_execution=True)
 def browser_action(
     action: BrowserAction,
     url: str | None = None,
