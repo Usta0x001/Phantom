@@ -56,6 +56,12 @@ RUN mkdir -p /home/pentester/tools/wordlists /home/pentester/.wtf && \
     mv /tmp/SecLists-master/* /home/pentester/tools/wordlists/ 2>/dev/null || true && \
     rm -rf /tmp/seclists.zip /tmp/SecLists-master 2>/dev/null || true
 
+# gobuster - Directory/File DNS web scanner
+RUN which gobuster || (apt-get update -qq && apt-get install -y -qq gobuster 2>/dev/null) || true
+
+# nuclei - Update templates to latest
+RUN nuclei -update-templates 2>/dev/null || true
+
 # Fix Windows CRLF line endings on all copied Python and shell files
 RUN find /app/phantom -name '*.py' -exec sed -i 's/\r$//' {} + 2>/dev/null || true
 
