@@ -41,8 +41,13 @@ RUN /app/venv/bin/pip install --no-cache-dir --quiet libtmux pyte openhands-aci 
     rm -rf /root/.cache/pip /tmp/pip-* 2>/dev/null || true
 
 # ─── Install security tools for pentesting ───────────────────────────────────
-# wpscan - WordPress vulnerability scanner
-RUN /app/venv/bin/pip install --no-cache-dir --quiet wpscan 2>/dev/null || true
+# wpscan - WordPress vulnerability scanner (Ruby gem, via pre-built binary)
+RUN curl -sL https://github.com/wpscanteam/wpscan/releases/download/v3.9.5/wpww-3.9.5-linux-x64.tar.xz -o /tmp/wpww.tar.xz && \
+    tar -xJf /tmp/wpww.tar.xz -C /tmp && \
+    mv /tmp/wpww /usr/local/bin/wpscan && \
+    chmod +x /usr/local/bin/wpscan && \
+    rm -f /tmp/wpww.tar.xz && \
+    ln -sf /usr/local/bin/wpscan /usr/bin/wpscan 2>/dev/null || true
 
 # Install additional wordlists and tools if not present
 RUN mkdir -p /home/pentester/tools/wordlists /home/pentester/.wtf && \
