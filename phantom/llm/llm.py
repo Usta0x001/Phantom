@@ -545,7 +545,7 @@ class LLM:
     def _build_fallback_system_prompt(self, tool_names: tuple[str, ...]) -> str:
         try:
             if tool_names:
-                tools_prompt = get_tools_prompt_subset(list(tool_names))
+                tools_prompt = get_tools_prompt_subset(list(tool_names), use_compact=True)
             else:
                 tools_prompt = get_compact_tools_prompt()
         except Exception:  # noqa: BLE001
