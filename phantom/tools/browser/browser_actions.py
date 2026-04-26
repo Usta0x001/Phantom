@@ -1,10 +1,6 @@
-import importlib.util
 from typing import TYPE_CHECKING, Any, Literal, NoReturn
 
 from phantom.tools.registry import register_tool
-
-
-_PLAYWRIGHT_AVAILABLE = importlib.util.find_spec("playwright") is not None
 
 
 if TYPE_CHECKING:
@@ -261,14 +257,6 @@ def browser_action(
     timeout: float | None = None,
     wait_state: str | None = None,
 ) -> dict[str, Any]:
-    if not _PLAYWRIGHT_AVAILABLE:
-        return {
-            "error": "Playwright is not installed. Install with: pip install playwright",
-            "tab_id": tab_id,
-            "screenshot": "",
-            "is_running": False,
-        }
-
     from .tab_manager import get_browser_tab_manager
 
     manager = get_browser_tab_manager()

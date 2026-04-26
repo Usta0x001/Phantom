@@ -8,6 +8,7 @@ from typing import Any, cast
 
 try:
     from playwright.async_api import Browser, BrowserContext, Page, Playwright, async_playwright
+
     _PLAYWRIGHT_AVAILABLE = True
 except ImportError:  # pragma: no cover - optional dependency guard
     Browser = BrowserContext = Page = Playwright = Any
@@ -70,14 +71,56 @@ async def _create_browser() -> Browser:
         _state.playwright = None
 
     _state.playwright = await async_playwright().start()
-    _state.browser = await _state.playwright.chromium.launch(
-        headless=True,
-        args=[
-            "--no-sandbox",
-            "--disable-dev-shm-usage",
-            "--disable-gpu",
-        ],
-    )
+    try:
+        _state.browser = await _state.playwright.chromium.launch(
+            headless=True,
+            args=[
+                "--no-sandbox",
+                "--disable-dev-shm-usage",
+                "--disable-gpu",
+            ],
+        )
+    except Exception as exc:
+        error_msg = str(exc)
+        # Auto-install Chromium if the browser binary is missing.
+        if "Executable doesn't exist" in error_msg or "download new browsers" in error_msg:
+            logger.warning("Playwright Chromium missing; attempting auto-install...")
+            import asyncio
+            import shutil
+            import sys
+
+            playwright_cmd = shutil.which("playwright")
+            if playwright_cmd is None:
+                # Fallback: try via python -m playwright
+                playwright_cmd = sys.executable
+                install_args = ["-m", "playwright", "install", "chromium"]
+            else:
+                install_args = ["install", "chromium"]
+
+            proc = await asyncio.create_subprocess_exec(
+                playwright_cmd,
+                *install_args,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, stderr = await proc.communicate()
+            if proc.returncode != 0:
+                raise RuntimeError(
+                    f"Failed to auto-install Playwright Chromium: {stderr.decode().strip()}"
+                ) from exc
+            logger.info("Playwright Chromium auto-installed successfully.")
+
+            # Retry launch after installation.
+            _state.browser = await _state.playwright.chromium.launch(
+                headless=True,
+                args=[
+                    "--no-sandbox",
+                    "--disable-dev-shm-usage",
+                    "--disable-gpu",
+                ],
+            )
+        else:
+            raise
     return _state.browser
 
 
@@ -610,14 +653,22 @@ class BrowserInstance:
             return state
 
     def wait_for_selector(
-        self, selector: str, tab_id: str | None = None, timeout: float = 10.0, state: str = "visible"
+        self,
+        selector: str,
+        tab_id: str | None = None,
+        timeout: float = 10.0,
+        state: str = "visible",
     ) -> dict[str, Any]:
         """Wait for an element matching selector to appear."""
         with self._execution_lock:
             return self._run_async(self._wait_for_selector(selector, tab_id, timeout, state))
 
     async def _wait_for_selector(
-        self, selector: str, tab_id: str | None = None, timeout: float = 10.0, state: str = "visible"
+        self,
+        selector: str,
+        tab_id: str | None = None,
+        timeout: float = 10.0,
+        state: str = "visible",
     ) -> dict[str, Any]:
         if not tab_id:
             tab_id = self.current_page_id
@@ -642,16 +693,12 @@ class BrowserInstance:
             page_state["wait_state"] = state
             return page_state
 
-    def query_selector_all(
-        self, selector: str, tab_id: str | None = None
-    ) -> dict[str, Any]:
+    def query_selector_all(self, selector: str, tab_id: str | None = None) -> dict[str, Any]:
         """Query all elements matching selector and return their info."""
         with self._execution_lock:
             return self._run_async(self._query_selector_all(selector, tab_id))
 
-    async def _query_selector_all(
-        self, selector: str, tab_id: str | None = None
-    ) -> dict[str, Any]:
+    async def _query_selector_all(self, selector: str, tab_id: str | None = None) -> dict[str, Any]:
         if not tab_id:
             tab_id = self.current_page_id
 
@@ -677,13 +724,15 @@ class BrowserInstance:
                         return attrs;
                     }""")
 
-                    element_info.append({
-                        "index": i,
-                        "tag": tag_name,
-                        "text": text_content.strip()[:100],
-                        "attributes": attrs,
-                        "bbox": bbox,
-                    })
+                    element_info.append(
+                        {
+                            "index": i,
+                            "tag": tag_name,
+                            "text": text_content.strip()[:100],
+                            "attributes": attrs,
+                            "bbox": bbox,
+                        }
+                    )
                 except Exception:  # noqa: BLE001
                     continue
 

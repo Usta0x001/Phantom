@@ -180,7 +180,10 @@ fi
 echo "Using Python: $PYTHON_BIN"
 # Inside Docker, bind to 0.0.0.0 so Docker port forwarding works.
 # Security is handled at the Docker level: host binds to 127.0.0.1.
-sudo -E -u pentester env PATH="$PATH:/app/venv/bin" PYTHONPATH=/app PHANTOM_SANDBOX_MODE=true \
+# FIX: Explicitly set HOME so Playwright finds browsers installed under
+# /home/pentester/.cache/ms-playwright/ instead of /root/.cache/.
+# sudo -E preserves root's HOME; env overrides it for the child process.
+sudo -E -u pentester env HOME=/home/pentester PATH="$PATH:/app/venv/bin" PYTHONPATH=/app PHANTOM_SANDBOX_MODE=true \
   $PYTHON_BIN -m phantom.runtime.tool_server \
   --token-file="$TOKEN_FILE" \
   --host=0.0.0.0 \

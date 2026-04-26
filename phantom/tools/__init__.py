@@ -22,60 +22,172 @@ from .registry import (
 )
 
 
-TOOL_SUBSET_MODE = (Config.get("phantom_tool_subset") or "full").strip().lower()
+TOOL_SUBSET_MODE = (Config.get("phantom_tool_subset") or "core").strip().lower()
 EXTENDED_TOOLS_ENABLED = TOOL_SUBSET_MODE == "full"
 
 HAS_PERPLEXITY_API = bool(Config.get("perplexity_api_key"))
 
 DISABLE_BROWSER = (Config.get("phantom_disable_browser") or "false").lower() == "true"
 
-from .agents_graph import *  # noqa: F403
+from .agents_graph import (
+    agent_finish,
+    create_agent,
+    send_message_to_agent,
+    view_agent_graph,
+    wait_for_message,
+    wait_for_agents,
+    reset_all_state,
+)
 
 if not DISABLE_BROWSER:
-    from .browser import *  # noqa: F403
-from .file_edit import *  # noqa: F403
-from .finish import *  # noqa: F403
-from .fuzzer import *  # noqa: F403
-from .proxy import *  # noqa: F403
-from .python import *  # noqa: F403
-from .reporting import *  # noqa: F403
-from .recon import *  # noqa: F403
-from .terminal import *  # noqa: F403
-from .todo import *  # noqa: F403
-from .thinking import *  # noqa: F403
+    from .browser import (
+        browser_action,
+    )
 
-# Hypothesis ledger - critical for tracking tested hypotheses
-from .hypothesis import *  # noqa: F403
+from .file_edit import (
+    list_files,
+    search_files,
+    str_replace_editor,
+)
 
-# Scan status - critical for LLM reasoning
-from .scan_status import *  # noqa: F403
+from .finish import (
+    finish_scan,
+)
 
-from .notes import *  # noqa: F403
-from .oast import *  # noqa: F403
-from .scan_registry import *  # noqa: F403
-from .session import *  # noqa: F403
-from .web_search import *  # noqa: F403
+from .fuzzer import (
+    execute_fuzz_batch,
+)
 
-# Phase 1 Enhancement Tools
-from .osint import *  # noqa: F403
-from .vuln_intel import *  # noqa: F403
-from .waf import *  # noqa: F403
+from .proxy import (
+    repeat_request,
+    scope_rules,
+    send_request,
+    list_requests,
+    view_request,
+)
 
-# Phase 2 Enhancement Tools
-from .payload_gen import *  # noqa: F403
-from .response_analysis import *  # noqa: F403
-from .session_mgmt import *  # noqa: F403
-from .api_schema import *  # noqa: F403
+from .python import (
+    python_action,
+)
 
-# Detection module
-from .detection import *  # noqa: F403
+from .reporting import (
+    create_vulnerability_report,
+)
+from .reporting import (
+    create_elite_report,
+    export_elite_report,
+)
 
-# Always register non-browser core tools.
-from .file_edit import *  # noqa: F403
-from .fuzzer import *  # noqa: F403
-from .proxy import *  # noqa: F403
-from .python import *  # noqa: F403
-from .terminal import *  # noqa: F403
+from .recon import (
+    bruteforce_directories,
+    comprehensive_js_analysis,
+)
+
+from .terminal import (
+    terminal_execute,
+)
+
+from .todo import (
+    create_todo,
+    list_todos,
+    update_todo,
+    delete_todo,
+)
+
+from .thinking import (
+    think,
+)
+
+from .hypothesis import (
+    add_hypothesis,
+    confirm_hypothesis,
+    get_hypothesis_summary,
+    has_tested_payload,
+    query_hypotheses,
+    record_payload_test,
+    reject_hypothesis,
+    set_ledger,
+)
+
+from .scan_status import (
+    get_scan_status,
+    set_scan_status_context,
+)
+
+from .notes import (
+    create_note,
+    list_notes,
+    update_note,
+    delete_note,
+)
+
+from .oast import (
+    generate_oast_payload,
+    check_oast_interactions,
+)
+
+from .scan_registry import (
+    check_scan_registry,
+    register_scan_target,
+)
+
+from .session import (
+    session_login,
+    session_get,
+    session_refresh,
+)
+
+from .web_search import (
+    web_search,
+)
+
+from .osint import (
+    shodan_search,
+    crtsh_search,
+    dns_enum,
+    github_dork,
+    bruteforce_subdomains,
+)
+
+from .vuln_intel import (
+    cve_search,
+    exploit_search,
+    auto_queue_cve_exploits,
+)
+
+from .waf import (
+    detect_waf,
+)
+
+from .payload_gen import (
+    generate_xss_payloads,
+    generate_sqli_payloads,
+    generate_xxe_payloads,
+    generate_ssti_payloads,
+    generate_cmd_injection_payloads,
+)
+
+from .response_analysis import (
+    analyze_response,
+    detect_errors,
+    extract_secrets,
+    identify_tech_stack,
+)
+
+from .session_mgmt import (
+    automate_login,
+    extract_csrf_token,
+    manage_cookies,
+)
+
+from .api_schema import (
+    extract_api_endpoints,
+)
+
+from .detection import (
+    detect_pattern,
+    detect_error_based,
+)
 
 __all__ = [
     "ImplementedInClientSideOnlyError",
@@ -92,4 +204,80 @@ __all__ = [
     "remove_screenshot_from_result",
     "tools",
     "validate_tool_availability",
+    "agent_finish",
+    "create_agent",
+    "send_message_to_agent",
+    "view_agent_graph",
+    "wait_for_message",
+    "wait_for_agents",
+    "reset_all_state",
+    "browser_action",
+    "list_files",
+    "search_files",
+    "str_replace_editor",
+    "finish_scan",
+    "execute_fuzz_batch",
+    "repeat_request",
+    "scope_rules",
+    "send_request",
+    "list_requests",
+    "view_request",
+    "python_action",
+    "create_vulnerability_report",
+    "create_elite_report",
+    "export_elite_report",
+    "bruteforce_directories",
+    "comprehensive_js_analysis",
+    "terminal_execute",
+    "create_todo",
+    "list_todos",
+    "update_todo",
+    "delete_todo",
+    "think",
+    "add_hypothesis",
+    "confirm_hypothesis",
+    "get_hypothesis_summary",
+    "has_tested_payload",
+    "query_hypotheses",
+    "record_payload_test",
+    "reject_hypothesis",
+    "set_ledger",
+    "get_scan_status",
+    "set_scan_status_context",
+    "create_note",
+    "list_notes",
+    "update_note",
+    "delete_note",
+    "generate_oast_payload",
+    "check_oast_interactions",
+    "check_scan_registry",
+    "register_scan_target",
+    "session_login",
+    "session_get",
+    "session_refresh",
+    "web_search",
+    "shodan_search",
+    "crtsh_search",
+    "dns_enum",
+    "github_dork",
+    "bruteforce_subdomains",
+    "cve_search",
+    "exploit_search",
+    "auto_queue_cve_exploits",
+    "detect_waf",
+    "generate_xss_payloads",
+    "generate_sqli_payloads",
+    "generate_xxe_payloads",
+    "generate_ssti_payloads",
+    "generate_cmd_injection_payloads",
+    "analyze_response",
+    "detect_errors",
+    "extract_secrets",
+    "identify_tech_stack",
+    "automate_login",
+    "extract_csrf_token",
+    "manage_cookies",
+    "extract_api_endpoints",
+    "detect_pattern",
+    "detect_error_based",
 ]

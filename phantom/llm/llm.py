@@ -66,7 +66,7 @@ class RequestStats:
     output_tokens: int = 0
     cached_tokens: int = 0
     cost: float = 0.0
-    requests: int = 0           # calls with accounted token usage
+    requests: int = 0  # calls with accounted token usage
     completed_requests: int = 0  # compatibility mirror of requests
 
     def to_dict(self) -> dict[str, int | float]:
@@ -86,6 +86,7 @@ class RequestStats:
         self.cost = 0.0
         self.requests = 0
         self.completed_requests = 0
+
 
 _GLOBAL_TOTAL_STATS = RequestStats()
 _GLOBAL_PER_MODEL_STATS: dict[str, RequestStats] = {}
@@ -127,7 +128,9 @@ def _record_token_drift(
         "actual_completion_tokens": int(max(actual_completion_tokens, 0)),
         "accounted_input_tokens": int(max(accounted_input_tokens, 0)),
         "accounted_output_tokens": int(max(accounted_output_tokens, 0)),
-        "accounted_total_tokens": int(max(accounted_input_tokens, 0) + max(accounted_output_tokens, 0)),
+        "accounted_total_tokens": int(
+            max(accounted_input_tokens, 0) + max(accounted_output_tokens, 0)
+        ),
         "accounted_cost": float(max(accounted_cost, 0.0)),
         "drift": int(drift),
     }
@@ -185,9 +188,7 @@ def _estimate_output_tokens_for_response(response: Any) -> int:
                 content = getattr(message, "content", "") or ""
                 if isinstance(content, list):
                     text_parts = [
-                        str(part.get("text", ""))
-                        for part in content
-                        if isinstance(part, dict)
+                        str(part.get("text", "")) for part in content if isinstance(part, dict)
                     ]
                     content = "\n".join(p for p in text_parts if p)
     except Exception:  # noqa: BLE001
@@ -243,9 +244,7 @@ def _extract_cost_for_model(model_name: str, response: Any) -> float:
             candidates = [model_name, bare, bare.lower(), model_name.lower()]
             model_cost_lower = {k.lower(): v for k, v in litellm.model_cost.items()}
             for candidate in candidates:
-                info = litellm.model_cost.get(candidate) or model_cost_lower.get(
-                    candidate.lower()
-                )
+                info = litellm.model_cost.get(candidate) or model_cost_lower.get(candidate.lower())
                 if info:
                     r_in = info.get("input_cost_per_token", 0) or 0
                     r_out = info.get("output_cost_per_token", 0) or 0
@@ -385,7 +384,6 @@ def validate_llm_accounting_invariants() -> dict[str, Any]:
 from enum import Enum
 
 
-
 class LLM:
     # Scan mode downgrade order for adaptive mode
     _SCAN_MODE_DOWNGRADE: dict[str, str] = {
@@ -403,8 +401,8 @@ class LLM:
         # Per-model breakdown: model_name -> RequestStats (only agent iteration calls)
         self._per_model_stats = _GLOBAL_PER_MODEL_STATS
         # Call type counters
-        self._agent_calls: int = 0    # LLM calls during agent loop iterations
-        self._error_calls: int = 0    # LLM calls that ended in an error (after retries)
+        self._agent_calls: int = 0  # LLM calls during agent loop iterations
+        self._error_calls: int = 0  # LLM calls that ended in an error (after retries)
         self.memory_compressor = MemoryCompressor(model_name=config.litellm_model)
         self._extra_tool_names: set[str] = set()
         self.runtime_allowed_tools = self._resolve_runtime_allowed_tools()
@@ -439,8 +437,11 @@ class LLM:
         except ValueError:
             self._adaptive_threshold = 0.8
 
-    def _prompt_cache_key(self, agent_name: str | None, tool_names: tuple[str, ...]) -> tuple[str, str, tuple[str, ...], str, str]:
+    def _prompt_cache_key(
+        self, agent_name: str | None, tool_names: tuple[str, ...]
+    ) -> tuple[str, str, tuple[str, ...], str, str]:
         import os
+
         return (
             str(agent_name or ""),
             str(self.config.scan_mode or ""),
@@ -502,7 +503,9 @@ class LLM:
             skills_dir = get_phantom_resource_path("skills")
             env = Environment(
                 loader=FileSystemLoader([prompt_dir, skills_dir]),
-                autoescape=select_autoescape(enabled_extensions=('jinja', 'html', 'htm', 'xml'), default_for_string=False),
+                autoescape=select_autoescape(
+                    enabled_extensions=("jinja", "html", "htm", "xml"), default_for_string=False
+                ),
             )
 
             skills_to_load = [
@@ -610,11 +613,13 @@ class LLM:
             if now < _GLOBAL_RATE_LIMIT_UNTIL:
                 wait_time = _GLOBAL_RATE_LIMIT_UNTIL - now
                 should_sleep = True
-                logger.warning("Global rate limit in effect, agent '%s' sleeping for %.1fs...", self.agent_name, wait_time)
+                logger.warning(
+                    "Global rate limit in effect, agent '%s' sleeping for %.1fs...",
+                    self.agent_name,
+                    wait_time,
+                )
         if should_sleep:
             await asyncio.sleep(wait_time)
-
-
 
         self._check_budget()
         self._agent_calls += 1
@@ -665,10 +670,9 @@ class LLM:
                     primary_exhausted = True
                     break
                 # Emit audit event so retries are visible in the audit log
-                _retry_audit = (
-                    __import__("phantom.logging.audit", fromlist=["get_audit_logger"])
-                    .get_audit_logger()
-                )
+                _retry_audit = __import__(
+                    "phantom.logging.audit", fromlist=["get_audit_logger"]
+                ).get_audit_logger()
                 if _retry_audit:
                     _retry_audit.log_llm_error(
                         agent_id=self.agent_id or "unknown",
@@ -681,10 +685,14 @@ class LLM:
                     wait = min(120, 4 * (2**attempt))
                     logger.warning(
                         "Rate limit hit (attempt %d/%d); backing off %.0fs globally...",
-                        attempt + 1, ratelimit_max_retries, wait,
+                        attempt + 1,
+                        ratelimit_max_retries,
+                        wait,
                     )
                     with _GLOBAL_STATS_LOCK:
-                        _GLOBAL_RATE_LIMIT_UNTIL = max(_GLOBAL_RATE_LIMIT_UNTIL, time.monotonic() + wait)
+                        _GLOBAL_RATE_LIMIT_UNTIL = max(
+                            _GLOBAL_RATE_LIMIT_UNTIL, time.monotonic() + wait
+                        )
                 else:
                     wait = min(10, 2 * (2**attempt))
                 await asyncio.sleep(wait)
@@ -717,9 +725,7 @@ class LLM:
             self._error_calls += 1
             last_err_str = f": {_last_error}" if _last_error else ""
 
-            raise LLMRequestFailedError(
-                f"All retries exhausted for primary model{last_err_str}"
-            )
+            raise LLMRequestFailedError(f"All retries exhausted for primary model{last_err_str}")
 
     async def _stream(self, messages: list[dict[str, Any]]) -> AsyncIterator[LLMResponse]:
         accumulated = ""
@@ -735,6 +741,7 @@ class LLM:
 
         # ── Audit: log the outgoing request ───────────────────────────────────
         from phantom.logging.audit import get_audit_logger as _get_audit
+
         _audit = _get_audit()
         _audit_rid = (
             _audit.log_llm_request(
@@ -742,7 +749,8 @@ class LLM:
                 model=self.config.litellm_model,
                 messages=messages,
             )
-            if _audit else None
+            if _audit
+            else None
         )
         _audit_t0 = time.monotonic()
         # ─────────────────────────────────────────────────────────────────────
@@ -802,8 +810,6 @@ class LLM:
             )
             self._check_per_request_budget(request_cost)
 
-
-
         accumulated = normalize_tool_format(accumulated)
         # Strip thinking blocks before truncation so embedded tool calls do not
         # hide the real execution payload.
@@ -854,9 +860,7 @@ class LLM:
             if examples:
                 malformed_notice += "[SYSTEM: Valid examples]\n" + "\n".join(examples) + "\n"
 
-            accumulated = (
-                malformed_notice + accumulated
-            )
+            accumulated = malformed_notice + accumulated
 
         # ── Audit: log the completed response ────────────────────────────────
         if _audit and _audit_rid:
@@ -940,9 +944,7 @@ class LLM:
             )
 
         _has_anchors = (
-            _state is not None
-            and hasattr(_state, "finding_anchors")
-            and _state.finding_anchors
+            _state is not None and hasattr(_state, "finding_anchors") and _state.finding_anchors
         )
         if _has_anchors:
             # Only inject if not already present in last 5 messages
@@ -992,7 +994,9 @@ class LLM:
         serialized = json.dumps(messages, ensure_ascii=False, default=str)
         chars = len(serialized)
         try:
-            estimated_tokens = litellm.token_counter(model=self.config.litellm_model, messages=messages)
+            estimated_tokens = litellm.token_counter(
+                model=self.config.litellm_model, messages=messages
+            )
         except Exception:  # noqa: BLE001
             estimated_tokens = max(chars // 4, 1)
         return chars, estimated_tokens
@@ -1034,7 +1038,9 @@ class LLM:
     ) -> list[dict[str, Any]]:
         max_request_chars = int(Config.get("phantom_max_request_chars") or "900000")
         max_request_tokens = int(
-            Config.get("phantom_max_request_estimated_tokens") or Config.get("phantom_ollama_context_length") or "220000"
+            Config.get("phantom_max_request_estimated_tokens")
+            or Config.get("phantom_ollama_context_length")
+            or "220000"
         )
         from phantom.logging.audit import get_audit_logger as _get_audit
 
@@ -1135,7 +1141,7 @@ class LLM:
 
     def _check_budget(self) -> None:
         """Check budget and apply graceful degradation at thresholds.
-        
+
         EFFICIENCY FIX SCALE-P1.1: Graceful Limit Degradation
         - 80% budget: Warning logged, continue normally
         - 90% budget: Warning logged, reduce reasoning effort, suggest wrap-up
@@ -1154,10 +1160,11 @@ class LLM:
             return
         if max_cost <= 0:
             return
-            
+
         # Get current global cost
         try:
             from phantom.telemetry.tracer import get_global_tracer
+
             tracer = get_global_tracer()
             if tracer:
                 traced_cost = tracer.get_total_llm_stats()["total"]["cost"]
@@ -1166,9 +1173,9 @@ class LLM:
                 current_cost = self._total_stats.cost
         except Exception:  # noqa: BLE001
             current_cost = self._total_stats.cost
-        
+
         budget_fraction = current_cost / max_cost
-        
+
         # ════════════════════════════════════════════════════════════════════
         # 80% threshold: Warning, continue normally
         # ════════════════════════════════════════════════════════════════════
@@ -1177,11 +1184,13 @@ class LLM:
             logger.warning(
                 "BUDGET ALERT: 80%% used ($%.4f / $%.4f). "
                 "Consider wrapping up current testing phase.",
-                current_cost, max_cost,
+                current_cost,
+                max_cost,
             )
             # Log to audit
             try:
                 from phantom.logging.audit import get_audit_logger as _get_audit
+
                 _audit = _get_audit()
                 if _audit:
                     _audit.log_security_event(
@@ -1196,7 +1205,7 @@ class LLM:
                     )
             except Exception:  # noqa: BLE001
                 pass
-        
+
         # ════════════════════════════════════════════════════════════════════
         # 90% threshold: Warning + reduce reasoning effort + inject wrap-up hint
         # ════════════════════════════════════════════════════════════════════
@@ -1205,9 +1214,10 @@ class LLM:
             logger.warning(
                 "BUDGET CRITICAL: 90%% used ($%.4f / $%.4f). "
                 "Reducing reasoning effort and preparing for graceful shutdown.",
-                current_cost, max_cost,
+                current_cost,
+                max_cost,
             )
-            
+
             # Reduce reasoning effort to save tokens
             if self._reasoning_effort in ("high", "xhigh"):
                 self._reasoning_effort = "medium"
@@ -1215,20 +1225,22 @@ class LLM:
             elif self._reasoning_effort == "medium":
                 self._reasoning_effort = "low"
                 logger.info("Reasoning effort reduced from medium to low to conserve budget")
-            
+
             # Auto-downgrade scan mode if adaptive is enabled
             if self._adaptive_scan_enabled:
                 new_mode = self._SCAN_MODE_DOWNGRADE.get(self.config.scan_mode)
                 if new_mode:
                     logger.warning(
                         "Auto-downgrading scan mode %s → %s due to 90%% budget",
-                        self.config.scan_mode, new_mode
+                        self.config.scan_mode,
+                        new_mode,
                     )
                     self._apply_scan_mode_change(new_mode)
-            
+
             # Log to audit
             try:
                 from phantom.logging.audit import get_audit_logger as _get_audit
+
                 _audit = _get_audit()
                 if _audit:
                     _audit.log_security_event(
@@ -1245,7 +1257,7 @@ class LLM:
                     )
             except Exception:  # noqa: BLE001
                 pass
-        
+
         # ════════════════════════════════════════════════════════════════════
         # 100% threshold: Hard stop or advisory continue
         # ════════════════════════════════════════════════════════════════════
@@ -1255,7 +1267,8 @@ class LLM:
             if abort_on_limit in ("false", "0", "no"):
                 logger.warning(
                     "Budget exceeded: $%.4f >= max $%.4f — advisory mode, continuing.",
-                    current_cost, max_cost,
+                    current_cost,
+                    max_cost,
                 )
                 return
 
@@ -1273,7 +1286,6 @@ class LLM:
         except ValueError:
             return
         if request_cost > ceiling:
-
             raise LLMRequestFailedError(
                 f"Per-request budget exceeded: ${request_cost:.4f} > ceiling ${ceiling:.4f}"
             )
@@ -1301,7 +1313,9 @@ class LLM:
                 pinned.append(
                     {
                         "role": "user",
-                        "content": "<pinned_facts>\n" + "\n".join(anchor_lines) + "\n</pinned_facts>",
+                        "content": "<pinned_facts>\n"
+                        + "\n".join(anchor_lines)
+                        + "\n</pinned_facts>",
                     }
                 )
 
@@ -1386,13 +1400,13 @@ class LLM:
         """
         if not self._routing_enabled:
             return None
-        last_user = next(
-            (m for m in reversed(messages) if m.get("role") == "user"), None
-        )
+        last_user = next((m for m in reversed(messages) if m.get("role") == "user"), None)
         content = (last_user or {}).get("content", "") or ""
         if isinstance(content, list):
             content = " ".join(
-                p.get("text", "") for p in content if isinstance(p, dict) and p.get("type") == "text"
+                p.get("text", "")
+                for p in content
+                if isinstance(p, dict) and p.get("type") == "text"
             )
         content_lower = content.strip().lower()
         is_tool_result = content_lower.startswith(("<tool_result", "<function_results"))
@@ -1418,6 +1432,7 @@ class LLM:
         # Use global cost (all agents) so the threshold is applied consistently.
         try:
             from phantom.telemetry.tracer import get_global_tracer
+
             tracer = get_global_tracer()
             current_cost = (
                 tracer.get_total_llm_stats()["total"]["cost"] if tracer else self._total_stats.cost
@@ -1464,9 +1479,7 @@ class LLM:
                     content = getattr(message, "content", "") or ""
                     if isinstance(content, list):
                         text_parts = [
-                            str(part.get("text", ""))
-                            for part in content
-                            if isinstance(part, dict)
+                            str(part.get("text", "")) for part in content if isinstance(part, dict)
                         ]
                         content = "\n".join(p for p in text_parts if p)
         except Exception:  # noqa: BLE001
@@ -1511,7 +1524,7 @@ class LLM:
                 # Estimate tokens to avoid reporting 0 which breaks cost tracking
                 logger.warning(
                     "API response missing usage stats - estimating tokens (model=%s)",
-                    self.config.litellm_model
+                    self.config.litellm_model,
                 )
                 input_tokens = self._estimate_input_tokens(messages)
                 output_tokens = self._estimate_output_tokens(response)
@@ -1592,6 +1605,7 @@ class LLM:
         # 4. Manual litellm.model_cost registry lookup (handles Azure/other prefixes).
         try:
             import litellm as _litellm
+
             usage = getattr(response, "usage", None)
             tok_in = getattr(usage, "prompt_tokens", 0) or 0
             tok_out = getattr(usage, "completion_tokens", 0) or 0
@@ -1604,9 +1618,7 @@ class LLM:
                 model_key = self.config.litellm_model or ""
                 bare = model_key.split("/", 1)[-1] if "/" in model_key else model_key
                 candidates = [model_key, bare, bare.lower(), model_key.lower()]
-                model_cost_lower = {
-                    k.lower(): v for k, v in _litellm.model_cost.items()
-                }
+                model_cost_lower = {k.lower(): v for k, v in _litellm.model_cost.items()}
                 for candidate in candidates:
                     info = _litellm.model_cost.get(candidate) or model_cost_lower.get(
                         candidate.lower()
@@ -1618,6 +1630,27 @@ class LLM:
                             return (tok_in * r_in) + (tok_out * r_out)
         except Exception:  # noqa: BLE001
             pass
+        # Cost returned 0.0 — model pricing may be missing from registry.
+        # Log a warning so operators know budget tracking is blind.
+        _total_toks = 0
+        try:
+            _u = getattr(response, "usage", None)
+            if _u is not None:
+                _total_toks = (getattr(_u, "prompt_tokens", 0) or 0) + (
+                    getattr(_u, "completion_tokens", 0) or 0
+                )
+        except Exception:  # noqa: BLE001
+            pass
+        if _total_toks > 0:
+            _model = self.config.litellm_model or "unknown"
+            logger.warning(
+                "Cost returned $0.00 for model=%s with %d tokens — "
+                "model pricing may be missing from litellm registry. "
+                "Budget tracking is blind. Add model to _PHANTOM_EXTRA_MODELS in llm/__init__.py "
+                "or set PHANTOM_COST_PER_1M_INPUT / PHANTOM_COST_PER_1M_OUTPUT.",
+                _model,
+                _total_toks,
+            )
         return 0.0
 
     def _is_context_too_large(self, e: Exception) -> bool:
@@ -1645,14 +1678,14 @@ class LLM:
                 "prompt is too long",
                 "exceeds the model",
                 # Additional provider-specific phrases
-                "model context limits",   # OpenRouter
-                "reduce context",          # generic
-                "request too large",       # HTTP proxies / gateways
-                "token count exceeds",     # Together AI / Mistral
-                "max context",             # some local models
-                "max_tokens",              # bad-param context errors
-                "message length",          # per-message size limits
-                "token budget",            # Cohere / Bedrock
+                "model context limits",  # OpenRouter
+                "reduce context",  # generic
+                "request too large",  # HTTP proxies / gateways
+                "token count exceeds",  # Together AI / Mistral
+                "max context",  # some local models
+                "max_tokens",  # bad-param context errors
+                "message length",  # per-message size limits
+                "token budget",  # Cohere / Bedrock
             )
         ):
             return True
@@ -1663,7 +1696,7 @@ class LLM:
                 r"(context|token).{0,30}exceed|"  # "context tokens exceeded"
                 r"too (many|large).{0,20}token|"  # "too many input tokens"
                 r"token.{0,20}(limit|max|over)|"  # "token limit reached"
-                r"limit.{0,20}token",               # "limit of N tokens"
+                r"limit.{0,20}token",  # "limit of N tokens"
                 msg,
             )
         )

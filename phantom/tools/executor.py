@@ -24,9 +24,6 @@ from phantom.llm.tracked_completion import tracked_acompletion
 logger = logging.getLogger(__name__)
 
 
-
-
-
 if os.getenv("PHANTOM_SANDBOX_MODE", "false").lower() == "false":
     from phantom.runtime import get_runtime
 
@@ -67,8 +64,6 @@ def _resolve_canonical_tool_name(tool_name: str | None) -> str | None:
     return candidate
 
 
-
-
 # ════════════════════════════════════════════════════════════════════════════════
 # SECURITY FIX: ARCH-001 - Prompt Injection Detection Patterns
 # ════════════════════════════════════════════════════════════════════════════════
@@ -107,7 +102,7 @@ _PROMPT_INJECTION_PATTERNS: list[re.Pattern[str]] = [
 
 def _recursive_url_decode(text: str, max_depth: int = 10) -> str:
     """Recursively URL-decode text until no more changes.
-    
+
     SECURITY FIX: Catches arbitrary-depth URL encoding like %252e%252e%252f
     which decodes to %2e%2e%2f then ../ over multiple passes.
     """
@@ -121,7 +116,7 @@ def _recursive_url_decode(text: str, max_depth: int = 10) -> str:
 
 def _normalize_for_injection_check(text: str) -> str:
     """Normalize text before injection pattern checking.
-    
+
     SECURITY FIX (CMD-002): Multi-layer normalization to defeat encoding bypasses:
     1. URL decode (catches %3B, %7C, etc.)
     2. Unicode NFKC normalization (catches fullwidth characters like ；)
@@ -129,38 +124,32 @@ def _normalize_for_injection_check(text: str) -> str:
     """
     # Layer 1: Recursive URL decode (catches arbitrary depth encoding)
     normalized = _recursive_url_decode(text)
-    
+
     # Layer 2: Unicode NFKC normalization (fullwidth to ASCII)
     normalized = _unicodedata.normalize("NFKC", normalized)
-    
+
     # Layer 3: HTML entity decode
     normalized = html.unescape(normalized)
-    
+
     return normalized
-
-
-
-
-
-
 
 
 def _detect_prompt_injection(text: str) -> tuple[bool, str | None]:
     """ARCH-001 FIX: Detect prompt injection attempts in text.
-    
+
     Returns (is_injection, matched_pattern) tuple.
     """
     if not isinstance(text, str):
         return False, None
-    
+
     # Normalize text first
     normalized = _normalize_for_injection_check(text)
-    
+
     for pattern in _PROMPT_INJECTION_PATTERNS:
         match = pattern.search(normalized)
         if match:
             return True, pattern.pattern[:50]
-    
+
     return False, None
 
 
@@ -191,32 +180,32 @@ def _enforce_safe_summary_schema(summary: str) -> str:
 
 def _semantic_sanitize_output(text: str) -> str:
     """ARCH-001 FIX: Sanitize tool output to remove prompt injection attempts.
-    
+
     Replaces detected injection patterns with safe placeholders.
     """
     if not isinstance(text, str):
         return str(text) if text is not None else ""
-    
+
     sanitized = text
-    
+
     # Remove system/instruction tags
     sanitized = re.sub(r"</?system\s*>", "[REMOVED]", sanitized, flags=re.IGNORECASE)
     sanitized = re.sub(r"\[/?system\]", "[REMOVED]", sanitized, flags=re.IGNORECASE)
     sanitized = re.sub(r"<</?SYS>>", "[REMOVED]", sanitized, flags=re.IGNORECASE)
-    
+
     # Remove function/tool injection tags
     sanitized = re.sub(r"</function>", "[REMOVED]", sanitized, flags=re.IGNORECASE)
     sanitized = re.sub(r"</tool_result>", "[REMOVED]", sanitized, flags=re.IGNORECASE)
     sanitized = re.sub(r"<function=\w+>", "[REMOVED]", sanitized, flags=re.IGNORECASE)
-    
+
     # Remove instruction override attempts
     sanitized = re.sub(
         r"ignore\s+(all\s+)?previous\s+instructions?",
         "[INSTRUCTION OVERRIDE REMOVED]",
         sanitized,
-        flags=re.IGNORECASE
+        flags=re.IGNORECASE,
     )
-    
+
     return sanitized
 
 
@@ -276,9 +265,8 @@ def _cleanup_screenshot_artifacts(path: str | Path | None = None) -> None:
 
 async def execute_tool(tool_name: str, agent_state: Any | None = None, **kwargs: Any) -> Any:
 
-    
     # Execution checks cleared (RBAC removed)
-    
+
     # FIX: Ensure agent_id is always captured - even if agent_state is None
     _agent_id = None
     if agent_state is not None:
@@ -293,7 +281,7 @@ async def execute_tool(tool_name: str, agent_state: Any | None = None, **kwargs:
 
     execute_in_sandbox = should_execute_in_sandbox(tool_name)
     sandbox_mode = os.getenv("PHANTOM_SANDBOX_MODE", "false").lower() == "true"
-    
+
     # Check if sandbox container exists (either in env var OR in agent_state)
     sandbox_available = sandbox_mode
     if not sandbox_available and agent_state:
@@ -301,11 +289,12 @@ async def execute_tool(tool_name: str, agent_state: Any | None = None, **kwargs:
 
     # ── Audit: log tool invocation ─────────────────────────────────────────
     from phantom.logging.audit import get_audit_logger as _get_audit
+
     _audit = _get_audit()
     _exec_id = _audit.log_tool_start(_agent_id, tool_name, kwargs) if _audit else None
     _t0 = time.monotonic()
     # ──────────────────────────────────────────────────────────────────
-    
+
     try:
         try:
             if execute_in_sandbox:
@@ -313,7 +302,9 @@ async def execute_tool(tool_name: str, agent_state: Any | None = None, **kwargs:
                     if agent_state and getattr(agent_state, "sandbox_id", None):
                         pass  # Sandbox exists but env var not set - should work
                     else:
-                        raise RuntimeError(f"CRITICAL: Tool '{tool_name}' requires Sandbox, but no sandbox container is running.")
+                        raise RuntimeError(
+                            f"CRITICAL: Tool '{tool_name}' requires Sandbox, but no sandbox container is running."
+                        )
                 result = await _execute_tool_in_sandbox(tool_name, agent_state, **kwargs)
             else:
                 result = await _execute_tool_locally(tool_name, agent_state, **kwargs)
@@ -432,43 +423,9 @@ def validate_tool_availability(tool_name: str | None) -> tuple[bool, str]:
         available = ", ".join(sorted(get_tool_names()))
         return False, f"Tool name is missing. Available tools: {available}"
 
-    normalized_name = _resolve_canonical_tool_name(tool_name)
-    if normalized_name is None:
+    if tool_name not in get_tool_names():
         available = ", ".join(sorted(get_tool_names()))
-        return False, f"Tool name is missing. Available tools: {available}"
-    available_tools = get_tool_names()
-    
-    if normalized_name not in available_tools:
-        sorted_tools = sorted(available_tools)
-        available_preview = ", ".join(sorted_tools[:25])
-        if len(sorted_tools) > 25:
-            available_preview += ", ..."
-        suggestion = ""
-        for t in available_tools:
-            if t.replace("_", "") == normalized_name.replace("_", ""):
-                suggestion = f" Did you mean '{t}'?"
-                break
-
-        retry_tools = [
-            name
-            for name in (
-                "get_scan_status",
-                "send_request",
-                "python_action",
-                "terminal_execute",
-                "create_vulnerability_report",
-            )
-            if name in available_tools
-        ]
-        if retry_tools:
-            retry_hint = f" Retry immediately with an exact tool name, e.g. {', '.join(retry_tools[:3])}."
-        else:
-            retry_hint = " Retry immediately with an exact registered tool name."
-
-        return (
-            False,
-            f"Tool '{tool_name}' is not available. Available tools: {available_preview}.{suggestion}{retry_hint}",
-        )
+        return False, f"Tool '{tool_name}' is not available. Available tools: {available}"
 
     return True, ""
 
@@ -532,14 +489,8 @@ def _mark_tool_pipeline_issue(agent_state: Any | None, issue_type: str, message:
 async def execute_tool_with_validation(
     tool_name: str | None,
     agent_state: Any | None = None,
-    allowed_tools: set[str] | None = None,
     **kwargs: Any,
 ) -> Any:
-    tool_name = _resolve_canonical_tool_name(tool_name)
-
-    if allowed_tools is None or tool_name not in allowed_tools:
-        raise Exception("Tool not allowed")
-
     is_valid, error_msg = validate_tool_availability(tool_name)
     if not is_valid:
         return f"Error: {error_msg}"
@@ -548,13 +499,10 @@ async def execute_tool_with_validation(
     if arg_error:
         return f"Error: {arg_error}"
 
-    # Ensure get_scan_status has a minimal agent-scoped context when invoked
-    # through the executor path without prior wiring.
     if tool_name == "get_scan_status" and agent_state is not None:
         agent_id_for_status = str(getattr(agent_state, "agent_id", "") or "").strip()
         if agent_id_for_status and "agent_id" not in kwargs:
             kwargs["agent_id"] = agent_id_for_status
-
         try:
             context_setter = None
             tool_func = get_tool_by_name(tool_name)
@@ -564,12 +512,10 @@ async def execute_tool_with_validation(
                     maybe_setter = getattr(tool_module, "set_scan_status_context", None)
                     if callable(maybe_setter):
                         context_setter = maybe_setter
-
             if context_setter is None:
                 from phantom.tools.scan_status.scan_status_actions import set_scan_status_context
 
                 context_setter = set_scan_status_context
-
             context_setter(
                 hypothesis_ledger=getattr(agent_state, "hypothesis_ledger", None),
                 coverage_tracker=getattr(agent_state, "coverage_tracker", None),
@@ -578,8 +524,6 @@ async def execute_tool_with_validation(
             )
         except Exception:  # noqa: BLE001
             pass
-
-
 
     try:
         result = await execute_tool(tool_name, agent_state, **kwargs)
@@ -595,18 +539,10 @@ async def execute_tool_with_validation(
 async def execute_tool_invocation(tool_inv: dict[str, Any], agent_state: Any | None = None) -> Any:
     tool_name = tool_inv.get("toolName")
     tool_args = tool_inv.get("args", {})
-    allowed_tools = tool_inv.get("allowedTools")
-    if isinstance(allowed_tools, list):
-        normalized_allowed_tools = set(str(name) for name in allowed_tools)
-    elif isinstance(allowed_tools, set):
-        normalized_allowed_tools = set(str(name) for name in allowed_tools)
-    else:
-        normalized_allowed_tools = None
 
     return await execute_tool_with_validation(
         tool_name,
         agent_state,
-        allowed_tools=normalized_allowed_tools,
         **tool_args,
     )
 
@@ -619,8 +555,7 @@ def _check_error_result(result: Any) -> tuple[bool, Any]:
         # BUG FIX C: also detect exceptions wrapped by execute_tool_with_validation,
         # which returns f"Error executing {tool_name}: {error_str}" — different from
         # the "Error: ..." prefix returned by validation helpers.
-        isinstance(result, str)
-        and result.strip().lower().startswith(("error:", "error executing"))
+        isinstance(result, str) and result.strip().lower().startswith(("error:", "error executing"))
     ):
         is_error = True
         error_payload = result
@@ -655,6 +590,7 @@ def _extract_ffuf_findings(text: str, limit: int) -> str | None:
     found so the caller can fall back to head+tail truncation.
     """
     import re as _re
+
     lines = text.splitlines()
     header_lines: list[str] = []
     finding_lines: list[str] = []
@@ -678,7 +614,9 @@ def _extract_ffuf_findings(text: str, limit: int) -> str | None:
     if not finding_lines:
         return None
 
-    result_lines = header_lines + [f"[ffuf findings: {len(finding_lines)} non-404 results]"] + finding_lines
+    result_lines = (
+        header_lines + [f"[ffuf findings: {len(finding_lines)} non-404 results]"] + finding_lines
+    )
     result = "\n".join(result_lines)
     if len(result) > limit:
         # Even the finding lines exceed limit — truncate from the end
@@ -702,6 +640,7 @@ def _extract_nuclei_findings(text: str, limit: int) -> str | None:
     # look like "[template-id] [protocol] [severity] target" or
     # "[template-id:matcher-name] ..."
     import re as _re_nuclei
+
     _template_tag_re = _re_nuclei.compile(r"^\[\w[\w.-]+\]")
 
     for line in lines:
@@ -714,18 +653,21 @@ def _extract_nuclei_findings(text: str, limit: int) -> str | None:
         elif lower.startswith("[") and "]" in lower and ("http" in lower or "/" in lower):
             # Template match lines like [template-id] [protocol] ...
             finding_lines.append(line)
-        elif len(header_lines) < 5 and ("nuclei" in lower or "target" in lower or "template" in lower):
+        elif len(header_lines) < 5 and (
+            "nuclei" in lower or "target" in lower or "template" in lower
+        ):
             header_lines.append(line)
 
     if not finding_lines:
         return None
 
-    result_lines = header_lines + [f"[nuclei findings: {len(finding_lines)} results]"] + finding_lines
+    result_lines = (
+        header_lines + [f"[nuclei findings: {len(finding_lines)} results]"] + finding_lines
+    )
     result = "\n".join(result_lines)
     if len(result) > limit:
         result = result[:limit] + "\n... [additional findings truncated] ..."
     return result
-
 
 
 def _extract_sqlmap_findings(text: str, limit: int) -> str | None:
@@ -759,15 +701,15 @@ def _extract_sqlmap_findings(text: str, limit: int) -> str | None:
         "back-end dbms",
         "password",  # FIX: capture password fields
         "username",  # FIX: capture username fields
-        "admin",     # FIX: capture admin credentials
-        "user:",     # FIX: capture user data
-        "hash:",     # FIX: capture password hashes
+        "admin",  # FIX: capture admin credentials
+        "user:",  # FIX: capture user data
+        "hash:",  # FIX: capture password hashes
         "retrieved",  # FIX: capture retrieved data
         "current user",  # FIX: capture DB user info
         "current database",  # FIX: capture current DB
         "privileges",  # FIX: capture privilege escalation info
-        "banner:",    # FIX: capture DB version banner
-        "| ",         # FIX: capture table-formatted output from --dump
+        "banner:",  # FIX: capture DB version banner
+        "| ",  # FIX: capture table-formatted output from --dump
     )
 
     for line in lines:
@@ -780,7 +722,9 @@ def _extract_sqlmap_findings(text: str, limit: int) -> str | None:
     if not finding_lines:
         return None
 
-    result_lines = [f"[sqlmap findings: {len(finding_lines)} signal lines extracted]"] + finding_lines
+    result_lines = [
+        f"[sqlmap findings: {len(finding_lines)} signal lines extracted]"
+    ] + finding_lines
     result = "\n".join(result_lines)
     if len(result) > limit:
         # FIX 3: Even when truncating, preserve first 90% (more than before)
@@ -804,8 +748,12 @@ def _extract_nmap_findings(text: str, limit: int) -> str | None:
         if "/tcp" in lower or "/udp" in lower:
             if "open" in lower:
                 open_lines.append(line)
-        elif lower.startswith("nmap scan report") or lower.startswith("host is up") or \
-                lower.startswith("nmap done") or lower.startswith("service detection"):
+        elif (
+            lower.startswith("nmap scan report")
+            or lower.startswith("host is up")
+            or lower.startswith("nmap done")
+            or lower.startswith("service detection")
+        ):
             summary_lines.append(line)
         # naabu format: host:port
         elif ":" in line and not line.strip().startswith("#"):
@@ -846,20 +794,20 @@ def _get_truncation_limit(tool_name: str) -> int:
     # Previous: sqlmap/nuclei = 6000 chars (90% evidence lost)
     # New: sqlmap/nuclei = 50000 chars (preserves database dumps, POCs)
     _BUILT_IN_TOOL_LIMITS: dict[str, int] = {
-        "naabu":                    3000,   # port scan: increased from 1500
-        "nmap":                     3000,   # nmap: decreased from 6000
-        "grep":                     3000,   # grep: increased from 2000
-        "curl":                     3000,   # curl: increased from 2000
-        "ffuf":                     5000,   # directory fuzzer: increased from 3000
-        "nikto":                    6000,   # nikto: increased from 4000
-        "terminal_execute":       12000,    # shell wrapper: keep context compact for follow-up turns
-        "exec_terminal":          12000,    # FIX: match terminal_execute
-        "terminal":               12000,    # FIX: match terminal_execute
-        "browser_action":         12000,   # browser: increased from 6000
-        "nuclei":                  50000,   # FIX: increased from 6000 (was 10000) - preserve full POCs
-        "run_nuclei":              50000,   # FIX: match nuclei
-        "sqlmap":                  50000,   # FIX: increased from 6000 (was 10000) - preserve DB dumps
-        "run_sqlmap":              50000,   # FIX: match sqlmap
+        "naabu": 3000,  # port scan: increased from 1500
+        "nmap": 3000,  # nmap: decreased from 6000
+        "grep": 3000,  # grep: increased from 2000
+        "curl": 3000,  # curl: increased from 2000
+        "ffuf": 5000,  # directory fuzzer: increased from 3000
+        "nikto": 6000,  # nikto: increased from 4000
+        "terminal_execute": 12000,  # shell wrapper: keep context compact for follow-up turns
+        "exec_terminal": 12000,  # FIX: match terminal_execute
+        "terminal": 12000,  # FIX: match terminal_execute
+        "browser_action": 12000,  # browser: increased from 6000
+        "nuclei": 50000,  # FIX: increased from 6000 (was 10000) - preserve full POCs
+        "run_nuclei": 50000,  # FIX: match nuclei
+        "sqlmap": 50000,  # FIX: increased from 6000 (was 10000) - preserve DB dumps
+        "run_sqlmap": 50000,  # FIX: match sqlmap
         "create_vulnerability_report": 12000,  # reports: keep full detail
     }
     # ─────────────────────────────────────────────────────────────────────────
@@ -923,8 +871,12 @@ async def _auto_summarize_result(result_text: str, tool_name: str) -> str:
     fallback_mode = "none"
     if "<tool_name>" in result_text and "<result>" in result_text:
         try:
-            tool_match = re.search(r"<tool_name>(.*?)</tool_name>", result_text, flags=re.IGNORECASE | re.DOTALL)
-            result_match = re.search(r"<result>(.*?)</result>", result_text, flags=re.IGNORECASE | re.DOTALL)
+            tool_match = re.search(
+                r"<tool_name>(.*?)</tool_name>", result_text, flags=re.IGNORECASE | re.DOTALL
+            )
+            result_match = re.search(
+                r"<result>(.*?)</result>", result_text, flags=re.IGNORECASE | re.DOTALL
+            )
             detected_tool = html.unescape(tool_match.group(1).strip()) if tool_match else tool_name
             extracted_result = html.unescape(result_match.group(1)) if result_match else result_text
             tool_name = detected_tool or tool_name
@@ -1095,10 +1047,10 @@ def _extract_vuln_signals(tool_name: str, output: str) -> list[str]:
     _rce_patterns = [
         # Match actual command output, not substrings in HTML/CSS
         (r"uid=\d+\([a-z0-9_-]+\)", "RCE_CONFIRMED"),  # uid=1000(user)
-        (r"^root:[^:]*:\d+:\d+:", "RCE_CONFIRMED"),    # /etc/passwd format at line start
+        (r"^root:[^:]*:\d+:\d+:", "RCE_CONFIRMED"),  # /etc/passwd format at line start
         (r"\b(bash|sh|zsh|dash)\s+-c\b", "RCE_POTENTIAL"),  # shell invocation
-        (r"^total\s+\d+\s*$", "RCE_POTENTIAL"),        # ls -l output
-        (r"^\s*(drwx|lrwx|-rwx)", "RCE_POTENTIAL"),    # file permissions at line start
+        (r"^total\s+\d+\s*$", "RCE_POTENTIAL"),  # ls -l output
+        (r"^\s*(drwx|lrwx|-rwx)", "RCE_POTENTIAL"),  # file permissions at line start
     ]
     for pattern, signal_type in _rce_patterns:
         if _re_sig.search(pattern, lower, _re_sig.MULTILINE):
@@ -1115,8 +1067,8 @@ def _extract_vuln_signals(tool_name: str, output: str) -> list[str]:
             # Match actual private IPs in responses, not just anywhere
             (r"(?:^|[^\d])127\.0\.0\.1(?:[^\d]|$)", "SSRF_LOCALHOST"),
             (r"(?:^|[^\d])169\.254\.169\.254(?:[^\d]|$)", "SSRF_METADATA"),  # AWS metadata
-            (r"169\.254\.169\.254/latest/meta-data", "SSRF_CONFIRMED"),     # AWS metadata access
-            (r"metadata\.google\.internal", "SSRF_CONFIRMED"),              # GCP metadata
+            (r"169\.254\.169\.254/latest/meta-data", "SSRF_CONFIRMED"),  # AWS metadata access
+            (r"metadata\.google\.internal", "SSRF_CONFIRMED"),  # GCP metadata
             # Only flag "internal" if it appears in suspicious contexts
             (r"internal.*(?:server|api|admin|backend|database)", "SSRF_POTENTIAL"),
         ]
@@ -1261,7 +1213,9 @@ def _format_tool_result_with_meta(
                 half = limit // 2
                 start_part = final_result_str[:half]
                 end_part = final_result_str[-half:]
-                final_result_str = start_part + "\n\n... [middle content truncated] ...\n\n" + end_part
+                final_result_str = (
+                    start_part + "\n\n... [middle content truncated] ...\n\n" + end_part
+                )
                 meta["smart_extracted"] = False
             meta["truncated"] = True
         meta["chars_after"] = len(final_result_str)
@@ -1304,8 +1258,7 @@ def _format_tool_result_with_meta(
     sanitized_result = _semantic_sanitize_output(final_result_str)
 
     observation_xml = (
-        signal_header
-        + f"<tool_result>\n<tool_name>{html.escape(tool_name)}</tool_name>\n"
+        signal_header + f"<tool_result>\n<tool_name>{html.escape(tool_name)}</tool_name>\n"
         f"<result>{html.escape(sanitized_result)}</result>\n</tool_result>"
     )
 
@@ -1470,7 +1423,6 @@ async def process_tool_invocations(
     conversation_history: list[dict[str, Any]],
     agent_state: Any | None = None,
     owner_agent: Any | None = None,
-    allowed_tools: set[str] | None = None,
 ) -> bool:
     observation_parts: list[str] = []
     all_images: list[dict[str, Any]] = []
@@ -1482,9 +1434,13 @@ async def process_tool_invocations(
 
     for tool_inv in tool_invocations:
         tool_inv = dict(tool_inv)
-        if allowed_tools is not None:
-            tool_inv["allowedTools"] = sorted(allowed_tools)
-        observation_xml, images, tool_should_finish, images_used, tool_had_error = await _execute_single_tool(
+        (
+            observation_xml,
+            images,
+            tool_should_finish,
+            images_used,
+            tool_had_error,
+        ) = await _execute_single_tool(
             tool_inv,
             agent_state,
             owner_agent,
@@ -1588,7 +1544,9 @@ def _auto_record_hypothesis(
                 or "injectable" in sig_text.lower()
             )
             # Ignore weak/heuristic-only categories.
-            if any(tag in sig_head for tag in ("potential", "scanner_", "_reflected", "xss_potential")):
+            if any(
+                tag in sig_head for tag in ("potential", "scanner_", "_reflected", "xss_potential")
+            ):
                 is_strong = False
             if is_strong:
                 strong_signal_lines.append(sig_text)
@@ -1658,7 +1616,9 @@ def _auto_record_hypothesis(
         if coverage_tracker is not None:
             try:
                 coverage_tracker.discover_surface(surface, "tool_surface", source=tool_name)
-                coverage_tracker.record_test(surface, "tool_surface", vuln_class, note=f"tool={tool_name}")
+                coverage_tracker.record_test(
+                    surface, "tool_surface", vuln_class, note=f"tool={tool_name}"
+                )
                 if any(x in obs_lower for x in ("403", "401", "forbidden", "rate limit", "waf")):
                     coverage_tracker.record_failure(
                         surface,
@@ -1674,7 +1634,8 @@ def _auto_record_hypothesis(
                 )
 
         should_correlate = bool(strong_signal_lines) or any(
-            kw in obs_lower for kw in ("confirmed", "extracted", "authentication bypass", "accepted")
+            kw in obs_lower
+            for kw in ("confirmed", "extracted", "authentication bypass", "accepted")
         )
         if correlation_engine is not None and vuln_class != "recon" and should_correlate:
             try:
@@ -1708,7 +1669,9 @@ def _auto_record_hypothesis(
                     attack_graph.add_vulnerability(
                         vuln_id=vuln_node,
                         title=f"{vuln_class.upper()} via {tool_name}",
-                        severity="high" if vuln_class in {"sqli", "rce", "auth_bypass"} else "medium",
+                        severity="high"
+                        if vuln_class in {"sqli", "rce", "auth_bypass"}
+                        else "medium",
                         status="suspected",
                         metadata={"surface": surface, "tool": tool_name, "hypothesis_id": hyp_id},
                     )
@@ -1720,7 +1683,9 @@ def _auto_record_hypothesis(
                     with suppress(Exception):
                         belief = float(getattr(hypothesis_ref, "posterior_mean", 0.5))
                     with suppress(Exception):
-                        confidence = float(getattr(hypothesis_ref, "confidence_score", 50.0)) / 100.0
+                        confidence = (
+                            float(getattr(hypothesis_ref, "confidence_score", 50.0)) / 100.0
+                        )
                     node_status = str(getattr(hypothesis_ref, "status", "testing") or "testing")
                 else:
                     node_status = "testing"
@@ -1728,7 +1693,11 @@ def _auto_record_hypothesis(
                 belief = max(0.01, min(0.99, belief))
                 confidence = max(0.01, min(0.99, confidence))
 
-                node_metadata = attack_graph._nodes[vuln_node].metadata if vuln_node in attack_graph._nodes else {}
+                node_metadata = (
+                    attack_graph._nodes[vuln_node].metadata
+                    if vuln_node in attack_graph._nodes
+                    else {}
+                )
                 node_metadata = dict(node_metadata or {})
                 node_metadata.update(
                     {
@@ -1768,7 +1737,9 @@ def _auto_record_hypothesis(
                         },
                     )
                 else:
-                    edge_data = attack_graph._graph.get_edge_data(vuln_node, target_node, default={}) or {}
+                    edge_data = (
+                        attack_graph._graph.get_edge_data(vuln_node, target_node, default={}) or {}
+                    )
                     edge_type_raw = str(edge_data.get("type", AttackEdgeType.AFFECTS.value))
                     try:
                         edge_type = AttackEdgeType(edge_type_raw)

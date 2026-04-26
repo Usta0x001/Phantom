@@ -53,13 +53,18 @@ class DockerRuntime(AbstractRuntime):
             return False
 
         candidates = [
-            Path(os.environ.get("ProgramFiles", r"C:\Program Files")) / "Docker" / "Docker" / "Docker Desktop.exe",
+            Path(os.environ.get("ProgramFiles", r"C:\Program Files"))
+            / "Docker"
+            / "Docker"
+            / "Docker Desktop.exe",
             Path(os.environ.get("LocalAppData", "")) / "Docker" / "Docker Desktop.exe",
         ]
         for exe in candidates:
             if exe.exists():
                 with contextlib.suppress(OSError):
-                    subprocess.Popen([str(exe)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)  # noqa: S603
+                    subprocess.Popen(
+                        [str(exe)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+                    )  # noqa: S603
                     return True
         return False
 
@@ -244,6 +249,7 @@ class DockerRuntime(AbstractRuntime):
                     cap_drop=["SYS_ADMIN", "SYS_PTRACE"],
                     labels={"phantom-scan-id": scan_id},
                     environment={
+                        "HOME": "/home/pentester",
                         "PYTHONUNBUFFERED": "1",
                         "TOOL_SERVER_PORT": "48081",  # Static port - always set
                         # Rec 8 (B-13): Token also injected via env for backward-compat.
@@ -253,7 +259,7 @@ class DockerRuntime(AbstractRuntime):
                         "HOST_GATEWAY": HOST_GATEWAY_HOSTNAME,
                         # Allow SSRF to target hosts (docker internal addresses)
                         "PHANTOM_ALLOWED_SSRF_HOSTS": "host.docker.internal,localhost,127.0.0.1",
-},
+                    },
                     extra_hosts={HOST_GATEWAY_HOSTNAME: "host-gateway"},
                     tty=True,
                 )
@@ -304,8 +310,10 @@ class DockerRuntime(AbstractRuntime):
                     container.put_archive("/run/secrets", tar_buf.getvalue())
                 except Exception:  # noqa: BLE001
                     # Non-fatal: env-var fallback is still present.
-                    logger.warning("Could not write tool_server_token to /run/secrets — "
-                                   "falling back to environment variable.")
+                    logger.warning(
+                        "Could not write tool_server_token to /run/secrets — "
+                        "falling back to environment variable."
+                    )
 
                 self._wait_for_tool_server()
 
@@ -374,16 +382,16 @@ class DockerRuntime(AbstractRuntime):
     def _extract_scope_targets(self, scan_config: dict | None) -> str:
         """
         SEC-002 FIX: Extract target hosts from scan_config for scope enforcement.
-        
+
         Returns comma-separated list of target hosts/IPs.
         """
         if not scan_config:
             return ""
-        
+
         targets = scan_config.get("targets", [])
         if not targets:
             return ""
-        
+
         extracted: list[str] = []
         for target_info in targets:
             if isinstance(target_info, dict):
@@ -415,7 +423,7 @@ class DockerRuntime(AbstractRuntime):
                         extracted.append(host)
             elif isinstance(target_info, str):
                 extracted.append(target_info)
-        
+
         return ",".join(extracted)
 
     def _configure_scope_firewall(self, container: Container, scan_target: str) -> None:
@@ -471,11 +479,13 @@ class DockerRuntime(AbstractRuntime):
             except Exception:
                 pass
 
-            rules.extend([
-                # Log then drop everything else
-                f"iptables -A OUTPUT -j LOG --log-prefix 'PHANTOM-OOB: ' --log-level 4",
-                f"iptables -A OUTPUT -j DROP",
-            ])
+            rules.extend(
+                [
+                    # Log then drop everything else
+                    f"iptables -A OUTPUT -j LOG --log-prefix 'PHANTOM-OOB: ' --log-level 4",
+                    f"iptables -A OUTPUT -j DROP",
+                ]
+            )
             for rule in rules:
                 result = container.exec_run(
                     ["bash", "-c", rule],
@@ -558,7 +568,7 @@ class DockerRuntime(AbstractRuntime):
                 else:
                     # User explicitly specified target(s)
                     scope_targets = scope_enforcement
-                
+
                 if scope_targets:
                     # Configure firewall for each target
                     for target in scope_targets.split(","):
@@ -634,9 +644,9 @@ class DockerRuntime(AbstractRuntime):
     def cleanup(self, wait: bool = False) -> None:
         """
         Clean up Docker containers.
-        
+
         P1.3 CRITICAL FIX: Properly clean up containers on Ctrl+C/signal.
-        
+
         Args:
             wait: If True, wait for cleanup to complete (blocking).
                   If False, cleanup runs async (for normal exit).
@@ -676,16 +686,16 @@ class DockerRuntime(AbstractRuntime):
                     stderr=subprocess.DEVNULL,
                     start_new_session=True,
                 )
-    
+
     def cleanup_all_phantom_containers(self) -> int:
         """
         P1.3: Clean up ALL phantom containers, not just the current one.
-        
+
         This handles zombie containers from crashed scans.
         Returns the number of containers cleaned up.
         """
         import subprocess
-        
+
         cleaned = 0
         try:
             # Find all phantom containers (running or stopped)
@@ -695,7 +705,7 @@ class DockerRuntime(AbstractRuntime):
                 text=True,
                 timeout=10,
             )
-            
+
             if result.returncode == 0:
                 container_names = result.stdout.strip().split("\n")
                 for name in container_names:
@@ -713,5 +723,5 @@ class DockerRuntime(AbstractRuntime):
                             pass
         except Exception as e:
             logger.warning("Failed to clean up phantom containers: %s", e)
-        
+
         return cleaned

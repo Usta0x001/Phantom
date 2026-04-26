@@ -25,6 +25,7 @@ RICH_TOOL_NAMES = {
     "browser_action",
 }
 
+
 class ImplementedInClientSideOnlyError(Exception):
     def __init__(
         self,
@@ -49,10 +50,14 @@ def _process_dynamic_content(content: str) -> str:
             )
 
     return content
+
+
 _TOOL_BLOCK_RE = re.compile(r'<tool\b[^>]*\bname="([^"]+)"[^>]*>(.*?)</tool>', re.DOTALL)
-_PARAM_BLOCK_RE = re.compile(r'<parameter\b(?![^>]*\/>)' r'([^>]*)>(.*?)</parameter>', re.IGNORECASE | re.DOTALL)
-_SELF_CLOSING_PARAM_RE = re.compile(r'<parameter\b([^>]*)\s*/>', re.IGNORECASE | re.DOTALL)
-_EXAMPLE_BLOCK_RE = re.compile(r'<examples?>.*?</examples?>', re.IGNORECASE | re.DOTALL)
+_PARAM_BLOCK_RE = re.compile(
+    r"<parameter\b(?![^>]*\/>)" r"([^>]*)>(.*?)</parameter>", re.IGNORECASE | re.DOTALL
+)
+_SELF_CLOSING_PARAM_RE = re.compile(r"<parameter\b([^>]*)\s*/>", re.IGNORECASE | re.DOTALL)
+_EXAMPLE_BLOCK_RE = re.compile(r"<examples?>.*?</examples?>", re.IGNORECASE | re.DOTALL)
 
 
 def _load_xml_schema(path: Path) -> Any:
@@ -105,7 +110,9 @@ def _parse_param_schema(tool_xml: str) -> dict[str, Any]:
         if required_match:
             is_required = required_match.group(1).strip().lower() == "true"
         else:
-            nested_required = re.search(r'<required>\s*(true|false)\s*</required>', body_text, re.IGNORECASE)
+            nested_required = re.search(
+                r"<required>\s*(true|false)\s*</required>", body_text, re.IGNORECASE
+            )
             if nested_required:
                 is_required = nested_required.group(1).strip().lower() == "true"
 
@@ -226,30 +233,33 @@ def register_tool(
             "sandbox_execution": sandbox_execution,
         }
 
-        try:
-            schema_xml = _resolve_schema_for_tool(f)
+        sandbox_mode = os.getenv("PHANTOM_SANDBOX_MODE", "false").lower() == "true"
+        if not sandbox_mode:
+            try:
+                schema_xml = _resolve_schema_for_tool(f)
 
-            if schema_xml is not None:
-                func_dict["xml_schema"] = schema_xml
-            else:
+                if schema_xml is not None:
+                    func_dict["xml_schema"] = schema_xml
+                else:
+                    func_dict["xml_schema"] = (
+                        f'<tool name="{f.__name__}">'
+                        "<description>Schema not found for tool.</description>"
+                        "</tool>"
+                    )
+            except (TypeError, FileNotFoundError) as e:
+                logger.warning(f"Error loading schema for {f.__name__}: {e}")
                 func_dict["xml_schema"] = (
                     f'<tool name="{f.__name__}">'
-                    "<description>Schema not found for tool.</description>"
+                    "<description>Error loading schema.</description>"
                     "</tool>"
                 )
-        except (TypeError, FileNotFoundError) as e:
-            logger.warning(f"Error loading schema for {f.__name__}: {e}")
-            func_dict["xml_schema"] = (
-                f'<tool name="{f.__name__}">'
-                "<description>Error loading schema.</description>"
-                "</tool>"
-            )
 
-        xml_schema = func_dict.get("xml_schema")
-        param_schema = _parse_param_schema(xml_schema if isinstance(xml_schema, str) else "")
-        if not param_schema.get("has_params"):
-            param_schema = _infer_param_schema_from_signature(f)
-        _tool_param_schemas[str(func_dict["name"])] = param_schema
+        if not sandbox_mode:
+            xml_schema = func_dict.get("xml_schema")
+            param_schema = _parse_param_schema(xml_schema if isinstance(xml_schema, str) else "")
+            if not param_schema.get("has_params"):
+                param_schema = _infer_param_schema_from_signature(f)
+            _tool_param_schemas[str(func_dict["name"])] = param_schema
 
         tools.append(func_dict)
         _tools_by_name[str(func_dict["name"])] = f
@@ -258,9 +268,11 @@ def register_tool(
         # returns True for async tools — needed by tool_server._run_tool and
         # by _execute_tool_locally to correctly await results.
         if inspect.iscoroutinefunction(f):
+
             @wraps(f)
             async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
                 return await f(*args, **kwargs)
+
             return async_wrapper
 
         @wraps(f)
