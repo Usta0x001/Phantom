@@ -1,295 +1,116 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <tools>
   <tool name="create_session">
-    <description>
-      Create a new session for authenticated testing.
-      
-      Creates and stores a session with cookies, headers, and authentication
-      tokens for use across multiple requests during penetration testing.
-      
-      This is useful when testing authenticated endpoints or maintaining
-      state across multiple tool invocations.
-      
-      Supported authentication types:
-      - bearer: Bearer token in Authorization header (default)
-      - basic: HTTP Basic authentication
-      - api_key: API key in X-API-Key header
-      - custom: Custom authentication (token stored for manual use)
-    </description>
+    <description>Create session for authenticated testing.</description>
     <parameters>
       <parameter name="session_name" type="string" required="true">
-        Unique name for this session (e.g., "admin_session", "user_auth")
+        <description>Session name.</description>
       </parameter>
       <parameter name="base_url" type="string" required="false">
-        Base URL for the session (e.g., "https://target.example.com")
+        <description>Base URL.</description>
       </parameter>
       <parameter name="cookies" type="object" required="false">
-        Initial cookies as a dict (e.g., {"session_id": "abc123", "lang": "en"})
+        <description>Cookies dict.</description>
       </parameter>
       <parameter name="headers" type="object" required="false">
-        Custom headers as a dict (e.g., {"X-Custom-Header": "value"})
+        <description>Headers dict.</description>
       </parameter>
       <parameter name="auth_token" type="string" required="false">
-        Authentication token (JWT, API key, or credentials)
+        <description>JWT, API key, or credentials.</description>
       </parameter>
       <parameter name="auth_type" type="string" required="false">
-        Token type: "bearer" (default), "basic", "api_key", "custom"
+        <description>bearer, basic, api_key, custom.</description>
       </parameter>
     </parameters>
-    <returns>
-      JSON object containing:
-      - success: Whether session was created
-      - session_id: Unique ID to reference this session
-      - session_name: The name provided
-      - base_url: Base URL if provided
-      - cookie_count: Number of cookies stored
-      - header_count: Number of custom headers
-      - auth_type: Authentication type if token provided
-      - message: Status message
+    <returns type="Dict[str, Any]">
+      <description>session_id, success, cookie_count, header_count.</description>
     </returns>
-    <example>
-      <!-- Create basic session -->
-      create_session(session_name="main_session", base_url="https://target.com")
-      
-      <!-- Create session with JWT auth -->
-      create_session(
-        session_name="admin_auth",
-        base_url="https://api.target.com",
-        auth_token="eyJhbGciOiJIUzI1NiIs...",
-        auth_type="bearer"
-      )
-      
-      <!-- Create session with cookies -->
-      create_session(
-        session_name="logged_in",
-        cookies={"PHPSESSID": "abc123", "user_id": "42"}
-      )
-    </example>
+    <examples>
+      <function=create_session>
+        <parameter=session_name>admin</parameter>
+        <parameter=auth_token>eyJhbG...</parameter>
+        <parameter=auth_type>bearer</parameter>
+      </function>
+    </examples>
   </tool>
 
   <tool name="update_session">
-    <description>
-      Update an existing session with new cookies, headers, or CSRF token.
-      
-      Use this to add cookies received from Set-Cookie headers, update
-      authorization tokens, or store CSRF tokens extracted from responses.
-    </description>
+    <description>Update session with new cookies, headers, or CSRF.</description>
     <parameters>
       <parameter name="session_id" type="string" required="true">
-        Session ID to update (from create_session result)
+        <description>Session ID.</description>
       </parameter>
       <parameter name="cookies" type="object" required="false">
-        Cookies to add or update (e.g., {"new_cookie": "value"})
+        <description>Cookies to add/update.</description>
       </parameter>
       <parameter name="headers" type="object" required="false">
-        Headers to add or update
+        <description>Headers to add/update.</description>
       </parameter>
       <parameter name="csrf_token" type="string" required="false">
-        CSRF token to store for this session
+        <description>CSRF token.</description>
       </parameter>
       <parameter name="merge" type="boolean" required="false">
-        If true (default), merge with existing data. If false, replace entirely.
+        <description>true=merge (default), false=replace.</description>
       </parameter>
     </parameters>
-    <returns>
-      JSON object containing:
-      - success: Whether update succeeded
-      - session_id: The session ID
-      - session_name: Session name
-      - cookie_count: Total cookies after update
-      - header_count: Total headers after update
-      - has_csrf: Whether session has a CSRF token
-      - message: Status message
+    <returns type="Dict[str, Any]">
+      <description>success, session_id, cookie_count, header_count.</description>
     </returns>
-    <example>
-      <!-- Add new cookies to session -->
-      update_session(
-        session_id="abc12345",
-        cookies={"auth_token": "new_value"}
-      )
-      
-      <!-- Store CSRF token -->
-      update_session(
-        session_id="abc12345",
-        csrf_token="csrf_token_value_here"
-      )
-    </example>
-  </tool>
-
-  <tool name="get_session_info">
-    <description>
-      Get information about a specific session or list all active sessions.
-      
-      Use this to inspect session state, verify cookies are set correctly,
-      or get a list of all sessions for cleanup.
-      
-      NOTE: Sensitive values (tokens, session cookies) are redacted in output.
-    </description>
-    <parameters>
-      <parameter name="session_id" type="string" required="false">
-        Specific session ID to query
-      </parameter>
-      <parameter name="list_all" type="boolean" required="false">
-        If true, list all active sessions (ignores session_id)
-      </parameter>
-    </parameters>
-    <returns>
-      JSON object containing (for single session):
-      - success: Whether query succeeded
-      - session_id: The session ID
-      - name: Session name
-      - base_url: Base URL
-      - cookies: Cookies (values redacted)
-      - headers: Headers (auth values redacted)
-      - csrf_token: CSRF token (redacted)
-      - auth: Authentication info
-      - created_at/updated_at: Timestamps
-      
-      For list_all=true:
-      - success: Whether query succeeded
-      - sessions: List of session summaries
-      - total_count: Number of active sessions
-    </returns>
-    <example>
-      <!-- Get specific session -->
-      get_session_info(session_id="abc12345")
-      
-      <!-- List all sessions -->
-      get_session_info(list_all=true)
-    </example>
+    <examples>
+      <function=update_session>
+        <parameter=session_id>abc123</parameter>
+        <parameter=cookies>{"auth_token": "new"}</parameter>
+      </function>
+    </examples>
   </tool>
 
   <tool name="extract_csrf_token">
-    <description>
-      Extract CSRF token from HTML content.
-      
-      Searches for common CSRF token patterns in HTML forms, meta tags,
-      and JavaScript code. Can automatically store the token in a session.
-      
-      Detected patterns:
-      - Hidden input fields: csrf_token, _csrf, csrfmiddlewaretoken, _token, 
-        authenticity_token, __RequestVerificationToken
-      - Meta tags: &lt;meta name="csrf-token" content="..."&gt;
-      - JavaScript: csrfToken = "...", window.__csrf = "..."
-      - Data attributes: data-csrf="..."
-    </description>
+    <description>Extract CSRF token from HTML.</description>
     <parameters>
       <parameter name="content" type="string" required="true">
-        HTML or JavaScript content to search for CSRF tokens
+        <description>HTML content.</description>
       </parameter>
       <parameter name="token_name" type="string" required="false">
-        Specific token name to look for (e.g., "my_csrf_field")
+        <description>Specific token name.</description>
       </parameter>
       <parameter name="session_id" type="string" required="false">
-        Session ID to store the extracted token in
+        <description>Session to store token in.</description>
       </parameter>
     </parameters>
-    <returns>
-      JSON object containing:
-      - success: Whether any tokens were found
-      - tokens: List of found tokens with metadata
-      - token_count: Number of tokens found
-      - primary_token: The first (most likely) token value
-      - stored_in_session: Session ID if token was stored
-      - message: Status message
+    <returns type="Dict[str, Any]">
+      <description>found tokens, primary token, stored session.</description>
     </returns>
-    <example>
-      <!-- Extract CSRF from page HTML -->
-      extract_csrf_token(content="&lt;html&gt;...&lt;input name='csrf_token' value='abc123'&gt;...&lt;/html&gt;")
-      
-      <!-- Extract and store in session -->
-      extract_csrf_token(
-        content=response_body,
-        session_id="abc12345"
-      )
-      
-      <!-- Search for custom token name -->
-      extract_csrf_token(
-        content=response_body,
-        token_name="my_app_token"
-      )
-    </example>
-    <workflow>
-      1. Fetch a page that contains a form (e.g., login page)
-      2. Use extract_csrf_token() on the response body
-      3. Include the token in subsequent POST requests
-      4. Optionally store in session with session_id parameter
-    </workflow>
+    <examples>
+      <function=extract_csrf_token>
+        <parameter=content>&lt;html&gt;...&lt;input name='csrf' value='abc'&gt;...&lt;/html&gt;</parameter>
+      </function>
+    </examples>
   </tool>
 
   <tool name="manage_cookies">
-    <description>
-      Parse, analyze, and manage HTTP cookies.
-      
-      Actions:
-      - parse: Parse Set-Cookie header or cookie string into dict
-      - analyze: Analyze cookie security flags (HttpOnly, Secure, SameSite)
-      - export: Export session cookies as Cookie header string
-      
-      Use this to:
-      - Parse cookies from HTTP responses
-      - Check for security misconfigurations in session cookies
-      - Format cookies for manual HTTP requests
-    </description>
+    <description>Parse, analyze, or export cookies.</description>
     <parameters>
       <parameter name="action" type="string" required="true">
-        Action to perform: "parse", "analyze", "export"
+        <description>parse, analyze, or export.</description>
       </parameter>
       <parameter name="cookies" type="string" required="false">
-        Cookies as string or dict (for parse action)
+        <description>Cookies string or dict.</description>
       </parameter>
       <parameter name="session_id" type="string" required="false">
-        Session ID (required for export action)
+        <description>Session ID (for export).</description>
       </parameter>
       <parameter name="cookie_header" type="string" required="false">
-        Raw Set-Cookie or Cookie header string
+        <description>Set-Cookie or Cookie header.</description>
       </parameter>
     </parameters>
-    <returns>
-      For parse:
-      - success: Whether parsing succeeded
-      - cookies: Parsed cookie dict
-      - cookie_count: Number of cookies
-      
-      For analyze:
-      - success: Whether analysis succeeded
-      - analysis: Security analysis results including:
-        - secure_flags: Which flags are present
-        - findings: Security issues found
-        - security_score: 0-100 score
-        - is_session_cookie: Whether it appears to be a session cookie
-        - recommendation: Suggested action
-      
-      For export:
-      - success: Whether export succeeded
-      - cookie_header: Formatted Cookie header string
-      - cookie_count: Number of cookies exported
+    <returns type="Dict[str, Any]">
+      <description>Parsed cookies, security analysis, or exported header.</description>
     </returns>
-    <example>
-      <!-- Parse Set-Cookie header -->
-      manage_cookies(
-        action="parse",
-        cookie_header="session=abc123; Path=/; HttpOnly; Secure"
-      )
-      
-      <!-- Analyze cookie security -->
-      manage_cookies(
-        action="analyze",
-        cookie_header="session=abc123; Path=/"
-      )
-      
-      <!-- Export session cookies for manual request -->
-      manage_cookies(
-        action="export",
-        session_id="abc12345"
-      )
-    </example>
-    <workflow>
-      1. Receive Set-Cookie from server response
-      2. Parse: manage_cookies(action="parse", cookie_header="...")
-      3. Analyze: manage_cookies(action="analyze", cookie_header="...")
-      4. If security issues found, report in vulnerability assessment
-      5. Store cookies in session: update_session(session_id="...", cookies={...})
-    </workflow>
+    <examples>
+      <function=manage_cookies>
+        <parameter=action>parse</parameter>
+        <parameter=cookie_header>session=abc; Path=/; HttpOnly</parameter>
+      </function>
+    </examples>
   </tool>
 </tools>

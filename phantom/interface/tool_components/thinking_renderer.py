@@ -1,3 +1,6 @@
+# think tool removed from registry; renderer kept for backward compatibility
+# if legacy scan logs contain think tool calls.
+
 from typing import Any, ClassVar
 
 from rich.text import Text

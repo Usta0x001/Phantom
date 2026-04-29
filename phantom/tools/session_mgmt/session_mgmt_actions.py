@@ -191,7 +191,6 @@ async def update_session(
     }
 
 
-@register_tool(sandbox_execution=False)
 async def get_session_info(
     session_id: str | None = None,
     list_all: bool = False,

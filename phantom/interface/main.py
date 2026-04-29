@@ -17,7 +17,7 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.text import Text
 
-from .tui_design_system import ACTION_BLUE, DANGER_CRIMSON, DANGER_RED, SUCCESS_GREEN, WARNING_YELLOW
+from .tui_design_system import ACTION_BLUE, SUCCESS_GREEN, WARNING_YELLOW
 
 from phantom.config import Config, apply_saved_config, save_current_config
 from phantom.config.config import resolve_llm_config

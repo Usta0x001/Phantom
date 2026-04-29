@@ -1,25 +1,51 @@
 <tools>
   <tool name="browser_action">
-    <description>Perform browser actions in a persistent Playwright session.</description>
+    <description>Browser automation via Playwright. Actions: launch (start browser), goto (navigate), click (x,y), type (text input), scroll_down/scroll_up, back/forward, new_tab/switch_tab/close_tab/list_tabs, wait (seconds), execute_js (run JS), double_click/hover/press_key, save_pdf, get_console_logs, view_source, close (shutdown).</description>
     <parameters>
-      <parameter name="action" type="string" required="true" />
-      <parameter name="url" type="string" required="false" />
-      <parameter name="coordinate" type="string" required="false" />
-      <parameter name="text" type="string" required="false" />
-      <parameter name="tab_id" type="string" required="false" />
-      <parameter name="js_code" type="string" required="false" />
-      <parameter name="duration" type="string" required="false" />
-      <parameter name="key" type="string" required="false" />
-      <parameter name="file_path" type="string" required="false" />
-      <parameter name="clear" type="boolean" required="false" />
-      <parameter name="selector" type="string" required="false" />
-      <parameter name="timeout" type="number" required="false" />
-      <parameter name="wait_state" type="string" required="false" />
+      <parameter name="action" type="string" required="true">
+        <description>Exact action name. Valid: launch, goto, click, type, scroll_down, scroll_up, back, forward, new_tab, switch_tab, close_tab, list_tabs, wait, execute_js, double_click, hover, press_key, save_pdf, get_console_logs, view_source, close.</description>
+      </parameter>
+      <parameter name="url" type="string" required="false">
+        <description>Required for goto/launch/new_tab. Target URL.</description>
+      </parameter>
+      <parameter name="coordinate" type="string" required="false">
+        <description>Required for click/double_click/hover. Format: "x,y".</description>
+      </parameter>
+      <parameter name="text" type="string" required="false">
+        <description>Required for type. Text to input.</description>
+      </parameter>
+      <parameter name="tab_id" type="string" required="false">
+        <description>Tab to operate on. Use tab ID from launch result.</description>
+      </parameter>
+      <parameter name="js_code" type="string" required="false">
+        <description>Required for execute_js. JavaScript code to run.</description>
+      </parameter>
+      <parameter name="duration" type="number" required="false">
+        <description>Required for wait. Seconds to wait.</description>
+      </parameter>
+      <parameter name="key" type="string" required="false">
+        <description>Required for press_key. Key name (Enter, Escape, etc).</description>
+      </parameter>
+      <parameter name="file_path" type="string" required="false">
+        <description>Required for save_pdf. Output file path.</description>
+      </parameter>
+      <parameter name="clear" type="boolean" required="false">
+        <description>For get_console_logs: clear after reading. Default false.</description>
+      </parameter>
     </parameters>
+    <returns type="Dict[str, Any]">
+      <description>success, screenshot, url, title, tab_id, message, error.</description>
+    </returns>
     <examples>
+      <function=browser_action>
+        <parameter=action>launch</parameter>
+      </function>
       <function=browser_action>
         <parameter=action>goto</parameter>
         <parameter=url>https://example.com</parameter>
+      </function>
+      <function=browser_action>
+        <parameter=action>close</parameter>
       </function>
     </examples>
   </tool>

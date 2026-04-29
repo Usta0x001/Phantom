@@ -194,9 +194,9 @@ async def record_payload_test(
     
     # Add evidence
     if outcome == "success" and evidence:
-        await _ledger.add_evidence_for(hypothesis_id, evidence, outcome)
+        _ledger.add_evidence_for(hypothesis_id, evidence, outcome)
     elif outcome == "failure" and evidence:
-        await _ledger.add_evidence_against(hypothesis_id, evidence, outcome)
+        _ledger.add_evidence_against(hypothesis_id, evidence, outcome)
 
     # Get current status
     hyp = _ledger.get(hypothesis_id)
@@ -241,7 +241,7 @@ async def confirm_hypothesis(hypothesis_id: str, evidence: str) -> dict[str, Any
             "error": f"Invalid hypothesis_id: {hypothesis_id}. Hypothesis not found.",
         }
     
-    await _ledger.confirm(hypothesis_id, evidence)
+    _ledger.confirm(hypothesis_id, evidence)
     
     hyp = _ledger.get(hypothesis_id)
     status = hyp.status if hyp else "unknown"
@@ -285,7 +285,7 @@ async def reject_hypothesis(hypothesis_id: str, reason: str) -> dict[str, Any]:
             "error": f"Invalid hypothesis_id: {hypothesis_id}. Hypothesis not found.",
         }
     
-    await _ledger.reject(hypothesis_id, reason)
+    _ledger.reject(hypothesis_id, reason)
     
     return {
         "success": True,

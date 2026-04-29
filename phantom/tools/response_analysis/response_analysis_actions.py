@@ -590,7 +590,6 @@ async def analyze_response(
     }
 
 
-@register_tool(sandbox_execution=False)
 async def detect_errors(
     content: str,
     error_types: list[str] | None = None,
@@ -663,7 +662,6 @@ async def detect_errors(
     }
 
 
-@register_tool(sandbox_execution=False)
 async def extract_secrets(
     content: str,
     secret_types: list[str] | None = None,
@@ -716,7 +714,6 @@ async def extract_secrets(
     }
 
 
-@register_tool(sandbox_execution=False)
 async def identify_tech_stack(
     content: str,
     headers: dict[str, str] | None = None,

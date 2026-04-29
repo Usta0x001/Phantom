@@ -1,165 +1,76 @@
 <tools>
   <tool name="create_vulnerability_report">
-    <description>Create a vulnerability report for a discovered security issue. One report per vulnerability. Deduplication is automatic — if rejected as duplicate, do not re-submit. IMPORTANT: if the same report fails validation 3+ times (missing params), stop retrying and try a different approach.
-
-REQUIRED: title, description, impact, target, technical_analysis.
-OPTIONAL (auto-filled if omitted): poc_description (=description), poc_script_code (only required for LIKELY/VERIFIED), remediation_steps (= "See impact + technical analysis for remediation guidance."), cvss_breakdown (auto-calculated from severity if provided, otherwise estimated LOW).
-Optional: endpoint, method, parameter, cve, cwe, code_locations (MANDATORY for white-box: include fix_before/fix_after), severity (auto-calculates cvss_breakdown).
-
-Report rules: Do NOT include local paths, internal tools, agents, sandboxes, models, system prompts, connection issues, or stack traces. Tone: formal, objective, third-person. Structure per finding: Overview, Severity/CVSS, Affected asset, Technical details, PoC (repro + code), Impact, Remediation. Numbered steps only in PoC and remediation.
-
-Validation quick wins:
-- cwe must be exact ID format like "CWE-89" (NOT "89" or "CWE-89: SQL Injection").
-- If you already validated exploitation but are short on time, set confidence=SUSPECTED and provide concrete technical_analysis (payload sent + observed response).
-- severity can replace cvss_breakdown for fast valid submissions (e.g., severity=HIGH).</description>
+    <description>Report a discovered vulnerability. One per finding. Stop retrying after 3 failures.</description>
     <parameters>
       <parameter name="title" type="string" required="true">
-        <description>Clear, specific title (e.g., "SQL Injection in Login Parameter"). But not too long. Don't mention CVE number in the title.</description>
+        <description>Vulnerability title.</description>
       </parameter>
       <parameter name="description" type="string" required="true">
-        <description>Comprehensive description of the vulnerability and how it was discovered</description>
+        <description>How it was discovered.</description>
       </parameter>
       <parameter name="impact" type="string" required="true">
-        <description>Impact assessment: what attacker can do, business risk, data at risk</description>
+        <description>Business impact and attacker capability.</description>
       </parameter>
       <parameter name="target" type="string" required="true">
-        <description>Affected target: URL, domain, or Git repository</description>
+        <description>Affected URL, domain, or repo.</description>
       </parameter>
       <parameter name="technical_analysis" type="string" required="true">
-        <description>Technical explanation of the vulnerability mechanism and root cause</description>
+        <description>Technical mechanism and root cause.</description>
       </parameter>
       <parameter name="poc_description" type="string" required="false">
-        <description>Step-by-step instructions to reproduce the vulnerability. If omitted, the description field is used.</description>
+        <description>Reproduction steps.</description>
       </parameter>
       <parameter name="poc_script_code" type="string" required="false">
-        <description>Actual proof of concept code, exploit, payload, or script that demonstrates the vulnerability. Python code. Only REQUIRED for LIKELY or VERIFIED confidence. Can be omitted for SUSPECTED.</description>
+        <description>PoC code.</description>
       </parameter>
       <parameter name="remediation_steps" type="string" required="false">
-        <description>Specific, actionable steps to fix the vulnerability. If omitted, a generic remediation message is used.</description>
+        <description>How to fix.</description>
       </parameter>
       <parameter name="cvss_breakdown" type="string" required="false">
-        <description>CVSS 3.1 base score as nested XML. If omitted, auto-calculated from severity: CRITICAL=9.8, HIGH=8.9, MEDIUM=6.5, LOW=3.7, INFO=0.1. You can also provide plain vector like "AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:N".</description>
+        <description>CVSS vector. Auto from severity.</description>
       </parameter>
       <parameter name="severity" type="string" required="false">
-        <description>Severity tier: CRITICAL, HIGH, MEDIUM, LOW, INFO. If provided, auto-calculates cvss_breakdown and cvss_score. Overrides any provided cvss_breakdown.</description>
+        <description>CRITICAL, HIGH, MEDIUM, LOW, INFO.</description>
       </parameter>
       <parameter name="endpoint" type="string" required="false">
-        <description>API endpoint(s) or URL path(s) (e.g., "/api/login") - for web vulnerabilities, or Git repository path(s) - for code vulnerabilities</description>
+        <description>Vulnerable endpoint path.</description>
       </parameter>
       <parameter name="method" type="string" required="false">
-        <description>HTTP method(s) (GET, POST, etc.) - for web vulnerabilities.</description>
+        <description>HTTP method.</description>
       </parameter>
       <parameter name="parameter" type="string" required="false">
-        <description>The specific HTTP parameter, header, or query string variable that carries the vulnerability (e.g., "q", "id", "username", "Authorization").
-If the endpoint contains a query string (e.g., "/search?q=test"), extract the parameter name from it (e.g., "q").
-If the vulnerable input is in a request body (e.g., POST JSON), include the field name (e.g., "username").
-If there is no specific parameter (e.g., SSRF via URL field), omit this field.</description>
+        <description>Vulnerable param, header, or query.</description>
       </parameter>
       <parameter name="cve" type="string" required="false">
-        <description>CVE identifier. ONLY the ID, e.g. "CVE-2024-1234" — do NOT include the name or description.
-You must be 100% certain of the exact CVE number. Do NOT guess, approximate, or hallucinate CVE IDs.
-If web_search is available, use it to verify the CVE exists and matches this vulnerability. If you cannot verify it, omit this field entirely.</description>
+        <description>CVE ID only. Do NOT guess.</description>
       </parameter>
       <parameter name="cwe" type="string" required="false">
-        <description>CWE identifier. ONLY the ID (e.g., "CWE-89"). Do NOT include the name or parenthetical. Use web_search to verify. Prefer the most specific child CWE over broad parents (e.g., CWE-89 over CWE-74). Common: CWE-89 SQLi, CWE-79 XSS, CWE-918 SSRF, CWE-352 CSRF, CWE-78 OS Command Injection, CWE-94 Code Injection, CWE-287 Improper Auth, CWE-862/863 Authorization, CWE-601 Open Redirect, CWE-502 XXE, CWE-22 Path Traversal, CWE-798 Hard-coded Credentials, CWE-434 Unsafe Upload. Omit if uncertain.</description>
+        <description>CWE ID only. No name.</description>
       </parameter>
       <parameter name="code_locations" type="string" required="false">
-        <description>MANDATORY for white-box testing. Nested XML list of code locations. Each location has: file (path relative to repo root, no leading slash), start_line, end_line (1-based inclusive range), snippet (optional), label (optional), fix_before (verbatim vulnerable code), fix_after (corrected code). fix_before/fix_after are LITERAL line-range replacements — fix_before must match source exactly character-for-character. Do NOT guess line numbers. Multi-part fixes need separate location entries. Omit this field for black-box testing.</description>
-        <format>
-          <location>
-            <file>src/db/queries.ts</file>
-            <start_line>42</start_line>
-            <end_line>45</end_line>
-            <snippet>const query = (
-    `SELECT * FROM users ` +
-    `WHERE id = ${id}`
-);</snippet>
-            <label>Unsanitized input used in SQL query (sink)</label>
-            <fix_before>const query = (
-    `SELECT * FROM users ` +
-    `WHERE id = ${id}`
-);</fix_before>
-            <fix_after>const query = 'SELECT * FROM users WHERE id = $1';
-const result = await db.query(query, [id]);</fix_after>
-          </location>
-          <location>
-            <file>src/routes/users.ts</file>
-            <start_line>15</start_line>
-            <end_line>15</end_line>
-            <snippet>const id = req.params.id</snippet>
-            <label>User input from request parameter (source)</label>
-          </location>
-        </format>
+        <description>Code locations. Omit for black-box.</description>
       </parameter>
       <parameter name="confidence" type="string" required="false">
-      <description>Confidence tier for this finding. Must be one of:
-- SUSPECTED: Detection signal only, not independently verified (use this if unsure)
-- LIKELY: You personally tested with a crafted payload and observed a confirming response
-- VERIFIED: Reserved for automatic PoC replay — do NOT set this manually
-
-If omitted, defaults to LIKELY. See CONFIDENCE TIERS in execution guidelines for rules.</description>
+        <description>SUSPECTED, LIKELY, VERIFIED.</description>
       </parameter>
     </parameters>
     <returns type="Dict[str, Any]">
-      <description>Response containing:
-- On success: success=true, message, report_id, severity, cvss_score
-- On duplicate detection: success=false, message (with duplicate info), duplicate_of (ID), duplicate_title, confidence (0-1), reason (why it's a duplicate)</description>
+      <description>success, report_id, severity, cvss_score, duplicate info.</description>
     </returns>
-
     <examples>
-<function=create_vulnerability_report>
-<parameter=title>Authentication Bypass via SQL Injection in Login Endpoint</parameter>
-<parameter=description>Login accepts crafted SQL payload in the username field and issues an authenticated session.</parameter>
-<parameter=impact>Unauthenticated attacker can bypass authentication and access protected user data.</parameter>
-<parameter=target>https://example.com</parameter>
-<parameter=technical_analysis>Sent POST /login with username payload "' OR 1=1 --" and arbitrary password. Response returned HTTP 200 with auth token and authenticated user context, confirming server-side SQL query manipulation.</parameter>
-<parameter=endpoint>/login</parameter>
-<parameter=method>POST</parameter>
-<parameter=parameter>username</parameter>
-<parameter=cwe>CWE-89</parameter>
-<parameter=severity>HIGH</parameter>
-<parameter=confidence>SUSPECTED</parameter>
-</function>
-
-<function=create_vulnerability_report>
-<parameter=title>Sensitive Information Exposure via Stack Trace Leak</parameter>
-<parameter=description>Invalid endpoint requests disclose backend stack traces and internal file paths.</parameter>
-<parameter=impact>Leaked internals improve attacker recon and exploit targeting.</parameter>
-<parameter=target>https://example.com</parameter>
-<parameter=technical_analysis>Request sent: GET /invalid. Observed response: HTTP 500 with backend stack-trace lines and internal file path disclosure. This confirms sensitive error disclosure in production responses.</parameter>
-<parameter=endpoint>/invalid</parameter>
-<parameter=method>GET</parameter>
-<parameter=poc_script_code>curl -i https://example.com/invalid</parameter>
-<parameter=severity>MEDIUM</parameter>
-<parameter=confidence>SUSPECTED</parameter>
-</function>
-
-<function=create_vulnerability_report>
-<parameter=title>SQL Injection in Login Parameter</parameter>
-<parameter=description>Classic SQL injection via the username parameter on the login endpoint.</parameter>
-<parameter=impact>Full database read/write; authentication bypass.</parameter>
-<parameter=target>https://example.com</parameter>
-<parameter=technical_analysis>The username value is interpolated directly into a SQL query without parameterization.</parameter>
-<parameter=poc_description>1. POST /login with username: admin' OR '1'='1' --
-2. Observe successful authentication without valid credentials.</parameter>
-<parameter=poc_script_code>import requests
-r = requests.post("https://example.com/login", json={"username": "admin' OR '1'='1' --", "password": "x"})
-print(r.status_code, r.text[:200])</parameter>
-<parameter=remediation_steps>Use parameterized queries / prepared statements. Never interpolate user input into SQL strings.</parameter>
-<parameter=cvss_breakdown>
-  <attack_vector>N</attack_vector>
-  <attack_complexity>L</attack_complexity>
-  <privileges_required>N</privileges_required>
-  <user_interaction>N</user_interaction>
-  <scope>U</scope>
-  <confidentiality>H</confidentiality>
-  <integrity>H</integrity>
-  <availability>N</availability>
-</parameter>
-<parameter=endpoint>/login</parameter>
-<parameter=method>POST</parameter>
-<parameter=cwe>CWE-89</parameter>
-</function>
+      <function=create_vulnerability_report>
+        <parameter=title>SQL Injection in Login</parameter>
+        <parameter=description>Username field accepts SQL payload.</parameter>
+        <parameter=impact>Auth bypass.</parameter>
+        <parameter=target>https://example.com</parameter>
+        <parameter=technical_analysis>POST /login with "' OR 1=1 --" returned 200 + token.</parameter>
+        <parameter=endpoint>/login</parameter>
+        <parameter=method>POST</parameter>
+        <parameter=parameter>username</parameter>
+        <parameter=cwe>CWE-89</parameter>
+        <parameter=severity>HIGH</parameter>
+        <parameter=confidence>SUSPECTED</parameter>
+      </function>
     </examples>
   </tool>
 </tools>

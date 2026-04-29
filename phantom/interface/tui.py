@@ -36,12 +36,6 @@ from phantom.interface.tui_design_system import (
     ERROR_STATES,
     KEYBOARD_MODEL,
     LOADING_STATES,
-    ACTION_BLUE,
-    ACCENT_PURPLE,
-    CANVAS_BG,
-    SURFACE_BG,
-    SURFACE_ALT_BG,
-    TEXT_PRIMARY,
     TEXT_MUTED,
     TEXT_FAINT,
     TEXT_SHADOW,
@@ -54,7 +48,6 @@ from phantom.interface.tui_design_system import (
     WARNING_ORANGE,
     DANGER_ROSE,
     SECONDARY_VIOLET,
-    BORDER_SLATE,
     SEVERITY_COLORS as DESIGN_SEVERITY_COLORS,
     NEUTRAL_DOT,
     SWEEP_COLORS,
@@ -1398,23 +1391,7 @@ class PhantomTUIApp(App):  # type: ignore[misc]
             return (Text(" "), keymap, status_vm.should_animate)
 
         if status_vm.mode == "active":
-            # FIX: Add phase badge to status bar
-            PHASE_BADGES = {
-                "recon": ("RECON", SUCCESS_LIME),
-                "enumeration": ("ENUM", INFO_BLUE),
-                "exploitation": ("EXPLOIT", DANGER_ROSE),
-                "post_exploitation": ("POST-EX", SECONDARY_VIOLET),
-                "reporting": ("REPORT", WARNING_GOLD),
-            }
-            
             animated_text = Text()
-            
-            # Add phase badge if available
-            phase = agent_data.get("phase", "recon")
-            if phase in PHASE_BADGES:
-                badge_text, badge_color = PHASE_BADGES[phase]
-                animated_text.append(f"[{badge_text}] ", style=Style(color=badge_color, bold=True))
-            
             animated_text.append_text(self._get_sweep_animation(self._sweep_colors))
             animated_text.append("esc", style="white")
             animated_text.append(" ", style="dim")
@@ -1748,8 +1725,13 @@ class PhantomTUIApp(App):  # type: ignore[misc]
             self.agent_nodes[agent_id] = agent_node
 
             if len(self.agent_nodes) == 1:
-                agents_tree.select_node(agent_node)
+                # Set selected_agent_id FIRST, then try to sync the tree UI.
+                # If select_node() fails, the agent is still selected.
                 self.selected_agent_id = agent_id
+                try:
+                    agents_tree.select_node(agent_node)
+                except Exception:
+                    pass
 
             self._reorganize_orphaned_agents(agent_id)
         except (AttributeError, ValueError, RuntimeError) as e:
@@ -1895,6 +1877,7 @@ class PhantomTUIApp(App):  # type: ignore[misc]
 
     def _send_user_message(self, message: str) -> None:
         if not self.selected_agent_id:
+            self._show_chat_error("No agent selected. Wait for an agent to appear, then click it.")
             return
 
         if self.tracer:
@@ -1929,17 +1912,36 @@ class PhantomTUIApp(App):  # type: ignore[misc]
         try:
             from phantom.tools.agents_graph.agents_graph_actions import send_user_message_to_agent
 
-            send_user_message_to_agent(self.selected_agent_id, message)
+            result = send_user_message_to_agent(self.selected_agent_id, message)
+            if not result.get("success"):
+                error = result.get("error", "Unknown error")
+                self._show_chat_error(f"Message not delivered: {error}")
+                return
 
         except (ImportError, AttributeError) as e:
             import logging
 
             logging.warning(f"Failed to send message to agent {self.selected_agent_id}: {e}")
+            self._show_chat_error(f"Failed to send message: {e}")
+            return
 
         self._displayed_events.clear()
         self._update_chat_view()
 
         self.call_after_refresh(self._focus_chat_input)
+
+    def _show_chat_error(self, error_text: str) -> None:
+        """Show a temporary error message in the chat area."""
+        if not self.tracer:
+            return
+        self.tracer.log_chat_message(
+            content=f"[SYSTEM ERROR: {error_text}]",
+            role="assistant",
+            agent_id=self.selected_agent_id or "unknown",
+            metadata={"system_error": True},
+        )
+        self._displayed_events.clear()
+        self._update_chat_view()
 
     def _get_agent_name(self, agent_id: str) -> str:
         try:
@@ -2053,7 +2055,6 @@ class PhantomTUIApp(App):  # type: ignore[misc]
                 interruption_reason=reason,
                 hypothesis_ledger=getattr(agent, "hypothesis_ledger", None),
                 coverage_tracker=getattr(agent, "coverage_tracker", None),
-                correlation_engine=getattr(agent, "correlation_engine", None),
                 attack_graph=getattr(agent, "attack_graph", None),
                 active_sub_agents=getattr(agent, "_collect_active_sub_agent_states", lambda: {})(),
             )

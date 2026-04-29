@@ -12,7 +12,7 @@ from rich.live import Live
 from rich.panel import Panel
 from rich.text import Text
 
-from .tui_design_system import ACTION_BLUE, DANGER_CRIMSON, INFO_BLUE, WARNING_ORANGE
+from .tui_design_system import ACTION_BLUE, DANGER_CRIMSON, INFO_BLUE
 
 from phantom.agents.PhantomAgent import PhantomAgent
 from phantom.llm.config import LLMConfig
@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 
 def _build_resume_diff_text(cp: Any) -> str:
     """Format a human-readable summary of a loaded checkpoint for display at resume time."""
-    from datetime import UTC, datetime
+    from datetime import datetime
 
     lines = [
         f"  Resuming run  {cp.run_name}",
@@ -275,6 +275,8 @@ async def run_cli(args: Any) -> None:  # noqa: PLR0912, PLR0915
 
     tracer = Tracer(args.run_name)
     tracer.set_scan_config(scan_config)
+    # FIX: register tracer globally so base_agent.py can retrieve it
+    set_global_tracer(tracer)
 
     # Restore previously found vulnerabilities into tracer so they show in live view
     if resume_run and cp is not None:
@@ -443,7 +445,9 @@ async def run_cli(args: Any) -> None:  # noqa: PLR0912, PLR0915
                     "tool_executions": len(tracer.tool_executions),
                 }
             }
-            print(json.dumps(output, indent=2))
+            import sys
+
+            sys.stdout.write(json.dumps(output, indent=2) + "\n")
         elif quiet_mode:
             # Quiet mode: just print vuln count
             console.print(f"\nScan complete: {len(tracer.vulnerability_reports)} vulnerabilities found")

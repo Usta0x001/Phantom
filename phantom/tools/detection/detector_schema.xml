@@ -1,38 +1,102 @@
 <tools>
   <tool name="detect_pattern">
-    <description>Detect vulnerability indicators with regex patterns.</description>
+    <description>Detect vulnerability indicators with regex.</description>
     <parameters>
-      <parameter name="response_body" type="string" required="true" />
-      <parameter name="patterns" type="array" required="false" />
-      <parameter name="vuln_class" type="string" required="false" />
-      <parameter name="case_sensitive" type="boolean" required="false" />
+      <parameter name="response_body" type="string" required="true">
+        <description>Response body.</description>
+      </parameter>
+      <parameter name="patterns" type="array" required="false">
+        <description>Custom regex patterns.</description>
+      </parameter>
+      <parameter name="vuln_class" type="string" required="false">
+        <description>Vulnerability class.</description>
+      </parameter>
+      <parameter name="case_sensitive" type="boolean" required="false">
+        <description>Case-sensitive matching.</description>
+      </parameter>
     </parameters>
+    <returns type="Dict[str, Any]">
+      <description>patterns, matches, confidence.</description>
+    </returns>
+    <examples>
+      <function=detect_pattern>
+        <parameter=response_body>Error: SQL syntax...</parameter>
+        <parameter=vuln_class>sqli</parameter>
+      </function>
+    </examples>
   </tool>
 
   <tool name="detect_error_based">
-    <description>Detect error-based vulnerability signals.</description>
+    <description>Detect error-based signals.</description>
     <parameters>
-      <parameter name="response_body" type="string" required="true" />
-      <parameter name="vuln_class" type="string" required="true" />
+      <parameter name="response_body" type="string" required="true">
+        <description>Response body.</description>
+      </parameter>
+      <parameter name="vuln_class" type="string" required="true">
+        <description>Vulnerability class.</description>
+      </parameter>
     </parameters>
+    <returns type="Dict[str, Any]">
+      <description>errors, severity, indicators.</description>
+    </returns>
+    <examples>
+      <function=detect_error_based>
+        <parameter=response_body>mysql_query() failed...</parameter>
+        <parameter=vuln_class>sqli</parameter>
+      </function>
+    </examples>
   </tool>
 
   <tool name="detect_timing_based">
-    <description>Detect timing-based blind vulnerability signals.</description>
+    <description>Detect timing-based blind signals.</description>
     <parameters>
-      <parameter name="baseline_time" type="number" required="true" />
-      <parameter name="test_time" type="number" required="true" />
-      <parameter name="delay_expected" type="number" required="false" />
-      <parameter name="tolerance" type="number" required="false" />
+      <parameter name="baseline_time" type="number" required="true">
+        <description>Baseline ms.</description>
+      </parameter>
+      <parameter name="test_time" type="number" required="true">
+        <description>Test ms.</description>
+      </parameter>
+      <parameter name="delay_expected" type="number" required="false">
+        <description>Expected delay ms.</description>
+      </parameter>
+      <parameter name="tolerance" type="number" required="false">
+        <description>Tolerance factor.</description>
+      </parameter>
     </parameters>
+    <returns type="Dict[str, Any]">
+      <description>confidence, recommendation.</description>
+    </returns>
+    <examples>
+      <function=detect_timing_based>
+        <parameter=baseline_time>200</parameter>
+        <parameter=test_time>5200</parameter>
+        <parameter=delay_expected>5000</parameter>
+      </function>
+    </examples>
   </tool>
 
   <tool name="detect_differential">
-    <description>Detect differential behavior between baseline/test responses.</description>
+    <description>Detect differential behavior.</description>
     <parameters>
-      <parameter name="baseline_response" type="object" required="true" />
-      <parameter name="test_response" type="object" required="true" />
-      <parameter name="vuln_class" type="string" required="true" />
+      <parameter name="baseline_response" type="object" required="true">
+        <description>Baseline response object.</description>
+      </parameter>
+      <parameter name="test_response" type="object" required="true">
+        <description>Test response object.</description>
+      </parameter>
+      <parameter name="vuln_class" type="string" required="true">
+        <description>Vulnerability class.</description>
+      </parameter>
     </parameters>
+    <returns type="Dict[str, Any]">
+      <description>differences, confidence, indicators.</description>
+    </returns>
+    <examples>
+      <function=detect_differential>
+        <parameter=baseline_response>{"body": "Welcome user", "status_code": 200}</parameter>
+        <parameter=test_response>{"body": "Welcome admin", "status_code": 200}</parameter>
+        <parameter=vuln_class>idor</parameter>
+      </function>
+    </examples>
   </tool>
 </tools>

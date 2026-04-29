@@ -18,9 +18,7 @@ logger = logging.getLogger(__name__)
 
 RICH_TOOL_NAMES = {
     "create_vulnerability_report",
-    "create_elite_report",
     "generate_smart_payloads",
-    "auto_queue_cve_exploits",
     "agent_finish",
     "browser_action",
 }
@@ -57,7 +55,6 @@ _PARAM_BLOCK_RE = re.compile(
     r"<parameter\b(?![^>]*\/>)" r"([^>]*)>(.*?)</parameter>", re.IGNORECASE | re.DOTALL
 )
 _SELF_CLOSING_PARAM_RE = re.compile(r"<parameter\b([^>]*)\s*/>", re.IGNORECASE | re.DOTALL)
-_EXAMPLE_BLOCK_RE = re.compile(r"<examples?>.*?</examples?>", re.IGNORECASE | re.DOTALL)
 
 
 def _load_xml_schema(path: Path) -> Any:
@@ -67,7 +64,6 @@ def _load_xml_schema(path: Path) -> Any:
         content = path.read_text(encoding="utf-8")
 
         content = _process_dynamic_content(content)
-        content = _EXAMPLE_BLOCK_RE.sub("", content)
         tools_dict: dict[str, str] = {}
 
         for tool_match in _TOOL_BLOCK_RE.finditer(content):

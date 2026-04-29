@@ -1,152 +1,30 @@
 <tools>
-<tool name="bruteforce_subdomains">
-<description>
-Perform async subdomain brute-forcing with DNS resolution.
-
-This is an ACTIVE reconnaissance tool - it makes DNS queries against
-public DNS resolvers to discover subdomains.
-
-Use this after passive enumeration (crt.sh) to find additional subdomains
-not listed in certificate transparency logs.
-</description>
-<parameters>
-  <parameter name="domain" type="string" required="true">
-    Target domain to bruteforce (e.g., "example.com")
-  </parameter>
-  <parameter name="wordlist_path" type="string" required="false">
-    Path to custom wordlist file (one subdomain per line). If not provided, uses built-in wordlist.
-  </parameter>
-  <parameter name="wordlist_size" type="string" required="false">
-    Built-in wordlist size: "small" (500 entries), "medium" (5000 entries), "large" (30000 entries). Default: "medium"
-  </parameter>
-  <parameter name="concurrency" type="integer" required="false">
-    Maximum concurrent DNS queries. Default: 50. Reduced automatically in stealth mode.
-  </parameter>
-  <parameter name="stealth" type="boolean" required="false">
-    Enable stealth mode with reduced speed and randomized timing. Default: false
-  </parameter>
-  <parameter name="existing_subdomains" type="array" required="false">
-    List of already discovered subdomains (from crt.sh) for deduplication.
-  </parameter>
-  <parameter name="custom_wordlist" type="array" required="false">
-    Custom list of subdomain prefixes to test instead of built-in wordlist.
-  </parameter>
-</parameters>
-<returns>
-  - success: Whether the scan completed
-  - domain: The target domain
-  - discovered: List of discovered subdomains with IP addresses
-  - total_checked: Number of subdomains checked
-  - wildcard_detected: Whether wildcard DNS was detected
-  - new_discoveries: Subdomains not in existing_subdomains
-</returns>
-<example>
-# Basic subdomain bruteforce
-result = bruteforce_subdomains(domain="example.com")
-
-# With deduplication against crt.sh findings
-result = bruteforce_subdomains(
-    domain="example.com",
-    existing_subdomains=["www.example.com", "mail.example.com"],
-    wordlist_size="medium"
-)
-
-# Stealth mode for sensitive targets
-result = bruteforce_subdomains(domain="target.com", stealth=True)
-</example>
-</tool>
-
-<tool name="smart_subdomain_gen">
-<description>
-Generate intelligent subdomain prefixes based on target context.
-
-Uses technology stack, industry, and pattern analysis to generate
-likely subdomain prefixes. More targeted than generic wordlists.
-</description>
-<parameters>
-  <parameter name="domain" type="string" required="true">
-    Target domain (e.g., "acme-corp.com")
-  </parameter>
-  <parameter name="tech_stack" type="array" required="false">
-    Detected technologies (e.g., ["nginx", "php", "mysql", "wordpress"])
-  </parameter>
-  <parameter name="industry" type="string" required="false">
-    Industry vertical (e.g., "finance", "healthcare", "ecommerce")
-  </parameter>
-  <parameter name="existing_subdomains" type="array" required="false">
-    Already discovered subdomains for pattern learning
-  </parameter>
-  <parameter name="max_suggestions" type="integer" required="false">
-    Maximum prefixes to generate. Default: 100
-  </parameter>
-</parameters>
-<returns>
-  - suggestions: List of suggested subdomain prefixes
-  - reasoning: Why each category was suggested
-  - priority: Priority ordering hints
-</returns>
-<example>
-# Generate based on tech stack
-result = smart_subdomain_gen(
-    domain="example.com",
-    tech_stack=["wordpress", "mysql", "nginx"],
-    industry="ecommerce"
-)
-</example>
-</tool>
-
-<tool name="run_subdomain_tools">
-<description>
-Run external subdomain enumeration tools (subfinder, assetfinder).
-
-Executes available external tools and aggregates their results.
-Requires the tools to be installed on the system PATH.
-</description>
-<parameters>
-  <parameter name="domain" type="string" required="true">
-    Target domain (e.g., "example.com")
-  </parameter>
-  <parameter name="tools" type="array" required="false">
-    List of tools to run. Default: ["subfinder", "assetfinder"]
-  </parameter>
-  <parameter name="timeout_seconds" type="integer" required="false">
-    Timeout for each tool. Default: 120
-  </parameter>
-</parameters>
-<returns>
-  - subdomains: Combined list of discovered subdomains
-  - by_tool: Results broken down by tool
-</returns>
-</tool>
-
-<tool name="comprehensive_subdomain_enum">
-<description>
-Run comprehensive subdomain enumeration combining multiple techniques.
-
-Orchestrates passive enumeration, external tools, smart wordlist generation,
-and active DNS brute-forcing into a single comprehensive scan.
-</description>
-<parameters>
-  <parameter name="domain" type="string" required="true">
-    Target domain (e.g., "example.com")
-  </parameter>
-  <parameter name="stealth" type="boolean" required="false">
-    Enable stealth mode (slower, more careful). Default: false
-  </parameter>
-  <parameter name="include_bruteforce" type="boolean" required="false">
-    Include DNS brute-forcing phase. Default: true
-  </parameter>
-  <parameter name="bruteforce_size" type="string" required="false">
-    Wordlist size for bruteforce: "small", "medium", "large". Default: "medium"
-  </parameter>
-  <parameter name="use_external_tools" type="boolean" required="false">
-    Try to use subfinder/assetfinder if available. Default: true
-  </parameter>
-</parameters>
-<returns>
-  - subdomains: All discovered subdomains
-  - by_source: Results broken down by technique
-  - sources_used: Which techniques were used
-</returns>
-</tool>
+  <tool name="comprehensive_subdomain_enum">
+    <description>Run comprehensive subdomain enumeration combining passive, external tools, smart generation, and active DNS brute-forcing.</description>
+    <parameters>
+      <parameter name="domain" type="string" required="true">
+        <description>Target domain (e.g., "example.com").</description>
+      </parameter>
+      <parameter name="stealth" type="boolean" required="false">
+        <description>Enable stealth mode (slower, more careful). Default: false.</description>
+      </parameter>
+      <parameter name="include_bruteforce" type="boolean" required="false">
+        <description>Include DNS brute-forcing phase. Default: true.</description>
+      </parameter>
+      <parameter name="bruteforce_size" type="string" required="false">
+        <description>Wordlist size for bruteforce: small, medium, large. Default: medium.</description>
+      </parameter>
+      <parameter name="use_external_tools" type="boolean" required="false">
+        <description>Try to use subfinder/assetfinder if available. Default: true.</description>
+      </parameter>
+    </parameters>
+    <returns type="Dict[str, Any]">
+      <description>All discovered subdomains, results by source, and sources_used.</description>
+    </returns>
+    <examples>
+      <function=comprehensive_subdomain_enum>
+        <parameter=domain>example.com</parameter>
+      </function>
+    </examples>
+  </tool>
 </tools>

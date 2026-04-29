@@ -3,10 +3,8 @@
 
 from phantom.tools.waf.waf_actions import (
     detect_waf,
-    get_waf_evasion_strategies,
 )
 
 __all__ = [
     "detect_waf",
-    "get_waf_evasion_strategies",
 ]

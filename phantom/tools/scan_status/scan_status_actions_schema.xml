@@ -1,20 +1,6 @@
 <tools>
   <tool name="get_scan_status">
-    <description>Get a compressed real-time dashboard of the current scan: hypothesis states, coverage gaps, confirmed findings, cost, iteration count, and recommended next action.
-
-WHEN TO CALL:
-- At the start of EVERY major decision (what to test next)
-- Before reporting findings (check for pending confirmed hypotheses)
-- When context feels stale or you've run 10+ iterations without a clear plan
-- After returning from a long wait_for_message
-
-Returns:
-- phase: current scan phase (recon/testing/exploitation/reporting)
-- iteration: current/max iteration count
-- hypotheses: open/testing/confirmed/rejected counts + confirmed list
-- coverage: tested surfaces and untested attack vectors
-- cost_usd: cumulative LLM spend
-- recommended_next: highest-priority next action based on scan state</description>
+    <description>Get a compressed real-time dashboard of the current scan: hypothesis states, coverage gaps, confirmed findings, cost, iteration count, and recommended next action. Call at the start of major decisions, before reporting, or when context feels stale.</description>
     <parameters>
       <parameter name="include_recommendations" type="boolean" required="false">
         <description>Whether to include a suggested next action (default: true).</description>
@@ -23,13 +9,12 @@ Returns:
         <description>Optional agent ID. Omit to auto-resolve from current runtime context.</description>
       </parameter>
     </parameters>
+    <returns type="Dict[str, Any]">
+      <description>Phase, iteration, hypotheses counts, coverage, cost_usd, and recommended_next action.</description>
+    </returns>
     <examples>
-<function=get_scan_status>
-</function>
-
-<function=get_scan_status>
-<parameter=include_recommendations>true</parameter>
-</function>
+      <function=get_scan_status>
+      </function>
     </examples>
   </tool>
 </tools>

@@ -181,24 +181,23 @@ def _enforce_safe_summary_schema(summary: str) -> str:
 def _semantic_sanitize_output(text: str) -> str:
     """ARCH-001 FIX: Sanitize tool output to remove prompt injection attempts.
 
-    Replaces detected injection patterns with safe placeholders.
+    Only removes active instruction-override attempts.
+    Tag-based patterns (</function>, </tool_result>) are NOT removed because:
+    1. They appear in legitimate HTML/JSON responses and would corrupt data.
+    2. Tool results are already wrapped in <tool_result> XML, so the LLM
+       parser treats them as structured data, not instructions.
     """
     if not isinstance(text, str):
         return str(text) if text is not None else ""
 
     sanitized = text
 
-    # Remove system/instruction tags
+    # Remove system/instruction override attempts
     sanitized = re.sub(r"</?system\s*>", "[REMOVED]", sanitized, flags=re.IGNORECASE)
     sanitized = re.sub(r"\[/?system\]", "[REMOVED]", sanitized, flags=re.IGNORECASE)
     sanitized = re.sub(r"<</?SYS>>", "[REMOVED]", sanitized, flags=re.IGNORECASE)
 
-    # Remove function/tool injection tags
-    sanitized = re.sub(r"</function>", "[REMOVED]", sanitized, flags=re.IGNORECASE)
-    sanitized = re.sub(r"</tool_result>", "[REMOVED]", sanitized, flags=re.IGNORECASE)
-    sanitized = re.sub(r"<function=\w+>", "[REMOVED]", sanitized, flags=re.IGNORECASE)
-
-    # Remove instruction override attempts
+    # Remove explicit instruction override attempts
     sanitized = re.sub(
         r"ignore\s+(all\s+)?previous\s+instructions?",
         "[INSTRUCTION OVERRIDE REMOVED]",

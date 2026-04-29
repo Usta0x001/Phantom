@@ -43,35 +43,11 @@ TOOL_CATEGORIES = {
         "search_files",
         "str_replace_editor",
     ],
-    "notes": [
-        "create_note",
-        "list_notes",
-        "update_note",
-        "delete_note",
-    ],
-    "todo": [
-        "create_todo",
-        "list_todos",
-        "update_todo",
-        "delete_todo",
-    ],
-    "thinking": [
-        "think",
-    ],
     "web_search": [
         "web_search",
     ],
     "python": [
         "python_action",
-    ],
-    "session": [
-        "session_login",
-        "session_get",
-        "session_refresh",
-    ],
-    "scan_registry": [
-        "check_scan_registry",
-        "register_scan_target",
     ],
     "memory": [
         "get_scan_status",
@@ -96,7 +72,6 @@ TOOL_SUBSET_CATEGORIES = {
         "agent_management",
         "memory",
         "files",
-        "thinking",
         "python",
     ],
     "core-fast": [
@@ -117,7 +92,6 @@ TOOL_SUBSET_CATEGORIES = {
         "agent_management",
         "memory",
         "files",
-        "thinking",
         "python",
         "web_search",
     ],
@@ -176,10 +150,6 @@ def get_tools_for_context(
     # Handle excluded modules from the caller
     if "finish" in _excluded or "reporting" in _excluded:
         categories.discard("reporting")
-    if "todo" in _excluded:
-        categories.discard("todo")
-    if "notes" in _excluded:
-        categories.discard("notes")
 
     # Collect tools from selected categories
     needed_tools = set()

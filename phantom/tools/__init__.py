@@ -73,25 +73,13 @@ from .python import (
 from .reporting import (
     create_vulnerability_report,
 )
-from .reporting import (
-    create_elite_report,
-    export_elite_report,
-)
 
 from .recon import (
-    bruteforce_directories,
     comprehensive_js_analysis,
 )
 
 from .terminal import (
     terminal_execute,
-)
-
-from .todo import (
-    create_todo,
-    list_todos,
-    update_todo,
-    delete_todo,
 )
 
 from .thinking import (
@@ -114,27 +102,9 @@ from .scan_status import (
     set_scan_status_context,
 )
 
-from .notes import (
-    create_note,
-    list_notes,
-    update_note,
-    delete_note,
-)
-
 from .oast import (
     generate_oast_payload,
     check_oast_interactions,
-)
-
-from .scan_registry import (
-    check_scan_registry,
-    register_scan_target,
-)
-
-from .session import (
-    session_login,
-    session_get,
-    session_refresh,
 )
 
 from .web_search import (
@@ -146,13 +116,11 @@ from .osint import (
     crtsh_search,
     dns_enum,
     github_dork,
-    bruteforce_subdomains,
 )
 
 from .vuln_intel import (
     cve_search,
     exploit_search,
-    auto_queue_cve_exploits,
 )
 
 from .waf import (
@@ -160,18 +128,11 @@ from .waf import (
 )
 
 from .payload_gen import (
-    generate_xss_payloads,
-    generate_sqli_payloads,
-    generate_xxe_payloads,
-    generate_ssti_payloads,
-    generate_cmd_injection_payloads,
+    generate_smart_payloads,
 )
 
 from .response_analysis import (
     analyze_response,
-    detect_errors,
-    extract_secrets,
-    identify_tech_stack,
 )
 
 from .session_mgmt import (
@@ -224,16 +185,8 @@ __all__ = [
     "view_request",
     "python_action",
     "create_vulnerability_report",
-    "create_elite_report",
-    "export_elite_report",
-    "bruteforce_directories",
     "comprehensive_js_analysis",
     "terminal_execute",
-    "create_todo",
-    "list_todos",
-    "update_todo",
-    "delete_todo",
-    "think",
     "add_hypothesis",
     "confirm_hypothesis",
     "get_hypothesis_summary",
@@ -244,36 +197,18 @@ __all__ = [
     "set_ledger",
     "get_scan_status",
     "set_scan_status_context",
-    "create_note",
-    "list_notes",
-    "update_note",
-    "delete_note",
     "generate_oast_payload",
     "check_oast_interactions",
-    "check_scan_registry",
-    "register_scan_target",
-    "session_login",
-    "session_get",
-    "session_refresh",
     "web_search",
     "shodan_search",
     "crtsh_search",
     "dns_enum",
     "github_dork",
-    "bruteforce_subdomains",
     "cve_search",
     "exploit_search",
-    "auto_queue_cve_exploits",
     "detect_waf",
-    "generate_xss_payloads",
-    "generate_sqli_payloads",
-    "generate_xxe_payloads",
-    "generate_ssti_payloads",
-    "generate_cmd_injection_payloads",
+    "generate_smart_payloads",
     "analyze_response",
-    "detect_errors",
-    "extract_secrets",
-    "identify_tech_stack",
     "automate_login",
     "extract_csrf_token",
     "manage_cookies",

@@ -62,12 +62,24 @@ async def _create_browser() -> Browser:
         return _state.browser
 
     if _state.browser is not None:
-        with contextlib.suppress(Exception):
-            await _state.browser.close()
+        try:
+            # Force-kill if close hangs (zombie browser from previous scan)
+            await asyncio.wait_for(_state.browser.close(), timeout=5)
+        except Exception:
+            # If close() hangs, try to kill the underlying process directly
+            try:
+                browser_proc = getattr(_state.browser, "process", None)
+                if browser_proc is not None:
+                    browser_proc.kill()
+                    await asyncio.wait_for(browser_proc.wait(), timeout=5)
+            except Exception:
+                pass
         _state.browser = None
     if _state.playwright is not None:
-        with contextlib.suppress(Exception):
-            await _state.playwright.stop()
+        try:
+            await asyncio.wait_for(_state.playwright.stop(), timeout=5)
+        except Exception:
+            pass
         _state.playwright = None
 
     _state.playwright = await async_playwright().start()
@@ -132,7 +144,14 @@ def _get_browser() -> tuple[asyncio.AbstractEventLoop, Browser]:
 
         if _state.browser is None or not _state.browser.is_connected():
             future = asyncio.run_coroutine_threadsafe(_create_browser(), _state.event_loop)
-            future.result(timeout=30)
+            try:
+                future.result(timeout=60)
+            except TimeoutError as exc:
+                raise RuntimeError(
+                    "Browser launch timed out after 60s. "
+                    "If this is the first run, Playwright may still be downloading Chromium. "
+                    "Try again in a moment or run 'playwright install chromium' manually."
+                ) from exc
 
         if _state.browser is None:
             raise RuntimeError("Failed to initialize browser instance")
@@ -217,8 +236,7 @@ class BrowserInstance:
 
         page = self.pages[tab_id]
 
-        await asyncio.sleep(2)
-
+        # Playwright already auto-waits for navigations/clicks; no need for extra sleep.
         screenshot_bytes = await page.screenshot(type="png", full_page=False)
         screenshot_b64 = base64.b64encode(screenshot_bytes).decode("utf-8")
 

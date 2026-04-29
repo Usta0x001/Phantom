@@ -165,7 +165,10 @@ class Config:
     phantom_browser_image_max_per_turn = "1"
     phantom_adaptive_truncation = "true"
     phantom_browser_truncation_burst_limit = (
-        "32000"  # FIX #5: Increased from 16K to 32K to match terminal
+        "64000"  # FIX: Increased from 32K to 64K. Modern SPAs and JSON APIs
+        # often exceed 32KB. 64KB captures verbose error pages,
+        # stack traces, and reflected XSS evidence without blowing
+        # context limits.
     )
     phantom_terminal_truncation_burst_limit = (
         "100000"  # Terminal default is 100K (higher due to tool output volume)

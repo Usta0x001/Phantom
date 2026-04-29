@@ -3,7 +3,15 @@ from urllib.parse import urlparse
 
 from phantom.agents.base_agent import BaseAgent
 from phantom.llm.config import LLMConfig
-from phantom.skills import _sanitize_skill_content
+def _sanitize_skill_content(text: str) -> str:
+    """Inline replacement for deleted phantom.skills._sanitize_skill_content."""
+    import html as _html
+
+    if not isinstance(text, str):
+        text = str(text) if text is not None else ""
+    # Basic XSS-prevention: strip script tags and escape HTML metacharacters
+    sanitized = _html.escape(text)
+    return sanitized
 
 
 class PhantomAgent(BaseAgent):

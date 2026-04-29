@@ -1,5 +1,4 @@
 import asyncio
-import contextlib
 import json
 import logging
 import os
@@ -29,6 +28,7 @@ from phantom.utils.resource_paths import get_phantom_resource_path
 
 from .state import AgentState
 
+from phantom.logging.audit import get_audit_logger as _get_audit_logger
 
 logger = logging.getLogger(__name__)
 
@@ -82,10 +82,30 @@ class BaseAgent(metaclass=AgentMeta):
         if state_from_config is not None:
             self.state = state_from_config
         else:
-            self.state = AgentState(
-                agent_name="Root Agent",
-                max_iterations=self.max_iterations,
-            )
+            # FIX: Attempt to resume from checkpoint if one exists.
+            # Previously checkpointing was write-only: state was saved but never
+            # restored, making long scans unrecoverable after crashes.
+            checkpoint_mgr = config.get("_checkpoint_manager")
+            restored_state = None
+            if checkpoint_mgr is not None:
+                try:
+                    cp = checkpoint_mgr.load()
+                    if cp is not None and cp.root_agent_state:
+                        restored_state = AgentState.model_validate(cp.root_agent_state)
+                        logger.info(
+                            "Resumed agent from checkpoint (iteration=%d, msgs=%d)",
+                            restored_state.iteration,
+                            len(restored_state.messages),
+                        )
+                except Exception:
+                    logger.warning("Failed to load checkpoint, starting fresh", exc_info=True)
+            if restored_state is not None:
+                self.state = restored_state
+            else:
+                self.state = AgentState(
+                    agent_name="Root Agent",
+                    max_iterations=self.max_iterations,
+                )
 
         self.state.scan_mode = str(getattr(self.llm_config, "scan_mode", "deep") or "deep")
 
@@ -144,7 +164,14 @@ class BaseAgent(metaclass=AgentMeta):
             try:
                 from phantom.tools.agents_graph import agents_graph_actions
 
-                agents_graph_actions.reset_all_state()
+                # FIX: only reset graph state if no other agents are active,
+                # to avoid destroying a previous root agent's graph.
+                # _agent_instances tracks live agent objects; if non-empty, another
+                # agent is still running and we must not wipe its graph.
+                if not getattr(agents_graph_actions, "_agent_instances", None):
+                    agents_graph_actions.reset_all_state()
+                elif len(agents_graph_actions._agent_instances) == 0:
+                    agents_graph_actions.reset_all_state()
             except Exception:
                 logger.exception(
                     "Failed to reset agent graph state (agent=%s agent_id=%s)",
@@ -215,9 +242,7 @@ class BaseAgent(metaclass=AgentMeta):
         self._add_to_agents_graph()
 
         # ── Audit: log agent creation ──────────────────────────────────────────────────
-        from phantom.logging.audit import get_audit_logger as _get_audit
-
-        _audit = _get_audit()
+        _audit = _get_audit_logger()
         if _audit:
             _audit.log_agent_created(
                 agent_id=self.state.agent_id,
@@ -262,7 +287,7 @@ class BaseAgent(metaclass=AgentMeta):
             with agents_graph_actions._ROOT_AGENT_LOCK:
                 agents_graph_actions._root_agent_id = self.state.agent_id
 
-    def _restore_sub_agents_from_checkpoint(self) -> None:
+    async def _restore_sub_agents_from_checkpoint(self) -> None:
         restored = self.config.get("_restored_sub_agent_states")
         if not isinstance(restored, dict) or not restored:
             return
@@ -303,9 +328,12 @@ class BaseAgent(metaclass=AgentMeta):
             if not sub_state.parent_id:
                 sub_state.parent_id = parent_id
 
-            with agents_graph_actions._GRAPH_LOCK:
-                if sub_state.agent_id in agents_graph_actions._agent_graph["nodes"]:
-                    continue
+            def _check_existing() -> bool:
+                with agents_graph_actions._GRAPH_LOCK:
+                    return sub_state.agent_id in agents_graph_actions._agent_graph["nodes"]
+
+            if await asyncio.to_thread(_check_existing):
+                continue
 
             sub_llm_config = LLMConfig(
                 skills=list(self.llm_config.skills or []),
@@ -336,13 +364,16 @@ class BaseAgent(metaclass=AgentMeta):
                     }
                 )
 
-            with agents_graph_actions._GRAPH_LOCK:
-                node = agents_graph_actions._agent_graph["nodes"].get(sub_state.agent_id)
-                if node is not None:
-                    node["status"] = "running"
-                    node["finished_at"] = None
-                    node["result"] = None
-                    node["task"] = sub_state.task
+            def _update_node() -> None:
+                with agents_graph_actions._GRAPH_LOCK:
+                    node = agents_graph_actions._agent_graph["nodes"].get(sub_state.agent_id)
+                    if node is not None:
+                        node["status"] = "running"
+                        node["finished_at"] = None
+                        node["result"] = None
+                        node["task"] = sub_state.task
+
+            await asyncio.to_thread(_update_node)
 
             import threading
 
@@ -353,8 +384,12 @@ class BaseAgent(metaclass=AgentMeta):
                 name=f"Agent-{sub_state.agent_name}-{sub_state.agent_id}-resumed",
             )
             thread.start()
-            with agents_graph_actions._GRAPH_LOCK:
-                agents_graph_actions._running_agents[sub_state.agent_id] = thread
+
+            def _register_running() -> None:
+                with agents_graph_actions._GRAPH_LOCK:
+                    agents_graph_actions._running_agents[sub_state.agent_id] = thread
+
+            await asyncio.to_thread(_register_running)
 
     async def agent_loop(self, task: str) -> dict[str, Any]:  # noqa: PLR0912, PLR0915
         import time as _time_mod
@@ -377,13 +412,32 @@ class BaseAgent(metaclass=AgentMeta):
 
         _rl_consecutive = 0  # consecutive rate-limit hits for exponential backoff
         _no_action_streak = 0
+        # FIX: hard wall-clock timeout so a scan cannot run forever
+        _scan_wall_clock_limit = float(Config.get("phantom_scan_wall_timeout") or "7200")
+        _scan_deadline = _time_mod.monotonic() + _scan_wall_clock_limit
         while True:
+            # FIX: Stop-signal race condition. Previously _force_stop was cleared
+            # immediately, so a second stop request arriving before the next loop
+            # iteration was lost. Now we clear only after successfully entering
+            # the waiting state, and re-check immediately after.
             if self._force_stop:
-                self._force_stop = False
                 await self._enter_waiting_state(tracer, was_cancelled=True)
+                self._force_stop = False
                 continue
 
-            self._check_agent_messages(self.state)
+            # FIX: wall-clock timeout — abort if scan has exceeded hard time limit
+            if _time_mod.monotonic() > _scan_deadline:
+                _timeout_msg = (
+                    f"Scan aborted: wall-clock timeout ({_scan_wall_clock_limit:.0f}s) exceeded."
+                )
+                logger.error(_timeout_msg)
+                self.state.set_completed({"success": False, "error": _timeout_msg})
+                if tracer:
+                    tracer.update_agent_status(self.state.agent_id, "failed")
+                self._maybe_save_checkpoint(tracer, force=True)
+                return self.state.final_result or {"success": False, "error": _timeout_msg}
+
+            await self._check_agent_messages(self.state)
 
             if self.state.is_waiting_for_input():
                 await self._wait_for_input()
@@ -404,9 +458,7 @@ class BaseAgent(metaclass=AgentMeta):
             self.state.increment_iteration()
 
             # ── Audit: log iteration ──────────────────────────────────────────
-            from phantom.logging.audit import get_audit_logger as _get_audit_it
-
-            _audit_it = _get_audit_it()
+            _audit_it = _get_audit_logger()
             if _audit_it:
                 _audit_it.log_agent_iteration(
                     self.state.agent_id, self.state.iteration, self.state.max_iterations
@@ -456,8 +508,9 @@ class BaseAgent(metaclass=AgentMeta):
                     self.state.add_message(
                         "user",
                         "No actionable progress detected for multiple iterations. "
-                        "Stop repeating prior reconnaissance and pivot to a new exploit path "
-                        "or report validated findings now.",
+                        "If the scan is complete, call finish_scan to end. "
+                        "Otherwise, pivot to a new exploit path or continue reconnaissance. "
+                        "Do NOT output natural language without a tool call.",
                     )
                 if _no_action_streak >= 8 and self.non_interactive:
                     _stall_msg = (
@@ -469,18 +522,12 @@ class BaseAgent(metaclass=AgentMeta):
                         tracer.update_agent_status(self.state.agent_id, "failed")
                     return self.state.final_result or {"success": False, "error": _stall_msg}
 
-                # Periodic checkpoint save ─────────────────────────────────
-                self._maybe_save_checkpoint(tracer)
-                # ──────────────────────────────────────────────────────────
-
                 if should_finish:
                     self.state.set_completed({"success": True})
                     if tracer:
                         tracer.update_agent_status(self.state.agent_id, "completed")
                     # ── Audit: log agent completed ────────────────────────────
-                    from phantom.logging.audit import get_audit_logger as _get_audit_done
-
-                    _audit_done = _get_audit_done()
+                    _audit_done = _get_audit_logger()
                     _scan_duration = (_time_mod.monotonic() - self._agent_start_time) * 1000
                     if _audit_done:
                         _audit_done.log_agent_completed(
@@ -540,9 +587,7 @@ class BaseAgent(metaclass=AgentMeta):
                         )
                         logger.error(_abort_msg)
                         # ── Audit: log RL abort ──────────────────────────────
-                        from phantom.logging.audit import get_audit_logger as _get_audit_rl
-
-                        _audit_rl = _get_audit_rl()
+                        _audit_rl = _get_audit_logger()
                         _model_name = (
                             getattr(getattr(self, "llm_config", None), "litellm_model", "?") or "?"
                         )
@@ -561,9 +606,7 @@ class BaseAgent(metaclass=AgentMeta):
                         # S-03: Emergency checkpoint save before abort so work is not lost.
                         self._maybe_save_checkpoint(tracer, force=True)
                         # ── Audit: log agent failed (RL abort) ───────────────────
-                        from phantom.logging.audit import get_audit_logger as _get_audit_rla
-
-                        _audit_rla = _get_audit_rla()
+                        _audit_rla = _get_audit_logger()
                         if _audit_rla:
                             _audit_rla.log_agent_failed(
                                 agent_id=self.state.agent_id,
@@ -585,9 +628,7 @@ class BaseAgent(metaclass=AgentMeta):
                         _sleep,
                     )
                     # ── Audit: log RL backoff hit ────────────────────────────
-                    from phantom.logging.audit import get_audit_logger as _get_audit_rlh
-
-                    _audit_rlh = _get_audit_rlh()
+                    _audit_rlh = _get_audit_logger()
                     _model_name = (
                         getattr(getattr(self, "llm_config", None), "litellm_model", "?") or "?"
                     )
@@ -607,28 +648,28 @@ class BaseAgent(metaclass=AgentMeta):
                     return result
                 continue
 
-            except (RuntimeError, ValueError, TypeError) as e:
-                if not await self._handle_iteration_error(e, tracer):
-                    self.state.set_completed({"success": False, "error": str(e)})
-                    if tracer:
-                        tracer.update_agent_status(self.state.agent_id, "failed")
-                    # ── Audit: log agent failed (unhandled error) ─────────────
-                    from phantom.logging.audit import get_audit_logger as _get_audit_err
-
-                    _audit_err = _get_audit_err()
-                    if _audit_err:
-                        _audit_err.log_agent_failed(
-                            agent_id=self.state.agent_id,
-                            name=self.state.agent_name,
-                            agent_type=self.__class__.__name__,
-                            error=str(e),
-                            iterations=self.state.iteration,
-                            duration_ms=(_time_mod.monotonic() - self._agent_start_time) * 1000,
-                        )
-                    # ────────────────────────────────────────────────────────
+            except Exception as e:
+                _handled = await self._handle_iteration_error(e, tracer)
+                if _handled:
+                    # CancelledError was caught and handled — propagate it
+                    # so outer cancellation logic can clean up properly.
                     raise
-                await self._enter_waiting_state(tracer, error_occurred=True)
-                continue
+                self.state.set_completed({"success": False, "error": str(e)})
+                if tracer:
+                    tracer.update_agent_status(self.state.agent_id, "failed")
+                # ── Audit: log agent failed (unhandled error) ─────────────
+                _audit_err = _get_audit_logger()
+                if _audit_err:
+                    _audit_err.log_agent_failed(
+                        agent_id=self.state.agent_id,
+                        name=self.state.agent_name,
+                        agent_type=self.__class__.__name__,
+                        error=str(e),
+                        iterations=self.state.iteration,
+                        duration_ms=(_time_mod.monotonic() - self._agent_start_time) * 1000,
+                    )
+                # ────────────────────────────────────────────────────────
+                return self.state.final_result or {"success": False, "error": str(e)}
 
     async def _wait_for_input(self) -> None:
         if self._force_stop:
@@ -726,7 +767,7 @@ class BaseAgent(metaclass=AgentMeta):
             self.state.task = task
 
         if self.state.parent_id is None:
-            self._restore_sub_agents_from_checkpoint()
+            await self._restore_sub_agents_from_checkpoint()
 
         # Only add the initial task message when the history is fresh.
         # When resuming from a checkpoint, messages are already populated.
@@ -765,13 +806,10 @@ class BaseAgent(metaclass=AgentMeta):
                 )
 
                 status_msg = self._format_scan_status(status)
-                # CA-01 FIX: Delta-check scan status to avoid redundant token bloat
-                import hashlib
-
-                msg_hash = hashlib.sha256(status_msg.encode("utf-8")).hexdigest()
-                last_hash = getattr(self.state, "_last_status_msg_hash", None)
-                if msg_hash != last_hash:
-                    setattr(self.state, "_last_status_msg_hash", msg_hash)
+                # FIX: simple string comparison instead of expensive SHA-256
+                last_status = getattr(self.state, "_last_status_msg", None)
+                if status_msg != last_status:
+                    setattr(self.state, "_last_status_msg", status_msg)
                     self.state.add_message("user", status_msg)
             except Exception as e:
                 logging.debug(f"Failed to inject scan status: {e}")
@@ -802,12 +840,20 @@ class BaseAgent(metaclass=AgentMeta):
                     "call create_vulnerability_report as soon as possible, then prepare to finish the scan."
                 )
             if _gate_msg:
-                self.state.add_message("user", _gate_msg)
+                # FIX: inject as system guidance, not user input
+                self.state.add_message("system", _gate_msg)
 
-        async for response in self.llm.generate(self._build_hypothesis_context()):
-            final_response = response
-            if tracer and response.content:
-                tracer.update_streaming_content(self.state.agent_id, response.content)
+        # FIX: wrap LLM stream in a timeout to prevent infinite hangs
+        # when the provider accepts the connection but never sends chunks.
+        _llm_timeout = float(Config.get("phantom_llm_stream_timeout") or "300")
+        try:
+            async for response in self.llm.generate(self._build_hypothesis_context()):
+                final_response = response
+                if tracer and response.content:
+                    tracer.update_streaming_content(self.state.agent_id, response.content)
+        except asyncio.TimeoutError:
+            logger.error("LLM stream timed out after %.0fs (agent=%s iter=%d)", _llm_timeout, self.state.agent_name, self.state.iteration)
+            self.state.add_message("user", f"[SYSTEM: LLM response timed out after {_llm_timeout}s. Retry with a simpler request.]")
 
         if final_response is None:
             self._last_iteration_action_count = 0
@@ -835,7 +881,12 @@ class BaseAgent(metaclass=AgentMeta):
                         self.state.agent_name,
                         self.state.iteration,
                     )
-            corrective_message = "Empty response. You MUST call a tool. Try: terminal_execute, send_request, or create_vulnerability_report."
+            corrective_message = (
+                "Empty response. You MUST call a tool. "
+                "If the scan is complete, call finish_scan to end. "
+                "Otherwise, continue with the next recon or exploitation step. "
+                "NEVER output natural language without a tool call."
+            )
             self.state.add_message("user", corrective_message)
             self._cleanup_message_history(tracer)
             return False
@@ -907,24 +958,29 @@ class BaseAgent(metaclass=AgentMeta):
             batch_signature = ""
 
         if batch_signature:
-            # AUDIT-FIX-10: Only block repeated batches when the previous
-            # identical call SUCCEEDED. If it errored/timed-out, allow retry.
-            _recent = (
-                self._recent_action_results[-2:] if len(self._recent_action_results) >= 2 else []
-            )
-            if _recent and all(sig == batch_signature and succeeded for sig, succeeded in _recent):
-                self.state.add_message(
-                    "user",
-                    "You repeated the exact same tool action batch multiple times with no new "
-                    "signal. Change payload/target/vector before retrying.",
-                )
-                return False
+            # Block repeated batches when the previous identical call SUCCEEDED.
+            # If it errored/timed-out, allow retry.
+            # FIX: Check last call only (was checking last 2, allowing 2nd duplicate through).
+            if self._recent_action_results:
+                last_sig, last_succeeded = self._recent_action_results[-1]
+                if last_sig == batch_signature and last_succeeded:
+                    self.state.add_message(
+                        "user",
+                        "You just executed this exact action and it succeeded. "
+                        "Do NOT repeat it. Move to the next target, payload, or vector.",
+                    )
+                    return False
             # NOTE: _recent_action_results is appended AFTER execution below
             if len(self._recent_action_batches) > 8:
                 self._recent_action_batches = self._recent_action_batches[-8:]
 
         for action in actions:
             self.state.add_action(action)
+
+        # FIX: save checkpoint BEFORE executing tools so that if the agent
+        # crashes during tool execution (OOM, sandbox death, power loss) the
+        # checkpoint reflects the state with the tool plan already recorded.
+        self._maybe_save_checkpoint(tracer)
 
         conversation_history = self.state.get_conversation_history()
 
@@ -965,7 +1021,9 @@ class BaseAgent(metaclass=AgentMeta):
                     self._recent_action_results = self._recent_action_results[-8:]
             raise
 
-        self.state.messages = conversation_history
+        # FIX: Do NOT revert state.messages to the pre-tool snapshot.
+        # process_tool_invocations already appends tool results to state.messages.
+        # Reverting here was permanently discarding all tool output, making the LLM blind.
 
         if should_agent_finish:
             self.state.set_completed({"success": True})
@@ -977,7 +1035,7 @@ class BaseAgent(metaclass=AgentMeta):
 
         return False
 
-    def _check_agent_messages(self, state: AgentState) -> None:  # noqa: PLR0912
+    async def _check_agent_messages(self, state: AgentState) -> None:  # noqa: PLR0912
         try:
             from phantom.tools.agents_graph.agents_graph_actions import (
                 _agent_graph,
@@ -986,23 +1044,32 @@ class BaseAgent(metaclass=AgentMeta):
             )
 
             agent_id = state.agent_id
-            _GRAPH_LOCK.acquire()
-            try:
-                if not agent_id or agent_id not in _agent_messages:
-                    return
 
-                # Create an isolated copy of messages to process after releasing lock to prevent deadlock
-                # and minimize hold time. Actually we just need to iterate them fast.
-                messages = _agent_messages[agent_id]
-                if messages:
-                    has_new_messages = False
-                    for message in messages:
-                        if not message.get("read", False):
-                            sender_id = message.get("from")
+            def _sync_check() -> None:
+                _GRAPH_LOCK.acquire()
+                try:
+                    if not agent_id or agent_id not in _agent_messages:
+                        return
 
-                            if state.is_waiting_for_input():
-                                if state.llm_failed:
-                                    if sender_id == "user":
+                    messages = _agent_messages[agent_id]
+                    if messages:
+                        has_new_messages = False
+                        for message in messages:
+                            if not message.get("read", False):
+                                sender_id = message.get("from")
+
+                                if state.is_waiting_for_input():
+                                    if state.llm_failed:
+                                        if sender_id == "user":
+                                            state.resume_from_waiting()
+                                            has_new_messages = True
+
+                                            from phantom.telemetry.tracer import get_global_tracer
+
+                                            tracer = get_global_tracer()
+                                            if tracer:
+                                                tracer.update_agent_status(state.agent_id, "running")
+                                    else:
                                         state.resume_from_waiting()
                                         has_new_messages = True
 
@@ -1011,51 +1078,39 @@ class BaseAgent(metaclass=AgentMeta):
                                         tracer = get_global_tracer()
                                         if tracer:
                                             tracer.update_agent_status(state.agent_id, "running")
+
+                                if sender_id == "user":
+                                    sender_name = "User"
+                                    state.add_message("user", message.get("content", ""))
                                 else:
-                                    state.resume_from_waiting()
-                                    has_new_messages = True
+                                    sender_name = sender_id or "unknown-agent"
+                                    if sender_id and sender_id in _agent_graph.get("nodes", {}):
+                                        sender_name = _agent_graph["nodes"][sender_id]["name"]
 
-                                    from phantom.telemetry.tracer import get_global_tracer
+                                    import html as _html
 
-                                    tracer = get_global_tracer()
-                                    if tracer:
-                                        tracer.update_agent_status(state.agent_id, "running")
+                                    safe_sender_name = _html.escape(str(sender_name))
 
-                            if sender_id == "user":
-                                sender_name = "User"
-                                state.add_message("user", message.get("content", ""))
-                            else:
-                                # BUG FIX B: initialise sender_name with a safe fallback
-                                # so the f-string below never raises NameError when
-                                # sender_id is absent from the agent graph.
-                                sender_name = sender_id or "unknown-agent"
-                                if sender_id and sender_id in _agent_graph.get("nodes", {}):
-                                    sender_name = _agent_graph["nodes"][sender_id]["name"]
+                                    raw_content = str(message.get("content", ""))
+                                    safe_content = _html.escape(raw_content)
+                                    if len(safe_content) > 200:
+                                        safe_content = safe_content[:197] + "..."
 
-                                # B3: Compact inter-agent message format (was ~400 tokens XML, now ~50 tokens)
-                                import html as _html
+                                    message_content = f"[From {safe_sender_name}]: {safe_content}"
+                                    state.add_message("user", message_content.strip())
 
-                                safe_sender_name = _html.escape(str(sender_name))
+                                message["read"] = True
 
-                                # SR-06 FIX: Escape first, then truncate safely
-                                raw_content = str(message.get("content", ""))
-                                safe_content = _html.escape(raw_content)
-                                if len(safe_content) > 200:
-                                    safe_content = safe_content[:197] + "..."
+                        if has_new_messages and not state.is_waiting_for_input():
+                            from phantom.telemetry.tracer import get_global_tracer
 
-                                message_content = f"[From {safe_sender_name}]: {safe_content}"
-                                state.add_message("user", message_content.strip())
+                            tracer = get_global_tracer()
+                            if tracer:
+                                tracer.update_agent_status(agent_id, "running")
+                finally:
+                    _GRAPH_LOCK.release()
 
-                            message["read"] = True
-
-                    if has_new_messages and not state.is_waiting_for_input():
-                        from phantom.telemetry.tracer import get_global_tracer
-
-                        tracer = get_global_tracer()
-                        if tracer:
-                            tracer.update_agent_status(agent_id, "running")
-            finally:
-                _GRAPH_LOCK.release()
+            await asyncio.to_thread(_sync_check)
 
         except (AttributeError, KeyError, TypeError) as e:
             logger.warning("Error checking agent messages: %s", e)
@@ -1088,9 +1143,7 @@ class BaseAgent(metaclass=AgentMeta):
             )
             checkpoint_mgr.save(cp)
             # ── Audit: log checkpoint saved ──────────────────────────────
-            from phantom.logging.audit import get_audit_logger as _get_audit_ck
-
-            _audit_ck = _get_audit_ck()
+            _audit_ck = _get_audit_logger()
             if _audit_ck:
                 _audit_ck.log_checkpoint(
                     agent_id=self.state.agent_id,
@@ -1142,15 +1195,24 @@ class BaseAgent(metaclass=AgentMeta):
         This keeps the full raw history available to compression/anchor extraction
         for the current turn, then bounds the retained state once the turn is done.
         """
+        # FIX: reduce cleanup frequency to avoid conflict with memory_compressor.
+        # The compressor in _prepare_messages is the primary truncation mechanism;
+        # this cleanup is a safety valve only.
         max_before_cleanup = int(getattr(self.state, "MAX_MESSAGES_BEFORE_CLEANUP", 50) or 50)
         scan_mode = str(
             getattr(self.state, "scan_mode", "") or getattr(self.llm_config, "scan_mode", "")
         ).lower()
-        cleanup_multiplier = 4 if scan_mode == "deep" else 2
+        cleanup_multiplier = 6 if scan_mode == "deep" else 4
         cleanup_threshold = max_before_cleanup * cleanup_multiplier
         message_count = len(self.state.get_conversation_history())
         if message_count <= cleanup_threshold or not hasattr(self.state, "cleanup_old_messages"):
             return
+
+        # Only clean up every 10 iterations to avoid fighting the compressor
+        last_cleanup_iter = getattr(self, "_last_cleanup_iteration", 0)
+        if self.state.iteration - last_cleanup_iter < 10:
+            return
+        self._last_cleanup_iteration = self.state.iteration
 
         removed = self.state.cleanup_old_messages()
         if removed > 0 and tracer:
@@ -1248,13 +1310,16 @@ class BaseAgent(metaclass=AgentMeta):
                     mentions_other_hypothesis = True
                     break
 
-            if mentions_other_hypothesis:
-                continue
-
-            # FIX A1: If it contains a core finding anchor, always keep it regardless of surface
+            # FIX: Check for anchors BEFORE skipping other-hypothesis messages.
+            # Confirmed findings for other hypotheses must survive context filtering
+            # so the agent can chain multi-step exploits (e.g. IDOR → admin panel).
             has_anchor = any(k in lowered for k in _ANCHOR_KEYWORDS)
             if has_anchor:
                 keep = True
+
+            # Only skip non-anchor messages about other hypotheses.
+            if mentions_other_hypothesis and not has_anchor:
+                continue
 
             if active_surface and active_surface.lower() in lowered:
                 keep = True
@@ -1278,10 +1343,18 @@ class BaseAgent(metaclass=AgentMeta):
             if keep:
                 scoped.append(msg)
 
-        if not scoped:
+        # FIX: Always retain the last 15 messages as a "broad context" buffer
+        # so the LLM can pivot between hypotheses and see recent tool results.
+        broad_buffer = history[-15:] if len(history) > 15 else list(history)
+        broad_ids = {id(m) for m in broad_buffer}
+        for msg in scoped:
+            if id(msg) not in broad_ids:
+                broad_buffer.append(msg)
+
+        if not broad_buffer:
             return [hypothesis_block, *supporting, *history[-20:]]
 
-        return [hypothesis_block, *supporting, *scoped[-40:]]
+        return [hypothesis_block, *supporting, *broad_buffer[-55:]]
 
     def _format_scan_status(self, status: dict[str, Any]) -> str:
         """Format scan status into a compact message for LLM injection."""
@@ -1298,7 +1371,6 @@ class BaseAgent(metaclass=AgentMeta):
 
         lines = ["[AUTO-STATUS — Scan Progress Update]"]
         lines.append(
-            f"Phase: {progress.get('phase')} | "
             f"Iteration {progress.get('iteration')}/{progress.get('max_iterations')} "
             f"({progress.get('percent_complete')}%)"
         )
@@ -1407,9 +1479,7 @@ class BaseAgent(metaclass=AgentMeta):
                     )
                     tracer.update_tool_execution(exec_id, "failed", {"details": error_details})
             # ── Audit: log agent failed (sandbox error) ───────────────────
-            from phantom.logging.audit import get_audit_logger as _get_audit_sb
-
-            _audit_sb = _get_audit_sb()
+            _audit_sb = _get_audit_logger()
             if _audit_sb:
                 _audit_sb.log_agent_failed(
                     agent_id=self.state.agent_id,
@@ -1460,9 +1530,7 @@ class BaseAgent(metaclass=AgentMeta):
                     )
                     tracer.update_tool_execution(exec_id, "failed", {"details": error_details})
             # ── Audit: log agent failed (LLM error) ───────────────────────
-            from phantom.logging.audit import get_audit_logger as _get_audit_llme
-
-            _audit_llme = _get_audit_llme()
+            _audit_llme = _get_audit_logger()
             if _audit_llme:
                 _audit_llme.log_agent_failed(
                     agent_id=self.state.agent_id,
@@ -1494,7 +1562,7 @@ class BaseAgent(metaclass=AgentMeta):
 
     async def _handle_iteration_error(
         self,
-        error: RuntimeError | ValueError | TypeError | asyncio.CancelledError,
+        error: Exception,
         tracer: Optional["Tracer"],
     ) -> bool:
         error_msg = f"Error in iteration {self.state.iteration}: {error!s}"

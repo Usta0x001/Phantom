@@ -1,3 +1,4 @@
+import asyncio
 import contextlib
 import logging
 import os
@@ -5,7 +6,6 @@ import random
 import re
 import secrets
 import socket
-import subprocess
 import time
 from pathlib import Path
 from typing import cast
@@ -48,26 +48,6 @@ class DockerRuntime(AbstractRuntime):
         self._tool_server_token: str | None = None
         self._caido_port: int | None = None
 
-    def _start_docker_desktop_windows(self) -> bool:
-        if os.name != "nt":
-            return False
-
-        candidates = [
-            Path(os.environ.get("ProgramFiles", r"C:\Program Files"))
-            / "Docker"
-            / "Docker"
-            / "Docker Desktop.exe",
-            Path(os.environ.get("LocalAppData", "")) / "Docker" / "Docker Desktop.exe",
-        ]
-        for exe in candidates:
-            if exe.exists():
-                with contextlib.suppress(OSError):
-                    subprocess.Popen(
-                        [str(exe)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
-                    )  # noqa: S603
-                    return True
-        return False
-
     def _connect_docker_client(self) -> docker.DockerClient:
         client = docker.from_env(timeout=DOCKER_TIMEOUT)
         client.ping()
@@ -77,18 +57,8 @@ class DockerRuntime(AbstractRuntime):
         try:
             return self._connect_docker_client()
         except (DockerException, RequestsConnectionError, RequestsTimeout) as e:
-            if os.name == "nt" and self._start_docker_desktop_windows():
-                deadline = time.time() + 120
-                while time.time() < deadline:
-                    try:
-                        return self._connect_docker_client()
-                    except (DockerException, RequestsConnectionError, RequestsTimeout):
-                        time.sleep(3)
-                raise SandboxInitializationError(
-                    "Docker is not available",
-                    "Phantom attempted to auto-start Docker Desktop but it did not become ready in time.",
-                ) from e
-
+            # FIX: removed auto-start Docker Desktop — security anti-pattern.
+            # Phantom should never spawn external processes without explicit consent.
             raise SandboxInitializationError(
                 "Docker is not available",
                 "Please ensure Docker Desktop is installed and running.",
@@ -179,24 +149,24 @@ class DockerRuntime(AbstractRuntime):
         if port_bindings.get(caido_port_key):
             self._caido_port = int(port_bindings[caido_port_key][0]["HostPort"])
 
-    def _wait_for_tool_server(self, max_retries: int = 30, timeout: int = 5) -> None:
+    async def _wait_for_tool_server(self, max_retries: int = 30, timeout: int = 5) -> None:
         host = self._resolve_docker_host()
         health_url = f"http://{host}:{self._tool_server_port}/health"
 
-        time.sleep(5)
+        await asyncio.sleep(5)
 
-        for attempt in range(max_retries):
-            try:
-                with httpx.Client(trust_env=False, timeout=timeout) as client:
-                    response = client.get(health_url)
+        async with httpx.AsyncClient(trust_env=False, timeout=timeout) as client:
+            for attempt in range(max_retries):
+                try:
+                    response = await client.get(health_url)
                     if response.status_code == 200:
                         data = response.json()
                         if data.get("status") == "healthy":
                             return
-            except (httpx.ConnectError, httpx.TimeoutException, httpx.RequestError):
-                pass
+                except (httpx.ConnectError, httpx.TimeoutException, httpx.RequestError):
+                    pass
 
-            time.sleep(min(2**attempt * 0.5, 5))
+                await asyncio.sleep(min(2**attempt * 0.5, 5))
 
         raise SandboxInitializationError(
             "Tool server failed to start",
@@ -314,8 +284,6 @@ class DockerRuntime(AbstractRuntime):
                         "Could not write tool_server_token to /run/secrets — "
                         "falling back to environment variable."
                     )
-
-                self._wait_for_tool_server()
 
             except (DockerException, RequestsConnectionError, RequestsTimeout) as e:
                 last_error = e
@@ -541,6 +509,10 @@ class DockerRuntime(AbstractRuntime):
     ) -> SandboxInfo:
         scan_id = self._get_scan_id(agent_id)
         container = self._get_or_create_container(scan_id)
+
+        # FIX: async health check after container creation/recovery.
+        # Previously this was a sync call blocking the event loop for minutes.
+        await self._wait_for_tool_server()
 
         source_copied_key = f"_source_copied_{scan_id}"
         if local_sources and not hasattr(self, source_copied_key):

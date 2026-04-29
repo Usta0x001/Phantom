@@ -28,6 +28,7 @@ except ImportError:
 
 class AttackNodeType(str, Enum):
     """Types of nodes in the attack graph."""
+
     VULNERABILITY = "vulnerability"
     ASSET = "asset"
     OBJECTIVE = "objective"
@@ -36,6 +37,7 @@ class AttackNodeType(str, Enum):
 
 class AttackEdgeType(str, Enum):
     """Types of edges (relationships) in the attack graph."""
+
     ENABLES = "enables"  # Vuln A enables exploiting Vuln B
     AFFECTS = "affects"  # Vuln affects an asset
     ACHIEVES = "achieves"  # Attack chain achieves objective
@@ -45,6 +47,7 @@ class AttackEdgeType(str, Enum):
 @dataclass
 class AttackNode:
     """A node in the attack graph."""
+
     id: str
     type: AttackNodeType
     label: str
@@ -72,6 +75,7 @@ class AttackNode:
 @dataclass
 class AttackEdge:
     """An edge (relationship) in the attack graph."""
+
     source: str
     target: str
     type: AttackEdgeType
@@ -133,7 +137,7 @@ _MAX_PLANNER_TRACES = 20
 class AttackGraph:
     """
     Directed graph representing attack paths and vulnerability chains.
-    
+
     Features:
     - Add vulnerabilities, assets, objectives, techniques
     - Define relationships between nodes
@@ -314,7 +318,8 @@ class AttackGraph:
             parsed = float(weight)
         except (TypeError, ValueError):
             return 1.0
-        return _clamp(parsed, 0.05, 1.5)
+        # FIX: _clamp was undefined. Inline the clamp logic.
+        return max(0.05, min(1.5, parsed))
 
     @staticmethod
     def _coerce_probability(value: Any) -> float | None:
@@ -322,7 +327,8 @@ class AttackGraph:
             parsed = float(value)
         except (TypeError, ValueError):
             return None
-        return _clamp(parsed, 0.01, 0.99)
+        # FIX: _clamp was undefined. Inline the clamp logic.
+        return max(0.01, min(0.99, parsed))
 
     @staticmethod
     def _coerce_positive(value: Any) -> float | None:
@@ -341,7 +347,6 @@ class AttackGraph:
             return 5
         status = str(node.status or "open").strip().lower()
         return _STATUS_PRIORITY.get(status, 5)
-
 
     def plan_attack_paths(
         self,
@@ -387,8 +392,7 @@ class AttackGraph:
                     cost=float(hop_count),
                     score=float(priority_sum + hop_count),
                     rationale=(
-                        f"{hop_count} hops, priority={priority_sum}; "
-                        f"{path[0]} -> {path[-1]}"
+                        f"{hop_count} hops, priority={priority_sum}; {path[0]} -> {path[-1]}"
                     ),
                 )
             )
@@ -521,31 +525,32 @@ class AttackGraph:
     def get_critical_vulnerabilities(self, top_n: int = 10) -> list[tuple[str, float]]:
         """
         Identify critical vulnerabilities using betweenness centrality.
-        
+
         Returns list of (vuln_id, centrality_score) tuples, sorted by score.
         High centrality means the vulnerability appears in many attack paths.
         """
         if not self._graph.nodes():
             return []
-        
+
         centrality = nx.betweenness_centrality(self._graph, weight="weight")
-        
+
         # Filter to only vulnerabilities
         vuln_centrality = [
             (node_id, score)
             for node_id, score in centrality.items()
-            if self._nodes.get(node_id) and self._nodes[node_id].type == AttackNodeType.VULNERABILITY
+            if self._nodes.get(node_id)
+            and self._nodes[node_id].type == AttackNodeType.VULNERABILITY
         ]
-        
+
         # Sort by centrality (descending)
         vuln_centrality.sort(key=lambda x: x[1], reverse=True)
-        
+
         return vuln_centrality[:top_n]
 
     def get_attack_surface(self) -> dict[str, Any]:
         """
         Calculate attack surface metrics.
-        
+
         Returns:
             - total_vulnerabilities: Count of vulnerability nodes
             - total_assets: Count of asset nodes
@@ -557,7 +562,7 @@ class AttackGraph:
         vuln_count = sum(1 for n in self._nodes.values() if n.type == AttackNodeType.VULNERABILITY)
         asset_count = sum(1 for n in self._nodes.values() if n.type == AttackNodeType.ASSET)
         objective_count = sum(1 for n in self._nodes.values() if n.type == AttackNodeType.OBJECTIVE)
-        
+
         metrics = {
             "total_vulnerabilities": vuln_count,
             "total_assets": asset_count,
@@ -567,7 +572,7 @@ class AttackGraph:
             "connected_components": nx.number_weakly_connected_components(self._graph),
             "density": nx.density(self._graph),
         }
-        
+
         # Calculate average path length safely for directed graphs.
         # networkx.average_shortest_path_length on a DiGraph requires strong
         # connectivity; weak connectivity is not sufficient and raises.
@@ -588,31 +593,32 @@ class AttackGraph:
     def get_vulnerability_chains(self, min_length: int = 2) -> list[list[str]]:
         """
         Find all chains of vulnerabilities (multi-step attack paths).
-        
+
         Args:
             min_length: Minimum chain length to return
-            
+
         Returns:
             List of vulnerability chains (each chain is a list of vuln IDs)
         """
         chains = []
         vuln_nodes = [n for n in self._nodes.values() if n.type == AttackNodeType.VULNERABILITY]
-        
+
         # Find paths between all pairs of vulnerabilities
         for source in vuln_nodes:
             for target in vuln_nodes:
-                    # CF-06 FIX: Bound graph path search to depth 5 to avoid exponential runaway
-                    paths = self.find_paths(source.id, target.id, cutoff=5)
-                    for path in paths:
-                        # Filter path to only vulnerability nodes
-                        vuln_path = [
-                            node_id for node_id in path
-                            if self._nodes.get(node_id) and
-                            self._nodes[node_id].type == AttackNodeType.VULNERABILITY
-                        ]
-                        if len(vuln_path) >= min_length and vuln_path not in chains:
-                            chains.append(vuln_path)
-        
+                # CF-06 FIX: Bound graph path search to depth 5 to avoid exponential runaway
+                paths = self.find_paths(source.id, target.id, cutoff=5)
+                for path in paths:
+                    # Filter path to only vulnerability nodes
+                    vuln_path = [
+                        node_id
+                        for node_id in path
+                        if self._nodes.get(node_id)
+                        and self._nodes[node_id].type == AttackNodeType.VULNERABILITY
+                    ]
+                    if len(vuln_path) >= min_length and vuln_path not in chains:
+                        chains.append(vuln_path)
+
         return chains
 
     # ── Export ─────────────────────────────────────────────────────────────
@@ -629,10 +635,10 @@ class AttackGraph:
         """Export graph to JSON format."""
         data = self.to_dict()
         json_str = json.dumps(data, indent=indent)
-        
+
         if filepath:
             Path(filepath).write_text(json_str, encoding="utf-8")
-        
+
         return json_str
 
     def to_networkx(self) -> nx.DiGraph:
@@ -646,22 +652,21 @@ class AttackGraph:
     def to_dot(self, filepath: str | Path | None = None) -> str:
         """
         Export graph to DOT format (Graphviz).
-        
+
         Returns DOT string. If filepath provided, also writes to file.
         """
         try:
             from networkx.drawing.nx_pydot import to_pydot
+
             pydot_graph = to_pydot(self._graph)
             dot_str = pydot_graph.to_string()
-            
+
             if filepath:
                 Path(filepath).write_text(dot_str, encoding="utf-8")
-            
+
             return dot_str
         except ImportError:
-            raise ImportError(
-                "pydot is required for DOT export. Install with: pip install pydot"
-            )
+            raise ImportError("pydot is required for DOT export. Install with: pip install pydot")
 
     # ── Import ─────────────────────────────────────────────────────────────
 
@@ -670,7 +675,7 @@ class AttackGraph:
         """Load graph from dictionary format."""
         graph = cls()
         graph.metadata = data.get("metadata", {})
-        
+
         # Add nodes
         for node_data in data.get("nodes", []):
             node = AttackNode.from_dict(node_data)
@@ -683,12 +688,14 @@ class AttackGraph:
                 status=node.status,
                 **node.metadata,
             )
-        
+
         # Add edges
         for edge_data in data.get("edges", []):
             edge = AttackEdge.from_dict(edge_data)
-            graph.add_edge(edge.source, edge.target, edge.type, weight=edge.weight, metadata=edge.metadata)
-        
+            graph.add_edge(
+                edge.source, edge.target, edge.type, weight=edge.weight, metadata=edge.metadata
+            )
+
         return graph
 
     @classmethod
@@ -702,7 +709,7 @@ class AttackGraph:
     def generate_summary_report(self) -> str:
         """Generate a text summary of the attack graph."""
         lines = ["=== Attack Graph Summary ===\n"]
-        
+
         surface = self.get_attack_surface()
         lines.append(f"Nodes: {surface['total_nodes']}")
         lines.append(f"  - Vulnerabilities: {surface['total_vulnerabilities']}")
@@ -711,17 +718,17 @@ class AttackGraph:
         lines.append(f"Edges: {surface['total_edges']}")
         lines.append(f"Density: {surface['density']:.3f}")
         lines.append(f"Connected Components: {surface['connected_components']}")
-        
-        if surface['avg_path_length'] is not None:
+
+        if surface["avg_path_length"] is not None:
             lines.append(f"Avg Path Length: {surface['avg_path_length']:.2f}")
-        
+
         lines.append("\n=== Critical Vulnerabilities (by Centrality) ===\n")
         critical = self.get_critical_vulnerabilities(top_n=5)
         for vuln_id, score in critical:
             node = self._nodes.get(vuln_id)
             if node:
                 lines.append(f"  {vuln_id}: {node.label} (centrality={score:.4f})")
-        
+
         lines.append("\n=== Vulnerability Chains (Multi-step Attacks) ===\n")
         chains = self.get_vulnerability_chains(min_length=2)
         if chains:
@@ -734,7 +741,7 @@ class AttackGraph:
                 lines.append(f"  Chain {i}: {' -> '.join(chain_labels)}")
         else:
             lines.append("  No multi-step attack chains detected.")
-        
+
         return "\n".join(lines)
 
 
@@ -744,28 +751,28 @@ def build_attack_graph_from_vulnerabilities(
 ) -> AttackGraph:
     """
     Build an attack graph from a list of vulnerability objects.
-    
+
     Args:
         vulnerabilities: List of Vulnerability objects
         hypothesis_ledger: Optional HypothesisLedger to extract relationships
-        
+
     Returns:
         AttackGraph instance
     """
     graph = AttackGraph()
-    
+
     # Add vulnerability nodes
     for vuln in vulnerabilities:
         graph.add_vulnerability(
             vuln_id=vuln.id,
             title=vuln.title,
-            severity=vuln.severity.value if hasattr(vuln.severity, 'value') else str(vuln.severity),
-            status=vuln.status.value if hasattr(vuln.status, 'value') else str(vuln.status),
+            severity=vuln.severity.value if hasattr(vuln.severity, "value") else str(vuln.severity),
+            status=vuln.status.value if hasattr(vuln.status, "value") else str(vuln.status),
             metadata={
-                "description": getattr(vuln, 'description', None),
-                "evidence": getattr(vuln, 'evidence', []),
-                "remediation": getattr(vuln, 'remediation', None),
-                "discovered_at": getattr(vuln, 'discovered_at', None),
+                "description": getattr(vuln, "description", None),
+                "evidence": getattr(vuln, "evidence", []),
+                "remediation": getattr(vuln, "remediation", None),
+                "discovered_at": getattr(vuln, "discovered_at", None),
             },
         )
 
