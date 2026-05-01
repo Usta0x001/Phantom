@@ -1,5 +1,4 @@
 import hashlib
-from copy import deepcopy
 import uuid
 from datetime import UTC, datetime
 from typing import Any
@@ -44,6 +43,14 @@ class AgentState(BaseModel):
     final_result: dict[str, Any] | None = None
     max_iterations_warning_sent: bool = False
 
+    # Session state tracking for pentesting context.
+    # The LLM uses this to know its current authentication level and
+    # discovered credentials without scrolling through full history.
+    session_cookies: dict[str, str] = Field(default_factory=dict)
+    session_tokens: dict[str, str] = Field(default_factory=dict)
+    current_auth_level: str = "unauthenticated"  # e.g. "unauthenticated", "user", "admin"
+    target_base_url: str = ""
+
     messages: list[dict[str, Any]] = Field(default_factory=list)
     context: dict[str, Any] = Field(default_factory=dict)
 
@@ -55,20 +62,10 @@ class AgentState(BaseModel):
 
     errors: list[str] = Field(default_factory=list)
 
-    # Finding anchors: high-signal items extracted from compressed message history
-    # so they survive memory compression and can be re-injected at report time.
-    finding_anchors: list[dict[str, Any]] = Field(default_factory=list)
-
     # Bounded archive of trimmed messages so full/deep runs can preserve older
     # context and fold it back into later compression cycles.
     archived_messages: list[dict[str, Any]] = Field(default_factory=list)
 
-    # Compression bookkeeping used by the memory compressor to avoid
-    # reprocessing the same history and to carry structured memory forward.
-    compression_state: dict[str, Any] = Field(default_factory=dict)
-
-    # Maximum anchors to store (matches injection limit in llm.py)
-    MAX_FINDING_ANCHORS: int = 15
     MAX_ARCHIVED_MESSAGES: int = 200
 
     # PLAN FIX: Message expiration
@@ -79,15 +76,23 @@ class AgentState(BaseModel):
 
         PrivateAttrs are not serialized by pydantic; after checkpoint resume we
         rebuild hash memory from loaded messages so duplicate suppression remains
-        effective.
+        effective. Both string and dict content are hashed so tool-call
+        duplicates are also caught after resume.
         """
+        import json
+
         self._message_hashes.clear()
         for msg in self.messages + self.archived_messages:
             content = msg.get("content", "")
             role = msg.get("role", "")
             if isinstance(content, str):
                 digest_input = f"{role}\x1f{content}"
-                self._message_hashes.add(hashlib.sha256(digest_input.encode("utf-8")).hexdigest())
+            else:
+                try:
+                    digest_input = f"{role}\x1f{json.dumps(content, sort_keys=True, default=str)}"
+                except (TypeError, ValueError):
+                    digest_input = f"{role}\x1f{str(content)}"
+            self._message_hashes.add(hashlib.sha256(digest_input.encode("utf-8")).hexdigest())
 
     def cleanup_old_messages(self) -> int:
         """PLAN FIX: Remove old messages beyond MAX_MESSAGES_BEFORE_CLEANUP.
@@ -100,7 +105,7 @@ class AgentState(BaseModel):
 
         removed_count = len(self.messages) - self.MAX_MESSAGES_BEFORE_CLEANUP
         # Keep recent messages and preserve older context in the bounded archive.
-        older_messages = deepcopy(self.messages[: -self.MAX_MESSAGES_BEFORE_CLEANUP])
+        older_messages = self.messages[: -self.MAX_MESSAGES_BEFORE_CLEANUP]
         if older_messages:
             self.archived_messages.extend(older_messages)
             if len(self.archived_messages) > self.MAX_ARCHIVED_MESSAGES:
@@ -120,112 +125,6 @@ class AgentState(BaseModel):
             self.last_updated = datetime.now(UTC).isoformat()
         return removed
 
-    def add_finding_anchor(self, anchor: dict[str, Any]) -> None:
-        """Store a high-signal finding so it survives memory compression."""
-        # FIX BUG 1: Validate anchor text is not empty, None, or whitespace
-        anchor_text = anchor.get("text")
-        if not anchor_text or not isinstance(anchor_text, str):
-            return  # Reject None or non-string
-        anchor_text = anchor_text.strip()
-        if not anchor_text:
-            return  # Reject empty or whitespace-only anchors
-
-        anchor_lower = anchor_text.lower()
-        # Drop obvious prompt-injection / role-manipulation text before it can
-        # be pinned and re-injected into later prompts.
-        blocked_patterns = (
-            "ignore previous instructions",
-            "forget previous instructions",
-            "system prompt",
-            "<system",
-            "</system>",
-            "<function=",
-            "</function>",
-            "[system",
-            "[[system]]",
-        )
-        if any(pattern in anchor_lower for pattern in blocked_patterns):
-            return
-
-        if anchor.get("confidence") == "low" and anchor.get("source") == "compressor":
-            # Low-confidence compressor anchors are useful for state, but they
-            # should not be re-injected as durable prompts.
-            anchor.setdefault("status", "transient")
-
-        # Deduplicate by key if present
-        key = anchor.get("key") or anchor_text[:80]
-        new_score = float(anchor.get("evidence_score", anchor.get("confidence_score", 0.0)) or 0.0)
-        for existing in self.finding_anchors:
-            if (existing.get("key") or existing.get("text", "")[:80]) == key:
-                existing_score = float(
-                    existing.get("evidence_score", existing.get("confidence_score", 0.0)) or 0.0
-                )
-                if new_score > existing_score:
-                    existing.update(anchor)
-                    existing["text"] = anchor_text
-                    existing["evidence_score"] = new_score
-                    if "status" not in existing:
-                        existing["status"] = "active"
-                    self.finding_anchors.sort(
-                        key=lambda item: (
-                            float(
-                                item.get("evidence_score", item.get("confidence_score", 0.0)) or 0.0
-                            ),
-                            item.get("key", ""),
-                        ),
-                        reverse=True,
-                    )
-                return  # already anchored
-
-        # FIX BUG 2: Enforce maximum anchor limit by evidential value, not age.
-        anchor["evidence_score"] = new_score
-        if len(self.finding_anchors) >= self.MAX_FINDING_ANCHORS:
-            weakest_index = min(
-                range(len(self.finding_anchors)),
-                key=lambda i: float(
-                    self.finding_anchors[i].get(
-                        "evidence_score", self.finding_anchors[i].get("confidence_score", 0.0)
-                    )
-                    or 0.0
-                ),
-            )
-            weakest_score = float(
-                self.finding_anchors[weakest_index].get(
-                    "evidence_score",
-                    self.finding_anchors[weakest_index].get("confidence_score", 0.0),
-                )
-                or 0.0
-            )
-            if new_score <= weakest_score:
-                return
-            self.finding_anchors.pop(weakest_index)
-
-        # Store the anchor with cleaned text and validity status
-        anchor["text"] = anchor_text
-        if "status" not in anchor:
-            anchor["status"] = "active"
-        self.finding_anchors.append(anchor)
-        self.finding_anchors.sort(
-            key=lambda item: (
-                float(item.get("evidence_score", item.get("confidence_score", 0.0)) or 0.0),
-                item.get("key", ""),
-            ),
-            reverse=True,
-        )
-        self.last_updated = datetime.now(UTC).isoformat()
-
-    def prune_invalid_anchors(self) -> int:
-        removed = 0
-        retained = []
-        for anchor in self.finding_anchors:
-            status = str(anchor.get("status", "active")).lower()
-            if status in {"invalidated", "superseded"}:
-                removed += 1
-                continue
-            retained.append(anchor)
-        self.finding_anchors = retained
-        return removed
-
     def increment_iteration(self) -> None:
         self.iteration += 1
         self.last_updated = datetime.now(UTC).isoformat()
@@ -237,22 +136,33 @@ class AgentState(BaseModel):
         thinking_blocks: list[dict[str, Any]] | None = None,
         force: bool = False,
     ) -> None:
-        if isinstance(content, str) and self.messages and not force:
+        # Sliding-window dedup: exact match in last 5 messages.
+        if not force and self.messages:
             _window = self.messages[-5:]
             for m in reversed(_window):
                 if m.get("role") == role and m.get("content") == content:
                     return
 
-        if isinstance(content, str) and not force:
-            content_hash = hashlib.sha256(f"{role}\x1f{content}".encode("utf-8")).hexdigest()
+        # Hash-based dedup: SHA-256 of role + canonical content.
+        # Covers both string content and dict content (tool calls, images).
+        if not force:
+            if isinstance(content, str):
+                digest_input = f"{role}\x1f{content}"
+            else:
+                # Canonicalise dict/list content so identical structures are caught.
+                import json
+                try:
+                    digest_input = f"{role}\x1f{json.dumps(content, sort_keys=True, default=str)}"
+                except (TypeError, ValueError):
+                    digest_input = f"{role}\x1f{str(content)}"
+            content_hash = hashlib.sha256(digest_input.encode("utf-8")).hexdigest()
             if content_hash in self._message_hashes:
                 return
             self._message_hashes.add(content_hash)
-            # FIX H1: cap hash set to prevent unbounded memory growth
-            if len(self._message_hashes) > 500:
-                self._message_hashes.clear()
 
-        message = {"role": role, "content": content}
+        message: dict[str, Any] = {"role": role, "content": content}
+        if thinking_blocks:
+            message["thinking_blocks"] = thinking_blocks
         self.messages.append(message)
         self.last_updated = datetime.now(UTC).isoformat()
 
@@ -288,6 +198,27 @@ class AgentState(BaseModel):
 
     def update_context(self, key: str, value: Any) -> None:
         self.context[key] = value
+        self.last_updated = datetime.now(UTC).isoformat()
+
+    def update_session(
+        self,
+        cookies: dict[str, str] | None = None,
+        tokens: dict[str, str] | None = None,
+        auth_level: str | None = None,
+        base_url: str | None = None,
+    ) -> None:
+        """Update session state so the LLM knows current auth context.
+
+        Called by tools when credentials, cookies, or tokens are discovered.
+        """
+        if cookies:
+            self.session_cookies.update(cookies)
+        if tokens:
+            self.session_tokens.update(tokens)
+        if auth_level is not None:
+            self.current_auth_level = auth_level
+        if base_url is not None:
+            self.target_base_url = base_url
         self.last_updated = datetime.now(UTC).isoformat()
 
     def set_completed(self, final_result: dict[str, Any] | None = None) -> None:
@@ -339,26 +270,13 @@ class AgentState(BaseModel):
         elapsed = (datetime.now(UTC) - self.waiting_start_time).total_seconds()
         return elapsed > 600
 
-    def has_empty_last_messages(self, count: int = 3) -> bool:
-        if len(self.messages) < count:
-            return False
-
-        last_messages = self.messages[-count:]
-
-        for message in last_messages:
-            content = message.get("content", "")
-            if isinstance(content, str) and content.strip():
-                return False
-
-        return True
-
     def get_conversation_history(self) -> list[dict[str, Any]]:
-        return self.messages
+        return list(self.messages)
 
     @property
     def conversation_history(self) -> list[dict[str, Any]]:
         """Backward-compatible alias for message history."""
-        return self.messages
+        return list(self.messages)
 
     @property
     def current_iteration(self) -> int:

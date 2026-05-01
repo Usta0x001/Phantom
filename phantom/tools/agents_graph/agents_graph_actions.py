@@ -442,11 +442,6 @@ def create_agent(
             agent_config["hypothesis_ledger"] = parent_agent.hypothesis_ledger
         if parent_agent and hasattr(parent_agent, "coverage_tracker"):
             agent_config["coverage_tracker"] = parent_agent.coverage_tracker
-        if parent_agent and hasattr(parent_agent, "correlation_engine"):
-            agent_config["correlation_engine"] = parent_agent.correlation_engine
-        if parent_agent and hasattr(parent_agent, "attack_graph"):
-            agent_config["attack_graph"] = parent_agent.attack_graph
-
         agent = PhantomAgent(agent_config)
 
         inherited_messages = []
@@ -469,31 +464,18 @@ def create_agent(
             import copy as _copy
             history = agent_state.get_conversation_history()
             
-            # Retrieve parent finding anchors to ensure subagent knows what was actually found.
-            anchors_text = ""
-            if hasattr(agent_state, "finding_anchors") and agent_state.finding_anchors:
-                anchors_text = "\\n".join([f"- {a.get('text', '')}" for a in agent_state.finding_anchors])
-                
             # FIX 2: Defuse the Context Bomb 
             # Sub-agents inheriting full history causes exponential token growth (e.g. 5x 40K tokens).
             # We slice the bloated middle to cap input costs at O(1) growth per sub-agent.
             if len(history) > 10:
                 copied_hist = _copy.deepcopy([history[0]] + history[-9:])
-                warning_msg = "<system_warning>Inherited history truncated to prevent token bloat.</system_warning>"
-                if anchors_text:
-                    warning_msg += f"\\n\\n<parent_findings>\\nCrucial findings from parent:\\n{anchors_text}\\n</parent_findings>"
                 copied_hist.append({
                     "role": "user",
-                    "content": warning_msg
+                    "content": "<system_warning>Inherited history truncated to prevent token bloat.</system_warning>"
                 })
                 inherited_messages.extend(copied_hist)
             else:
                 copied_hist = _copy.deepcopy(history)
-                if anchors_text:
-                    copied_hist.append({
-                        "role": "user",
-                        "content": f"<parent_findings>\\nCrucial findings from parent:\\n{anchors_text}\\n</parent_findings>"
-                    })
                 inherited_messages.extend(copied_hist)
 
         with _GRAPH_LOCK:  # Rec 1 (B-01)

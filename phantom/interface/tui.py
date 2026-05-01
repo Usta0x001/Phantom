@@ -959,14 +959,6 @@ class PhantomTUIApp(App):  # type: ignore[misc]
                 except Exception:
                     pass
 
-            if cp.attack_graph_state:
-                try:
-                    from phantom.core.attack_graph import AttackGraph
-
-                    config["attack_graph"] = AttackGraph.from_dict(cp.attack_graph_state)
-                except Exception:
-                    pass
-
             if cp.sub_agent_states:
                 config["_restored_sub_agent_states"] = cp.sub_agent_states
 
@@ -2055,7 +2047,6 @@ class PhantomTUIApp(App):  # type: ignore[misc]
                 interruption_reason=reason,
                 hypothesis_ledger=getattr(agent, "hypothesis_ledger", None),
                 coverage_tracker=getattr(agent, "coverage_tracker", None),
-                attack_graph=getattr(agent, "attack_graph", None),
                 active_sub_agents=getattr(agent, "_collect_active_sub_agent_states", lambda: {})(),
             )
             self._checkpoint_mgr.save(cp_data)

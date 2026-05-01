@@ -54,10 +54,6 @@ from .finish import (
     finish_scan,
 )
 
-from .fuzzer import (
-    execute_fuzz_batch,
-)
-
 from .proxy import (
     repeat_request,
     scope_rules,
@@ -100,11 +96,6 @@ from .hypothesis import (
 from .scan_status import (
     get_scan_status,
     set_scan_status_context,
-)
-
-from .oast import (
-    generate_oast_payload,
-    check_oast_interactions,
 )
 
 from .web_search import (
@@ -177,7 +168,6 @@ __all__ = [
     "search_files",
     "str_replace_editor",
     "finish_scan",
-    "execute_fuzz_batch",
     "repeat_request",
     "scope_rules",
     "send_request",
@@ -197,8 +187,6 @@ __all__ = [
     "set_ledger",
     "get_scan_status",
     "set_scan_status_context",
-    "generate_oast_payload",
-    "check_oast_interactions",
     "web_search",
     "shodan_search",
     "crtsh_search",

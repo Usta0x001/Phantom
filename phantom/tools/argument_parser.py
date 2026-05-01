@@ -1,4 +1,5 @@
 import contextlib
+import logging
 import inspect
 import json
 import types
@@ -8,6 +9,9 @@ from typing import Any, Union, get_args, get_origin
 
 # Maximum size of a JSON string value to attempt parsing (prevents DoS)
 _MAX_JSON_PARSE_LENGTH = 100_000
+
+
+logger = logging.getLogger(__name__)
 
 
 class ArgumentConversionError(Exception):
@@ -23,7 +27,13 @@ def convert_arguments(func: Callable[..., Any], kwargs: dict[str, Any]) -> dict[
 
         for param_name, value in kwargs.items():
             if param_name not in sig.parameters:
-                converted[param_name] = value
+                # Forward-compat: ignore unknown params instead of erroring.
+                # This avoids sandbox/version mismatches breaking tool execution.
+                logger.debug(
+                    "Ignoring unknown argument '%s' for %s",
+                    param_name,
+                    getattr(func, "__name__", "<tool>"),
+                )
                 continue
 
             param = sig.parameters[param_name]

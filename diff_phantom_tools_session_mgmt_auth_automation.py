@@ -1,0 +1,253 @@
+diff --git a/phantom/tools/session_mgmt/auth_automation.py b/phantom/tools/session_mgmt/auth_automation.py
+index 9f9cbf8..005326f 100644
+--- a/phantom/tools/session_mgmt/auth_automation.py
++++ b/phantom/tools/session_mgmt/auth_automation.py
+@@ -293,7 +293,6 @@ async def refresh_jwt_token(
+         }
+ 
+ 
+-@register_tool(sandbox_execution=False)
+ async def extract_jwt_from_response(
+     response_body: str,
+     response_headers: dict[str, str] | None = None,
+@@ -378,240 +377,8 @@ async def extract_jwt_from_response(
+     }
+ 
+ 
+-@register_tool(sandbox_execution=False)
+-async def check_jwt_expiration(
+-    token: str | None = None,
+-    session_id: str | None = None,
+-) -> dict[str, Any]:
+-    """
+-    Check JWT token expiration status.
+-    
+-    Parse JWT token and check if it's expired or expiring soon.
+-    Can check cached token for a session.
+-    
+-    Args:
+-        token: JWT token to check (optional)
+-        session_id: Session ID to check cached token (optional)
+-    
+-    Returns:
+-        Dict with expiration status and time remaining
+-    """
+-    try:
+-        # Get token from cache if session_id provided
+-        if not token and session_id:
+-            jwt_info = _JWT_CACHE.get(session_id)
+-            if jwt_info:
+-                token = jwt_info.get("token")
+-        
+-        if not token:
+-            return {
+-                "success": False,
+-                "error": "No token provided or found in cache",
+-            }
+-        
+-        # Parse token
+-        token_info = _parse_jwt_token(token)
+-        
+-        if not token_info:
+-            return {
+-                "success": False,
+-                "error": "Invalid JWT token format",
+-            }
+-        
+-        claims = token_info.get("claims", {})
+-        exp_timestamp = claims.get("exp")
+-        
+-        if not exp_timestamp:
+-            return {
+-                "success": True,
+-                "has_expiration": False,
+-                "message": "Token does not have expiration claim",
+-            }
+-        
+-        current_time = int(time.time())
+-        time_remaining = exp_timestamp - current_time
+-        
+-        is_expired = time_remaining <= 0
+-        expires_soon = 0 < time_remaining < 300  # Less than 5 minutes
+-        
+-        return {
+-            "success": True,
+-            "has_expiration": True,
+-            "is_expired": is_expired,
+-            "expires_soon": expires_soon,
+-            "expires_at": datetime.fromtimestamp(exp_timestamp).isoformat(),
+-            "time_remaining_seconds": max(0, time_remaining),
+-            "claims": claims,
+-            "recommendation": (
+-                "Token expired - refresh immediately" if is_expired
+-                else "Token expires soon - consider refreshing" if expires_soon
+-                else "Token is valid"
+-            ),
+-        }
+-        
+-    except Exception as e:
+-        logger.error(f"JWT expiration check failed: {e}")
+-        return {
+-            "success": False,
+-            "error": str(e),
+-        }
+ 
+ 
+-@register_tool(sandbox_execution=False)
+-async def multi_step_login(
+-    steps: list[dict[str, Any]],
+-    session_name: str | None = None,
+-) -> dict[str, Any]:
+-    """
+-    Execute multi-step authentication flow.
+-    
+-    Handles complex auth flows requiring multiple requests:
+-    - Get login page ΓåÆ Extract CSRF ΓåÆ Submit credentials ΓåÆ Get 2FA page ΓåÆ Submit code
+-    - OAuth2 authorization code flow
+-    - SAML SSO flows
+-    
+-    Args:
+-        steps: List of step configs with type, url, data, extract, etc.
+-        session_name: Name for the created session
+-    
+-    Example steps:
+-    [
+-        {"type": "get", "url": "https://app.com/login", "extract_csrf": True},
+-        {"type": "post", "url": "https://app.com/login", "data": {"user": "admin", "pass": "test"}},
+-        {"type": "get", "url": "https://app.com/2fa"},
+-        {"type": "post", "url": "https://app.com/2fa", "data": {"code": "123456"}}
+-    ]
+-    
+-    Returns:
+-        Dict with session_id, cookies, and flow execution status
+-    """
+-    start_time = time.time()
+-    session_name = session_name or f"multi_step_{int(start_time)}"
+-    
+-    cookies: dict[str, str] = {}
+-    headers: dict[str, str] = {}
+-    csrf_token: str | None = None
+-    
+-    step_results: list[dict[str, Any]] = []
+-    
+-    try:
+-        async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
+-            for idx, step in enumerate(steps, 1):
+-                step_type = step.get("type", "get").lower()
+-                url = step.get("url")
+-                
+-                if not url:
+-                    return {
+-                        "success": False,
+-                        "error": f"Step {idx}: Missing URL",
+-                        "step_results": step_results,
+-                    }
+-                
+-                # Prepare request data
+-                data = step.get("data", {})
+-                
+-                # Inject CSRF token if needed
+-                if csrf_token and step.get("inject_csrf"):
+-                    csrf_field = step.get("csrf_field", "csrf_token")
+-                    data[csrf_field] = csrf_token
+-                
+-                # Merge cookies from previous steps
+-                request_headers = {**headers}
+-                if cookies:
+-                    request_headers["Cookie"] = "; ".join(f"{k}={v}" for k, v in cookies.items())
+-                
+-                # Execute step
+-                if step_type == "get":
+-                    response = await client.get(url, headers=request_headers)
+-                elif step_type == "post":
+-                    content_type = step.get("content_type", "form")
+-                    if content_type == "json":
+-                        response = await client.post(url, json=data, headers=request_headers)
+-                    else:
+-                        response = await client.post(url, data=data, headers=request_headers)
+-                else:
+-                    return {
+-                        "success": False,
+-                        "error": f"Step {idx}: Unknown type '{step_type}'",
+-                    }
+-                
+-                # Extract cookies from response
+-                if "set-cookie" in response.headers:
+-                    new_cookies = _parse_set_cookie_header(response.headers["set-cookie"])
+-                    cookies.update(new_cookies)
+-                
+-                # Extract CSRF token if requested
+-                if step.get("extract_csrf"):
+-                    from phantom.tools.session_mgmt.session_mgmt_actions import extract_csrf_token
+-                    csrf_result = await extract_csrf_token(response.text)
+-                    if csrf_result.get("success"):
+-                        csrf_token = csrf_result.get("primary_token")
+-                
+-                # Extract JWT token if requested
+-                jwt_token = None
+-                if step.get("extract_jwt"):
+-                    jwt_result = await extract_jwt_from_response(
+-                        response_body=response.text,
+-                        response_headers=dict(response.headers),
+-                    )
+-                    if jwt_result.get("success"):
+-                        jwt_token = jwt_result["primary_token"]["raw_token"]
+-                        headers["Authorization"] = f"Bearer {jwt_token}"
+-                
+-                step_results.append({
+-                    "step": idx,
+-                    "type": step_type,
+-                    "url": url,
+-                    "status_code": response.status_code,
+-                    "success": response.status_code < 400,
+-                    "csrf_extracted": csrf_token is not None if step.get("extract_csrf") else None,
+-                    "jwt_extracted": jwt_token is not None if step.get("extract_jwt") else None,
+-                })
+-                
+-                # Check for failure indicators
+-                if step.get("failure_indicators"):
+-                    for indicator in step["failure_indicators"]:
+-                        if indicator in response.text:
+-                            return {
+-                                "success": False,
+-                                "error": f"Step {idx}: Found failure indicator '{indicator}'",
+-                                "step_results": step_results,
+-                            }
+-        
+-        # Create session with collected cookies/headers
+-        from phantom.tools.session_mgmt.session_mgmt_actions import create_session
+-        
+-        session_result = await create_session(
+-            session_name=session_name,
+-            cookies=cookies,
+-            headers=headers,
+-        )
+-        
+-        if not session_result.get("success"):
+-            return session_result
+-        
+-        session_id = session_result["session_id"]
+-        
+-        return {
+-            "success": True,
+-            "session_id": session_id,
+-            "session_name": session_name,
+-            "cookies": _safe_cookie_output(cookies),
+-            "headers": {k: _redact_token(v) for k, v in headers.items()},
+-            "csrf_token": _redact_token(csrf_token) if csrf_token else None,
+-            "steps_executed": len(step_results),
+-            "step_results": step_results,
+-            "duration_ms": int((time.time() - start_time) * 1000),
+-            "message": f"Multi-step login completed ({len(steps)} steps)",
+-        }
+-        
+-    except Exception as e:
+-        logger.error(f"Multi-step login failed: {e}")
+-        return {
+-            "success": False,
+-            "error": str(e),
+-            "step_results": step_results,
+-        }
+ 
+ 
+ # ============================================================================

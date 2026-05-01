@@ -1,0 +1,53 @@
+<tools>
+  <tool name="terminal_execute">
+    <description>Execute a bash command in a persistent terminal session. The terminal maintains state (environment variables, current directory, running processes) between commands.</description>
+    <parameters>
+      <parameter name="command" type="string" required="true">
+        <description>The bash command to execute. Can be empty to check output of running commands (waits for timeout period to collect output).</description>
+      </parameter>
+      <parameter name="is_input" type="boolean" required="false">
+        <description>If true, the command is sent as input to a currently running process. If false (default), the command is executed as a new bash command.</description>
+      </parameter>
+      <parameter name="timeout" type="number" required="false">
+        <description>Optional timeout in seconds for command execution. CAPPED AT 60 SECONDS. If not provided, uses default wait (30s). On timeout, the command keeps running and returns status 'running'.</description>
+      </parameter>
+      <parameter name="terminal_id" type="string" required="false">
+        <description>Identifier for the terminal session. Defaults to "default". Use different IDs to manage multiple concurrent terminal sessions.</description>
+      </parameter>
+      <parameter name="no_enter" type="boolean" required="false">
+        <description>If true, don't automatically add Enter/newline after the command. Useful for interactive prompts, Vim navigation (e.g., "gg", "5j", "i"), or multi-step commands.</description>
+      </parameter>
+    </parameters>
+    <returns type="Dict[str, Any]">
+      <description>Response containing: content (command output), exit_code (only for completed), command, terminal_id, status ('completed' or 'running'), working_dir.</description>
+    </returns>
+    <examples>
+  # Execute a simple command
+  <function=terminal_execute>
+  <parameter=command>ls -la</parameter>
+  </function>
+
+  # Run a command with timeout
+  <function=terminal_execute>
+  <parameter=command>npm install</parameter>
+  <parameter=timeout>60</parameter>
+  </function>
+
+  # Background process
+  <function=terminal_execute>
+  <parameter=command>python app.py > server.log 2>&1 &</parameter>
+  </function>
+
+  # Interrupt (C-c works automatically)
+  <function=terminal_execute>
+  <parameter=command>C-c</parameter>
+  </function>
+
+  # Interactive input
+  <function=terminal_execute>
+  <parameter=command>y</parameter>
+  <parameter=is_input>true</parameter>
+  </function>
+    </examples>
+  </tool>
+</tools>

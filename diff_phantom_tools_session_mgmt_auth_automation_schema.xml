@@ -1,0 +1,410 @@
+diff --git a/phantom/tools/session_mgmt/auth_automation_schema.xml b/phantom/tools/session_mgmt/auth_automation_schema.xml
+index 0906468..387f92c 100644
+--- a/phantom/tools/session_mgmt/auth_automation_schema.xml
++++ b/phantom/tools/session_mgmt/auth_automation_schema.xml
+@@ -1,373 +1,72 @@
+ <?xml version="1.0" encoding="UTF-8"?>
+ <tools>
+   <tool name="automate_login">
+-    <description>
+-      Automate login to web application and extract authenticated session.
+-      
+-      Performs automated authentication through various methods:
+-      - Simple form-based login (POST username/password)
+-      - JSON API authentication
+-      - Complex JavaScript-heavy login flows (using headless browser)
+-      - Multi-step authentication workflows
+-      
+-      Automatically extracts and stores:
+-      - Session cookies (PHPSESSID, JSESSIONID, etc.)
+-      - CSRF tokens from login page
+-      - JWT tokens from API responses
+-      - Custom authentication headers
+-      
+-      ELITE FEATURE: Use this to maintain authenticated context across
+-      all scanning operations. Many vulnerabilities only exist in
+-      authenticated surfaces.
+-    </description>
++    <description>Automate login and extract authenticated session.</description>
+     <parameters>
+       <parameter name="target_url" type="string" required="true">
+-        Login page URL (e.g., "https://target.com/login")
++        <description>Login page URL.</description>
+       </parameter>
+       <parameter name="username" type="string" required="true">
+-        Username or email for authentication
++        <description>Username or email.</description>
+       </parameter>
+       <parameter name="password" type="string" required="true">
+-        Password for authentication
++        <description>Password.</description>
+       </parameter>
+       <parameter name="flow_type" type="string" required="false">
+-        Authentication flow type: "form" (default), "json_api", "multi_step"
++        <description>form, json_api, multi_step.</description>
+       </parameter>
+       <parameter name="username_field" type="string" required="false">
+-        Form field name for username (default: "username")
++        <description>Username field name.</description>
+       </parameter>
+       <parameter name="password_field" type="string" required="false">
+-        Form field name for password (default: "password")
++        <description>Password field name.</description>
+       </parameter>
+       <parameter name="submit_selector" type="string" required="false">
+-        CSS selector for submit button (default: "button[type=submit],input[type=submit]")
++        <description>CSS selector for submit.</description>
+       </parameter>
+       <parameter name="success_indicator" type="string" required="false">
+-        String to check for successful login (e.g., "Dashboard", "Welcome", "Logout")
++        <description>String confirming login success.</description>
+       </parameter>
+       <parameter name="session_name" type="string" required="false">
+-        Name for the created session (default: auto-generated)
++        <description>Session name.</description>
+       </parameter>
+       <parameter name="use_browser" type="boolean" required="false">
+-        Use headless browser for JavaScript-heavy login (default: false)
++        <description>Use headless browser.</description>
+       </parameter>
+     </parameters>
+-    <returns>
+-      JSON object containing:
+-      - success: Whether login succeeded
+-      - session_id: Created session ID for authenticated requests
+-      - session_name: Session name
+-      - cookies: Extracted session cookies (redacted)
+-      - tokens: JWT or other auth tokens extracted
+-      - authenticated: True if login succeeded
+-      - login_duration_ms: Time taken for login flow
+-      - message: Status message
++    <returns type="Dict[str, Any]">
++      <description>success, session_id, cookies, tokens, authenticated.</description>
+     </returns>
+-    <example>
+-      <!-- Simple form login -->
+-      automate_login(
+-        target_url="https://target.com/login",
+-        username="admin",
+-        password="Password123",
+-        success_indicator="Dashboard"
+-      )
+-      
+-      <!-- JSON API login -->
+-      automate_login(
+-        target_url="https://api.target.com/auth/login",
+-        username="user@example.com",
+-        password="SecurePass456",
+-        flow_type="json_api"
+-      )
+-      
+-      <!-- Complex JS-heavy login -->
+-      automate_login(
+-        target_url="https://spa.target.com/login",
+-        username="admin",
+-        password="test123",
+-        use_browser=true,
+-        success_indicator="Welcome back"
+-      )
+-    </example>
+-    <workflow>
+-      1. Call automate_login() with target credentials
+-      2. Tool fetches login page and extracts CSRF tokens
+-      3. Submits credentials via POST request
+-      4. Extracts session cookies and JWT tokens
+-      5. Creates authenticated session automatically
+-      6. Returns session_id for use with other tools
+-      7. Use session_id with scanning tools to test authenticated surfaces
+-    </workflow>
++    <examples>
++      <function=automate_login>
++        <parameter=target_url>https://target.com/login</parameter>
++        <parameter=username>admin</parameter>
++        <parameter=password>Password123</parameter>
++        <parameter=success_indicator>Dashboard</parameter>
++      </function>
++    </examples>
+   </tool>
+ 
+   <tool name="refresh_jwt_token">
+-    <description>
+-      Refresh expired JWT token to maintain authentication.
+-      
+-      JWT tokens typically expire after 15-60 minutes. This tool
+-      automatically refreshes the access token using a refresh token.
+-      
+-      ELITE FEATURE: During long scan operations, JWT tokens may expire.
+-      Use this tool to refresh tokens mid-scan and maintain access to
+-      protected endpoints.
+-      
+-      Supports:
+-      - Automatic refresh using cached refresh token
+-      - Manual refresh with provided refresh token
+-      - Updates session with new access token
+-      - Caches new token for future refreshes
+-    </description>
++    <description>Refresh expired JWT token.</description>
+     <parameters>
+       <parameter name="session_id" type="string" required="true">
+-        Session ID to refresh token for
++        <description>Session ID.</description>
+       </parameter>
+       <parameter name="refresh_token" type="string" required="false">
+-        Refresh token (optional if previously cached)
++        <description>Refresh token (if not cached).</description>
+       </parameter>
+       <parameter name="refresh_endpoint" type="string" required="false">
+-        Token refresh endpoint URL (e.g., "https://api.target.com/auth/refresh")
++        <description>Refresh endpoint URL.</description>
+       </parameter>
+     </parameters>
+-    <returns>
+-      JSON object containing:
+-      - success: Whether token refresh succeeded
+-      - session_id: Updated session ID
+-      - access_token: New access token (redacted)
+-      - token_refreshed: True if successful
+-      - expires_in: Token expiration time (if provided by API)
+-      - message: Status message
++    <returns type="Dict[str, Any]">
++      <description>success, new access token, expiration.</description>
+     </returns>
+-    <example>
+-      <!-- Refresh with cached refresh token -->
+-      refresh_jwt_token(session_id="abc12345")
+-      
+-      <!-- Refresh with manual token -->
+-      refresh_jwt_token(
+-        session_id="abc12345",
+-        refresh_token="eyJhbGciOiJIUz...",
+-        refresh_endpoint="https://api.target.com/refresh"
+-      )
+-    </example>
+-    <workflow>
+-      1. Detect JWT expiration during scan (HTTP 401 responses)
+-      2. Call refresh_jwt_token(session_id="...")
+-      3. Tool POSTs to refresh endpoint with refresh token
+-      4. Extracts new access token from response
+-      5. Updates session Authorization header
+-      6. Caches new token and refresh token
+-      7. Resume scanning with refreshed authentication
+-    </workflow>
+-  </tool>
+-
+-  <tool name="extract_jwt_from_response">
+-    <description>
+-      Extract JWT tokens from HTTP response body and headers.
+-      
+-      Searches for JWT tokens in:
+-      - JSON response bodies: {"token": "...", "access_token": "...", "id_token": "..."}
+-      - Authorization response headers: Authorization: Bearer ...
+-      - Refresh tokens: {"refresh_token": "..."}
+-      
+-      Automatically parses token claims:
+-      - Issuer (iss)
+-      - Subject (sub)
+-      - Expiration (exp)
+-      - Issued at (iat)
+-      
+-      ELITE FEATURE: Many modern web apps use JWT for authentication.
+-      This tool extracts tokens from API responses and validates their
+-      format before use.
+-    </description>
+-    <parameters>
+-      <parameter name="response_body" type="string" required="true">
+-        HTTP response body (JSON or HTML)
+-      </parameter>
+-      <parameter name="response_headers" type="object" required="false">
+-        HTTP response headers as dict
+-      </parameter>
+-      <parameter name="session_id" type="string" required="false">
+-        Session to store extracted token in (optional)
+-      </parameter>
+-    </parameters>
+-    <returns>
+-      JSON object containing:
+-      - success: Whether any tokens were found
+-      - tokens: List of extracted tokens with parsed claims
+-      - token_count: Number of tokens found
+-      - primary_token: Most likely token with claims
+-      - refresh_tokens: List of refresh tokens found
+-      - stored_in_session: Session ID if token stored
+-      - message: Status message
+-    </returns>
+-    <example>
+-      <!-- Extract JWT from API login response -->
+-      extract_jwt_from_response(
+-        response_body='{"access_token":"eyJhbGc...", "refresh_token":"dGhpc2lz..."}'
+-      )
+-      
+-      <!-- Extract and store in session -->
+-      extract_jwt_from_response(
+-        response_body=api_response,
+-        response_headers={"Authorization": "Bearer eyJhbGc..."},
+-        session_id="abc12345"
+-      )
+-    </example>
+-    <workflow>
+-      1. Perform API authentication request
+-      2. Call extract_jwt_from_response() on response
+-      3. Tool parses JWT and validates format
+-      4. Extracts token claims (expiration, subject, etc.)
+-      5. Stores token in session if session_id provided
+-      6. Use extracted token for authenticated API requests
+-    </workflow>
+-  </tool>
+-
+-  <tool name="check_jwt_expiration">
+-    <description>
+-      Check JWT token expiration status and validity.
+-      
+-      Parses JWT token to determine:
+-      - Is token expired?
+-      - Is token expiring soon? (within 5 minutes)
+-      - Time remaining until expiration
+-      - Token claims (issuer, subject, etc.)
+-      
+-      ELITE FEATURE: Proactively check token expiration before
+-      making critical requests. Prevents authentication failures
+-      mid-scan by refreshing tokens before they expire.
+-    </description>
+-    <parameters>
+-      <parameter name="token" type="string" required="false">
+-        JWT token to check (optional)
+-      </parameter>
+-      <parameter name="session_id" type="string" required="false">
+-        Session ID to check cached token (alternative to token parameter)
+-      </parameter>
+-    </parameters>
+-    <returns>
+-      JSON object containing:
+-      - success: Whether check completed
+-      - has_expiration: Whether token has exp claim
+-      - is_expired: True if token is expired
+-      - expires_soon: True if expiring within 5 minutes
+-      - expires_at: ISO timestamp of expiration
+-      - time_remaining_seconds: Seconds until expiration
+-      - claims: Full JWT claims
+-      - recommendation: Action to take (refresh, valid, etc.)
+-    </returns>
+-    <example>
+-      <!-- Check specific token -->
+-      check_jwt_expiration(token="eyJhbGciOiJIUzI1NiIsInR5c...")
+-      
+-      <!-- Check cached session token -->
+-      check_jwt_expiration(session_id="abc12345")
+-    </example>
+-    <workflow>
+-      1. Before critical authenticated request, check token expiration
+-      2. Call check_jwt_expiration(session_id="...")
+-      3. If is_expired or expires_soon, call refresh_jwt_token()
+-      4. Proceed with request using valid token
+-    </workflow>
+-  </tool>
+-
+-  <tool name="multi_step_login">
+-    <description>
+-      Execute complex multi-step authentication flows.
+-      
+-      Handles authentication requiring multiple sequential requests:
+-      - Multi-page login forms
+-      - Two-factor authentication (2FA)
+-      - OAuth2 authorization code flow
+-      - SAML SSO workflows
+-      - CSRF token extraction + login + redirect
+-      
+-      ELITE FEATURE: Modern enterprise apps often have complex auth.
+-      This tool chains requests together, extracting tokens/cookies
+-      at each step and passing them to subsequent steps.
+-      
+-      Each step can:
+-      - GET or POST to URLs
+-      - Extract CSRF tokens
+-      - Extract JWT tokens
+-      - Parse and store cookies
+-      - Inject data from previous steps
+-      - Check for success/failure indicators
+-    </description>
+-    <parameters>
+-      <parameter name="steps" type="array" required="true">
+-        List of step configurations. Each step is a dict with:
+-        - type: "get" or "post"
+-        - url: Request URL
+-        - data: Form/JSON data (for POST)
+-        - extract_csrf: Extract CSRF token (bool)
+-        - extract_jwt: Extract JWT token (bool)
+-        - inject_csrf: Inject CSRF into form (bool)
+-        - csrf_field: Field name for CSRF (default: "csrf_token")
+-        - content_type: "form" or "json"
+-        - failure_indicators: List of strings indicating failure
+-      </parameter>
+-      <parameter name="session_name" type="string" required="false">
+-        Name for the created session (default: auto-generated)
+-      </parameter>
+-    </parameters>
+-    <returns>
+-      JSON object containing:
+-      - success: Whether all steps completed successfully
+-      - session_id: Created session ID
+-      - session_name: Session name
+-      - cookies: Final cookies (redacted)
+-      - headers: Final headers (redacted)
+-      - csrf_token: Final CSRF token (redacted)
+-      - steps_executed: Number of steps completed
+-      - step_results: Results from each step
+-      - duration_ms: Total flow duration
+-      - message: Status message
+-    </returns>
+-    <example>
+-      <!-- Two-step login with CSRF -->
+-      multi_step_login(
+-        steps=[
+-          {
+-            "type": "get",
+-            "url": "https://target.com/login",
+-            "extract_csrf": true
+-          },
+-          {
+-            "type": "post",
+-            "url": "https://target.com/login",
+-            "data": {"username": "admin", "password": "test123"},
+-            "inject_csrf": true,
+-            "csrf_field": "csrf_token"
+-          }
+-        ],
+-        session_name="two_step_auth"
+-      )
+-      
+-      <!-- OAuth2 + API call -->
+-      multi_step_login(
+-        steps=[
+-          {
+-            "type": "post",
+-            "url": "https://api.target.com/oauth/token",
+-            "data": {"grant_type": "password", "username": "admin", "password": "test"},
+-            "content_type": "json",
+-            "extract_jwt": true
+-          },
+-          {
+-            "type": "get",
+-            "url": "https://api.target.com/user/profile"
+-          }
+-        ]
+-      )
+-    </example>
+-    <workflow>
+-      1. Define authentication steps as list of dicts
+-      2. Call multi_step_login(steps=[...])
+-      3. Tool executes steps sequentially
+-      4. Each step can extract/inject CSRF, JWT, cookies
+-      5. Cookies and tokens accumulated across steps
+-      6. Final session created with all auth data
+-      7. Use session_id for authenticated scanning
+-    </workflow>
++    <examples>
++      <function=refresh_jwt_token>
++        <parameter=session_id>abc123</parameter>
++      </function>
++    </examples>
+   </tool>
+ </tools>

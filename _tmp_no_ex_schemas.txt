@@ -1,0 +1,398 @@
+=== wait_for_agents ===
+<tool name="wait_for_agents">
+    <description>Wait for specific agents to finish, with timeout.</description>
+    <parameters>
+      <parameter name="agent_ids" type="array" required="true">
+        <description>List of agent IDs to wait on.</description>
+      </parameter>
+      <parameter name="timeout_seconds" type="integer" required="false">
+        <description>Max seconds to wait before returning partial results.</description>
+      </parameter>
+    </parameters>
+    <returns type="Dict[str, Any]">
+      <description>Completion status and per-agent results.</description>
+    </returns>
+  </tool>
+
+=== add_hypothesis ===
+<tool name="add_hypothesis">
+    <description>Add a new vulnerability hypothesis for an attack surface.</description>
+    <parameters>
+      <parameter name="surface" type="string" required="true">
+        <description>Surface identifier, usually "endpoint::parameter".</description>
+      </parameter>
+      <parameter name="vuln_class" type="string" required="true">
+        <description>Vulnerability class such as sqli, xss, ssrf, idor.</description>
+      </parameter>
+    </parameters>
+  </tool>
+
+=== record_payload_test ===
+<tool name="record_payload_test">
+    <description>Record a payload test outcome for a hypothesis.</description>
+    <parameters>
+      <parameter name="hypothesis_id" type="string" required="true" />
+      <parameter name="payload" type="string" required="true" />
+      <parameter name="outcome" type="string" required="true">
+        <description>success or failure</description>
+      </parameter>
+      <parameter name="evidence" type="string" required="false" />
+    </parameters>
+  </tool>
+
+=== confirm_hypothesis ===
+<tool name="confirm_hypothesis">
+    <description>Mark a hypothesis as confirmed with evidence.</description>
+    <parameters>
+      <parameter name="hypothesis_id" type="string" required="true" />
+      <parameter name="evidence" type="string" required="true" />
+    </parameters>
+  </tool>
+
+=== reject_hypothesis ===
+<tool name="reject_hypothesis">
+    <description>Mark a hypothesis as rejected with a reason.</description>
+    <parameters>
+      <parameter name="hypothesis_id" type="string" required="true" />
+      <parameter name="reason" type="string" required="true" />
+    </parameters>
+  </tool>
+
+=== query_hypotheses ===
+<tool name="query_hypotheses">
+    <description>Query hypotheses by status and/or class.</description>
+    <parameters>
+      <parameter name="status" type="string" required="false" />
+      <parameter name="vuln_class" type="string" required="false" />
+      <parameter name="limit" type="integer" required="false" />
+    </parameters>
+  </tool>
+
+=== get_hypothesis_summary ===
+<tool name="get_hypothesis_summary">
+    <description>Get a summary of hypothesis ledger state and priorities.</description>
+    <parameters />
+  </tool>
+
+=== has_tested_payload ===
+<tool name="has_tested_payload">
+    <description>Check whether a payload was already tested for surface/class.</description>
+    <parameters>
+      <parameter name="surface" type="string" required="true" />
+      <parameter name="vuln_class" type="string" required="true" />
+      <parameter name="payload" type="string" required="true" />
+    </parameters>
+  </tool>
+
+=== comprehensive_subdomain_enum ===
+<tool name="comprehensive_subdomain_enum">
+<description>Run comprehensive subdomain enumeration combining multiple techniques.
+
+Orchestrates passive enumeration, external tools, smart wordlist generation,
+and active DNS brute-forcing into a single comprehensive scan.</description>
+<parameters>
+  <parameter name="domain" type="string" required="true">
+    Target domain (e.g., "example.com")
+  </parameter>
+  <parameter name="stealth" type="boolean" required="false">
+    Enable stealth mode (slower, more careful). Default: false
+  </parameter>
+  <parameter name="include_bruteforce" type="boolean" required="false">
+    Include DNS brute-forcing phase. Default: true
+  </parameter>
+  <parameter name="bruteforce_size" type="string" required="false">
+    Wordlist size for bruteforce: "small", "medium", "large". Default: "medium"
+  </parameter>
+  <parameter name="use_external_tools" type="boolean" required="false">
+    Try to use subfinder/assetfinder if available. Default: true
+  </parameter>
+</parameters>
+<returns>
+  - subdomains: All discovered subdomains
+  - by_source: Results broken down by technique
+  - sources_used: Which techniques were used
+</returns>
+</tool>
+
+=== auto_queue_cve_exploits ===
+<tool name="auto_queue_cve_exploits">
+    <description>Automatically queue CVE-based exploitation hypotheses from fingerprinted tech stack.
+      
+      This is the MAIN INTEGRATION FUNCTION that bridges:      
+      WORKFLOW:
+      1. Parse tech_stack dictionary for products with versions
+      2. Call version_to_cves() for each technology
+      3. Map CVEs to vulnerability classes (sqli, xss, rce, path_traversal, etc.)
+      4. Generate attack surfaces based on product/CVE combination
+      5. Queue hypotheses in hypothesis ledger
+      6. Return prioritized exploitation plan      
+      ELITE FEATURE:</description>
+    
+    <parameters>
+      <parameter name="tech_stack" type="dict" required="true">
+        <description>Tech stack dictionary from identify_tech_stack().</description>
+      </parameter>
+      
+      <parameter name="base_url" type="string" required="true">
+        <description>Target base URL for generating attack surfaces.</description>
+      </parameter>
+      
+      <parameter name="hypothesis_ledger" type="object" required="false">
+        <description>HypothesisLedger instance for direct integration.</description>
+      </parameter>
+      
+      <parameter name="min_severity" type="string" required="false" default="MEDIUM">
+        <description>Minimum CVE severity to queue.</description>
+      </parameter>
+      
+      <parameter name="prioritize_exploits" type="boolean" required="false" default="true">
+        <description>If true, prioritize CVEs with available exploits (Metasploit, PoC).</description>
+      </parameter>
+      
+      <parameter name="max_hypotheses" type="integer" required="false" default="20">
+        <description>Maximum number of hypotheses to queue.</description>
+      </parameter>
+    </parameters>
+    
+    <returns>
+      <description>
+        Dictionary with exploitation plan and queuing summary:
+        {
+          "hypotheses_queued": 5,
+          "cves_found": 12,
+          "exploitation_plan": [
+            {
+              "priority": 1,
+              "cve_id": "CVE-2021-41773",
+              "product": "Apache/2.4.49",
+              "severity": "CRITICAL",
+              "vuln_class": "path_traversal",
+              "hypothesis_id": "H-0042",
+              "attack_surface": "https://example.com/cgi-bin/.%2e/.%2e/etc/passwd",
+              "exploit_available": true,
+              "exploit_type": "metasploit",
+              "exploit_url": "https://www.exploit-db.com/exploits/50383",
+              "confidence": "HIGH",
+              "recommended_payloads": ["../.../../etc/passwd", ".%2e/.%2e/etc/passwd"],
+              "recommended_action": "Deploy Metasploit module immediately - CRITICAL severity RCE"
+            },
+            ...
+          ],
+          "summary": "Queued 5 CVE exploits: 2 CRITICAL, 3 HIGH",
+          "status": "success"
+        }
+      </description>
+      
+      <status_codes>
+        <code value="success">Hypotheses successfully queued</code>
+        <code value="no_cves_found">No CVEs found matching criteria</code>
+        <code value="error">CVE auto-integration failed</code>
+      </status_codes>
+    </returns>
+    
+    <example>
+      <scenario>Apache 2.4.49 with known path traversal CVE</scenario>
+      <input>
+        tech_stack = {
+          "web_servers": [
+            {"name": "Apache", "version": "2.4.49", "confidence": "high"}
+          ]
+        }
+        base_url = "https://target.com"
+        min_severity = "HIGH"
+      </input>
+      <output>
+        {
+          "hypotheses_queued": 2,
+          "cves_found": 2,
+          "exploitation_plan": [
+            {
+              "priority": 1,
+              "cve_id": "CVE-2021-41773",
+              "severity": "CRITICAL",
+              "vuln_class": "path_traversal",
+              "attack_surface": "https://target.com/cgi-bin/.%2e/.%2e/etc/passwd",
+              "exploit_available": true,
+              "exploit_type": "metasploit"
+            }
+          ]
+        }
+      </output>
+    </example>
+    
+    <example>
+      <scenario>WordPress 5.8.2 with multiple CVEs</scenario>
+      <input>
+        tech_stack = {
+          "cms": [
+            {"name": "WordPress", "version": "5.8.2"}
+          ]
+        }
+        base_url = "https://blog.example.com"
+        min_severity = "MEDIUM"
+        max_hypotheses = 10
+      </input>
+      <output>
+        {
+          "hypotheses_queued": 10,
+          "cves_found": 15,
+          "summary": "Queued 10 CVE exploits: 1 CRITICAL, 4 HIGH, 5 MEDIUM"
+        }
+      </output>
+    </example>
+    
+    <security_notes>
+      <note>This function ONLY queries public CVE databases - no interaction with target</note>
+      <note>Hypothesis queueing is local - does not send payloads to target</note>
+      <note>Rate limiting applied to NVD/ExploitDB queries (inherited from version_to_cves)</note>
+    </security_notes>
+    
+    <integration_notes>
+      <note>Designed to be called immediately after identify_tech_stack()</note>
+      <note>Works seamlessly with existing hypothesis_ledger and payload generation</note>
+      <note>Exploitation plan can be fed directly to agent's attack loop</note>
+    </integration_notes>
+  </tool>
+
+=== enrich_hypothesis_with_cve ===
+<tool name="enrich_hypothesis_with_cve">
+    <description>Enrich an existing hypothesis with CVE metadata.
+      
+      Useful when CVEs are discovered AFTER hypothesis creation (e.g., manual research).
+      Fetches full CVE details from NVD and stores them in hypothesis metadata.</description>
+    
+    <parameters>
+      <parameter name="hypothesis_id" type="string" required="true">
+        <description>Hypothesis ID to enrich (e.g., "H-0042").</description>
+      </parameter>
+      
+      <parameter name="cve_id" type="string" required="true">
+        <description>CVE identifier (e.g., "CVE-2021-41773").</description>
+      </parameter>
+      
+      <parameter name="hypothesis_ledger" type="object" required="false">
+        <description>HypothesisLedger instance.</description>
+      </parameter>
+    </parameters>
+    
+    <returns>
+      <description>
+        {
+          "status": "success",
+          "hypothesis_id": "H-0042",
+          "cve_id": "CVE-2021-41773",
+          "enriched_data": {
+            "description": "Path traversal in Apache HTTP Server 2.4.49...",
+            "cvss_score": 7.5,
+            "severity": "HIGH",
+            "references": [...]
+          },
+          "summary": "Hypothesis H-0042 enriched with CVE-2021-41773"
+        }
+      </description>
+    </returns>
+    
+    <example>
+      <input>
+        hypothesis_id = "H-0042"
+        cve_id = "CVE-2021-41773"
+      </input>
+      <output>
+        {
+          "status": "success",
+          "hypothesis_id": "H-0042",
+          "cve_id": "CVE-2021-41773",
+          "summary": "Hypothesis H-0042 enriched with CVE-2021-41773"
+        }
+      </output>
+    </example>
+  </tool>
+
+=== parse_openapi_schema ===
+<tool name="parse_openapi_schema">
+<description>Parse OpenAPI/Swagger schema and extract API structure.
+
+Supports OpenAPI 2.0 (Swagger) and OpenAPI 3.x formats in JSON or YAML.
+Returns parsed schema with endpoints, parameters, and security requirements.
+
+P3.6: API Schema Validation - Automatically discover API endpoints and their security requirements from OpenAPI specifications.</description>
+<parameters>
+<parameter name="schema_url_or_data">
+<type>string</type>
+<required>true</required>
+<description>URL to schema file or direct schema content (JSON/YAML).</description>
+</parameter>
+</parameters>
+</tool>
+
+=== extract_api_endpoints ===
+<tool name="extract_api_endpoints">
+<description>Extract testable endpoints from OpenAPI/Swagger schema.
+
+Returns detailed endpoint information including paths, methods, parameters,
+and security requirements. Useful for automated API testing.
+
+P3.6: Enables systematic API testing by extracting all endpoints from schema.</description>
+<parameters>
+<parameter name="schema_url_or_data">
+<type>string</type>
+<required>true</required>
+<description>URL to schema or direct schema content (JSON/YAML)</description>
+</parameter>
+<parameter name="filter_by_tag">
+<type>string</type>
+<required>false</required>
+<description>Optional tag to filter endpoints (e.g., "admin", "public", "users")</description>
+</parameter>
+</parameters>
+</tool>
+
+=== analyze_security_requirements ===
+<tool name="analyze_security_requirements">
+<description>Analyze security/authentication requirements from OpenAPI schema.
+
+Identifies authentication schemes, authorization requirements, and
+security policies defined in the API schema. Helps identify insecure endpoints.
+
+P3.6: Security analysis - find endpoints without authentication, OAuth scopes, API key requirements.</description>
+<parameters>
+<parameter name="schema_url_or_data">
+<type>string</type>
+<required>true</required>
+<description>URL to schema or direct schema content</description>
+</parameter>
+</parameters>
+</tool>
+
+=== detect_pattern ===
+<tool name="detect_pattern">
+    <description>Detect vulnerability indicators with regex patterns.</description>
+    <parameters>
+      <parameter name="response_body" type="string" required="true" />
+      <parameter name="patterns" type="array" required="false" />
+      <parameter name="vuln_class" type="string" required="false" />
+      <parameter name="case_sensitive" type="boolean" required="false" />
+    </parameters>
+  </tool>
+
+=== detect_timing_based ===
+<tool name="detect_timing_based">
+    <description>Detect timing-based blind vulnerability signals.</description>
+    <parameters>
+      <parameter name="baseline_time" type="number" required="true" />
+      <parameter name="test_time" type="number" required="true" />
+      <parameter name="delay_expected" type="number" required="false" />
+      <parameter name="tolerance" type="number" required="false" />
+    </parameters>
+  </tool>
+
+=== detect_differential ===
+<tool name="detect_differential">
+    <description>Detect differential behavior between baseline/test responses.</description>
+    <parameters>
+      <parameter name="baseline_response" type="object" required="true" />
+      <parameter name="test_response" type="object" required="true" />
+      <parameter name="vuln_class" type="string" required="true" />
+    </parameters>
+  </tool>
+

@@ -1,0 +1,4 @@
+[
+  "test:xss:http://example.com",
+  "SimAgent:idor:http://testapp.local/api/users"
+]

@@ -1,0 +1,352 @@
+<tools>
+  <tool name="generate_smart_payloads">
+    <description>P6 ELITE: Generate intelligent context-aware payloads with learning.
+    
+    This is the most advanced payload generation function that:
+    - Learns from previous successful/failed payloads (hypothesis ledger)
+    - Adapts to target technology stack (framework, database, OS, WAF)
+    - Avoids blocked patterns and optimizes payload selection
+    - Generates framework-specific payload variations
+    - Creates WAF bypass mutations automatically
+    
+    USE THIS FIRST when you have target context information (framework, WAF, etc).
+    Falls back to standard generators if no context available.
+    
+    Integration with Hypothesis Ledger:
+    - Loads failed payloads to avoid similar ones
+    - Prioritizes payloads similar to successful ones
+    - Tracks blocked WAF patterns to evade them</description>
+    <parameters>
+      <parameter name="vuln_class" type="string" required="true">
+        <description>Vulnerability type: "xss", "sqli", "xxe", "ssti", "cmd_injection"</description>
+      </parameter>
+      <parameter name="url" type="string" required="false">
+        <description>Target URL for context (optional)</description>
+      </parameter>
+      <parameter name="parameter" type="string" required="false">
+        <description>Parameter name being tested (optional)</description>
+      </parameter>
+      <parameter name="framework" type="string" required="false">
+        <description>Detected framework: "django", "laravel", "spring", "flask", "rails", "express"
+        
+        Framework-specific optimizations:
+        - django/flask: Prioritizes Jinja2 template injection patterns
+        - laravel: Blade template patterns
+        - spring: Thymeleaf and Freemarker patterns
+        - express: EJS and Pug patterns</description>
+      </parameter>
+      <parameter name="database" type="string" required="false">
+        <description>Database type: "mysql", "postgresql", "mssql", "oracle"
+        
+        Optimizes SQLi payloads for database-specific syntax</description>
+      </parameter>
+      <parameter name="os" type="string" required="false">
+        <description>Operating system: "linux", "windows"
+        
+        Optimizes command injection for target OS</description>
+      </parameter>
+      <parameter name="waf_type" type="string" required="false">
+        <description>WAF detected: "cloudflare", "akamai", "modsecurity", "imperva", "f5"
+        
+        Automatically generates bypass variations for detected WAF</description>
+      </parameter>
+      <parameter name="injection_context" type="string" required="false">
+        <description>Injection context: "html", "attribute", "javascript", "sql", "template", "shell"
+        
+        Default: "html"</description>
+      </parameter>
+      <parameter name="hypothesis_id" type="string" required="false">
+        <description>Hypothesis ID from ledger to learn from previous attempts
+        
+        When provided, loads:
+        - Previously tested payloads (to avoid redundancy)
+        - Successful payloads (to generate similar variants)
+        - Blocked patterns (to evade WAF signatures)</description>
+      </parameter>
+      <parameter name="max_payloads" type="integer" required="false">
+        <description>Maximum payloads to return (default: 15)</description>
+      </parameter>
+    </parameters>
+    <returns type="Dict[str, Any]">
+      <description>Response containing:
+        - 'payloads': Intelligently selected payloads with priority scoring
+        - 'total_count': Number of payloads returned
+        - 'context': Full PayloadContext object with detection info
+        - 'intelligence': Metadata about optimizations applied:
+          - framework_optimized: Whether framework-specific payloads prioritized
+          - waf_aware: Whether WAF bypass variations included
+          - learning_enabled: Whether hypothesis ledger integration active
+          - tech_stack: Summary of detected technologies
+        - 'usage': Instructions for testing</description>
+    </returns>
+    <example>
+      <!-- Basic usage with framework detection -->
+      generate_smart_payloads(vuln_class="xss", framework="django", waf_type="cloudflare")
+
+      <!-- SQLi with full context -->
+      generate_smart_payloads(
+        vuln_class="sqli",
+        url="https://target.com/api/users", 
+        parameter="id",
+        database="mysql",
+        waf_type="akamai",
+        hypothesis_id="H-0042"
+      )
+
+      <!-- SSTI with learning -->
+      generate_smart_payloads(
+        vuln_class="ssti",
+        framework="flask", 
+        injection_context="template",
+        hypothesis_id="H-0123"
+      )
+
+      <!-- Command injection for Windows -->
+      generate_smart_payloads(vuln_class="cmd_injection", os="windows", waf_type="modsecurity")
+    </example>
+    <workflow>
+  1. Detect target technology stack (framework, database, OS, WAF)
+  2. Call generate_smart_payloads() with detected context
+  3. If testing an existing hypothesis, include hypothesis_id
+  4. Tool builds PayloadContext and applies intelligent filtering:
+     - Excludes payloads similar to failed attempts
+     - Prioritizes payloads similar to successful ones
+     - Optimizes for detected framework/database
+     - Generates WAF bypass variations
+  5. Test returned payloads sequentially
+  6. Record results in hypothesis ledger
+  7. On subsequent iterations, payloads adapt based on learning
+    </workflow>
+  </tool>
+
+  <tool name="generate_xss_payloads">
+    <description>Generate context-aware XSS (Cross-Site Scripting) payloads.
+    
+    Creates payloads optimized for specific injection contexts with
+    optional WAF bypass techniques and encoding options.
+    
+    Use this when you've identified a potential XSS injection point.</description>
+    <parameters>
+      <parameter name="context" type="string" required="false">
+        <description>Injection context:
+        - "html" (default) - Standard HTML body injection
+        - "attribute" - Inside HTML attribute values
+        - "javascript" - Inside JavaScript code
+        - "href" - Inside href/src attributes
+        - "template" - Inside template expressions
+        - "multi" - All contexts</description>
+      </parameter>
+      <parameter name="waf_type" type="string" required="false">
+        <description>WAF to bypass: "cloudflare", "akamai", "modsecurity", "imperva", "f5"</description>
+      </parameter>
+      <parameter name="encoding" type="string" required="false">
+        <description>Output encoding: "url", "html", "base64", "unicode"</description>
+      </parameter>
+      <parameter name="max_payloads" type="integer" required="false">
+        <description>Maximum payloads to return (default: 20)</description>
+      </parameter>
+    </parameters>
+    <returns type="Dict[str, Any]">
+      <description>Response containing:
+        - 'payloads': List of XSS payloads with metadata
+        - 'total_count': Number of payloads returned
+        - 'context': Injection context
+        - 'usage': Instructions for testing</description>
+    </returns>
+    <example>
+  # Generate payloads for attribute injection
+  <!-- generate_xss_payloads>
+    context>attribute</parameter>
+  -->
+
+  # Generate WAF bypass payloads
+  <!-- generate_xss_payloads>
+    waf_type>cloudflare</parameter>
+    encoding>unicode</parameter>
+  -->
+    </example>
+  </tool>
+
+  <tool name="generate_sqli_payloads">
+    <description>Generate context-aware SQL injection payloads.
+    
+    Creates payloads for different database backends and injection types
+    including UNION, time-based blind, error-based, and stacked queries.
+    
+    Use after detecting potential SQLi injection points.</description>
+    <parameters>
+      <parameter name="db_type" type="string" required="false">
+        <description>Target database: "mysql", "postgresql", "mssql", "oracle", "all" (default)</description>
+      </parameter>
+      <parameter name="injection_type" type="string" required="false">
+        <description>Injection type: "detection", "union", "time_blind", "error_based", "stacked", "all"</description>
+      </parameter>
+      <parameter name="waf_type" type="string" required="false">
+        <description>WAF to bypass: "cloudflare", "akamai", "modsecurity"</description>
+      </parameter>
+      <parameter name="column_count" type="integer" required="false">
+        <description>Number of columns for UNION payloads (if known)</description>
+      </parameter>
+      <parameter name="max_payloads" type="integer" required="false">
+        <description>Maximum payloads to return (default: 25)</description>
+      </parameter>
+    </parameters>
+    <returns type="Dict[str, Any]">
+      <description>Response containing:
+        - 'payloads': List of SQLi payloads with metadata
+        - 'total_count': Number of payloads
+        - 'db_type': Target database
+        - 'usage': Testing instructions</description>
+    </returns>
+    <example>
+  # Generate MySQL-specific payloads
+  <!-- generate_sqli_payloads>
+    db_type>mysql</parameter>
+    injection_type>union</parameter>
+  -->
+
+  # Generate time-based blind payloads
+  <!-- generate_sqli_payloads>
+    injection_type>time_blind</parameter>
+  -->
+
+  # Generate UNION payloads for 5 columns
+  <!-- generate_sqli_payloads>
+    injection_type>union</parameter>
+    column_count>5</parameter>
+  -->
+    </example>
+  </tool>
+
+  <tool name="generate_xxe_payloads">
+    <description>Generate XXE (XML External Entity) injection payloads.
+    
+    Creates payloads for file disclosure, SSRF via XXE, and blind XXE
+    data exfiltration attacks.
+    
+    Use when XML processing is detected (SOAP, XML APIs, file uploads).</description>
+    <parameters>
+      <parameter name="target_os" type="string" required="false">
+        <description>Target OS: "linux" (default), "windows", "all"</description>
+      </parameter>
+      <parameter name="xxe_type" type="string" required="false">
+        <description>XXE type: "file_disclosure", "ssrf", "blind_exfil", "parameter_entity", "xinclude", "all"</description>
+      </parameter>
+      <parameter name="target_file" type="string" required="false">
+        <description>Specific file to read (e.g., "/etc/passwd", "/app/config.php")</description>
+      </parameter>
+      <parameter name="callback_url" type="string" required="false">
+        <description>Attacker callback URL for blind XXE (e.g., "http://attacker.com")</description>
+      </parameter>
+      <parameter name="max_payloads" type="integer" required="false">
+        <description>Maximum payloads to return (default: 15)</description>
+      </parameter>
+    </parameters>
+    <returns type="Dict[str, Any]">
+      <description>Response containing:
+        - 'payloads': List of XXE payloads with metadata
+        - 'total_count': Number of payloads
+        - 'usage': Testing instructions</description>
+    </returns>
+    <example>
+  # Generate Linux file reading payloads
+  <!-- generate_xxe_payloads>
+    target_os>linux</parameter>
+    xxe_type>file_disclosure</parameter>
+  -->
+
+  # Generate payload for specific file
+  <!-- generate_xxe_payloads>
+    target_file>/app/config.php</parameter>
+  -->
+
+  # Generate blind XXE with callback
+  <!-- generate_xxe_payloads>
+    xxe_type>blind_exfil</parameter>
+    callback_url>http://attacker.com</parameter>
+  -->
+    </example>
+  </tool>
+
+  <tool name="generate_ssti_payloads">
+    <description>Generate SSTI (Server-Side Template Injection) payloads.
+    
+    Creates payloads for various template engines: Jinja2, Twig,
+    Freemarker, Velocity, ERB, Smarty, Thymeleaf.
+    
+    Use when template engine rendering is detected.</description>
+    <parameters>
+      <parameter name="template_engine" type="string" required="false">
+        <description>Template engine: "jinja2", "twig", "freemarker", "velocity", "erb", "smarty", "all"</description>
+      </parameter>
+      <parameter name="payload_type" type="string" required="false">
+        <description>Payload type: "detection", "rce", "class_enum", "all"</description>
+      </parameter>
+      <parameter name="command" type="string" required="false">
+        <description>Custom command to execute (default: "id")</description>
+      </parameter>
+      <parameter name="max_payloads" type="integer" required="false">
+        <description>Maximum payloads to return (default: 20)</description>
+      </parameter>
+    </parameters>
+    <returns type="Dict[str, Any]">
+      <description>Response containing:
+        - 'payloads': List of SSTI payloads with metadata
+        - 'detection_tips': Tips for identifying SSTI</description>
+    </returns>
+    <example>
+  # Generate detection payloads for all engines
+  <!-- generate_ssti_payloads>
+    payload_type>detection</parameter>
+  -->
+
+  # Generate Jinja2 RCE payloads
+  <!-- generate_ssti_payloads>
+    template_engine>jinja2</parameter>
+    payload_type>rce</parameter>
+  -->
+    </example>
+  </tool>
+
+  <tool name="generate_cmd_injection_payloads">
+    <description>Generate OS command injection payloads.
+    
+    Creates payloads for command chaining, time-based blind detection,
+    and out-of-band exfiltration.
+    
+    Use when application executes system commands with user input.</description>
+    <parameters>
+      <parameter name="target_os" type="string" required="false">
+        <description>Target OS: "linux" (default), "windows", "all"</description>
+      </parameter>
+      <parameter name="injection_type" type="string" required="false">
+        <description>Type: "chaining", "time_based", "oob", "bypass", "all"</description>
+      </parameter>
+      <parameter name="command" type="string" required="false">
+        <description>Custom command to execute</description>
+      </parameter>
+      <parameter name="callback_url" type="string" required="false">
+        <description>Attacker callback URL for OOB</description>
+      </parameter>
+      <parameter name="max_payloads" type="integer" required="false">
+        <description>Maximum payloads to return (default: 25)</description>
+      </parameter>
+    </parameters>
+    <returns type="Dict[str, Any]">
+      <description>Response containing:
+        - 'payloads': List of command injection payloads
+        - 'tips': Testing tips</description>
+    </returns>
+    <example>
+  # Generate Linux command injection payloads
+  <!-- generate_cmd_injection_payloads>
+    target_os>linux</parameter>
+  -->
+
+  # Generate time-based blind payloads
+  <!-- generate_cmd_injection_payloads>
+    injection_type>time_based</parameter>
+  -->
+    </example>
+  </tool>
+</tools>

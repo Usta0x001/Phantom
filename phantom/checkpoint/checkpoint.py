@@ -356,7 +356,6 @@ class CheckpointManager:
         interruption_reason: str | None = None,
         hypothesis_ledger: Any = None,  # P4: Add hypothesis ledger parameter
         coverage_tracker: Any = None,   # P4: Add coverage tracker parameter
-        attack_graph: Any = None,  # FIX 5: Add attack graph parameter
         active_sub_agents: dict[str, Any] | None = None,  # FIX ISSUE#6: Sub-agent states
     ) -> CheckpointData:
         vulns: list[dict[str, Any]] = []
@@ -422,15 +421,6 @@ class CheckpointManager:
             except Exception:
                 logger.debug("Failed to serialize coverage tracker state", exc_info=True)
 
-        # FIX 5: Serialize attack graph state for vulnerability chain visualization
-        attack_graph_state: dict[str, Any] = {}
-        if attack_graph:
-            try:
-                attack_graph_state = attack_graph.to_dict()
-                logger.debug("Serialized attack graph with %d nodes", len(attack_graph_state.get("nodes", [])))
-            except Exception:
-                logger.debug("Failed to serialize attack graph state", exc_info=True)
-
         # FIX ISSUE#6: Capture active sub-agent states
         # This allows resuming scans without losing sub-agent work
         sub_agent_states_dict: dict[str, dict[str, Any]] = {}
@@ -475,8 +465,4 @@ class CheckpointManager:
             # P4: Include hypothesis ledger and coverage tracker state
             hypothesis_ledger_state=hypothesis_ledger_state,
             coverage_tracker_state=coverage_tracker_state,
-            # FIX 5: Include attack graph state for vulnerability chain analysis
-            attack_graph_state=attack_graph_state,
-            # FIX ISSUE#6: Include sub-agent states to avoid losing work on resume
-            sub_agent_states=sub_agent_states_dict,
         )

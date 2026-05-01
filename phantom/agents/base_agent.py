@@ -130,7 +130,6 @@ class BaseAgent(metaclass=AgentMeta):
             )
         self._current_task: asyncio.Task[Any] | None = None
         self._force_stop = False
-        self._recent_action_batches: list[str] = []
         self._last_iteration_action_count: int = 0
 
         # Rec 6 (SF-005): Hypothesis Ledger — structured external memory that
@@ -145,17 +144,6 @@ class BaseAgent(metaclass=AgentMeta):
         # tested for which vulnerability classes. Returns FACTS not commands.
         # Root agents get a fresh tracker; sub-agents share if passed via config.
         self.coverage_tracker: CoverageTracker = config.get("coverage_tracker") or CoverageTracker()
-
-        # FIX 5: Attack Graph - visualizes vulnerability relationships and attack paths.
-        # Enables critical node identification and multi-step attack chain analysis.
-        # Root agents get a fresh graph; sub-agents share if passed via config.
-        try:
-            from phantom.core.attack_graph import AttackGraph
-
-            self.attack_graph: AttackGraph | None = config.get("attack_graph") or AttackGraph()
-        except ImportError:
-            # NetworkX not installed - attack graph unavailable
-            self.attack_graph = None
 
         # AUDIT-FIX-10: Track (signature, success) for dedup checking
         self._recent_action_results: list[tuple[str, bool]] = []
@@ -198,7 +186,6 @@ class BaseAgent(metaclass=AgentMeta):
             set_scan_status_context(
                 hypothesis_ledger=self.hypothesis_ledger,
                 coverage_tracker=self.coverage_tracker,
-                attack_graph=self.attack_graph if hasattr(self, "attack_graph") else None,  # FIX 5
                 agent_state=self.state,
             )
         except ImportError as e:
@@ -347,7 +334,6 @@ class BaseAgent(metaclass=AgentMeta):
                 "local_sources": self.local_sources,
                 "hypothesis_ledger": self.hypothesis_ledger,
                 "coverage_tracker": self.coverage_tracker,
-                "attack_graph": self.attack_graph,
             }
 
             sub_agent = PhantomAgent(sub_config)
@@ -395,8 +381,6 @@ class BaseAgent(metaclass=AgentMeta):
         import time as _time_mod
         from phantom.telemetry.tracer import get_global_tracer
 
-        if not hasattr(self, "_recent_action_batches"):
-            self._recent_action_batches = []
         if not hasattr(self, "_last_iteration_action_count"):
             self._last_iteration_action_count = 0
 
@@ -509,7 +493,7 @@ class BaseAgent(metaclass=AgentMeta):
                         "user",
                         "No actionable progress detected for multiple iterations. "
                         "If the scan is complete, call finish_scan to end. "
-                        "Otherwise, pivot to a new exploit path or continue reconnaissance. "
+                        "Otherwise, pivot to a new verification path or continue reconnaissance. "
                         "Do NOT output natural language without a tool call.",
                     )
                 if _no_action_streak >= 8 and self.non_interactive:
@@ -884,7 +868,7 @@ class BaseAgent(metaclass=AgentMeta):
             corrective_message = (
                 "Empty response. You MUST call a tool. "
                 "If the scan is complete, call finish_scan to end. "
-                "Otherwise, continue with the next recon or exploitation step. "
+                "Otherwise, continue with the next recon or verification step. "
                 "NEVER output natural language without a tool call."
             )
             self.state.add_message("user", corrective_message)
@@ -932,6 +916,27 @@ class BaseAgent(metaclass=AgentMeta):
     async def _execute_actions(self, actions: list[Any], tracer: Optional["Tracer"]) -> bool:
         """Execute actions and return True if agent should finish."""
 
+        # ENFORCE: exactly ONE tool call per response. The parser extracts ALL
+        # <function> blocks from the LLM output, but the system prompt mandates
+        # one call per turn. DeepSeek reasoning models embed example/monologue
+        # tool calls that get parsed as real — executing them all causes loops.
+        # Keep only the LAST call, which is the actual intended action.
+        if len(actions) > 1:
+            skipped = [a.get("toolName", "?") for a in actions[:-1]]
+            logger.warning(
+                "Agent emitted %d tool calls (mandated: 1). Executing only the last. "
+                "Skipped: %s",
+                len(actions),
+                skipped,
+            )
+            self.state.add_message(
+                "user",
+                f"[SYSTEM: You output {len(actions)} tool calls but only ONE is allowed. "
+                f"Executing only your last call: {actions[-1].get('toolName', '?')}. "
+                f"Output exactly ONE tool call per response.]",
+            )
+            actions = [actions[-1]]
+
         # Avoid blind repetition of identical action batches across consecutive iterations.
         # This reduces dead-end payload retries without changing tool semantics.
         def _strip(v):
@@ -970,10 +975,6 @@ class BaseAgent(metaclass=AgentMeta):
                         "Do NOT repeat it. Move to the next target, payload, or vector.",
                     )
                     return False
-            # NOTE: _recent_action_results is appended AFTER execution below
-            if len(self._recent_action_batches) > 8:
-                self._recent_action_batches = self._recent_action_batches[-8:]
-
         for action in actions:
             self.state.add_action(action)
 
@@ -1002,6 +1003,16 @@ class BaseAgent(metaclass=AgentMeta):
                 batch_succeeded = not bool(
                     self.state.context.get("last_tool_batch_had_error", False)
                 )
+
+            if not batch_succeeded:
+                last_warn = getattr(self, "_last_tool_error_warning_iter", None)
+                if last_warn != self.state.iteration:
+                    self.state.add_message(
+                        "system",
+                        "[SYSTEM: The last tool call FAILED. Do NOT assume it succeeded. "
+                        "Fix the arguments or choose a different tool, then retry.]",
+                    )
+                    self._last_tool_error_warning_iter = self.state.iteration
 
             # AUDIT-FIX-10: Record signature outcome for dedup tracking
             if batch_signature:
@@ -1136,8 +1147,6 @@ class BaseAgent(metaclass=AgentMeta):
                 # P4: Include hypothesis ledger, coverage tracker
                 hypothesis_ledger=self.hypothesis_ledger,
                 coverage_tracker=self.coverage_tracker,
-                # FIX 5: Include attack graph for vulnerability chain analysis
-                attack_graph=self.attack_graph if hasattr(self, "attack_graph") else None,
                 # Wave D: Persist active sub-agent states for resume continuity
                 active_sub_agents=self._collect_active_sub_agent_states(),
             )
@@ -1229,139 +1238,180 @@ class BaseAgent(metaclass=AgentMeta):
             )
 
     def _build_hypothesis_context(self) -> list[dict[str, Any]]:
+        """Return conversation history with hypothesis + coverage metadata prepended.
+
+        Proactively injects structured external memory every turn so the LLM
+        knows what has been tested, what is blocked, and what remains untested
+        — without requiring the LLM to call a status tool.
+
+        Context blocks use "system" role so the compressor preserves them
+        intact (system messages are never summarized) and they appear at the
+        top of the conversation where the LLM sees them first.
+        """
         history = list(self.state.get_conversation_history())
         if not history:
             return history
 
-        active_surface = ""
-        active_vclass = ""
-        active_hypothesis_id = ""
-        hypothesis_ids: set[str] = set()
+        prefix_blocks: list[dict[str, Any]] = []
+
+        # ── Coverage context ──
         try:
-            scored = self.hypothesis_ledger.get_scored_hypotheses()
-            if scored:
-                top = scored[0]
-                active_surface = str(top.get("surface") or "")
-                active_vclass = str(top.get("vuln_class") or "")
-                active_hypothesis_id = str(top.get("hypothesis_id") or "")
-                all_hyps = self.hypothesis_ledger.get_all()
-                for h in all_hyps.values():
-                    hid = str(getattr(h, "id", "") or "")
-                    if hid:
-                        hypothesis_ids.add(hid)
+            coverage_summary = self.coverage_tracker.to_prompt_summary(max_items=12)
+            if coverage_summary:
+                prefix_blocks.append({"role": "system", "content": coverage_summary})
         except Exception:
-            logger.warning(
-                "Failed to access hypothesis ledger (agent=%s iter=%d)",
-                self.state.agent_name,
-                self.state.iteration,
+            logger.debug(
+                "Failed to build coverage summary (agent=%s)", self.state.agent_name
             )
 
-        if not active_surface and not active_vclass:
-            return history
-
-        hypothesis_block = {
-            "role": "user",
-            "content": (
-                "<current_hypothesis>\n"
-                f"id={active_hypothesis_id}\n"
-                f"class={active_vclass}\n"
-                f"surface={active_surface}\n"
-                "</current_hypothesis>"
-            ),
-        }
-
-        supporting: list[dict[str, Any]] = []
+        # ── Active hypotheses + cross-surface payload hints ──
         try:
-            all_hyps = self.hypothesis_ledger.get_all()
-            if active_hypothesis_id and active_hypothesis_id in all_hyps:
-                hyp = all_hyps[active_hypothesis_id]
-                evidence_lines = []
-                for item in list(getattr(hyp, "evidence_for", []) or [])[:5]:
-                    text = str(item).strip()
-                    if text:
-                        evidence_lines.append(f"- {text[:300]}")
-                if evidence_lines:
-                    supporting.append(
-                        {
-                            "role": "user",
+            scored = self.hypothesis_ledger.get_scored_hypotheses()
+            top_hyps = scored[:5]  # top 5 so agent sees alternatives
+        except Exception:
+            top_hyps = []
+
+        if top_hyps:
+            lines = ["<active_hypotheses>"]
+            for h in top_hyps:
+                lines.append(
+                    f"  {h['hypothesis_id']}: {h['vuln_class']} on {h['surface']} "
+                    f"(conf={h['confidence']}, evidence={h['evidence_count']})"
+                )
+            lines.append("</active_hypotheses>")
+            prefix_blocks.append({"role": "system", "content": "\n".join(lines)})
+
+            # Evidence for top hypothesis
+            try:
+                top_hyp = self.hypothesis_ledger.get(top_hyps[0]["hypothesis_id"])
+                if top_hyp is not None:
+                    evidence_lines = []
+                    for item in list(getattr(top_hyp, "evidence_for", []) or [])[:3]:
+                        text = str(item).strip()
+                        if text:
+                            evidence_lines.append(f"- {text[:250]}")
+                    if evidence_lines:
+                        prefix_blocks.append({
+                            "role": "system",
                             "content": "<supporting_evidence>\n"
                             + "\n".join(evidence_lines)
                             + "\n</supporting_evidence>",
-                        }
-                    )
+                        })
+            except Exception:
+                pass
+
+        # ── Cross-surface payload hints: what worked elsewhere ──
+        try:
+            confirmed_payloads = self._get_confirmed_payloads()
+            if confirmed_payloads:
+                payload_hint = (
+                    "<payload_hints>\n"
+                    "Successful payloads from other surfaces — try these on active hypotheses:\n"
+                    + "\n".join(f"  {p}" for p in confirmed_payloads)
+                    + "\n</payload_hints>"
+                )
+                prefix_blocks.append({"role": "system", "content": payload_hint})
         except Exception:
-            logger.warning(
-                "Failed to extract supporting evidence (agent=%s)",
-                self.state.agent_name,
-            )
-            supporting = []
+            pass
 
-        scoped: list[dict[str, Any]] = []
-        from phantom.llm.memory_compressor import _ANCHOR_KEYWORDS
+        # ── WAF / rate-limit handling hints when blocked surfaces exist ──
+        try:
+            bypass_hint = self._get_bypass_hints()
+            if bypass_hint:
+                prefix_blocks.append({"role": "system", "content": bypass_hint})
+        except Exception:
+            pass
 
-        for msg in history:
-            content = msg.get("content", "")
-            text = content if isinstance(content, str) else str(content)
-            lowered = text.lower()
-            keep = False
-            mentions_other_hypothesis = False
-            for hid in hypothesis_ids:
-                if hid and hid != active_hypothesis_id and hid.lower() in lowered:
-                    mentions_other_hypothesis = True
-                    break
+        # ── Session / auth context ──
+        session_block = self._build_session_context()
+        if session_block:
+            prefix_blocks.append({"role": "system", "content": session_block})
 
-            # FIX: Check for anchors BEFORE skipping other-hypothesis messages.
-            # Confirmed findings for other hypotheses must survive context filtering
-            # so the agent can chain multi-step exploits (e.g. IDOR → admin panel).
-            has_anchor = any(k in lowered for k in _ANCHOR_KEYWORDS)
-            if has_anchor:
-                keep = True
+        # Prepend prefix blocks at the FRONT so the LLM sees guidance first.
+        # Using "system" role ensures the compressor preserves them intact
+        # (system messages are never summarized) regardless of position.
+        return [*prefix_blocks, *history]
 
-            # Only skip non-anchor messages about other hypotheses.
-            if mentions_other_hypothesis and not has_anchor:
-                continue
+    def _get_confirmed_payloads(self) -> list[str]:
+        """Return payloads from confirmed hypotheses for cross-surface reuse."""
+        payloads: list[str] = []
+        try:
+            all_hyps = self.hypothesis_ledger.get_all()
+            for h in all_hyps.values():
+                if h.status == "confirmed" and h.successful_payloads:
+                    payloads.extend(h.successful_payloads[:3])
+        except Exception:
+            pass
+        return payloads[:5]  # cap at 5 to keep context compact
 
-            if active_surface and active_surface.lower() in lowered:
-                keep = True
-            if active_vclass and active_vclass.lower() in lowered:
-                keep = True
-            if active_hypothesis_id and active_hypothesis_id.lower() in lowered:
-                keep = True
-            if "<current_hypothesis>" in lowered or "<supporting_evidence>" in lowered:
-                keep = True
-            if "[auto-status" in lowered or "chain opportunities" in lowered:
-                keep = False
+    def _get_bypass_hints(self) -> str | None:
+        """Return WAF handling hints if blocked surfaces exist."""
+        try:
+            blocked = self.coverage_tracker.get_blocked_surfaces()
+            if not blocked:
+                return None
+            waf_hints = []
+            rate_hints = []
+            for b in blocked:
+                reasons_str = " ".join(b.get("failure_reasons", []))
+                if any(x in reasons_str for x in ("WAF", "BLOCKED", "403")):
+                    waf_hints.append(b["surface"])
+                elif any(x in reasons_str for x in ("RATE", "429")):
+                    rate_hints.append(b["surface"])
 
-            # FIX A1 (cont): Override exclusion if it's a finding anchor
-            if has_anchor:
-                keep = True
+                lines = ["<blocked_surfaces_guidance>"]
+                if waf_hints:
+                    lines.append(
+                        f"WAF blocking {len(waf_hints)} surface(s). Try: safe encoding variations, "
+                        "case changes, HTTP method swaps (POST->GET), header adjustments, "
+                        "or lower request rates to reduce false positives."
+                    )
+            if rate_hints:
+                lines.append(
+                    f"Rate-limited on {len(rate_hints)} surface(s). Slow down, increase "
+                    "delays between requests, or rotate source IPs."
+                )
+            lines.append("</blocked_surfaces_guidance>")
+            return "\n".join(lines) if len(lines) > 2 else None
+        except Exception:
+            return None
 
-            if "<finding_anchors>" in lowered or "<pinned_facts>" in lowered:
-                keep = True
-            if msg.get("role") == "system":
-                keep = True
-            if keep:
-                scoped.append(msg)
+    def _build_session_context(self) -> str | None:
+        """Return session state so the LLM knows its current auth context.
+        Includes re-auth hints when blockers indicate session expiry."""
+        parts = []
+        if self.state.target_base_url:
+            parts.append(f"target={self.state.target_base_url}")
+        if self.state.session_cookies:
+            parts.append(f"cookies={len(self.state.session_cookies)} set")
+        if self.state.session_tokens:
+            parts.append(f"tokens={len(self.state.session_tokens)} discovered")
+        if self.state.current_auth_level != "unauthenticated":
+            parts.append(f"auth_level={self.state.current_auth_level}")
 
-        # FIX: Always retain the last 15 messages as a "broad context" buffer
-        # so the LLM can pivot between hypotheses and see recent tool results.
-        broad_buffer = history[-15:] if len(history) > 15 else list(history)
-        broad_ids = {id(m) for m in broad_buffer}
-        for msg in scoped:
-            if id(msg) not in broad_ids:
-                broad_buffer.append(msg)
+        # Detect potential auth expiry from blocked surfaces
+        try:
+            blocked = self.coverage_tracker.get_blocked_surfaces()
+            auth_errors = sum(1 for b in blocked
+                if any(x in str(b.get("failure_reasons", "")) for x in ("401", "403")))
+            if auth_errors > 0 and self.state.session_cookies:
+                parts.append(
+                    f"WARNING: {auth_errors} surface(s) blocked with 401/403 while "
+                    "you have session cookies — credentials may have expired. "
+                    "Use automate_login or refresh_jwt_token to re-authenticate."
+                )
+        except Exception:
+            pass
 
-        if not broad_buffer:
-            return [hypothesis_block, *supporting, *history[-20:]]
-
-        return [hypothesis_block, *supporting, *broad_buffer[-55:]]
+        if parts:
+            return "<session_context> " + ", ".join(parts) + " </session_context>"
+        return None
 
     def _format_scan_status(self, status: dict[str, Any]) -> str:
         """Format scan status into a compact message for LLM injection."""
         progress = status.get("scan_progress", {})
         findings = status.get("findings", {})
         coverage = status.get("coverage", {})
-        attack_graph = status.get("attack_graph") or {}
         archived_messages = status.get("archived_messages", {})
         blocked_surfaces = status.get("blocked_surfaces", [])
         top_hypotheses = status.get("top_hypotheses", [])
@@ -1401,43 +1451,6 @@ class BaseAgent(metaclass=AgentMeta):
                 for hyp in top_hypotheses[:2]:
                     lines.append(
                         f"  - {hyp.get('vuln_class')} @ {str(hyp.get('surface', ''))[:35]}"
-                    )
-
-        if attack_graph:
-            lines.append(
-                "Attack graph: "
-                f"{attack_graph.get('total_nodes')} nodes, "
-                f"{attack_graph.get('total_vulnerabilities')} vulns, "
-                f"{attack_graph.get('total_edges')} edges, "
-                f"density={attack_graph.get('density')}"
-            )
-            critical_vulns = attack_graph.get("critical_vulns", [])
-            if critical_vulns:
-                critical_bits = []
-                for vuln in critical_vulns[:2]:
-                    if isinstance(vuln, dict):
-                        critical_bits.append(f"{vuln.get('id')}:{vuln.get('centrality')}")
-                if critical_bits:
-                    lines.append(f"  Critical: {', '.join(critical_bits)}")
-
-            top_attack_plans = attack_graph.get("top_attack_plans", [])
-            if top_attack_plans:
-                lines.append(f"  Top Plans: {len(top_attack_plans)}")
-                for plan in top_attack_plans[:2]:
-                    if not isinstance(plan, dict):
-                        continue
-                    path = plan.get("path") or []
-                    if not isinstance(path, list) or not path:
-                        continue
-                    path_preview = " -> ".join(str(p) for p in path[:4])
-                    if len(path) > 4:
-                        path_preview = f"{path_preview} -> ..."
-                    lines.append(
-                        "  - "
-                        f"p={plan.get('probability')} "
-                        f"cost={plan.get('cost')} "
-                        f"score={plan.get('score')} "
-                        f"path={path_preview}"
                     )
 
         if archived_messages:

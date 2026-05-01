@@ -1,0 +1,132 @@
+<tools>
+  <tool name="analyze_response">
+    <description>Comprehensive HTTP response analysis for vulnerability detection.
+    
+    Analyzes response body and headers for errors, secrets, information
+    disclosure, technology stack, and vulnerability indicators.
+    
+    Use this after receiving ANY HTTP response to identify security issues.</description>
+    <parameters>
+      <parameter name="response_body" type="string" required="true">
+        <description>HTTP response body content to analyze</description>
+      </parameter>
+      <parameter name="response_headers" type="object" required="false">
+        <description>Response headers as key-value dict</description>
+      </parameter>
+      <parameter name="status_code" type="integer" required="false">
+        <description>HTTP status code (default: 200)</description>
+      </parameter>
+      <parameter name="request_payload" type="string" required="false">
+        <description>Original request payload to check for reflection</description>
+      </parameter>
+    </parameters>
+    <returns type="Dict[str, Any]">
+      <description>Response containing:
+        - 'findings': List of detected issues with severity
+        - 'tech_stack': Identified technologies
+        - 'risk_level': Overall risk assessment
+        - 'recommendations': Remediation suggestions</description>
+    </returns>
+    <examples>
+  # Analyze response body and headers
+  <function=analyze_response>
+  <parameter=response_body>Error: SQL syntax error near...</parameter>
+  <parameter=status_code>500</parameter>
+  </function>
+
+  # Check for input reflection (XSS)
+  <function=analyze_response>
+  <parameter=response_body>Welcome &lt;script&gt;alert(1)&lt;/script&gt;</parameter>
+  <parameter=request_payload>&lt;script&gt;alert(1)&lt;/script&gt;</parameter>
+  </function>
+    </examples>
+  </tool>
+
+  <tool name="detect_errors">
+    <description>Detect error messages and stack traces in response content.
+    
+    Identifies SQL errors (with database type), path disclosure,
+    stack traces, debug info, and version disclosure.
+    
+    Use this to find information leakage in error pages.</description>
+    <parameters>
+      <parameter name="content" type="string" required="true">
+        <description>Response content to analyze for errors</description>
+      </parameter>
+      <parameter name="error_types" type="list" required="false">
+        <description>Specific error types: "sql_error", "path_disclosure", 
+                     "stack_trace", "debug_info", "version_disclosure"</description>
+      </parameter>
+    </parameters>
+    <returns type="Dict[str, Any]">
+      <description>Response containing:
+        - 'errors': List of detected errors with severity
+        - 'has_sql_errors': Boolean if SQL errors found
+        - 'has_stack_traces': Boolean if stack traces found</description>
+    </returns>
+    <examples>
+  # Analyze error page
+  <function=detect_errors>
+  <parameter=content>Warning: mysql_query(): You have an error...</parameter>
+  </function>
+    </examples>
+  </tool>
+
+  <tool name="extract_secrets">
+    <description>Extract potential secrets, API keys, and credentials.
+    
+    Detects AWS keys, API tokens, database connection strings,
+    private keys, JWTs, and other sensitive data.
+    
+    CRITICAL: Secrets are redacted in output for safety.</description>
+    <parameters>
+      <parameter name="content" type="string" required="true">
+        <description>Content to search for secrets</description>
+      </parameter>
+      <parameter name="secret_types" type="list" required="false">
+        <description>Specific secret types to check (optional)</description>
+      </parameter>
+    </parameters>
+    <returns type="Dict[str, Any]">
+      <description>Response containing:
+        - 'secrets': List of detected secrets (redacted)
+        - 'critical_secrets': Count of critical severity secrets</description>
+    </returns>
+    <examples>
+  # Search for exposed secrets
+  <function=extract_secrets>
+  <parameter=content>config = { "api_key": "AIzaSyA..." }</parameter>
+  </function>
+    </examples>
+  </tool>
+
+  <tool name="identify_tech_stack">
+    <description>Identify technology stack from response content and headers.
+    
+    Detects web servers, programming languages, frameworks,
+    CDN/WAF providers, and analyzes security headers.
+    
+    Use this to map target technology for CVE correlation.</description>
+    <parameters>
+      <parameter name="content" type="string" required="true">
+        <description>Response body content</description>
+      </parameter>
+      <parameter name="headers" type="object" required="false">
+        <description>Response headers as key-value dict</description>
+      </parameter>
+    </parameters>
+    <returns type="Dict[str, Any]">
+      <description>Response containing:
+        - 'technologies': Dict of detected technologies by category
+        - 'missing_security_headers': List of absent security headers
+        - 'security_score': Security header score (0-100)</description>
+    </returns>
+    <examples>
+  # Identify tech stack from response
+  <function=identify_tech_stack>
+  <parameter=content>&lt;html&gt;...wp-content...&lt;/html&gt;</parameter>
+  <parameter=headers>{"Server": "nginx/1.19.0", "X-Powered-By": "PHP/7.4.3"}</parameter>
+  </function>
+    </examples>
+  </tool>
+</tools>

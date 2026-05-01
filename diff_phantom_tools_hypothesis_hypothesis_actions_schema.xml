@@ -1,0 +1,183 @@
+diff --git a/phantom/tools/hypothesis/hypothesis_actions_schema.xml b/phantom/tools/hypothesis/hypothesis_actions_schema.xml
+index 53d343f..8203453 100644
+--- a/phantom/tools/hypothesis/hypothesis_actions_schema.xml
++++ b/phantom/tools/hypothesis/hypothesis_actions_schema.xml
+@@ -1,64 +1,154 @@
+ <tools>
+   <tool name="add_hypothesis">
+-    <description>Add a new vulnerability hypothesis for an attack surface.</description>
++    <description>Add vulnerability hypothesis.</description>
+     <parameters>
+       <parameter name="surface" type="string" required="true">
+-        <description>Surface identifier, usually "endpoint::parameter".</description>
++        <description>endpoint::parameter.</description>
+       </parameter>
+       <parameter name="vuln_class" type="string" required="true">
+-        <description>Vulnerability class such as sqli, xss, ssrf, idor.</description>
++        <description>sqli, xss, ssrf, idor, etc.</description>
+       </parameter>
+     </parameters>
++    <returns type="Dict[str, Any]">
++      <description>hypothesis_id, success.</description>
++    </returns>
++    <examples>
++      <function=add_hypothesis>
++        <parameter=surface>/api/login::username</parameter>
++        <parameter=vuln_class>sqli</parameter>
++      </function>
++    </examples>
+   </tool>
+ 
+   <tool name="record_payload_test">
+-    <description>Record a payload test outcome for a hypothesis.</description>
++    <description>Record payload test outcome.</description>
+     <parameters>
+-      <parameter name="hypothesis_id" type="string" required="true" />
+-      <parameter name="payload" type="string" required="true" />
++      <parameter name="hypothesis_id" type="string" required="true">
++        <description>Hypothesis ID.</description>
++      </parameter>
++      <parameter name="payload" type="string" required="true">
++        <description>Payload tested.</description>
++      </parameter>
+       <parameter name="outcome" type="string" required="true">
+-        <description>success or failure</description>
++        <description>success or failure.</description>
++      </parameter>
++      <parameter name="evidence" type="string" required="false">
++        <description>Observations.</description>
+       </parameter>
+-      <parameter name="evidence" type="string" required="false" />
+     </parameters>
++    <returns type="Dict[str, Any]">
++      <description>success, test details.</description>
++    </returns>
++    <examples>
++      <function=record_payload_test>
++        <parameter=hypothesis_id>H-001</parameter>
++        <parameter=payload>admin' OR '1'='1'--</parameter>
++        <parameter=outcome>success</parameter>
++      </function>
++    </examples>
+   </tool>
+ 
+   <tool name="confirm_hypothesis">
+-    <description>Mark a hypothesis as confirmed with evidence.</description>
++    <description>Confirm hypothesis with evidence.</description>
+     <parameters>
+-      <parameter name="hypothesis_id" type="string" required="true" />
+-      <parameter name="evidence" type="string" required="true" />
++      <parameter name="hypothesis_id" type="string" required="true">
++        <description>Hypothesis ID.</description>
++      </parameter>
++      <parameter name="evidence" type="string" required="true">
++        <description>Proof of vulnerability.</description>
++      </parameter>
+     </parameters>
++    <returns type="Dict[str, Any]">
++      <description>success, confirmation.</description>
++    </returns>
++    <examples>
++      <function=confirm_hypothesis>
++        <parameter=hypothesis_id>H-001</parameter>
++        <parameter=evidence>SQL error confirming injection.</parameter>
++      </function>
++    </examples>
+   </tool>
+ 
+   <tool name="reject_hypothesis">
+-    <description>Mark a hypothesis as rejected with a reason.</description>
++    <description>Reject hypothesis with reason.</description>
+     <parameters>
+-      <parameter name="hypothesis_id" type="string" required="true" />
+-      <parameter name="reason" type="string" required="true" />
++      <parameter name="hypothesis_id" type="string" required="true">
++        <description>Hypothesis ID.</description>
++      </parameter>
++      <parameter name="reason" type="string" required="true">
++        <description>Why rejected.</description>
++      </parameter>
+     </parameters>
++    <returns type="Dict[str, Any]">
++      <description>success, rejection.</description>
++    </returns>
++    <examples>
++      <function=reject_hypothesis>
++        <parameter=hypothesis_id>H-001</parameter>
++        <parameter=reason>Input sanitized.</parameter>
++      </function>
++    </examples>
+   </tool>
+ 
+   <tool name="query_hypotheses">
+-    <description>Query hypotheses by status and/or class.</description>
++    <description>Query hypotheses.</description>
+     <parameters>
+-      <parameter name="status" type="string" required="false" />
+-      <parameter name="vuln_class" type="string" required="false" />
+-      <parameter name="limit" type="integer" required="false" />
++      <parameter name="status" type="string" required="false">
++        <description>open, testing, confirmed, rejected.</description>
++      </parameter>
++      <parameter name="vuln_class" type="string" required="false">
++        <description>Vulnerability class.</description>
++      </parameter>
++      <parameter name="limit" type="integer" required="false">
++        <description>Max results.</description>
++      </parameter>
+     </parameters>
++    <returns type="Dict[str, Any]">
++      <description>Matching hypotheses.</description>
++    </returns>
++    <examples>
++      <function=query_hypotheses>
++        <parameter=status>confirmed</parameter>
++        <parameter=limit>10</parameter>
++      </function>
++    </examples>
+   </tool>
+ 
+   <tool name="get_hypothesis_summary">
+-    <description>Get a summary of hypothesis ledger state and priorities.</description>
+-    <parameters />
++    <description>Hypothesis ledger summary.</description>
++    <parameters>
++    </parameters>
++    <returns type="Dict[str, Any]">
++      <description>Counts by status, priorities.</description>
++    </returns>
++    <examples>
++      <function=get_hypothesis_summary>
++      </function>
++    </examples>
+   </tool>
+ 
+   <tool name="has_tested_payload">
+-    <description>Check whether a payload was already tested for surface/class.</description>
++    <description>Check if payload was tested.</description>
+     <parameters>
+-      <parameter name="surface" type="string" required="true" />
+-      <parameter name="vuln_class" type="string" required="true" />
+-      <parameter name="payload" type="string" required="true" />
++      <parameter name="surface" type="string" required="true">
++        <description>endpoint::parameter.</description>
++      </parameter>
++      <parameter name="vuln_class" type="string" required="true">
++        <description>Vulnerability class.</description>
++      </parameter>
++      <parameter name="payload" type="string" required="true">
++        <description>Payload to check.</description>
++      </parameter>
+     </parameters>
++    <returns type="Dict[str, Any]">
++      <description>was_tested, previous details.</description>
++    </returns>
++    <examples>
++      <function=has_tested_payload>
++        <parameter=surface>/api/login::username</parameter>
++        <parameter=vuln_class>sqli</parameter>
++        <parameter=payload>admin' OR '1'='1'--</parameter>
++      </function>
++    </examples>
+   </tool>
+ </tools>

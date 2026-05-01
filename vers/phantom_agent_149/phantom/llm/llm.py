@@ -1,0 +1,1321 @@
+import asyncio
+import json
+import logging
+import os
+import time
+from collections.abc import AsyncIterator
+from dataclasses import dataclass, field
+from typing import Any
+
+import litellm
+from jinja2 import Environment, FileSystemLoader, select_autoescape
+from litellm import acompletion, completion_cost, stream_chunk_builder, supports_reasoning
+from litellm.utils import supports_prompt_caching, supports_vision
+
+logger = logging.getLogger(__name__)
+
+from phantom.config import Config
+from phantom.llm.config import LLMConfig
+from phantom.llm.memory_compressor import MemoryCompressor
+from phantom.llm.utils import (
+    _truncate_to_first_function,
+    fix_incomplete_tool_call,
+    normalize_tool_format,
+    parse_tool_invocations,
+    strip_thinking_blocks,
+)
+from phantom.skills import load_skills
+from phantom.tools import get_tools_prompt
+from phantom.tools.dynamic_tools import get_tools_prompt_subset, TOOL_CATEGORIES
+from phantom.utils.resource_paths import get_phantom_resource_path
+
+
+litellm.drop_params = True
+litellm.modify_params = True
+
+
+class LLMRequestFailedError(Exception):
+    def __init__(self, message: str, details: str | None = None):
+        super().__init__(message)
+        self.message = message
+        self.details = details
+
+
+@dataclass
+class LLMResponse:
+    content: str
+    tool_invocations: list[dict[str, Any]] | None = None
+    thinking_blocks: list[dict[str, Any]] | None = None
+
+
+@dataclass
+class RequestStats:
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cached_tokens: int = 0
+    cost: float = 0.0
+    requests: int = 0           # all attempted calls (including timed-out)
+    completed_requests: int = 0  # calls that returned a response with usage data
+
+    def to_dict(self) -> dict[str, int | float]:
+        return {
+            "input_tokens": self.input_tokens,
+            "output_tokens": self.output_tokens,
+            "cached_tokens": self.cached_tokens,
+            "cost": round(self.cost, 4),
+            "requests": self.requests,
+            "completed_requests": self.completed_requests,
+        }
+
+_GLOBAL_TOTAL_STATS = RequestStats()
+_GLOBAL_PER_MODEL_STATS: dict[str, RequestStats] = {}
+_GLOBAL_RATE_LIMIT_UNTIL: float = 0.0
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# RELIABILITY REC MED-5: Circuit Breaker for LLM Failures
+# ══════════════════════════════════════════════════════════════════════════════
+# Prevents cascading failures by temporarily stopping LLM requests after repeated
+# failures. Uses a 3-state pattern: CLOSED (normal), OPEN (blocking), HALF_OPEN (testing).
+#
+# Example: After 5 consecutive failures, circuit opens for 60s. During this time,
+# requests fail-fast instead of retrying endlessly. After 60s, one test request
+# is allowed (HALF_OPEN). If it succeeds, circuit closes; if it fails, circuit
+# reopens for another 60s.
+
+from enum import Enum
+
+
+class CircuitState(Enum):
+    CLOSED = "closed"      # Normal operation
+    OPEN = "open"          # Blocking requests (failure threshold exceeded)
+    HALF_OPEN = "half_open"  # Testing if service recovered
+
+
+@dataclass
+class CircuitBreaker:
+    """Circuit breaker to prevent cascading LLM failures.
+    
+    Tracks failure rate and temporarily blocks requests when threshold is exceeded.
+    """
+    failure_threshold: int | None = None  # None = use default, otherwise use this value
+    timeout_seconds: float = 60.0   # How long to wait before testing recovery
+    _state: CircuitState = field(default_factory=lambda: CircuitState.CLOSED)
+    _failure_count: int = 0
+    _last_failure_time: float = 0.0
+    
+    def __post_init__(self) -> None:
+        """Initialize from config if available."""
+        # Use explicit value if provided, otherwise fall back to config, then default of 5
+        if self.failure_threshold is None:
+            threshold = Config.get("phantom_circuit_breaker_threshold")
+            if threshold:
+                try:
+                    self.failure_threshold = max(1, int(threshold))
+                except ValueError:
+                    self.failure_threshold = 5
+            else:
+                self.failure_threshold = 5
+        
+        timeout = Config.get("phantom_circuit_breaker_timeout")
+        if timeout:
+            try:
+                self.timeout_seconds = max(1.0, float(timeout))
+            except ValueError:
+                pass
+    
+    def record_success(self) -> None:
+        """Record successful request - resets failure counter and closes circuit."""
+        self._failure_count = 0
+        self._state = CircuitState.CLOSED
+    
+    def record_failure(self) -> None:
+        """Record failed request - may open circuit if threshold exceeded."""
+        self._failure_count += 1
+        self._last_failure_time = time.monotonic()
+        
+        if self._failure_count >= self.failure_threshold:
+            self._state = CircuitState.OPEN
+            logger.warning(
+                "Circuit breaker OPEN: %d consecutive LLM failures. "
+                "Blocking requests for %.0fs to prevent cascading failures.",
+                self._failure_count,
+                self.timeout_seconds,
+            )
+    
+    def allow_request(self) -> bool:
+        """Check if a request should be allowed based on circuit state.
+        
+        Returns:
+            True if request allowed, False if blocked by open circuit
+        """
+        if self._state == CircuitState.CLOSED:
+            return True
+        
+        if self._state == CircuitState.OPEN:
+            # Check if timeout elapsed - transition to HALF_OPEN for testing
+            elapsed = time.monotonic() - self._last_failure_time
+            if elapsed >= self.timeout_seconds:
+                self._state = CircuitState.HALF_OPEN
+                logger.info(
+                    "Circuit breaker HALF_OPEN: Testing LLM recovery after %.0fs cooldown.",
+                    elapsed,
+                )
+                return True  # Allow one test request
+            return False  # Still in timeout - block request
+        
+        # HALF_OPEN: allow request (will close on success or reopen on failure)
+        return True
+    
+    def get_state(self) -> CircuitState:
+        """Get current circuit state."""
+        return self._state
+    
+    def reset(self) -> None:
+        """Manually reset circuit to CLOSED state."""
+        self._failure_count = 0
+        self._state = CircuitState.CLOSED
+
+
+# Global circuit breaker instance (per-process singleton)
+_CIRCUIT_BREAKER = CircuitBreaker()
+
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+class _TokenRateLimiter:
+    def __init__(self) -> None:
+        self._calls_by_model: dict[str, list[float]] = {}
+
+    def _limit(self) -> int:
+        raw = os.getenv("PHANTOM_LLM_RATE_LIMIT_PER_MINUTE", "1000")
+        try:
+            parsed = int(raw)
+        except ValueError:
+            return 1000
+        return max(parsed, 1)
+
+    def check_and_record(self, model: str) -> bool:
+        now = time.monotonic()
+        window_start = now - 60.0
+        calls = self._calls_by_model.setdefault(model, [])
+        calls[:] = [stamp for stamp in calls if stamp >= window_start]
+        if len(calls) >= self._limit():
+            return False
+        calls.append(now)
+        return True
+
+
+class LLM:
+    # Scan mode downgrade order for adaptive mode
+    _SCAN_MODE_DOWNGRADE: dict[str, str] = {
+        "deep": "standard",
+        "standard": "quick",
+    }
+
+    def __init__(self, config: LLMConfig, agent_name: str | None = None):
+        self.config = config
+        self.agent_name = agent_name
+        self.agent_id: str | None = None
+        self._total_stats = _GLOBAL_TOTAL_STATS
+        # Per-model breakdown: model_name -> RequestStats (only agent iteration calls)
+        self._per_model_stats = _GLOBAL_PER_MODEL_STATS
+        # Call type counters
+        self._agent_calls: int = 0    # LLM calls during agent loop iterations
+        self._error_calls: int = 0    # LLM calls that ended in an error (after retries)
+        self.memory_compressor = MemoryCompressor(model_name=config.litellm_model)
+        self.system_prompt = self._load_system_prompt(agent_name)
+
+        reasoning = Config.get("phantom_reasoning_effort")
+        if reasoning:
+            self._reasoning_effort = reasoning
+        elif config.scan_mode == "quick":
+            self._reasoning_effort = "medium"
+        elif config.scan_mode == "stealth":
+            self._reasoning_effort = "low"
+        else:
+            self._reasoning_effort = "high"
+
+        # Fallback model: used when primary exhausts all retries
+        self._fallback_llm_name = Config.get("phantom_fallback_llm") or None
+        # Multi-model routing
+        self._routing_enabled = (Config.get("phantom_routing_enabled") or "").lower() == "true"
+        self._routing_reasoning_model = Config.get("phantom_routing_reasoning_model") or None
+        self._routing_tool_model = Config.get("phantom_routing_tool_model") or None
+        # Adaptive scan mode
+        self._adaptive_scan_enabled = (Config.get("phantom_adaptive_scan") or "").lower() == "true"
+        try:
+            self._adaptive_threshold = float(Config.get("phantom_adaptive_scan_threshold") or "0.8")
+        except ValueError:
+            self._adaptive_threshold = 0.8
+
+    def _load_system_prompt(self, agent_name: str | None) -> str:
+        if not agent_name:
+            return ""
+
+        try:
+            prompt_dir = get_phantom_resource_path("agents", agent_name)
+            skills_dir = get_phantom_resource_path("skills")
+            env = Environment(
+                loader=FileSystemLoader([prompt_dir, skills_dir]),
+                autoescape=select_autoescape(enabled_extensions=(), default_for_string=False),
+            )
+
+            skills_to_load = [
+                *list(self.config.skills or []),
+                f"scan_modes/{self.config.scan_mode}",
+            ]
+            skill_content = load_skills(skills_to_load)
+            env.globals["get_skill"] = lambda name: skill_content.get(name, "")
+
+            subset_mode = (Config.get("phantom_tool_subset") or "full").lower()
+            if subset_mode == "full":
+                tools_prompt_fn = get_tools_prompt
+            else:
+                subset_cats = self._get_tool_subset_categories(subset_mode)
+                if subset_cats:
+                    needed_tools = set()
+                    for cat in subset_cats:
+                        needed_tools.update(TOOL_CATEGORIES.get(cat, []))
+                    tools_prompt_fn = lambda: get_tools_prompt_subset(list(needed_tools))
+                else:
+                    tools_prompt_fn = get_tools_prompt
+
+            use_condensed_prompt = (
+                os.environ.get("PHANTOM_USE_CONDENSED_PROMPT", "false").lower() == "true"
+            )
+            template_name = "system_prompt_condensed.jinja" if use_condensed_prompt else "system_prompt.jinja"
+            try:
+                template = env.get_template(template_name)
+            except Exception:
+                template = env.get_template("system_prompt.jinja")
+
+            result = template.render(
+                get_tools_prompt=tools_prompt_fn,
+                loaded_skill_names=list(skill_content.keys()),
+                phantom_port_range=os.environ.get("PHANTOM_PORT_RANGE", ""),
+                **skill_content,
+            )
+            prompt = str(result)
+            if not prompt.strip():
+                logger.error("System prompt rendered empty for agent %s", agent_name)
+            return prompt
+        except Exception:  # noqa: BLE001
+            logger.error("Failed to load system prompt for agent %s", agent_name, exc_info=True)
+            return ""
+
+    def _get_tool_subset_categories(self, mode: str) -> list[str]:
+        """Return list of tool categories for the given subset mode."""
+        subsets = {
+            "minimal": ["web_testing", "terminal", "reporting", "python"],
+            "core": ["web_testing", "terminal", "browser", "reporting", "agent_management", "files", "thinking", "python"],
+            "core-fast": ["web_testing", "terminal", "browser", "reporting", "agent_management", "files", "python"],
+            "web": ["web_testing", "terminal", "browser", "reporting", "agent_management", "files", "thinking", "python", "web_search"],
+        }
+        return subsets.get(mode, [])
+
+    def set_agent_identity(self, agent_name: str | None, agent_id: str | None) -> None:
+        if agent_name:
+            self.agent_name = agent_name
+        if agent_id:
+            self.agent_id = agent_id
+
+    def set_agent_state(self, agent_state: Any) -> None:
+        """Attach the agent state so compress_history and anchor injection can use it."""
+        self._agent_state = agent_state
+
+    async def generate(
+        self, conversation_history: list[dict[str, Any]]
+    ) -> AsyncIterator[LLMResponse]:
+        global _GLOBAL_RATE_LIMIT_UNTIL
+        now = time.monotonic()
+        if now < _GLOBAL_RATE_LIMIT_UNTIL:
+            wait_time = _GLOBAL_RATE_LIMIT_UNTIL - now
+            logger.warning("Global rate limit in effect, agent '%s' sleeping for %.1fs...", self.agent_name, wait_time)
+            await asyncio.sleep(wait_time)
+
+        # RELIABILITY REC MED-5: Check circuit breaker before making request
+        if not _CIRCUIT_BREAKER.allow_request():
+            raise LLMRequestFailedError(
+                message="LLM circuit breaker is OPEN - too many consecutive failures",
+                details=f"Circuit state: {_CIRCUIT_BREAKER.get_state().value}. Wait before retrying."
+            )
+
+        self._check_budget()
+        self._agent_calls += 1
+        messages = await self._prepare_messages(conversation_history)
+        messages = await self._enforce_request_size_limits(messages)
+        max_retries = int(Config.get("phantom_llm_max_retries") or "5")
+        unknown_error_max_retries = 2
+
+        # Optionally switch model based on routing config
+        original_model = self.config.litellm_model
+        if self._routing_enabled:
+            routed = self._pick_routing_model(messages)
+            if routed and routed != original_model:
+                logger.debug("Routing: switching model %s → %s", original_model, routed)
+                self.config.litellm_model = routed
+        primary_model = self.config.litellm_model
+
+        primary_exhausted = False
+        _last_error: Exception | None = None
+        _compress_attempted = False  # last-chance compress flag for undetected 400 overflow
+        # 429 errors get a separate, higher retry budget to survive long rate-limit windows
+        ratelimit_max_retries = int(Config.get("phantom_llm_ratelimit_max_retries") or "10")
+        for attempt in range(ratelimit_max_retries + 1):
+            try:
+                async for response in self._stream(messages):
+                    yield response
+                # Restore routing override after successful call
+                self.config.litellm_model = original_model
+                self._check_adaptive_scan_mode()
+                return  # noqa: TRY300
+            except LLMRequestFailedError:
+                self.config.litellm_model = original_model
+                raise
+            except Exception as e:  # noqa: BLE001
+                if self._is_context_too_large(e):
+                    # Shrink context aggressively and retry immediately (no sleep)
+                    logger.warning(
+                        "Context too large for model %s — force-compressing and retrying "
+                        "(attempt %d/%d)",
+                        self.config.scan_mode,
+                        attempt + 1,
+                        max_retries,
+                    )
+                    messages = await self._force_compress_messages(messages)
+                    if self._is_anthropic() and self.config.enable_prompt_caching:
+                        messages = self._add_cache_control(messages)
+                    continue
+                # Extract error code once — used for exhaustion check and backoff
+                code = getattr(e, "status_code", None) or getattr(
+                    getattr(e, "response", None), "status_code", None
+                )
+                # Rate-limit errors use the larger ratelimit_max_retries budget.
+                # Unknown-code errors are capped to avoid long blind retry loops.
+                if code == 429:
+                    effective_max = ratelimit_max_retries
+                elif code is None:
+                    effective_max = min(max_retries, unknown_error_max_retries)
+                else:
+                    effective_max = max_retries
+                if attempt >= effective_max or not self._should_retry(e):
+                    # Last-chance: a 400 that wasn't recognised as context-too-large
+                    # (provider phrased it differently) — compress once and retry.
+                    # This is the primary cause of "All retries exhausted" in SQL agents.
+                    if code == 400 and not _compress_attempted:
+                        _compress_attempted = True
+                        logger.warning(
+                            "400 error for model %s — attempting last-chance force-compress "
+                            "in case this is an unrecognised context overflow: %s",
+                            self.config.scan_mode,
+                            str(e)[:200],
+                        )
+                        messages = await self._force_compress_messages(messages)
+                        if self._is_anthropic() and self.config.enable_prompt_caching:
+                            messages = self._add_cache_control(messages)
+                        continue  # one more attempt
+                    _last_error = e
+                    primary_exhausted = True
+                    break
+                # Emit audit event so retries are visible in the audit log
+                _retry_audit = (
+                    __import__("phantom.logging.audit", fromlist=["get_audit_logger"])
+                    .get_audit_logger()
+                )
+                if _retry_audit:
+                    _retry_audit.log_llm_error(
+                        agent_id=self.agent_id or "unknown",
+                        model=self.config.litellm_model,
+                        error=str(e)[:500],
+                        attempt=attempt + 1,
+                    )
+                # Longer backoff for rate limits (429) — up to 120 s; others up to 10 s
+                if code == 429:
+                    wait = min(120, 4 * (2**attempt))
+                    logger.warning(
+                        "Rate limit hit (attempt %d/%d); backing off %.0fs globally...",
+                        attempt + 1, ratelimit_max_retries, wait,
+                    )
+                    _GLOBAL_RATE_LIMIT_UNTIL = max(_GLOBAL_RATE_LIMIT_UNTIL, time.monotonic() + wait)
+                else:
+                    wait = min(10, 2 * (2**attempt))
+                await asyncio.sleep(wait)
+
+        # Primary model exhausted — try fallback if configured
+        if (
+            primary_exhausted
+            and self._fallback_llm_name
+            and self._fallback_llm_name != primary_model
+        ):
+            logger.warning(
+                "Primary model %s exhausted — retrying with fallback %s",
+                primary_model,
+                self._fallback_llm_name,
+            )
+            try:
+                self.config.litellm_model = self._fallback_llm_name
+                async for response in self._stream(messages):
+                    yield response
+                self._check_adaptive_scan_mode()  # honour cost budget after fallback too
+                return  # noqa: TRY300
+            except Exception as e:  # noqa: BLE001
+                self._error_calls += 1
+                self._raise_error(e)
+            finally:
+                # Always restore the original model, even if fallback raises.
+                self.config.litellm_model = original_model
+        elif primary_exhausted:
+            self.config.litellm_model = original_model
+            self._error_calls += 1
+            last_err_str = f": {_last_error}" if _last_error else ""
+            raise LLMRequestFailedError(
+                f"All retries exhausted for primary model{last_err_str}"
+            )
+
+    async def _stream(self, messages: list[dict[str, Any]]) -> AsyncIterator[LLMResponse]:
+        accumulated = ""
+        chunks: list[Any] = []
+        done_streaming = 0
+        rebuilt: Any | None = None  # holds stream_chunk_builder result to avoid double call
+
+        cost_before = self._total_stats.cost
+        tokens_in_before = self._total_stats.input_tokens
+        tokens_out_before = self._total_stats.output_tokens
+        self._total_stats.requests += 1
+
+        # ── Audit: log the outgoing request ───────────────────────────────────
+        from phantom.logging.audit import get_audit_logger as _get_audit
+        _audit = _get_audit()
+        _audit_rid = (
+            _audit.log_llm_request(
+                agent_id=self.agent_id or "unknown",
+                model=self.config.litellm_model,
+                messages=messages,
+            )
+            if _audit else None
+        )
+        _audit_t0 = time.monotonic()
+        # ─────────────────────────────────────────────────────────────────────
+
+        response = await acompletion(**self._build_completion_args(messages), stream=True)
+
+        async for chunk in response:
+            chunks.append(chunk)
+            if done_streaming:
+                done_streaming += 1
+                if getattr(chunk, "usage", None) or done_streaming > 5:
+                    break
+                continue
+            delta = self._get_chunk_content(chunk)
+            if delta:
+                accumulated += delta
+                if "</function>" in accumulated or "</invoke>" in accumulated:
+                    end_tag = "</function>" if "</function>" in accumulated else "</invoke>"
+                    pos = accumulated.find(end_tag)
+                    accumulated = accumulated[: pos + len(end_tag)]
+                    yield LLMResponse(content=accumulated)
+                    done_streaming = 1
+                    continue
+                yield LLMResponse(content=accumulated)
+
+        if chunks:
+            rebuilt = stream_chunk_builder(chunks)
+            self._update_usage_stats(rebuilt)
+            self._update_per_model_stats(rebuilt)
+            request_cost = self._total_stats.cost - cost_before
+            logger.info(
+                "llm_call model=%s scan_mode=%s tokens_in=%d tokens_out=%d "
+                "request_cost=$%.4f cumulative_cost=$%.4f",
+                self.config.litellm_model,
+                self.config.scan_mode,
+                self._total_stats.input_tokens,
+                self._total_stats.output_tokens,
+                request_cost,
+                self._total_stats.cost,
+            )
+            self._check_per_request_budget(cost_before)
+
+        # RELIABILITY REC MED-5: Record successful LLM call - close circuit
+        _CIRCUIT_BREAKER.record_success()
+
+        accumulated = normalize_tool_format(accumulated)
+        accumulated = fix_incomplete_tool_call(_truncate_to_first_function(accumulated))
+        # Strip thinking blocks so their embedded tool calls (e.g. create_vulnerability_report
+        # inside a think tool's thought parameter) do not bypass deduplication checks.
+        accumulated = strip_thinking_blocks(accumulated)
+        _parsed_tools = parse_tool_invocations(accumulated)
+
+        # AUDIT-FIX-09: When the LLM produces text that looks like a tool call
+        # but fails to parse, prepend a corrective message so the agent knows
+        # its call was NOT executed and can reformat.
+        _xml_markers = ["<function=", "<invoke ", "</function>"]
+        _looks_like_tool = any(m in accumulated for m in _xml_markers)
+        if _looks_like_tool and not _parsed_tools:
+            accumulated = (
+                "[SYSTEM: Your tool call was malformed and NOT executed. "
+                "Reformat using: <function=tool_name><parameter=name>value</parameter></function>]\n"
+                + accumulated
+            )
+
+        # ── Audit: log the completed response ────────────────────────────────
+        if _audit and _audit_rid:
+            _audit.log_llm_response(
+                agent_id=self.agent_id or "unknown",
+                request_id=_audit_rid,
+                model=self.config.litellm_model,
+                response_text=accumulated,
+                tool_invocations=_parsed_tools,
+                tokens_in=self._total_stats.input_tokens - tokens_in_before,
+                tokens_out=self._total_stats.output_tokens - tokens_out_before,
+                cost_usd=self._total_stats.cost - cost_before,
+                duration_ms=(time.monotonic() - _audit_t0) * 1000,
+            )
+        # ─────────────────────────────────────────────────────────────────────
+
+        yield LLMResponse(
+            content=accumulated,
+            tool_invocations=_parsed_tools,
+            thinking_blocks=self._extract_thinking(chunks, rebuilt),
+        )
+
+    async def _prepare_messages(
+        self, conversation_history: list[dict[str, Any]]
+    ) -> list[dict[str, Any]]:
+        messages = [{"role": "system", "content": self.system_prompt}]
+
+        if self.agent_name:
+            messages.append(
+                {
+                    "role": "user",
+                    "content": (
+                        f"\n\n<agent_identity>\n"
+                        f"<meta>Internal metadata: do not echo or reference.</meta>\n"
+                        f"<agent_name>{self.agent_name}</agent_name>\n"
+                        f"<agent_id>{self.agent_id}</agent_id>\n"
+                        f"</agent_identity>\n\n"
+                    ),
+                }
+            )
+
+        # Run compression in a thread to avoid blocking the async event loop.
+        # The sync compress_history call can take 30s+ per chunk when LLM summarisation fires.
+        _state = getattr(self, "_agent_state", None)
+        compressed = list(
+            await asyncio.to_thread(
+                self.memory_compressor.compress_history, conversation_history, _state
+            )
+        )
+        conversation_history.clear()
+        conversation_history.extend(compressed)
+
+        # ── Finding anchors injection ─────────────────────────────────────────
+        # AUDIT-FIX-04: Re-inject high-signal findings continuously from iter 2+
+        # (was: only at 75% of max iterations, far too late for exploitation).
+        # This ensures the agent always "knows" about confirmed vulnerabilities
+        # even when the full history has been summarised away.
+        _has_anchors = (
+            _state is not None
+            and hasattr(_state, "finding_anchors")
+            and _state.finding_anchors
+        )
+        if _has_anchors:
+            # Only inject if not already present in last 5 messages
+            _last_msgs = compressed[-5:] if len(compressed) >= 5 else compressed
+            _already_injected = any(
+                "finding_anchors" in str(m.get("content", "")) for m in _last_msgs
+            )
+            if not _already_injected:
+                anchor_lines = []
+                for anchor in _state.finding_anchors[:15]:  # cap at 15
+                    text = anchor.get("text", "").strip()
+                    if text:
+                        anchor_lines.append(f"- {text[:600]}")  # 600 chars, was 300
+                if anchor_lines:
+                    anchor_reminder = (
+                        "<finding_anchors>\n"
+                        "Confirmed signals from earlier in this scan — "
+                        "report any that have NOT been reported yet:\n"
+                        + "\n".join(anchor_lines)
+                        + "\n</finding_anchors>"
+                    )
+                    messages.append({"role": "user", "content": anchor_reminder})
+        # ─────────────────────────────────────────────────────────────────────
+
+        messages.extend(compressed)
+
+        if messages[-1].get("role") == "assistant":
+            messages.append({"role": "user", "content": "<meta>Continue the task.</meta>"})
+
+        if self._is_anthropic() and self.config.enable_prompt_caching:
+            messages = self._add_cache_control(messages)
+
+        return messages
+
+    def _estimate_request_size(self, messages: list[dict[str, Any]]) -> tuple[int, int]:
+        serialized = json.dumps(messages, ensure_ascii=False, default=str)
+        chars = len(serialized)
+        try:
+            estimated_tokens = litellm.token_counter(model=self.config.litellm_model, messages=messages)
+        except Exception:  # noqa: BLE001
+            estimated_tokens = max(chars // 4, 1)
+        return chars, estimated_tokens
+
+    def _drop_old_images_from_messages(
+        self, messages: list[dict[str, Any]], keep_recent_images: int = 1
+    ) -> list[dict[str, Any]]:
+        image_count = 0
+        transformed = [dict(m) for m in messages]
+
+        for msg in reversed(transformed):
+            content = msg.get("content")
+            if not isinstance(content, list):
+                continue
+
+            new_content: list[dict[str, Any] | Any] = []
+            for item in content:
+                if not isinstance(item, dict) or item.get("type") != "image_url":
+                    new_content.append(item)
+                    continue
+
+                if image_count >= keep_recent_images:
+                    new_content.append(
+                        {
+                            "type": "text",
+                            "text": "[Older image removed during request-size preflight]",
+                        }
+                    )
+                else:
+                    image_count += 1
+                    new_content.append(item)
+
+            msg["content"] = new_content
+
+        return transformed
+
+    async def _enforce_request_size_limits(
+        self, messages: list[dict[str, Any]]
+    ) -> list[dict[str, Any]]:
+        max_request_chars = int(Config.get("phantom_max_request_chars") or "900000")
+        max_request_tokens = int(
+            Config.get("phantom_max_request_estimated_tokens") or "220000"
+        )
+        from phantom.logging.audit import get_audit_logger as _get_audit
+
+        _audit = _get_audit()
+        _agent_id = self.agent_id or "unknown"
+
+        current = messages
+        for attempt in range(4):
+            chars, est_tokens = self._estimate_request_size(current)
+            if chars <= max_request_chars and est_tokens <= max_request_tokens:
+                return current
+
+            logger.warning(
+                "LLM preflight request too large (attempt %d): chars=%d/%d est_tokens=%d/%d",
+                attempt + 1,
+                chars,
+                max_request_chars,
+                est_tokens,
+                max_request_tokens,
+            )
+
+            if attempt == 0:
+                before_chars, before_tokens = chars, est_tokens
+                current = self._drop_old_images_from_messages(current, keep_recent_images=1)
+                after_chars, after_tokens = self._estimate_request_size(current)
+                if _audit:
+                    _audit.log_preflight_reduction(
+                        agent_id=_agent_id,
+                        stage="drop_old_images",
+                        attempt=attempt + 1,
+                        chars_before=before_chars,
+                        chars_after=after_chars,
+                        tokens_before=before_tokens,
+                        tokens_after=after_tokens,
+                        max_request_chars=max_request_chars,
+                        max_request_tokens=max_request_tokens,
+                    )
+                continue
+            if attempt == 1:
+                before_chars, before_tokens = chars, est_tokens
+                current = await self._force_compress_messages(current)
+                if self._is_anthropic() and self.config.enable_prompt_caching:
+                    current = self._add_cache_control(current)
+                after_chars, after_tokens = self._estimate_request_size(current)
+                if _audit:
+                    _audit.log_preflight_reduction(
+                        agent_id=_agent_id,
+                        stage="force_compress",
+                        attempt=attempt + 1,
+                        chars_before=before_chars,
+                        chars_after=after_chars,
+                        tokens_before=before_tokens,
+                        tokens_after=after_tokens,
+                        max_request_chars=max_request_chars,
+                        max_request_tokens=max_request_tokens,
+                    )
+                continue
+            if attempt == 2:
+                before_chars, before_tokens = chars, est_tokens
+                system_msgs = [m for m in current if m.get("role") == "system"]
+                non_system = [m for m in current if m.get("role") != "system"]
+                keep = min(max(12, len(non_system) // 2), len(non_system))
+                current = system_msgs + non_system[-keep:]
+                after_chars, after_tokens = self._estimate_request_size(current)
+                if _audit:
+                    _audit.log_preflight_reduction(
+                        agent_id=_agent_id,
+                        stage="trim_history",
+                        attempt=attempt + 1,
+                        chars_before=before_chars,
+                        chars_after=after_chars,
+                        tokens_before=before_tokens,
+                        tokens_after=after_tokens,
+                        max_request_chars=max_request_chars,
+                        max_request_tokens=max_request_tokens,
+                    )
+                continue
+
+        final_chars, final_tokens = self._estimate_request_size(current)
+        raise LLMRequestFailedError(
+            "Request preflight hard cap exceeded: "
+            f"chars={final_chars} (limit={max_request_chars}), "
+            f"estimated_tokens={final_tokens} (limit={max_request_tokens})"
+        )
+
+    def _get_max_tokens(self) -> int | None:
+        """Return an explicit output-token cap ONLY when the user has set one.
+
+        R-01 regression fix: Strix never passed max_tokens, letting the model
+        use its full output budget.  Phantom added hard caps (4k/6k/8k) which
+        truncated the model mid-thought before it could call
+        create_vulnerability_report — the #1 root cause of 0 findings.
+
+        Now we only honour an explicit env-var override; otherwise return None
+        so that _build_completion_args omits the parameter entirely.
+        """
+        env_val = Config.get("llm_max_tokens")
+        if env_val:
+            return int(env_val)
+        return None  # let the model use its full output budget (Strix behaviour)
+
+    # ════════════════════════════════════════════════════════════════════════════
+    # EFFICIENCY FIX SCALE-P1.1: Budget threshold tracking for graceful degradation
+    # ════════════════════════════════════════════════════════════════════════════
+    _budget_warning_80_emitted: bool = False
+    _budget_warning_90_emitted: bool = False
+
+    def _check_budget(self) -> None:
+        """Check budget and apply graceful degradation at thresholds.
+        
+        EFFICIENCY FIX SCALE-P1.1: Graceful Limit Degradation
+        - 80% budget: Warning logged, continue normally
+        - 90% budget: Warning logged, reduce reasoning effort, suggest wrap-up
+        - 100% budget: Stop or continue based on PHANTOM_COST_ABORT_ON_LIMIT
+
+        Uses the *global* scan cost aggregated across all agent instances via the
+        Tracer, so sub-agents cannot each individually spend up to max_cost.
+        Falls back to this agent's local stats when the Tracer is unavailable.
+        """
+        max_cost_str = Config.get("phantom_max_cost")
+        if not max_cost_str:
+            return
+        try:
+            max_cost = float(max_cost_str)
+        except ValueError:
+            return
+        if max_cost <= 0:
+            return
+            
+        # Get current global cost
+        try:
+            from phantom.telemetry.tracer import get_global_tracer
+            tracer = get_global_tracer()
+            if tracer:
+                traced_cost = tracer.get_total_llm_stats()["total"]["cost"]
+                current_cost = max(float(traced_cost or 0.0), float(self._total_stats.cost or 0.0))
+            else:
+                current_cost = self._total_stats.cost
+        except Exception:  # noqa: BLE001
+            current_cost = self._total_stats.cost
+        
+        budget_fraction = current_cost / max_cost
+        
+        # ════════════════════════════════════════════════════════════════════
+        # 80% threshold: Warning, continue normally
+        # ════════════════════════════════════════════════════════════════════
+        if budget_fraction >= 0.80 and not self._budget_warning_80_emitted:
+            self._budget_warning_80_emitted = True
+            logger.warning(
+                "BUDGET ALERT: 80%% used ($%.4f / $%.4f). "
+                "Consider wrapping up current testing phase.",
+                current_cost, max_cost,
+            )
+            # Log to audit
+            try:
+                from phantom.logging.audit import get_audit_logger as _get_audit
+                _audit = _get_audit()
+                if _audit:
+                    _audit.log_security_event(
+                        "budget_warning_80",
+                        self.agent_id,
+                        {
+                            "current_cost": round(current_cost, 4),
+                            "max_cost": max_cost,
+                            "percentage": round(budget_fraction * 100, 1),
+                            "action": "warning_only",
+                        },
+                    )
+            except Exception:  # noqa: BLE001
+                pass
+        
+        # ════════════════════════════════════════════════════════════════════
+        # 90% threshold: Warning + reduce reasoning effort + inject wrap-up hint
+        # ════════════════════════════════════════════════════════════════════
+        if budget_fraction >= 0.90 and not self._budget_warning_90_emitted:
+            self._budget_warning_90_emitted = True
+            logger.warning(
+                "BUDGET CRITICAL: 90%% used ($%.4f / $%.4f). "
+                "Reducing reasoning effort and preparing for graceful shutdown.",
+                current_cost, max_cost,
+            )
+            
+            # Reduce reasoning effort to save tokens
+            if self._reasoning_effort in ("high", "xhigh"):
+                self._reasoning_effort = "medium"
+                logger.info("Reasoning effort reduced from high/xhigh to medium to conserve budget")
+            elif self._reasoning_effort == "medium":
+                self._reasoning_effort = "low"
+                logger.info("Reasoning effort reduced from medium to low to conserve budget")
+            
+            # Auto-downgrade scan mode if adaptive is enabled
+            if self._adaptive_scan_enabled:
+                new_mode = self._SCAN_MODE_DOWNGRADE.get(self.config.scan_mode)
+                if new_mode:
+                    logger.warning(
+                        "Auto-downgrading scan mode %s → %s due to 90%% budget",
+                        self.config.scan_mode, new_mode
+                    )
+                    self.config.scan_mode = new_mode
+            
+            # Log to audit
+            try:
+                from phantom.logging.audit import get_audit_logger as _get_audit
+                _audit = _get_audit()
+                if _audit:
+                    _audit.log_security_event(
+                        "budget_warning_90",
+                        self.agent_id,
+                        {
+                            "current_cost": round(current_cost, 4),
+                            "max_cost": max_cost,
+                            "percentage": round(budget_fraction * 100, 1),
+                            "action": "degradation_applied",
+                            "reasoning_effort": self._reasoning_effort,
+                            "scan_mode": self.config.scan_mode,
+                        },
+                    )
+            except Exception:  # noqa: BLE001
+                pass
+        
+        # ════════════════════════════════════════════════════════════════════
+        # 100% threshold: Hard stop or advisory continue
+        # ════════════════════════════════════════════════════════════════════
+        if current_cost >= max_cost:
+            # Rec 2 (SF-001): Respect abort-on-limit flag.
+            abort_on_limit = (Config.get("phantom_cost_abort_on_limit") or "true").lower()
+            if abort_on_limit in ("false", "0", "no"):
+                logger.warning(
+                    "Budget exceeded: $%.4f >= max $%.4f — advisory mode, continuing.",
+                    current_cost, max_cost,
+                )
+                return
+            raise LLMRequestFailedError(
+                f"Budget exceeded: ${current_cost:.4f} >= max ${max_cost:.4f}"
+            )
+
+    def _check_per_request_budget(self, cost_before: float) -> None:
+        """Hard-stop if a single LLM call exceeds PHANTOM_PER_REQUEST_CEILING."""
+        ceiling_str = Config.get("phantom_per_request_ceiling")
+        if not ceiling_str:
+            return
+        try:
+            ceiling = float(ceiling_str)
+        except ValueError:
+            return
+        request_cost = self._total_stats.cost - cost_before
+        if request_cost > ceiling:
+            raise LLMRequestFailedError(
+                f"Per-request budget exceeded: ${request_cost:.4f} > ceiling ${ceiling:.4f}"
+            )
+
+    def _build_completion_args(self, messages: list[dict[str, Any]]) -> dict[str, Any]:
+        if not self._supports_vision():
+            messages = self._strip_images(messages)
+
+        args: dict[str, Any] = {
+            "model": self.config.litellm_model,
+            "messages": messages,
+            "timeout": self.config.timeout,
+            "stream_options": {"include_usage": True},
+        }
+
+        # R-01: Only pass max_tokens if explicitly configured via env var.
+        # Strix never capped output; Phantom's caps caused truncated responses.
+        _max_tok = self._get_max_tokens()
+        if _max_tok is not None:
+            args["max_tokens"] = _max_tok
+
+        if self.config.api_key:
+            args["api_key"] = self.config.api_key
+        if self.config.api_base:
+            args["api_base"] = self.config.api_base
+        if self._supports_reasoning():
+            args["reasoning_effort"] = self._reasoning_effort
+
+        return args
+
+    def _get_chunk_content(self, chunk: Any) -> str:
+        if chunk.choices and hasattr(chunk.choices[0], "delta"):
+            return getattr(chunk.choices[0].delta, "content", "") or ""
+        return ""
+
+    def _extract_thinking(
+        self, chunks: list[Any], rebuilt: Any | None = None
+    ) -> list[dict[str, Any]] | None:
+        if not chunks or not self._supports_reasoning():
+            return None
+        try:
+            # Reuse the already-rebuilt response when available to avoid a second
+            # stream_chunk_builder() call (which is CPU-heavy on large streams).
+            resp = rebuilt if rebuilt is not None else stream_chunk_builder(chunks)
+            if resp.choices and hasattr(resp.choices[0].message, "thinking_blocks"):
+                blocks: list[dict[str, Any]] = resp.choices[0].message.thinking_blocks
+                return blocks
+        except Exception:  # noqa: BLE001, S110  # nosec B110
+            pass
+        return None
+
+    def _update_per_model_stats(self, response: Any) -> None:
+        """Track per-model token/cost breakdown (agent calls only)."""
+        try:
+            model_key = self.config.litellm_model or "unknown"
+            if model_key not in self._per_model_stats:
+                self._per_model_stats[model_key] = RequestStats()
+            stats = self._per_model_stats[model_key]
+            if hasattr(response, "usage") and response.usage:
+                stats.input_tokens += getattr(response.usage, "prompt_tokens", 0) or 0
+                stats.output_tokens += getattr(response.usage, "completion_tokens", 0) or 0
+                cached = 0
+                if hasattr(response.usage, "prompt_tokens_details"):
+                    cached = getattr(response.usage.prompt_tokens_details, "cached_tokens", 0) or 0
+                stats.cached_tokens += cached
+                stats.cost += self._extract_cost(response)
+            stats.requests += 1
+        except Exception:  # noqa: BLE001, S110  # nosec B110
+            pass
+
+    def _pick_routing_model(self, messages: list[dict[str, Any]]) -> str | None:
+        """
+        Decide which model to use based on conversation context.
+        Heuristic: if the last user message looks like a tool result
+        (starts with <tool_result or <function_results), we're in an
+        "execution" phase → use tool model. Otherwise → reasoning model.
+        """
+        if not self._routing_enabled:
+            return None
+        last_user = next(
+            (m for m in reversed(messages) if m.get("role") == "user"), None
+        )
+        content = (last_user or {}).get("content", "") or ""
+        if isinstance(content, list):
+            content = " ".join(
+                p.get("text", "") for p in content if isinstance(p, dict) and p.get("type") == "text"
+            )
+        content_lower = content.strip().lower()
+        is_tool_result = content_lower.startswith(("<tool_result", "<function_results"))
+        if is_tool_result and self._routing_tool_model:
+            return self._routing_tool_model
+        if not is_tool_result and self._routing_reasoning_model:
+            return self._routing_reasoning_model
+        return None
+
+    def _check_adaptive_scan_mode(self) -> None:
+        """Downgrade scan mode if *global* cost has exceeded the adaptive threshold."""
+        if not self._adaptive_scan_enabled:
+            return
+        max_cost_str = Config.get("phantom_max_cost")
+        if not max_cost_str:
+            return
+        try:
+            max_cost = float(max_cost_str)
+        except ValueError:
+            return
+        if max_cost <= 0:
+            return
+        # Use global cost (all agents) so the threshold is applied consistently.
+        try:
+            from phantom.telemetry.tracer import get_global_tracer
+            tracer = get_global_tracer()
+            current_cost = (
+                tracer.get_total_llm_stats()["total"]["cost"] if tracer else self._total_stats.cost
+            )
+        except Exception:  # noqa: BLE001
+            current_cost = self._total_stats.cost
+        fraction = current_cost / max_cost
+        if fraction >= self._adaptive_threshold:
+            new_mode = self._SCAN_MODE_DOWNGRADE.get(self.config.scan_mode)
+            if new_mode:
+                # debug-level: this fires after every successful LLM call, routing
+                # to stderr at WARNING level causes PowerShell NativeCommandError.
+                logger.debug(
+                    "adaptive scan: cost=%.4f (%.1f%% of $%.2f) downgrading %s -> %s",
+                    self._total_stats.cost,
+                    fraction * 100,
+                    max_cost,
+                    self.config.scan_mode,
+                    new_mode,
+                )
+                self.config.scan_mode = new_mode
+
+    def _update_usage_stats(self, response: Any) -> None:
+        try:
+            if hasattr(response, "usage") and response.usage:
+                input_tokens = getattr(response.usage, "prompt_tokens", 0) or 0
+                output_tokens = getattr(response.usage, "completion_tokens", 0) or 0
+
+                cached_tokens = 0
+                if hasattr(response.usage, "prompt_tokens_details"):
+                    prompt_details = response.usage.prompt_tokens_details
+                    if hasattr(prompt_details, "cached_tokens"):
+                        cached_tokens = prompt_details.cached_tokens or 0
+
+                cost = self._extract_cost(response)
+            else:
+                input_tokens = 0
+                output_tokens = 0
+                cached_tokens = 0
+                cost = 0.0
+
+            self._total_stats.input_tokens += input_tokens
+            self._total_stats.output_tokens += output_tokens
+            self._total_stats.cached_tokens += cached_tokens
+            self._total_stats.cost += cost
+            if input_tokens or output_tokens:
+                self._total_stats.completed_requests += 1
+
+        except Exception:  # noqa: BLE001, S110  # nosec B110
+            pass
+
+    def _extract_cost(self, response: Any) -> float:
+        # 1. API-reported cost (if provider returns it directly)
+        if hasattr(response, "usage") and response.usage:
+            direct_cost = getattr(response.usage, "cost", None)
+            if direct_cost is not None:
+                return float(direct_cost)
+        # 2. User-configured rates (from config file / env vars) — checked before
+        # litellm so explicit user overrides take priority over built-in pricing.
+        try:
+            rate_in = float(Config.get("phantom_cost_per_1m_input") or "0")
+            rate_out = float(Config.get("phantom_cost_per_1m_output") or "0")
+            if rate_in > 0 or rate_out > 0:
+                usage = getattr(response, "usage", None) or {}
+                tok_in = getattr(usage, "prompt_tokens", 0) or 0
+                tok_out = getattr(usage, "completion_tokens", 0) or 0
+                return (tok_in * rate_in + tok_out * rate_out) / 1_000_000
+        except Exception:  # noqa: BLE001
+            pass
+        # 3. litellm built-in pricing via completion_cost.
+        try:
+            if hasattr(response, "_hidden_params"):
+                response._hidden_params.pop("custom_llm_provider", None)
+            cost = completion_cost(response, model=self.config.canonical_model) or 0.0
+            if cost > 0:
+                return cost
+        except Exception:  # noqa: BLE001
+            pass
+        # 4. Manual litellm.model_cost registry lookup (handles Azure/other prefixes).
+        try:
+            import litellm as _litellm
+            usage = getattr(response, "usage", None)
+            tok_in = getattr(usage, "prompt_tokens", 0) or 0
+            tok_out = getattr(usage, "completion_tokens", 0) or 0
+            if tok_in or tok_out:
+                model_key = self.config.litellm_model or ""
+                bare = model_key.split("/", 1)[-1] if "/" in model_key else model_key
+                candidates = [model_key, bare, bare.lower(), model_key.lower()]
+                model_cost_lower = {
+                    k.lower(): v for k, v in _litellm.model_cost.items()
+                }
+                for candidate in candidates:
+                    info = _litellm.model_cost.get(candidate) or model_cost_lower.get(
+                        candidate.lower()
+                    )
+                    if info:
+                        r_in = info.get("input_cost_per_token", 0) or 0
+                        r_out = info.get("output_cost_per_token", 0) or 0
+                        if r_in or r_out:
+                            return (tok_in * r_in) + (tok_out * r_out)
+        except Exception:  # noqa: BLE001
+            pass
+        return 0.0
+
+    def _is_context_too_large(self, e: Exception) -> bool:
+        """Detect 'request body too large' / context-window-exceeded errors from any provider.
+
+        Covers OpenAI, Anthropic, Gemini, OpenRouter, Mistral, Cohere, Together AI and
+        generic HTTP-proxy 400/413 responses.
+        """
+        import re as _re
+
+        msg = str(e).lower()
+        if any(
+            phrase in msg
+            for phrase in (
+                "request body too large",
+                "context_length_exceeded",
+                "maximum context length",
+                "too many tokens",
+                "reduce the length",
+                "input is too long",
+                "string too long",
+                "payload too large",
+                "context window",
+                "tokens in your prompt",
+                "prompt is too long",
+                "exceeds the model",
+                # Additional provider-specific phrases
+                "model context limits",   # OpenRouter
+                "reduce context",          # generic
+                "request too large",       # HTTP proxies / gateways
+                "token count exceeds",     # Together AI / Mistral
+                "max context",             # some local models
+                "max_tokens",              # bad-param context errors
+                "message length",          # per-message size limits
+                "token budget",            # Cohere / Bedrock
+            )
+        ):
+            return True
+        # Regex catch-all for dynamic phrasing across providers
+        return bool(
+            _re.search(
+                r"exceed.{0,30}(context|token)|"  # "would exceed model context"
+                r"(context|token).{0,30}exceed|"  # "context tokens exceeded"
+                r"too (many|large).{0,20}token|"  # "too many input tokens"
+                r"token.{0,20}(limit|max|over)|"  # "token limit reached"
+                r"limit.{0,20}token",               # "limit of N tokens"
+                msg,
+            )
+        )
+
+    async def _force_compress_messages(
+        self, messages: list[dict[str, Any]]
+    ) -> list[dict[str, Any]]:
+        """Aggressively halve the non-system messages to recover from a context overflow."""
+        from phantom.llm.memory_compressor import _summarize_messages, MIN_RECENT_MESSAGES
+
+        system_msgs = [m for m in messages if m.get("role") == "system"]
+        non_system = [m for m in messages if m.get("role") != "system"]
+
+        if len(non_system) <= MIN_RECENT_MESSAGES:
+            # Nothing we can compress further — just keep the tail
+            return system_msgs + non_system[-MIN_RECENT_MESSAGES:]
+
+        # Summarize the entire older half into one message
+        keep_count = max(MIN_RECENT_MESSAGES, len(non_system) // 2)
+        to_compress = non_system[:-keep_count]
+        recent = non_system[-keep_count:]
+
+        if to_compress:
+            compress_timeout = int(Config.get("phantom_memory_compressor_timeout") or "120")
+            summary = await asyncio.to_thread(
+                _summarize_messages,
+                to_compress,
+                self.config.litellm_model,
+                compress_timeout,
+            )
+            self.memory_compressor.compression_calls += 1
+            return system_msgs + [summary] + recent
+        return system_msgs + recent
+
+    def _should_retry(self, e: Exception) -> bool:
+        lower_msg = str(e).lower()
+        if any(
+            marker in lower_msg
+            for marker in (
+                "invalid api key",
+                "authentication",
+                "unauthorized",
+                "forbidden",
+                "insufficient_quota",
+                "model_not_found",
+                "unsupported parameter",
+                "invalid_request_error",
+            )
+        ):
+            return False
+        code = getattr(e, "status_code", None) or getattr(
+            getattr(e, "response", None), "status_code", None
+        )
+        if code is None:
+            return True
+        # Retry on rate limits (429) and server errors (5xx).
+        # Do NOT retry auth failures (401/403), bad requests (400/422), not found (404).
+        return code == 429 or (500 <= code < 600)
+
+    def _raise_error(self, e: Exception) -> None:
+        # RELIABILITY REC MED-5: Record LLM failure for circuit breaker
+        _CIRCUIT_BREAKER.record_failure()
+        raise LLMRequestFailedError(f"LLM request failed: {type(e).__name__}", str(e)) from e
+
+    def _is_anthropic(self) -> bool:
+        if not self.config.model_name:
+            return False
+        return any(p in self.config.model_name.lower() for p in ["anthropic/", "claude"])
+
+    def _supports_vision(self) -> bool:
+        try:
+            return bool(supports_vision(model=self.config.canonical_model))
+        except Exception:  # noqa: BLE001
+            return False
+
+    def _supports_reasoning(self) -> bool:
+        try:
+            return bool(supports_reasoning(model=self.config.canonical_model))
+        except Exception:  # noqa: BLE001
+            return False
+
+    def _strip_images(self, messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        result = []
+        for msg in messages:
+            content = msg.get("content")
+            if isinstance(content, list):
+                text_parts = []
+                for item in content:
+                    if isinstance(item, dict) and item.get("type") == "text":
+                        text_parts.append(item.get("text", ""))
+                    elif isinstance(item, dict) and item.get("type") == "image_url":
+                        text_parts.append("[Image removed - model doesn't support vision]")
+                result.append({**msg, "content": "\n".join(text_parts)})
+            else:
+                result.append(msg)
+        return result
+
+    def _add_cache_control(self, messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        if not messages or not supports_prompt_caching(self.config.canonical_model):
+            return messages
+
+        result = list(messages)
+
+        if result[0].get("role") == "system":
+            content = result[0]["content"]
+            result[0] = {
+                **result[0],
+                "content": [
+                    {"type": "text", "text": content, "cache_control": {"type": "ephemeral"}}
+                ]
+                if isinstance(content, str)
+                else content,
+            }
+        return result

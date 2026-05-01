@@ -1,0 +1,1092 @@
+import asyncio
+import contextlib
+import json
+import logging
+import os
+import random
+from typing import TYPE_CHECKING, Any, Optional
+
+
+if TYPE_CHECKING:
+    from phantom.telemetry.tracer import Tracer
+
+from jinja2 import (
+    Environment,
+    FileSystemLoader,
+    select_autoescape,
+)
+
+from phantom.agents.hypothesis_ledger import HypothesisLedger  # Rec 6 (SF-005)
+from phantom.agents.coverage_tracker import CoverageTracker  # Enhancement: Coverage tracking
+from phantom.agents.correlation_engine import CorrelationEngine  # Enhancement: Vulnerability chains
+from phantom.llm import LLM, LLMConfig, LLMRequestFailedError
+from phantom.llm.pentager.reflector import get_reflector
+from phantom.llm.utils import clean_content
+from phantom.config import Config
+from phantom.runtime import SandboxInitializationError
+from phantom.tools import process_tool_invocations
+from phantom.utils.resource_paths import get_phantom_resource_path
+
+from .state import AgentState
+
+
+logger = logging.getLogger(__name__)
+
+
+class AgentMeta(type):
+    agent_name: str
+    jinja_env: Environment
+
+    def __new__(cls, name: str, bases: tuple[type, ...], attrs: dict[str, Any]) -> type:
+        new_cls = super().__new__(cls, name, bases, attrs)
+
+        if name == "BaseAgent":
+            return new_cls
+
+        prompt_dir = get_phantom_resource_path("agents", name)
+
+        new_cls.agent_name = name
+        new_cls.jinja_env = Environment(
+            loader=FileSystemLoader(prompt_dir),
+            autoescape=select_autoescape(enabled_extensions=(), default_for_string=False),
+        )
+
+        return new_cls
+
+
+class BaseAgent(metaclass=AgentMeta):
+    max_iterations = 300
+    agent_name: str = ""
+    jinja_env: Environment
+    default_llm_config: LLMConfig | None = None
+
+    def __init__(self, config: dict[str, Any]):
+        self.config = config
+
+        self.local_sources = config.get("local_sources", [])
+        self.non_interactive = config.get("non_interactive", False)
+
+        if "max_iterations" in config:
+            self.max_iterations = config["max_iterations"]
+
+        self.llm_config_name = config.get("llm_config_name", "default")
+        self.llm_config = config.get("llm_config", self.default_llm_config)
+        if self.llm_config is None:
+            raise ValueError("llm_config is required but not provided")
+        state_from_config = config.get("state")
+        if state_from_config is not None:
+            self.state = state_from_config
+        else:
+            self.state = AgentState(
+                agent_name="Root Agent",
+                max_iterations=self.max_iterations,
+            )
+
+        self.llm = LLM(self.llm_config, agent_name=self.agent_name)
+
+        with contextlib.suppress(Exception):
+            self.llm.set_agent_identity(self.state.agent_name, self.state.agent_id)
+        with contextlib.suppress(Exception):
+            self.llm.set_agent_state(self.state)
+        self._current_task: asyncio.Task[Any] | None = None
+        self._force_stop = False
+        self._recent_action_batches: list[str] = []
+        self._last_iteration_action_count: int = 0
+
+        # Rec 6 (SF-005): Hypothesis Ledger — structured external memory that
+        # survives context compression and prevents redundant payload testing.
+        # Root agents get a fresh ledger; sub-agents share the ledger if one is
+        # passed via config (enabling cross-agent deduplication).
+        self.hypothesis_ledger: HypothesisLedger = config.get(
+            "hypothesis_ledger"
+        ) or HypothesisLedger()
+
+        # Enhancement: Coverage Tracker - tracks what attack surfaces have been
+        # tested for which vulnerability classes. Returns FACTS not commands.
+        # Root agents get a fresh tracker; sub-agents share if passed via config.
+        self.coverage_tracker: CoverageTracker = config.get(
+            "coverage_tracker"
+        ) or CoverageTracker()
+
+        # Enhancement: Correlation Engine - identifies potential vulnerability chains.
+        # Returns SUGGESTIONS not commands - LLM decides whether to pursue chains.
+        # Root agents get a fresh engine; sub-agents share if passed via config.
+        self.correlation_engine: CorrelationEngine = config.get(
+            "correlation_engine"
+        ) or CorrelationEngine()
+
+        # FIX 5: Attack Graph - visualizes vulnerability relationships and attack paths.
+        # Enables critical node identification and multi-step attack chain analysis.
+        # Root agents get a fresh graph; sub-agents share if passed via config.
+        try:
+            from phantom.core.attack_graph import AttackGraph
+            self.attack_graph: AttackGraph | None = config.get("attack_graph") or AttackGraph()
+        except ImportError:
+            # NetworkX not installed - attack graph unavailable
+            self.attack_graph = None
+
+        # FEAT-001: Set scan mode for stealth rate limiting
+        # This enables programmatic rate limiting in executor.py when scan_mode="stealth"
+        try:
+            from phantom.tools.executor import set_scan_mode
+            set_scan_mode(self.llm_config.scan_mode)
+        except Exception:
+            pass  # Rate limiting not critical - continue without it
+
+        # AUDIT-FIX-10: Track (signature, success) for dedup checking
+        self._recent_action_results: list[tuple[str, bool]] = []
+
+        # C1: Wire hypothesis ledger to the tool so the LLM can interact with it
+        try:
+            from phantom.tools.hypothesis.hypothesis_actions import set_ledger, set_correlation_engine
+            set_ledger(self.hypothesis_ledger)
+            # FIX 4: Wire correlation engine for automatic chain detection
+            set_correlation_engine(self.correlation_engine)
+        except ImportError as e:
+            # Tool module not available in this environment
+            logging.warning(f"Hypothesis ledger tool not available: {e}")
+            pass
+
+        # AUDIT-FIX: Wire scan_status tool with all context
+        try:
+            from phantom.tools.scan_status.scan_status_actions import set_scan_status_context
+            set_scan_status_context(
+                hypothesis_ledger=self.hypothesis_ledger,
+                coverage_tracker=self.coverage_tracker,
+                correlation_engine=self.correlation_engine,
+                attack_graph=self.attack_graph if hasattr(self, 'attack_graph') else None,  # FIX 5
+                agent_state=self.state,
+            )
+        except ImportError as e:
+            # Tool module not available in this environment
+            logging.warning(f"Scan status tool not available: {e}")
+            pass
+
+        from phantom.telemetry.tracer import get_global_tracer
+
+        tracer = get_global_tracer()
+        if tracer:
+            tracer.log_agent_creation(
+                agent_id=self.state.agent_id,
+                name=self.state.agent_name,
+                task=self.state.task,
+                parent_id=self.state.parent_id,
+            )
+            if self.state.parent_id is None:
+                scan_config = tracer.scan_config or {}
+                exec_id = tracer.log_tool_execution_start(
+                    agent_id=self.state.agent_id,
+                    tool_name="scan_start_info",
+                    args=scan_config,
+                )
+                tracer.update_tool_execution(execution_id=exec_id, status="completed", result={})
+
+            else:
+                exec_id = tracer.log_tool_execution_start(
+                    agent_id=self.state.agent_id,
+                    tool_name="subagent_start_info",
+                    args={
+                        "name": self.state.agent_name,
+                        "task": self.state.task,
+                        "parent_id": self.state.parent_id,
+                    },
+                )
+                tracer.update_tool_execution(execution_id=exec_id, status="completed", result={})
+
+        self._add_to_agents_graph()
+
+        # ── Audit: log agent creation ──────────────────────────────────────────────────
+        from phantom.logging.audit import get_audit_logger as _get_audit
+        _audit = _get_audit()
+        if _audit:
+            _audit.log_agent_created(
+                agent_id=self.state.agent_id,
+                name=self.state.agent_name,
+                task=self.state.task,
+                parent_id=self.state.parent_id,
+                agent_type=self.__class__.__name__,
+                model=getattr(self.llm_config, "litellm_model", "unknown") or "unknown",
+            )
+        # ──────────────────────────────────────────────────────────────────────────────
+
+    def _add_to_agents_graph(self) -> None:
+        from phantom.tools.agents_graph import agents_graph_actions
+
+        node = {
+            "id": self.state.agent_id,
+            "name": self.state.agent_name,
+            "task": self.state.task,
+            "status": "running",
+            "parent_id": self.state.parent_id,
+            "created_at": self.state.start_time,
+            "finished_at": None,
+            "result": None,
+            "llm_config": self.llm_config_name,
+            "agent_type": self.__class__.__name__,
+            "state": self.state.model_dump(),
+        }
+        agents_graph_actions._agent_graph["nodes"][self.state.agent_id] = node
+
+        agents_graph_actions._agent_instances[self.state.agent_id] = self
+        agents_graph_actions._agent_states[self.state.agent_id] = self.state
+
+        if self.state.parent_id:
+            agents_graph_actions._agent_graph["edges"].append(
+                {"from": self.state.parent_id, "to": self.state.agent_id, "type": "delegation"}
+            )
+
+        if self.state.agent_id not in agents_graph_actions._agent_messages:
+            agents_graph_actions._agent_messages[self.state.agent_id] = []
+
+        if self.state.parent_id is None:
+            with agents_graph_actions._ROOT_AGENT_LOCK:
+                if agents_graph_actions._root_agent_id is None:
+                    agents_graph_actions._root_agent_id = self.state.agent_id
+
+    async def agent_loop(self, task: str) -> dict[str, Any]:  # noqa: PLR0912, PLR0915
+        import time as _time_mod
+        from phantom.telemetry.tracer import get_global_tracer
+
+        if not hasattr(self, "_recent_action_batches"):
+            self._recent_action_batches = []
+        if not hasattr(self, "_last_iteration_action_count"):
+            self._last_iteration_action_count = 0
+
+        tracer = get_global_tracer()
+        # P1.4: Capture start time for accurate duration_ms in audit logs.
+        # Previously all audit-log callsites passed a placeholder zero.
+        self._agent_start_time: float = _time_mod.monotonic()
+
+        try:
+            await self._initialize_sandbox_and_state(task)
+        except SandboxInitializationError as e:
+            return self._handle_sandbox_error(e, tracer)
+
+        _rl_consecutive = 0  # consecutive rate-limit hits for exponential backoff
+        _no_action_streak = 0
+        while True:
+            if self._force_stop:
+                self._force_stop = False
+                await self._enter_waiting_state(tracer, was_cancelled=True)
+                continue
+
+            self._check_agent_messages(self.state)
+
+            if self.state.is_waiting_for_input():
+                await self._wait_for_input()
+                continue
+
+            if self.state.should_stop():
+                if not self.state.completed and self.state.has_reached_max_iterations():
+                    self.state.set_completed({"success": False, "error": "Max iterations reached"})
+                    if tracer:
+                        tracer.update_agent_status(self.state.agent_id, "failed")
+
+                if self.non_interactive:
+                    return self.state.final_result or {}
+                await self._enter_waiting_state(tracer)
+                continue
+
+            if self.state.llm_failed:
+                await self._wait_for_input()
+                continue
+
+            self.state.increment_iteration()
+
+            # ── Audit: log iteration ──────────────────────────────────────────
+            from phantom.logging.audit import get_audit_logger as _get_audit_it
+            _audit_it = _get_audit_it()
+            if _audit_it:
+                _audit_it.log_agent_iteration(
+                    self.state.agent_id, self.state.iteration, self.state.max_iterations
+                )
+            # ─────────────────────────────────────────────────────────────────
+
+            if (
+                self.state.is_approaching_max_iterations()
+                and not self.state.max_iterations_warning_sent
+            ):
+                self.state.max_iterations_warning_sent = True
+                remaining = self.state.max_iterations - self.state.iteration
+                warning_msg = (
+                    f"URGENT: You are approaching the maximum iteration limit. "
+                    f"Current: {self.state.iteration}/{self.state.max_iterations} "
+                    f"({remaining} iterations remaining). "
+                    f"Please prioritize completing your required task(s) and calling "
+                    f"the appropriate finish tool (finish_scan for root agent, "
+                    f"agent_finish for sub-agents) as soon as possible."
+                )
+                self.state.add_message("user", warning_msg)
+
+            if self.state.iteration >= self.state.max_iterations - 3:
+                final_warning_msg = (
+                    "CRITICAL: You have only 3 iterations left! "
+                    "Your next message MUST be the tool call to the appropriate "
+                    "finish tool: finish_scan if you are the root agent, or "
+                    "agent_finish if you are a sub-agent. "
+                    "No other actions should be taken except finishing your work "
+                    "immediately."
+                )
+                self.state.add_message("user", final_warning_msg)
+
+            try:
+                iteration_task = asyncio.create_task(self._process_iteration(tracer))
+                self._current_task = iteration_task
+                should_finish = await iteration_task
+                self._current_task = None
+                _rl_consecutive = 0  # successful iteration — reset rate-limit backoff counter
+
+                if self._last_iteration_action_count <= 0:
+                    _no_action_streak += 1
+                else:
+                    _no_action_streak = 0
+
+                if _no_action_streak >= 3:
+                    self.state.add_message(
+                        "user",
+                        "No actionable progress detected for multiple iterations. "
+                        "Stop repeating prior reconnaissance and pivot to a new exploit path "
+                        "or report validated findings now.",
+                    )
+                if _no_action_streak >= 8 and self.non_interactive:
+                    _stall_msg = (
+                        "Aborting non-interactive run due to sustained no-action loop "
+                        "(8 consecutive iterations)."
+                    )
+                    self.state.set_completed({"success": False, "error": _stall_msg})
+                    if tracer:
+                        tracer.update_agent_status(self.state.agent_id, "failed")
+                    return self.state.final_result or {"success": False, "error": _stall_msg}
+
+                # Periodic checkpoint save ─────────────────────────────────
+                self._maybe_save_checkpoint(tracer)
+                # ──────────────────────────────────────────────────────────
+
+                if should_finish:
+                    if self.non_interactive:
+                        self.state.set_completed({"success": True})
+                        if tracer:
+                            tracer.update_agent_status(self.state.agent_id, "completed")
+                        # ── Audit: log agent completed ────────────────────────────
+                        from phantom.logging.audit import get_audit_logger as _get_audit_done
+                        _audit_done = _get_audit_done()
+                        _scan_duration = (_time_mod.monotonic() - self._agent_start_time) * 1000
+                        if _audit_done:
+                            _audit_done.log_agent_completed(
+                                agent_id=self.state.agent_id,
+                                name=self.state.agent_name,
+                                task=self.state.task,
+                                result=self.state.final_result,
+                                iterations=self.state.iteration,
+                                duration_ms=_scan_duration,
+                            )
+                            # ── EFFICIENCY REC HIGH-2: Log cache statistics ────────
+                            try:
+                                from phantom.tools.cache import get_tool_cache
+                                _cache = get_tool_cache()
+                                if _cache and _cache.enabled:
+                                    _cache_stats = _cache.get_stats_summary()
+                                    _audit_done.log_cache_stats(
+                                        agent_id=self.state.agent_id,
+                                        cache_stats=_cache_stats,
+                                        scan_duration_ms=_scan_duration,
+                                    )
+                            except Exception:  # noqa: BLE001
+                                pass  # Non-critical — don't fail scan if cache reporting fails
+                            # ───────────────────────────────────────────────────────
+                        # ─────────────────────────────────────────────────────────
+                        return self.state.final_result or {}
+                    await self._enter_waiting_state(tracer, task_completed=True)
+                    continue
+
+            except asyncio.CancelledError:
+                self._current_task = None
+                if tracer:
+                    partial_content = tracer.finalize_streaming_as_interrupted(self.state.agent_id)
+                    if partial_content and partial_content.strip():
+                        self.state.add_message(
+                            "assistant", f"{partial_content}\n\n[ABORTED BY USER]"
+                        )
+                if self.non_interactive:
+                    raise
+                await self._enter_waiting_state(tracer, error_occurred=False, was_cancelled=True)
+                continue
+
+            except LLMRequestFailedError as e:
+                # Rate-limit errors are transient — pause and retry the agent loop
+                # rather than aborting (applies in both interactive and non-interactive modes).
+                error_lower = str(e).lower()
+                if "rate limit" in error_lower or "ratelimit" in error_lower or "rate_limit" in error_lower:
+                    _rl_consecutive += 1
+                    # H-03 follow-up: hard cap — abort if API key appears revoked/exhausted
+                    _rl_max = int(Config.get("phantom_llm_ratelimit_max_agent_retries") or "10")
+                    if _rl_consecutive > _rl_max:
+                        _abort_msg = (
+                            f"LLM rate limit hit {_rl_consecutive} consecutive times "
+                            f"(limit={_rl_max}). API key may be revoked, quota permanently "
+                            f"exhausted, or provider down. Aborting agent to prevent "
+                            f"infinite loop."
+                        )
+                        logger.error(_abort_msg)
+                        # ── Audit: log RL abort ──────────────────────────────
+                        from phantom.logging.audit import get_audit_logger as _get_audit_rl
+                        _audit_rl = _get_audit_rl()
+                        _model_name = getattr(getattr(self, "llm_config", None), "litellm_model", "?") or "?"
+                        if _audit_rl:
+                            _audit_rl.log_rate_limit_abort(
+                                agent_id=self.state.agent_id,
+                                model=_model_name,
+                                consecutive=_rl_consecutive,
+                                max_consecutive=_rl_max,
+                                abort_message=_abort_msg,
+                            )
+                        # ────────────────────────────────────────────────────
+                        self.state.set_completed({"success": False, "error": _abort_msg})
+                        if tracer:
+                            tracer.update_agent_status(self.state.agent_id, "failed")
+                        # S-03: Emergency checkpoint save before abort so work is not lost.
+                        self._maybe_save_checkpoint(tracer, force=True)
+                        # ── Audit: log agent failed (RL abort) ───────────────────
+                        from phantom.logging.audit import get_audit_logger as _get_audit_rla
+                        _audit_rla = _get_audit_rla()
+                        if _audit_rla:
+                            _audit_rla.log_agent_failed(
+                                agent_id=self.state.agent_id,
+                                name=self.state.agent_name,
+                                error=_abort_msg,
+                                iterations=_rl_consecutive,
+                                duration_ms=(_time_mod.monotonic() - self._agent_start_time) * 1000,
+                            )
+                        # ────────────────────────────────────────────────────────
+                        return self.state.final_result or {"success": False, "error": _abort_msg}
+                    _backoff = min(300.0, 30.0 * (2.0 ** (_rl_consecutive - 1)))
+                    _jitter = _backoff * random.uniform(0.0, 0.2)
+                    _sleep = _backoff + _jitter
+                    logger.warning(
+                        "LLM rate limit exhausted after all retries (hit #%d/%d); "
+                        "backing off %.0fs before resuming agent loop...",
+                        _rl_consecutive,
+                        _rl_max,
+                        _sleep,
+                    )
+                    # ── Audit: log RL backoff hit ────────────────────────────
+                    from phantom.logging.audit import get_audit_logger as _get_audit_rlh
+                    _audit_rlh = _get_audit_rlh()
+                    _model_name = getattr(getattr(self, "llm_config", None), "litellm_model", "?") or "?"
+                    if _audit_rlh:
+                        _audit_rlh.log_rate_limit_hit(
+                            agent_id=self.state.agent_id,
+                            model=_model_name,
+                            consecutive=_rl_consecutive,
+                            max_consecutive=_rl_max,
+                            backoff_s=_sleep,
+                        )
+                    # ────────────────────────────────────────────────────────
+                    await asyncio.sleep(_sleep)
+                    continue
+                result = self._handle_llm_error(e, tracer)
+                if result is not None:
+                    return result
+                continue
+
+            except (RuntimeError, ValueError, TypeError) as e:
+                if not await self._handle_iteration_error(e, tracer):
+                    if self.non_interactive:
+                        self.state.set_completed({"success": False, "error": str(e)})
+                        if tracer:
+                            tracer.update_agent_status(self.state.agent_id, "failed")
+                        # ── Audit: log agent failed (unhandled error) ─────────────
+                        from phantom.logging.audit import get_audit_logger as _get_audit_err
+                        _audit_err = _get_audit_err()
+                        if _audit_err:
+                            _audit_err.log_agent_failed(
+                                agent_id=self.state.agent_id,
+                                name=self.state.agent_name,
+                                error=str(e),
+                                iterations=self.state.iteration,
+                                duration_ms=(_time_mod.monotonic() - self._agent_start_time) * 1000,
+                            )
+                        # ────────────────────────────────────────────────────────
+                        raise
+                    await self._enter_waiting_state(tracer, error_occurred=True)
+                    continue
+
+    async def _wait_for_input(self) -> None:
+        if self._force_stop:
+            return
+
+        if self.state.has_waiting_timeout():
+            self.state.resume_from_waiting()
+            self.state.add_message("user", "Waiting timeout reached. Resuming execution.")
+
+            from phantom.telemetry.tracer import get_global_tracer
+
+            tracer = get_global_tracer()
+            if tracer:
+                tracer.update_agent_status(self.state.agent_id, "running")
+
+            try:
+                from phantom.tools.agents_graph.agents_graph_actions import _agent_graph
+
+                if self.state.agent_id in _agent_graph["nodes"]:
+                    _agent_graph["nodes"][self.state.agent_id]["status"] = "running"
+            except (ImportError, KeyError):
+                pass
+
+            return
+
+        await asyncio.sleep(0.5)
+
+    async def _enter_waiting_state(
+        self,
+        tracer: Optional["Tracer"],
+        task_completed: bool = False,
+        error_occurred: bool = False,
+        was_cancelled: bool = False,
+    ) -> None:
+        self.state.enter_waiting_state()
+
+        if tracer:
+            if task_completed:
+                tracer.update_agent_status(self.state.agent_id, "completed")
+            elif error_occurred:
+                tracer.update_agent_status(self.state.agent_id, "error")
+            elif was_cancelled:
+                tracer.update_agent_status(self.state.agent_id, "stopped")
+            else:
+                tracer.update_agent_status(self.state.agent_id, "stopped")
+
+        if task_completed:
+            self.state.add_message(
+                "assistant",
+                "Task completed. I'm now waiting for follow-up instructions or new tasks.",
+            )
+        elif error_occurred:
+            self.state.add_message(
+                "assistant", "An error occurred. I'm now waiting for new instructions."
+            )
+        elif was_cancelled:
+            self.state.add_message(
+                "assistant", "Execution was cancelled. I'm now waiting for new instructions."
+            )
+        else:
+            self.state.add_message(
+                "assistant",
+                "Execution paused. I'm now waiting for new instructions or any updates.",
+            )
+
+    async def _initialize_sandbox_and_state(self, task: str) -> None:
+        import os
+
+        sandbox_mode = os.getenv("PHANTOM_SANDBOX_MODE", "false").lower() == "true"
+        if not sandbox_mode and self.state.sandbox_id is None:
+            from phantom.runtime import get_runtime
+
+            runtime = get_runtime()
+            sandbox_info = await runtime.create_sandbox(
+                self.state.agent_id, self.state.sandbox_token, self.local_sources
+            )
+            self.state.sandbox_id = sandbox_info["workspace_id"]
+            self.state.sandbox_token = sandbox_info["auth_token"]
+            self.state.sandbox_info = sandbox_info
+
+            if "agent_id" in sandbox_info:
+                self.state.sandbox_info["agent_id"] = sandbox_info["agent_id"]
+
+            caido_port = sandbox_info.get("caido_port")
+            if caido_port:
+                from phantom.telemetry.tracer import get_global_tracer
+
+                tracer = get_global_tracer()
+                if tracer:
+                    tracer.caido_url = f"localhost:{caido_port}"
+
+        if not self.state.task:
+            self.state.task = task
+
+        # Only add the initial task message when the history is fresh.
+        # When resuming from a checkpoint, messages are already populated.
+        if not self.state.messages:
+            self.state.add_message("user", task)
+
+    async def _process_iteration(self, tracer: Optional["Tracer"]) -> bool:
+        final_response = None
+        self._last_iteration_action_count = 0
+        use_reflector = os.environ.get("PHANTOM_USE_REFLECTOR", "false").lower() == "true"
+
+        # AUDIT-FIX: Auto-inject scan_status every 10 iterations OR when message count > 50
+        message_count = len(self.state.get_conversation_history())
+        should_inject_status = (
+            (self.state.iteration > 0 and self.state.iteration % 10 == 0) or
+            (message_count > 50)
+        )
+        if should_inject_status:
+            try:
+                from phantom.tools.scan_status.scan_status_actions import get_scan_status
+                status = get_scan_status(include_recommendations=True)
+                
+                # Format as compact message
+                status_msg = self._format_scan_status(status)
+                self.state.add_message("user", status_msg)
+            except Exception as e:
+                logging.debug(f"Failed to inject scan status: {e}")
+
+        # Rec 6 (SF-005): Inject Hypothesis Ledger summary every 10 iterations.
+        # AUDIT-FIX-08: Only inject unresolved hypotheses (PROPOSED/TESTING).
+        # Resolved hypotheses waste tokens by re-injecting closed items.
+        _LEDGER_INJECT_EVERY = int(Config.get("phantom_ledger_inject_interval") or "10")
+        if (
+            len(self.hypothesis_ledger) > 0
+            and self.state.iteration > 0
+            and self.state.iteration % _LEDGER_INJECT_EVERY == 0
+        ):
+            ledger_summary = self.hypothesis_ledger.to_prompt_summary(
+                top_n=10,
+                status_filter=["open", "testing"],
+            )
+            if ledger_summary:
+                self.state.add_message("user", ledger_summary)
+
+        # Enhancement: Coverage Tracker injection (same cadence as hypothesis ledger).
+        # Reports FACTS about coverage state - LLM decides what to test based on this.
+        _COVERAGE_INJECT_EVERY = int(Config.get("phantom_coverage_inject_interval") or "15")
+        if (
+            len(self.coverage_tracker) > 0
+            and self.state.iteration > 0
+            and self.state.iteration % _COVERAGE_INJECT_EVERY == 0
+        ):
+            coverage_summary = self.coverage_tracker.to_prompt_summary(max_items=15)
+            if coverage_summary:
+                self.state.add_message("user", coverage_summary)
+
+        # Enhancement: Correlation Engine injection - shows potential vulnerability chains.
+        # Reports SUGGESTIONS not commands - LLM decides whether to pursue chains.
+        _CORRELATION_INJECT_EVERY = int(Config.get("phantom_correlation_inject_interval") or "20")
+        if (
+            len(self.correlation_engine) > 0
+            and self.state.iteration > 0
+            and self.state.iteration % _CORRELATION_INJECT_EVERY == 0
+        ):
+            correlation_summary = self.correlation_engine.to_prompt_summary(max_items=10)
+            if correlation_summary:
+                self.state.add_message("user", correlation_summary)
+
+        # S-07: Phase-gate reporting reminder at 85% of max iterations.
+        _max_iter = self.state.max_iterations
+        _cur_iter = self.state.iteration
+        if _max_iter and _max_iter > 0 and _cur_iter > 1:
+            _gate_msg = None
+            if _cur_iter == max(4, int(_max_iter * 0.85)):
+                _gate_msg = (
+                    "[FINAL WARNING — REPORT NOW] You have used 85% of your iterations. "
+                    "You are about to run out of time. If you have ANY unreported findings, "
+                    "call create_vulnerability_report as soon as possible, then prepare to finish the scan."
+                )
+            if _gate_msg:
+                self.state.add_message("user", _gate_msg)
+
+        async for response in self.llm.generate(self.state.get_conversation_history()):
+            final_response = response
+            if tracer and response.content:
+                tracer.update_streaming_content(self.state.agent_id, response.content)
+
+        if final_response is None:
+            self._last_iteration_action_count = 0
+            return False
+
+        content_stripped = (final_response.content or "").strip()
+
+        if not content_stripped:
+            self._last_iteration_action_count = 0
+            if use_reflector:
+                try:
+                    reflector = get_reflector()
+                    context = "\n".join(
+                        str(msg.get("content", ""))
+                        for msg in self.state.get_conversation_history()[-4:]
+                    )
+                    suggestion = await reflector.reflect(context)
+                    if suggestion:
+                        self.state.add_message("user", f"Reflector suggestion: {suggestion}")
+                        return False
+                except Exception:
+                    pass
+            # B2: Compact corrective message (was ~200 tokens, now ~30)
+            corrective_message = (
+                "Empty response. You MUST call a tool. Try: terminal_execute, send_request, or create_vulnerability_report."
+            )
+            self.state.add_message("user", corrective_message)
+            return False
+
+        thinking_blocks = getattr(final_response, "thinking_blocks", None)
+        self.state.add_message("assistant", final_response.content, thinking_blocks=thinking_blocks)
+        if tracer:
+            tracer.clear_streaming_content(self.state.agent_id)
+            tracer.log_chat_message(
+                content=clean_content(final_response.content),
+                role="assistant",
+                agent_id=self.state.agent_id,
+            )
+
+        actions = (
+            final_response.tool_invocations
+            if hasattr(final_response, "tool_invocations") and final_response.tool_invocations
+            else []
+        )
+
+        if actions:
+            self._last_iteration_action_count = len(actions)
+            return await self._execute_actions(actions, tracer)
+
+        if use_reflector:
+            try:
+                reflector = get_reflector()
+                context = (final_response.content or "")[:500]
+                suggestion = await reflector.reflect(context)
+                if suggestion:
+                    self.state.add_message("user", f"Reflector suggestion: {suggestion}")
+            except Exception:
+                pass
+
+        self._last_iteration_action_count = 0
+        return False
+
+    async def _execute_actions(self, actions: list[Any], tracer: Optional["Tracer"]) -> bool:
+        """Execute actions and return True if agent should finish."""
+        # Avoid blind repetition of identical action batches across consecutive iterations.
+        # This reduces dead-end payload retries without changing tool semantics.
+        try:
+            batch_signature = json.dumps(
+                [
+                    {
+                        "toolName": action.get("toolName"),
+                        "args": action.get("args", {}),
+                    }
+                    for action in actions
+                ],
+                sort_keys=True,
+            )
+        except Exception:  # noqa: BLE001
+            batch_signature = ""
+
+        if batch_signature:
+            # AUDIT-FIX-10: Only block repeated batches when the previous
+            # identical call SUCCEEDED. If it errored/timed-out, allow retry.
+            _recent = self._recent_action_results[-2:] if len(self._recent_action_results) >= 2 else []
+            if _recent and all(
+                sig == batch_signature and succeeded
+                for sig, succeeded in _recent
+            ):
+                self.state.add_message(
+                    "user",
+                    "You repeated the exact same tool action batch multiple times with no new "
+                    "signal. Change payload/target/vector before retrying.",
+                )
+                return False
+            # NOTE: _recent_action_results is appended AFTER execution below
+            if len(self._recent_action_batches) > 8:
+                self._recent_action_batches = self._recent_action_batches[-8:]
+
+        for action in actions:
+            self.state.add_action(action)
+
+        conversation_history = self.state.get_conversation_history()
+
+        tool_task = asyncio.create_task(
+            process_tool_invocations(actions, conversation_history, self.state)
+        )
+        self._current_task = tool_task
+
+        try:
+            should_agent_finish = await tool_task
+            self._current_task = None
+            # AUDIT-FIX-10: Record (signature, succeeded=True) for dedup tracking
+            if batch_signature:
+                self._recent_action_results.append((batch_signature, True))
+                if len(self._recent_action_results) > 8:
+                    self._recent_action_results = self._recent_action_results[-8:]
+        except asyncio.CancelledError:
+            self._current_task = None
+            self.state.add_error("Tool execution cancelled by user")
+            # AUDIT-FIX-10: Cancelled execution → mark as not-succeeded so retry is allowed
+            if batch_signature:
+                self._recent_action_results.append((batch_signature, False))
+                if len(self._recent_action_results) > 8:
+                    self._recent_action_results = self._recent_action_results[-8:]
+            raise
+
+        self.state.messages = conversation_history
+
+        if should_agent_finish:
+            self.state.set_completed({"success": True})
+            if tracer:
+                tracer.update_agent_status(self.state.agent_id, "completed")
+            if self.non_interactive and self.state.parent_id is None:
+                return True
+            return True
+
+        return False
+
+    def _check_agent_messages(self, state: AgentState) -> None:  # noqa: PLR0912
+        try:
+            from phantom.tools.agents_graph.agents_graph_actions import _agent_graph, _agent_messages
+
+            agent_id = state.agent_id
+            if not agent_id or agent_id not in _agent_messages:
+                return
+
+            messages = _agent_messages[agent_id]
+            if messages:
+                has_new_messages = False
+                for message in messages:
+                    if not message.get("read", False):
+                        sender_id = message.get("from")
+
+                        if state.is_waiting_for_input():
+                            if state.llm_failed:
+                                if sender_id == "user":
+                                    state.resume_from_waiting()
+                                    has_new_messages = True
+
+                                    from phantom.telemetry.tracer import get_global_tracer
+
+                                    tracer = get_global_tracer()
+                                    if tracer:
+                                        tracer.update_agent_status(state.agent_id, "running")
+                            else:
+                                state.resume_from_waiting()
+                                has_new_messages = True
+
+                                from phantom.telemetry.tracer import get_global_tracer
+
+                                tracer = get_global_tracer()
+                                if tracer:
+                                    tracer.update_agent_status(state.agent_id, "running")
+
+                        if sender_id == "user":
+                            sender_name = "User"
+                            state.add_message("user", message.get("content", ""))
+                        else:
+                            # BUG FIX B: initialise sender_name with a safe fallback
+                            # so the f-string below never raises NameError when
+                            # sender_id is absent from the agent graph.
+                            sender_name = sender_id or "unknown-agent"
+                            if sender_id and sender_id in _agent_graph.get("nodes", {}):
+                                sender_name = _agent_graph["nodes"][sender_id]["name"]
+
+                            # B3: Compact inter-agent message format (was ~400 tokens XML, now ~50 tokens)
+                            import html as _html
+
+                            safe_sender_name = _html.escape(str(sender_name))
+                            safe_content = _html.escape(str(message.get("content", ""))[:200])
+
+                            message_content = f"[From {safe_sender_name}]: {safe_content}"
+                            state.add_message("user", message_content.strip())
+
+                        message["read"] = True
+
+                if has_new_messages and not state.is_waiting_for_input():
+                    from phantom.telemetry.tracer import get_global_tracer
+
+                    tracer = get_global_tracer()
+                    if tracer:
+                        tracer.update_agent_status(agent_id, "running")
+
+        except (AttributeError, KeyError, TypeError) as e:
+            logger.warning("Error checking agent messages: %s", e)
+
+    def _maybe_save_checkpoint(self, tracer: Optional["Tracer"], force: bool = False) -> None:
+        """Save a checkpoint if the checkpoint manager is configured and it's time to do so."""
+        # Only the root agent (no parent) saves checkpoint state
+        if self.state.parent_id is not None:
+            return
+        checkpoint_mgr = self.config.get("_checkpoint_manager")
+        if checkpoint_mgr is None:
+            return
+        if not force and not checkpoint_mgr.should_save(self.state.iteration):
+            return
+        try:
+            from phantom.checkpoint.checkpoint import CheckpointManager
+
+            cp = CheckpointManager.build(
+                run_name=tracer.run_name if tracer else (self.config.get("_run_name") or "unknown"),
+                state=self.state,
+                tracer=tracer,
+                scan_config=tracer.scan_config or {} if tracer else {},
+                # P4: Include hypothesis ledger, coverage tracker, and correlation engine
+                hypothesis_ledger=self.hypothesis_ledger,
+                coverage_tracker=self.coverage_tracker,
+                correlation_engine=self.correlation_engine,
+            )
+            checkpoint_mgr.save(cp)
+            # ── Audit: log checkpoint saved ──────────────────────────────
+            from phantom.logging.audit import get_audit_logger as _get_audit_ck
+            _audit_ck = _get_audit_ck()
+            if _audit_ck:
+                _audit_ck.log_checkpoint(
+                    agent_id=self.state.agent_id,
+                    run_dir=str(checkpoint_mgr.run_dir),
+                    iteration=self.state.iteration,
+                )
+            # ────────────────────────────────────────────────────────────
+        except Exception:  # noqa: BLE001
+            logger.warning("Checkpoint save failed", exc_info=True)
+
+    def _format_scan_status(self, status: dict[str, Any]) -> str:
+        """Format scan status into a compact message for LLM injection."""
+        progress = status.get("scan_progress", {})
+        findings = status.get("findings", {})
+        coverage = status.get("coverage", {})
+        chains = status.get("chain_opportunities", [])
+        recommendation = status.get("recommended_next_action")
+        warnings = status.get("warnings", [])
+        
+        lines = ["[AUTO-STATUS — Scan Progress Update]"]
+        lines.append(
+            f"Phase: {progress.get('phase')} | "
+            f"Iteration {progress.get('iteration')}/{progress.get('max_iterations')} "
+            f"({progress.get('percent_complete')}%)"
+        )
+        lines.append(
+            f"Findings: {findings.get('confirmed_vulnerabilities')} confirmed, "
+            f"{findings.get('actively_testing')} testing, "
+            f"{findings.get('pending_hypotheses')} pending"
+        )
+        lines.append(
+            f"Coverage: {coverage.get('surfaces_tested')} tested, "
+            f"{coverage.get('surfaces_remaining')} remaining "
+            f"({coverage.get('coverage_percent')}%)"
+        )
+        
+        if chains:
+            lines.append(f"Chain Opportunities: {len(chains)}")
+            for chain in chains[:2]:
+                lines.append(f"  - {chain.get('chain')}: {chain.get('description', '')[:50]}")
+        
+        if recommendation:
+            lines.append(f"Recommended: {recommendation}")
+        
+        if warnings:
+            for warning in warnings:
+                lines.append(f"[!] {warning}")
+        
+        lines.append("[END STATUS]")
+        return "\n".join(lines)
+
+    def _handle_sandbox_error(
+        self,
+        error: SandboxInitializationError,
+        tracer: Optional["Tracer"],
+    ) -> dict[str, Any]:
+        error_msg = str(error.message)
+        error_details = error.details
+        self.state.add_error(error_msg)
+
+        if self.non_interactive:
+            self.state.set_completed({"success": False, "error": error_msg})
+            if tracer:
+                tracer.update_agent_status(self.state.agent_id, "failed", error_msg)
+                if error_details:
+                    exec_id = tracer.log_tool_execution_start(
+                        self.state.agent_id,
+                        "sandbox_error_details",
+                        {"error": error_msg, "details": error_details},
+                    )
+                    tracer.update_tool_execution(exec_id, "failed", {"details": error_details})
+            # ── Audit: log agent failed (sandbox error) ───────────────────
+            from phantom.logging.audit import get_audit_logger as _get_audit_sb
+            _audit_sb = _get_audit_sb()
+            if _audit_sb:
+                _audit_sb.log_agent_failed(
+                    agent_id=self.state.agent_id,
+                    name=self.state.agent_name,
+                    error=error_msg,
+                    iterations=self.state.iteration,
+                    duration_ms=(__import__('time').monotonic() - getattr(self, '_agent_start_time', __import__('time').monotonic())) * 1000,
+                )
+            # ─────────────────────────────────────────────────────────────
+            return {"success": False, "error": error_msg, "details": error_details}
+
+        self.state.enter_waiting_state()
+        if tracer:
+            tracer.update_agent_status(self.state.agent_id, "sandbox_failed", error_msg)
+            if error_details:
+                exec_id = tracer.log_tool_execution_start(
+                    self.state.agent_id,
+                    "sandbox_error_details",
+                    {"error": error_msg, "details": error_details},
+                )
+                tracer.update_tool_execution(exec_id, "failed", {"details": error_details})
+
+        return {"success": False, "error": error_msg, "details": error_details}
+
+    def _handle_llm_error(
+        self,
+        error: LLMRequestFailedError,
+        tracer: Optional["Tracer"],
+    ) -> dict[str, Any] | None:
+        error_msg = str(error)
+        error_details = getattr(error, "details", None)
+        self.state.add_error(error_msg)
+
+        if self.non_interactive:
+            self.state.set_completed({"success": False, "error": error_msg})
+            if tracer:
+                tracer.update_agent_status(self.state.agent_id, "failed", error_msg)
+                if error_details:
+                    exec_id = tracer.log_tool_execution_start(
+                        self.state.agent_id,
+                        "llm_error_details",
+                        {"error": error_msg, "details": error_details},
+                    )
+                    tracer.update_tool_execution(exec_id, "failed", {"details": error_details})
+            # ── Audit: log agent failed (LLM error) ───────────────────────
+            from phantom.logging.audit import get_audit_logger as _get_audit_llme
+            _audit_llme = _get_audit_llme()
+            if _audit_llme:
+                _audit_llme.log_agent_failed(
+                    agent_id=self.state.agent_id,
+                    name=self.state.agent_name,
+                    error=error_msg,
+                    iterations=self.state.iteration,
+                    duration_ms=(__import__('time').monotonic() - getattr(self, '_agent_start_time', __import__('time').monotonic())) * 1000,
+                )
+            # ─────────────────────────────────────────────────────────────
+            return {"success": False, "error": error_msg}
+
+        self.state.enter_waiting_state(llm_failed=True)
+        if tracer:
+            tracer.update_agent_status(self.state.agent_id, "llm_failed", error_msg)
+            if error_details:
+                exec_id = tracer.log_tool_execution_start(
+                    self.state.agent_id,
+                    "llm_error_details",
+                    {"error": error_msg, "details": error_details},
+                )
+                tracer.update_tool_execution(exec_id, "failed", {"details": error_details})
+
+        return None
+
+    async def _handle_iteration_error(
+        self,
+        error: RuntimeError | ValueError | TypeError | asyncio.CancelledError,
+        tracer: Optional["Tracer"],
+    ) -> bool:
+        error_msg = f"Error in iteration {self.state.iteration}: {error!s}"
+        logger.exception(error_msg)
+        self.state.add_error(error_msg)
+        if tracer:
+            tracer.update_agent_status(self.state.agent_id, "error")
+        if isinstance(error, asyncio.CancelledError):
+            return True  # Cancelled — don't propagate, loop will handle
+        return False  # Real error — propagate to non_interactive raise or waiting state
+
+    def cancel_current_execution(self) -> None:
+        self._force_stop = True
+        if self._current_task and not self._current_task.done():
+            try:
+                loop = self._current_task.get_loop()
+                loop.call_soon_threadsafe(self._current_task.cancel)
+            except RuntimeError:
+                self._current_task.cancel()
+        self._current_task = None

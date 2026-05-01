@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python3 -c \"import sys,json; [print\\(json.dumps\\(json.loads\\(l\\),indent=2\\)\\) for l in sys.stdin if 'error' in l.lower\\(\\) or 'tool.error' in l.lower\\(\\) or 'tool.start' in l.lower\\(\\)]\")",
+      "Bash(python3 *)",
+      "Bash(grep -rn \"@register_tool$\\\\|@register_tool\\(\" phantom/tools/ --include=\"*.py\")",
+      "Bash(grep -n \"\\\\\\\\\\\\\\\\section\\\\|\\\\\\\\\\\\\\\\subsection\\\\|\\\\\\\\\\\\\\\\subsubsection\\\\|\\\\\\\\\\\\\\\\chapter\" \"C:\\\\Users\\\\Gadouri\\\\Desktop\\\\New folder \\(2\\)\\\\phantom\\\\thesis_output\\\\phantom_master_thesis.tex\")"
+    ]
+  }
+}

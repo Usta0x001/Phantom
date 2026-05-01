@@ -957,86 +957,49 @@ class LLM:
             except Exception:
                 pass
 
-        # ── Dynamic Context Injection ──
-        # Inject metadata as user context combined with the first real message
-        # This avoids consecutive user messages which breaks prompt caching alternation rules
-        dynamic_user_content = ""
-        if self.agent_name:
-            dynamic_user_content += (
-                f"<agent_identity>\n"
-                f"<meta>Internal metadata: do not echo or reference.</meta>\n"
-                f"<agent_name>{self.agent_name}</agent_name>\n"
-                f"<agent_id>{self.agent_id}</agent_id>\n"
-                f"</agent_identity>\n\n"
-            )
-
-        _has_anchors = (
-            _state is not None and hasattr(_state, "finding_anchors") and _state.finding_anchors
-        )
-        if _has_anchors:
-            # Only inject if not already present in last 5 messages
-            _last_msgs = compressed[-5:] if len(compressed) >= 5 else compressed
-            _already_injected = any(
-                "finding_anchors" in str(m.get("content", "")) for m in _last_msgs
-            )
-            if not _already_injected:
-                anchor_lines = []
-                for anchor in _state.finding_anchors[:15]:  # cap at 15
-                    status = str(anchor.get("status", "active")).lower()
-                    if status in {"transient", "invalidated", "superseded"}:
-                        continue
-                    text = anchor.get("text", "").strip()
-                    if text:
-                        anchor_lines.append(f"- {text[:600]}")  # 600 chars, was 300
-                if anchor_lines:
-                    dynamic_user_content += (
-                        "<finding_anchors>\n"
-                        "Confirmed signals from earlier in this scan — "
-                        "report any that have NOT been reported yet:\n"
-                        + "\n".join(anchor_lines)
-                        + "\n</finding_anchors>\n\n"
-                    )
-
-        if dynamic_user_content:
-            if compressed and compressed[0].get("role") == "user":
-                first_msg = dict(compressed[0])
-                first_msg["content"] = dynamic_user_content + str(first_msg.get("content", ""))
-                messages.append(first_msg)
-                messages.extend(compressed[1:])
-            else:
-                messages.append({"role": "user", "content": dynamic_user_content.strip()})
-                messages.extend(compressed)
-        else:
-            messages.extend(compressed)
-
-        if messages[-1].get("role") == "assistant":
-            messages.append({"role": "user", "content": "<meta>Continue the task.</meta>"})
-
-        # FIX: merge consecutive user messages to respect Anthropic prompt-caching
-        # alternation rules and reduce token bloat from repeated role markers.
-        messages = self._merge_consecutive_same_role(messages)
-
-        # FIX: Use supports_prompt_caching() instead of _is_anthropic() so ALL
-        # supported providers (DeepSeek, Anthropic, OpenAI) get prompt caching.
+        # ── CACHE-CONTROL: mark the static system prompt BEFORE dynamic
+        # context blocks join it. Only for models litellm confirms support
+        # prompt caching. Third-party models on Azure (e.g. DeepSeek) may
+        # NOT support cache_control, causing under-reported token counts.
         if (
             self.config.enable_prompt_caching
             and supports_prompt_caching(self.config.canonical_model)
         ):
             messages = self._add_cache_control(messages)
 
+        # ── Message Assembly ──
+        # Extend with compressed output (includes system-role prefix blocks
+        # from _build_hypothesis_context, plus conversation messages).
+        messages.extend(compressed)
+
+        if messages[-1].get("role") == "assistant":
+            messages.append({"role": "user", "content": "<meta>Continue the task.</meta>"})
+
+        # Merge consecutive user messages (respects alternation rules).
+        # Do NOT merge system messages — the static prompt must stay isolated
+        # so prompt caching works across iterations.
+        messages = self._merge_consecutive_same_role(messages, merge_system=False)
+
         return messages
 
     def _merge_consecutive_same_role(
-        self, messages: list[dict[str, Any]]
+        self, messages: list[dict[str, Any]], merge_system: bool = True
     ) -> list[dict[str, Any]]:
         """Merge consecutive messages with the same role to avoid breaking
-        provider-specific caching / alternation rules."""
+        provider-specific caching / alternation rules.
+
+        When merge_system=False, system messages are never merged. This keeps
+        the static system prompt isolated from dynamic context blocks so
+        prompt caching works (the static block has a stable content hash)."""
         if not messages:
             return messages
         merged: list[dict[str, Any]] = []
         for msg in messages:
             role = msg.get("role")
             content = msg.get("content", "")
+            if role == "system" and not merge_system:
+                merged.append(dict(msg))
+                continue
             if merged and merged[-1].get("role") == role:
                 prev = dict(merged[-1])
                 prev_content = prev.get("content", "")
@@ -1364,34 +1327,9 @@ class LLM:
         system_msgs = [m for m in messages if m.get("role") == "system"]
         non_system = [m for m in messages if m.get("role") != "system"]
 
-        pinned: list[dict[str, Any]] = []
-        state = getattr(self, "_agent_state", None)
-        anchors = []
-        if state is not None:
-            anchors = list(getattr(state, "finding_anchors", []) or [])
-
-        if anchors:
-            anchor_lines = []
-            for anchor in anchors[:15]:
-                status = str(anchor.get("status", "active")).lower()
-                if status in {"invalidated", "superseded"}:
-                    continue
-                text = str(anchor.get("text", "")).strip()
-                if text:
-                    anchor_lines.append(f"- {text[:600]}")
-            if anchor_lines:
-                pinned.append(
-                    {
-                        "role": "user",
-                        "content": "<pinned_facts>\n"
-                        + "\n".join(anchor_lines)
-                        + "\n</pinned_facts>",
-                    }
-                )
-
         keep_recent = max(12, int(Config.get("phantom_safe_reduce_last_k") or "20"))
         recent = non_system[-keep_recent:]
-        return system_msgs + pinned + recent
+        return system_msgs + recent
 
     def _build_completion_args(self, messages: list[dict[str, Any]]) -> dict[str, Any]:
         if not self._supports_vision():
@@ -1844,7 +1782,17 @@ class LLM:
         return result
 
     def _add_cache_control(self, messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        if not messages or not supports_prompt_caching(self.config.canonical_model):
+        if not messages or not self.config.enable_prompt_caching:
+            return messages
+
+        # Only add cache_control when litellm CONFIRMS the model supports
+        # prompt caching. Previous heuristics (openai/ prefix, azure in api_base)
+        # assumed all OpenAI-compatible endpoints support caching, but third-party
+        # models hosted on Azure (DeepSeek-V3.2-Speciale, etc.) may NOT support
+        # it. Sending cache_control to unsupported models causes the API to
+        # under-report prompt_tokens (only counting non-cached portion), leading
+        # to cost being under-reported vs the actual Azure bill.
+        if not supports_prompt_caching(self.config.canonical_model):
             return messages
 
         result = list(messages)

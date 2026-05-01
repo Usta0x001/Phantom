@@ -1,0 +1,100 @@
+<tools>
+  <tool name="browser_action">
+    <description>Perform browser actions using a Playwright-controlled browser with multiple tabs. The browser is PERSISTENT and remains active until explicitly closed.</description>
+    <parameters>
+      <parameter name="action" type="string" required="true">
+      </parameter>
+      <parameter name="url" type="string" required="false">
+        <description>Required for 'launch', 'goto', and optionally for 'new_tab' actions.</description>
+      </parameter>
+      <parameter name="coordinate" type="string" required="false">
+        <description>Required for 'click', 'double_click', and 'hover' actions. Format: "x,y". Calculate coordinates from the center of elements in the screenshot.</description>
+      </parameter>
+      <parameter name="text" type="string" required="false">
+        <description>Required for 'type' and 'fill_selector' actions.</description>
+      </parameter>
+      <parameter name="tab_id" type="string" required="false">
+        <description>Required for 'switch_tab' and 'close_tab' actions. Default: currently active tab.</description>
+      </parameter>
+      <parameter name="js_code" type="string" required="false">
+        <description>Required for 'execute_js' action. JavaScript runs in page context. LAST EVALUATED EXPRESSION is returned (no return statement needed). For objects, wrap in parens: {title: document.title}. For async: await fetch(url).then(r => r.status).</description>
+      </parameter>
+      <parameter name="duration" type="string" required="false">
+        <description>Required for 'wait' action. Number of seconds to pause (can be fractional).</description>
+      </parameter>
+      <parameter name="key" type="string" required="false">
+        <description>Required for 'press_key' action. Valid: 'a'-'z', 'A'-'Z', '0'-'9', 'Enter', 'Escape', 'ArrowLeft', 'ArrowRight', 'Shift', 'Control', 'Alt', 'F1'-'F12'.</description>
+      </parameter>
+      <parameter name="file_path" type="string" required="false">
+        <description>Required for 'save_pdf' action.</description>
+      </parameter>
+      <parameter name="clear" type="boolean" required="false">
+        <description>For 'get_console_logs': whether to clear logs after retrieval. Default: False.</description>
+      </parameter>
+      <parameter name="selector" type="string" required="false">
+        <description>Required for selector actions ('click_selector', 'fill_selector', 'wait_for_selector', 'query_selector_all'). CSS selector string (e.g., '#login-btn', 'input[name="username"]', '.submit-form button').</description>
+      </parameter>
+      <parameter name="timeout" type="number" required="false">
+        <description>For selector actions: max seconds to wait for element. Default: 5s for click/fill, 10s for wait_for_selector.</description>
+      </parameter>
+      <parameter name="wait_state" type="string" required="false">
+        <description>For 'wait_for_selector': element state to wait for. Options: 'attached', 'detached', 'visible', 'hidden'. Default: 'visible'.</description>
+      </parameter>
+    </parameters>
+    <returns type="Dict[str, Any]">
+      <description>Response containing: screenshot (base64 PNG), url, title, viewport, tab_id, all_tabs, message, js_result, console_logs (50KB max, 200 entries), page_source (100KB max). Selector actions also return: selector_found (bool), selector_used, elements (for query_selector_all).</description>
+    </returns>
+    <examples>
+  <function=browser_action>
+  <parameter=action>launch</parameter>
+  <parameter=url>https://example.com</parameter>
+  </function>
+
+  <function=browser_action>
+  <parameter=action>goto</parameter>
+  <parameter=url>https://github.com</parameter>
+  </function>
+
+  <function=browser_action>
+  <parameter=action>click</parameter>
+  <parameter=coordinate>450,300</parameter>
+  </function>
+
+  <function=browser_action>
+  <parameter=action>type</parameter>
+  <parameter=text>user@example.com</parameter>
+  </function>
+
+  <function=browser_action>
+  <parameter=action>execute_js</parameter>
+  <parameter=js_code>{images: document.images.length, links: document.links.length, title: document.title}</parameter>
+  </function>
+
+  <function=browser_action>
+  <parameter=action>click_selector</parameter>
+  <parameter=selector>#login-button</parameter>
+  </function>
+
+  <function=browser_action>
+  <parameter=action>fill_selector</parameter>
+  <parameter=selector>input[name="username"]</parameter>
+  <parameter=text>admin</parameter>
+  </function>
+
+  <function=browser_action>
+  <parameter=action>wait_for_selector</parameter>
+  <parameter=selector>.success-message</parameter>
+  <parameter=wait_state>visible</parameter>
+  </function>
+
+  <function=browser_action>
+  <parameter=action>query_selector_all</parameter>
+  <parameter=selector>form input</parameter>
+  </function>
+
+  <function=browser_action>
+  <parameter=action>close</parameter>
+  </function>
+    </examples>
+  </tool>
+</tools>

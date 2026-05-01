@@ -1,0 +1,286 @@
+diff --git a/phantom/tools/recon/directory_bruteforce_schema.xml b/phantom/tools/recon/directory_bruteforce_schema.xml
+index cbc9612..275128f 100644
+--- a/phantom/tools/recon/directory_bruteforce_schema.xml
++++ b/phantom/tools/recon/directory_bruteforce_schema.xml
+@@ -1,245 +1,39 @@
+ <?xml version="1.0" encoding="UTF-8"?>
+ <tool_schemas>
+-    <tool name="bruteforce_directories">
+-        <description>
+-            Perform async directory and file brute-forcing.
+-            
+-            Enumerates directories and files on a web server using wordlists,
+-            with smart detection of custom 404 pages and interesting responses.
+-            
+-            This is ACTIVE reconnaissance - it makes HTTP requests to discover
+-            hidden content, admin panels, backup files, and sensitive paths.
+-            
+-            Features:
+-            - Async concurrent requests for speed
+-            - Custom 404 detection (handles soft 404s)
+-            - Stealth mode for careful enumeration
+-            - Extension fuzzing (.php, .bak, .old, etc.)
+-            - Categorizes findings by type
+-            
+-            Common Findings:
+-            - Admin panels (/admin, /dashboard, /cpanel)
+-            - Backup files (.sql, .zip, .bak)
+-            - Config files (.env, config.php)
+-            - API endpoints (/api, /graphql)
+-            - Version control (.git, .svn)
+-            - Debug endpoints (/debug, /phpinfo.php)
+-        </description>
+-        <parameters>
+-            <parameter name="url" type="string" required="true">
+-                Target base URL (e.g., "https://example.com")
+-            </parameter>
+-            <parameter name="wordlist_path" type="string" required="false">
+-                Path to custom wordlist file (one path per line)
+-            </parameter>
+-            <parameter name="wordlist_size" type="string" required="false" default="medium">
+-                Built-in wordlist size: "small" (50), "medium" (150), "large" (300+)
+-            </parameter>
+-            <parameter name="extensions" type="array" required="false">
+-                File extensions to append (e.g., [".php", ".bak", ".old"])
+-            </parameter>
+-            <parameter name="concurrency" type="integer" required="false" default="20">
+-                Maximum concurrent requests (reduced in stealth mode)
+-            </parameter>
+-            <parameter name="stealth" type="boolean" required="false" default="false">
+-                Enable stealth mode (slower, randomized timing)
+-            </parameter>
+-            <parameter name="timeout" type="number" required="false" default="10.0">
+-                Request timeout in seconds
+-            </parameter>
+-            <parameter name="custom_wordlist" type="array" required="false">
+-                Custom list of paths to test
+-            </parameter>
+-            <parameter name="follow_redirects" type="boolean" required="false" default="false">
+-                Follow HTTP redirects
+-            </parameter>
+-            <parameter name="exclude_status" type="array" required="false">
+-                Status codes to exclude from results (e.g., [404, 500])
+-            </parameter>
+-        </parameters>
+-        <returns>
+-            Dictionary with:
+-            - success: Whether scan completed
+-            - url: Target URL
+-            - found: List of discovered paths with status codes and metadata
+-            - found_count: Number of paths found
+-            - statistics: Scan statistics (time, rate, etc.)
+-            - by_status: Breakdown by HTTP status code
+-            - by_category: Breakdown by finding category
+-        </returns>
+-        <example>
+-            bruteforce_directories(
+-                url="https://example.com",
+-                extensions=[".php", ".bak"],
+-                stealth=True
+-            )
+-        </example>
+-    </tool>
+-
+-    <tool name="smart_path_gen">
+-        <description>
+-            Generate intelligent path suggestions based on context.
+-            
+-            Analyzes the target and generates likely paths based on:
+-            - Detected technologies (PHP, Java, Python, etc.)
+-            - CMS platform (WordPress, Drupal, Joomla)
+-            - Domain name patterns
+-            - Existing findings for pattern learning
+-            
+-            Use this before brute-forcing to create a targeted wordlist.
+-            
+-            Path Categories:
+-            - high_priority: Always-check paths (.env, .git, robots.txt)
+-            - tech_specific: Based on tech stack
+-            - cms_specific: Based on CMS platform
+-            - pattern_based: Learned from existing findings
+-            - sensitive: Domain-specific backup/config files
+-        </description>
+-        <parameters>
+-            <parameter name="url" type="string" required="true">
+-                Target URL
+-            </parameter>
+-            <parameter name="tech_stack" type="array" required="false">
+-                Detected technologies (e.g., ["php", "mysql", "nginx"])
+-            </parameter>
+-            <parameter name="cms" type="string" required="false">
+-                Detected CMS (e.g., "wordpress", "drupal")
+-            </parameter>
+-            <parameter name="discovered_paths" type="array" required="false">
+-                Already discovered paths for pattern learning
+-            </parameter>
+-            <parameter name="max_paths" type="integer" required="false" default="200">
+-                Maximum paths to generate
+-            </parameter>
+-        </parameters>
+-        <returns>
+-            Dictionary with:
+-            - suggestions: Paths organized by category
+-            - all_paths: Combined list of all suggestions
+-            - total_count: Total paths generated
+-            - by_category: Count per category
+-        </returns>
+-        <example>
+-            smart_path_gen(
+-                url="https://example.com",
+-                tech_stack=["php", "mysql"],
+-                cms="wordpress"
+-            )
+-        </example>
+-    </tool>
+-
+-    <tool name="recursive_dir_scan">
+-        <description>
+-            Recursively scan discovered directories.
+-            
+-            After initial enumeration finds directories, this tool
+-            recursively explores them to find deeper content.
+-            
+-            Use this when:
+-            - Initial scan found interesting directories
+-            - You need to map the full directory structure
+-            - Looking for files nested deep in the tree
+-            
+-            Warning: Can generate many requests. Use stealth mode
+-            and low max_depth for sensitive targets.
+-        </description>
+-        <parameters>
+-            <parameter name="url" type="string" required="true">
+-                Target directory URL to scan recursively
+-            </parameter>
+-            <parameter name="max_depth" type="integer" required="false" default="3">
+-                Maximum recursion depth
+-            </parameter>
+-            <parameter name="concurrency" type="integer" required="false" default="10">
+-                Maximum concurrent requests
+-            </parameter>
+-            <parameter name="stealth" type="boolean" required="false" default="false">
+-                Enable stealth mode
+-            </parameter>
+-            <parameter name="timeout" type="number" required="false" default="10.0">
+-                Request timeout in seconds
+-            </parameter>
+-            <parameter name="extensions" type="array" required="false">
+-                File extensions to try
+-            </parameter>
+-        </parameters>
+-        <returns>
+-            Dictionary with:
+-            - found: All discovered paths
+-            - found_count: Total paths found
+-            - directories_scanned: Number of directories explored
+-            - max_depth_reached: Depth limit used
+-        </returns>
+-        <example>
+-            recursive_dir_scan(
+-                url="https://example.com/api/",
+-                max_depth=2,
+-                stealth=True
+-            )
+-        </example>
+-    </tool>
+-
+-    <tool name="comprehensive_dir_enum">
+-        <description>
+-            Perform comprehensive directory enumeration.
+-            
+-            This is the RECOMMENDED entry point for directory discovery.
+-            It orchestrates the full pipeline:
+-            
+-            1. Smart path generation based on tech stack and CMS
+-            2. Initial directory brute-forcing with combined wordlist
+-            3. Optional recursive scanning of discovered directories
+-            4. Categorization and prioritization of findings
+-            
+-            Use This When:
+-            - Starting reconnaissance on a web application
+-            - You want intelligent path suggestions
+-            - You need categorized, prioritized results
+-            - You want recursive directory exploration
+-            
+-            After This Tool:
+-            - Add discovered endpoints to coverage tracker
+-            - Create hypotheses for admin panels, API endpoints
+-            - Test sensitive files for information disclosure
+-            - Fuzz discovered forms and parameters
+-        </description>
+-        <parameters>
+-            <parameter name="url" type="string" required="true">
+-                Target URL (e.g., "https://example.com")
+-            </parameter>
+-            <parameter name="tech_stack" type="array" required="false">
+-                Detected technologies for smart path generation
+-            </parameter>
+-            <parameter name="cms" type="string" required="false">
+-                Detected CMS platform
+-            </parameter>
+-            <parameter name="stealth" type="boolean" required="false" default="false">
+-                Enable stealth mode
+-            </parameter>
+-            <parameter name="include_recursive" type="boolean" required="false" default="false">
+-                Recursively scan discovered directories
+-            </parameter>
+-            <parameter name="max_depth" type="integer" required="false" default="2">
+-                Max recursion depth (if recursive enabled)
+-            </parameter>
+-            <parameter name="wordlist_size" type="string" required="false" default="medium">
+-                Base wordlist size: "small", "medium", "large"
+-            </parameter>
+-        </parameters>
+-        <returns>
+-            Comprehensive results including:
+-            - findings: All discovered paths
+-            - priority_findings: High-priority findings (admin, config, etc.)
+-            - by_category: Findings organized by type
+-            - categories: Detailed category breakdown
+-            - statistics: Scan statistics
+-        </returns>
+-        <example>
+-            comprehensive_dir_enum(
+-                url="https://banking-app.example.com",
+-                tech_stack=["java", "spring"],
+-                include_recursive=True
+-            )
+-        </example>
+-    </tool>
++  <tool name="comprehensive_dir_enum">
++    <description>Perform comprehensive directory enumeration combining smart path generation, brute-forcing, and optional recursive scanning.</description>
++    <parameters>
++      <parameter name="url" type="string" required="true">
++        <description>Target URL (e.g., "https://example.com").</description>
++      </parameter>
++      <parameter name="tech_stack" type="array" required="false">
++        <description>Detected technologies for smart path generation.</description>
++      </parameter>
++      <parameter name="cms" type="string" required="false">
++        <description>Detected CMS platform.</description>
++      </parameter>
++      <parameter name="stealth" type="boolean" required="false">
++        <description>Enable stealth mode.</description>
++      </parameter>
++      <parameter name="include_recursive" type="boolean" required="false">
++        <description>Recursively scan discovered directories.</description>
++      </parameter>
++      <parameter name="max_depth" type="integer" required="false">
++        <description>Max recursion depth (if recursive enabled).</description>
++      </parameter>
++      <parameter name="wordlist_size" type="string" required="false">
++        <description>Base wordlist size: small, medium, large.</description>
++      </parameter>
++    </parameters>
++    <returns type="Dict[str, Any]">
++      <description>Findings, priority_findings, by_category, categories, and statistics.</description>
++    </returns>
++    <examples>
++      <function=comprehensive_dir_enum>
++        <parameter=url>https://banking-app.example.com</parameter>
++        <parameter=tech_stack>["java", "spring"]</parameter>
++        <parameter=include_recursive>true</parameter>
++      </function>
++    </examples>
++  </tool>
+ </tool_schemas>

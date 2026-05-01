@@ -16,7 +16,6 @@ from phantom.tools.registry import register_tool
 if TYPE_CHECKING:
     from phantom.agents.hypothesis_ledger import HypothesisLedger
     from phantom.agents.coverage_tracker import CoverageTracker
-    from phantom.core.attack_graph import AttackGraph
 
 
 _CONTEXT_BY_AGENT: dict[str, dict[str, Any]] = {}
@@ -35,7 +34,6 @@ def clear_scan_status_context(agent_id: str | None = None) -> None:
 def set_scan_status_context(
     hypothesis_ledger: HypothesisLedger | None = None,
     coverage_tracker: CoverageTracker | None = None,
-    attack_graph: Any | None = None,
     agent_state: Any | None = None,
 ) -> None:
     """Set the global context for scan status queries."""
@@ -47,12 +45,11 @@ def set_scan_status_context(
         _CONTEXT_BY_AGENT[agent_id] = {
             "hypothesis_ledger": hypothesis_ledger,
             "coverage_tracker": coverage_tracker,
-            "attack_graph": attack_graph,
             "agent_state": agent_state,
         }
 
 
-def _resolve_context(agent_id: str | None = None) -> tuple[Any, Any, Any, Any]:
+def _resolve_context(agent_id: str | None = None) -> tuple[Any, Any, Any]:
     if not agent_id:
         agent_id = "default"
     with _CONTEXT_LOCK:
@@ -61,7 +58,6 @@ def _resolve_context(agent_id: str | None = None) -> tuple[Any, Any, Any, Any]:
             return (
                 ctx.get("hypothesis_ledger"),
                 ctx.get("coverage_tracker"),
-                ctx.get("attack_graph"),
                 ctx.get("agent_state"),
             )
 
@@ -105,7 +101,6 @@ def _empty_scan_status(include_recommendations: bool = True) -> dict[str, Any]:
         "top_hypotheses": [],
         "archived_messages": {"count": 0, "recent": []},
         "chain_opportunities": [],
-        "correlation_learning": None,
         "recommended_next_action": (
             "Continue systematic testing" if include_recommendations else None
         ),
@@ -133,7 +128,6 @@ def get_scan_status(include_recommendations: bool = True, agent_id: str | None =
         - findings: Confirmed vulnerabilities, actively testing, pending hypotheses
         - coverage: Surfaces tested vs remaining
         - chain_opportunities: Active vulnerability chains to explore
-        - attack_graph: FIX 5 - Attack graph metrics and critical vulnerabilities
         - recommended_next_action: Suggested next step
         - warnings: Critical alerts (running out of iterations, etc.)
     
@@ -145,13 +139,12 @@ def get_scan_status(include_recommendations: bool = True, agent_id: str | None =
 
     # Get references (agent-scoped only)
     try:
-        hypothesis_ledger, coverage_tracker, attack_graph, state = _resolve_context(agent_id)
+        hypothesis_ledger, coverage_tracker, state = _resolve_context(agent_id)
     except (ValueError, AttributeError):
         if explicit_agent_requested:
             return _empty_scan_status(include_recommendations=include_recommendations)
         hypothesis_ledger = None
         coverage_tracker = None
-        attack_graph = None
         state = None
     
     # Compute phase
@@ -207,61 +200,12 @@ def get_scan_status(include_recommendations: bool = True, agent_id: str | None =
     
     # FIX 5: Get attack graph metrics
     chains: list[dict[str, Any]] = []
-    correlation_learning: dict[str, Any] | None = None
-    attack_graph_summary = None
-    if attack_graph:
-        try:
-            surface = attack_graph.get_attack_surface()
-            critical = attack_graph.get_critical_vulnerabilities(top_n=3)
-            top_attack_plans = []
-            planner_traces: list[dict[str, Any]] = []
-            try:
-                plans = attack_graph.get_ranked_attack_plans(max_plans=3, cutoff=4)
-                top_attack_plans = [p.to_dict() for p in plans]
-            except (AttributeError, TypeError, ValueError):  # noqa: BLE001
-                top_attack_plans = []
-            try:
-                raw_traces = attack_graph.metadata.get("planner_traces", [])
-                if isinstance(raw_traces, list):
-                    planner_traces = [t for t in raw_traces if isinstance(t, dict)][-3:]
-            except (AttributeError, TypeError, ValueError, KeyError):  # noqa: BLE001
-                planner_traces = []
-            attack_graph_summary = {
-                "total_nodes": surface.get("total_nodes", 0),
-                "total_vulnerabilities": surface.get("total_vulnerabilities", 0),
-                "total_edges": surface.get("total_edges", 0),
-                "density": round(surface.get("density", 0), 3),
-                "critical_vulns": [
-                    {"id": v[0], "centrality": round(v[1], 4)} 
-                    for v in critical
-                ],
-                "top_attack_plans": top_attack_plans,
-                "planner_traces": planner_traces,
-            }
-        except (AttributeError, TypeError, ValueError, KeyError):  # noqa: BLE001
-            pass  # Attack graph analysis failed - continue without it
-    
     # Compute recommendation
     recommendation = None
     if include_recommendations:
         recommendation = _compute_recommendation(
             hypothesis_ledger, coverage_tracker, phase
         )
-        if attack_graph is not None:
-            try:
-                plans = attack_graph.get_ranked_attack_plans(max_plans=1, cutoff=4)
-                if plans:
-                    top_plan = plans[0]
-                    path = " -> ".join(str(node) for node in top_plan.path[:5])
-                    if len(top_plan.path) > 5:
-                        path = f"{path} -> ..."
-                    recommendation = (
-                        "Prioritize top attack chain "
-                        f"(score={top_plan.score:.3f}, p={top_plan.probability:.3f}, cost={top_plan.cost:.2f}): "
-                        f"{path}"
-                    )
-            except (AttributeError, TypeError, ValueError):  # noqa: BLE001
-                pass
     
     result = {
         "scan_progress": {
@@ -284,15 +228,10 @@ def get_scan_status(include_recommendations: bool = True, agent_id: str | None =
         "top_hypotheses": top_hypotheses,
         "archived_messages": archived_messages,
         "chain_opportunities": chains,
-        "correlation_learning": correlation_learning,
         "recommended_next_action": recommendation,
         "warnings": _get_warnings(iteration, max_iter, pending, chains)
     }
-    
-    # FIX 5: Include attack graph if available
-    if attack_graph_summary:
-        result["attack_graph"] = attack_graph_summary
-    
+
     return result
 
 

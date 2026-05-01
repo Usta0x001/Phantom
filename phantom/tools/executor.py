@@ -39,6 +39,22 @@ from .registry import (
 )
 
 
+def _filter_unknown_args(tool_name: str, kwargs: dict[str, Any]) -> dict[str, Any]:
+    """Drop arguments not present in the tool schema/signature.
+
+    This prevents sandbox execution failures when the tool server is running
+    an older implementation that doesn't accept newly added params.
+    """
+    try:
+        schema = get_tool_param_schema(tool_name) or {}
+        params = schema.get("params", set()) or set()
+        if not params:
+            return kwargs
+        return {k: v for k, v in kwargs.items() if k in params}
+    except Exception:
+        return kwargs
+
+
 def _resolve_canonical_tool_name(tool_name: str | None) -> str | None:
     if tool_name is None:
         return None
@@ -366,7 +382,7 @@ async def _execute_tool_in_sandbox(tool_name: str, agent_state: Any, **kwargs: A
     request_data = {
         "agent_id": agent_id,
         "tool_name": tool_name,
-        "kwargs": kwargs,
+        "kwargs": _filter_unknown_args(tool_name, kwargs),
     }
 
     headers = {
@@ -387,6 +403,37 @@ async def _execute_tool_in_sandbox(tool_name: str, agent_state: Any, **kwargs: A
             response.raise_for_status()
             response_data = response.json()
             if response_data.get("error"):
+                error_text = str(response_data.get("error") or "")
+                # Compatibility retry: if sandbox tool rejects a new argument,
+                # retry once without the offending parameter.
+                if "unexpected keyword argument" in error_text:
+                    match = re.search(
+                        r"unexpected keyword argument ['\"]([^'\"]+)['\"]", error_text
+                    )
+                    bad_arg = match.group(1) if match else ""
+                    if bad_arg and bad_arg in kwargs:
+                        retry_kwargs = dict(kwargs)
+                        retry_kwargs.pop(bad_arg, None)
+                        logger.warning(
+                            "Sandbox tool '%s' rejected arg '%s'; retrying without it.",
+                            tool_name,
+                            bad_arg,
+                        )
+                        retry_request_data = {
+                            "agent_id": agent_id,
+                            "tool_name": tool_name,
+                            "kwargs": retry_kwargs,
+                        }
+                        retry_response = await client.post(
+                            request_url, json=retry_request_data, headers=headers, timeout=timeout
+                        )
+                        retry_response.raise_for_status()
+                        retry_data = retry_response.json()
+                        if retry_data.get("error"):
+                            raise RuntimeError(
+                                f"Sandbox execution error: {retry_data['error']}"
+                            )
+                        return retry_data.get("result")
                 raise RuntimeError(f"Sandbox execution error: {response_data['error']}")
             return response_data.get("result")
         except httpx.HTTPStatusError as e:
@@ -518,7 +565,6 @@ async def execute_tool_with_validation(
             context_setter(
                 hypothesis_ledger=getattr(agent_state, "hypothesis_ledger", None),
                 coverage_tracker=getattr(agent_state, "coverage_tracker", None),
-                attack_graph=getattr(agent_state, "attack_graph", None),
                 agent_state=agent_state,
             )
         except Exception:  # noqa: BLE001
@@ -799,6 +845,8 @@ def _get_truncation_limit(tool_name: str) -> int:
         "curl": 3000,  # curl: increased from 2000
         "ffuf": 5000,  # directory fuzzer: increased from 3000
         "nikto": 6000,  # nikto: increased from 4000
+        "send_request": 15000,  # HTTP responses: enough for signals + body context
+        "analyze_response": 15000,  # signal analysis needs full response context
         "terminal_execute": 12000,  # shell wrapper: keep context compact for follow-up turns
         "exec_terminal": 12000,  # FIX: match terminal_execute
         "terminal": 12000,  # FIX: match terminal_execute
@@ -1485,8 +1533,6 @@ def _auto_record_hypothesis(
     - Only create/update hypotheses from explicit, strong vulnerability signals.
     - Ignore weak or scanner-only hints to prevent ledger pollution.
     """
-    import re as _re_hyp
-
     def _resolve_component(name: str) -> Any | None:
         if owner_agent is not None and hasattr(owner_agent, name):
             return getattr(owner_agent, name)
@@ -1499,8 +1545,6 @@ def _auto_record_hypothesis(
 
     ledger = _resolve_component("hypothesis_ledger")
     coverage_tracker = _resolve_component("coverage_tracker")
-    correlation_engine = _resolve_component("correlation_engine")
-    attack_graph = _resolve_component("attack_graph")
 
     if ledger is None:
         return
@@ -1509,9 +1553,9 @@ def _auto_record_hypothesis(
     args = tool_inv.get("args", {})
 
     try:
-        if tool_name not in {"send_request", "terminal_execute", "browser_action"}:
-            return
-
+        # Extract surface from tool arguments. We support explicit URL tools
+        # and fall back to generic url/target/host parameters so crawlers,
+        # scanners, and DNS tools also register their targets.
         surface = ""
         if tool_name == "send_request":
             url = str(args.get("url", ""))
@@ -1519,10 +1563,17 @@ def _auto_record_hypothesis(
             surface = f"{url} {method}".strip()[:100]
         elif tool_name == "terminal_execute":
             cmd = str(args.get("command", ""))
-            url_match = _re_hyp.search(r'https?://[^\s\'"]+', cmd)
+            url_match = re.search(r'https?://[^\s\'"]+', cmd)
             surface = (url_match.group(0) if url_match else cmd)[:100]
         elif tool_name == "browser_action":
             surface = str(args.get("url") or args.get("action") or "")[:100]
+        else:
+            # Generic fallback: any tool with url/target/host/endpoint
+            for key in ("url", "target", "host", "endpoint", "domain", "ip"):
+                val = args.get(key)
+                if val:
+                    surface = str(val).strip()[:100]
+                    break
 
         if not surface:
             return
@@ -1531,8 +1582,8 @@ def _auto_record_hypothesis(
 
         signals = [s for s in (vuln_signals or []) if isinstance(s, str) and s.strip()]
 
-        signal_vclass = ""
         strong_signal_lines: list[str] = []
+        vuln_classes_found: set[str] = set()
         for sig in signals:
             sig_head = sig.split(":", 1)[0].strip().lower()
             sig_text = sig.strip()
@@ -1549,27 +1600,22 @@ def _auto_record_hypothesis(
                 is_strong = False
             if is_strong:
                 strong_signal_lines.append(sig_text)
+            # Collect ALL vulnerability classes from signals; do NOT break
+            # after the first match or multi-class findings are silently lost.
             if "sql" in sig_head:
-                signal_vclass = "sqli"
-                break
-            if "xss" in sig_head:
-                signal_vclass = "xss"
-                break
-            if "rce" in sig_head or "command" in sig_head:
-                signal_vclass = "rce"
-                break
-            if "ssrf" in sig_head:
-                signal_vclass = "ssrf"
-                break
-            if "idor" in sig_head:
-                signal_vclass = "idor"
-                break
-            if "xxe" in sig_head:
-                signal_vclass = "xxe"
-                break
-            if "redirect" in sig_head:
-                signal_vclass = "open_redirect"
-                break
+                vuln_classes_found.add("sqli")
+            elif "xss" in sig_head:
+                vuln_classes_found.add("xss")
+            elif "rce" in sig_head or "command" in sig_head:
+                vuln_classes_found.add("rce")
+            elif "ssrf" in sig_head:
+                vuln_classes_found.add("ssrf")
+            elif "idor" in sig_head:
+                vuln_classes_found.add("idor")
+            elif "xxe" in sig_head:
+                vuln_classes_found.add("xxe")
+            elif "redirect" in sig_head:
+                vuln_classes_found.add("open_redirect")
 
         # Do not auto-create hypotheses from weak/noisy signals.
         if not strong_signal_lines:
@@ -1577,224 +1623,55 @@ def _auto_record_hypothesis(
 
         # Backward compatibility: legacy gate tests expect signals-only paths to
         # use "auto_extraction" class when no owner agent is wired.
-        if strong_signal_lines and owner_agent is None:
-            vuln_class = "auto_extraction"
-        elif signal_vclass:
-            vuln_class = signal_vclass
-        else:
+        if owner_agent is None:
+            vuln_classes_found.add("auto_extraction")
+        elif not vuln_classes_found:
             return
 
-        hyp_id = ledger.add(surface, vuln_class)
+        # Record one hypothesis per vulnerability class so multi-class findings
+        # (e.g. both XSS and SQLi on the same surface) are not silently reduced.
+        for vuln_class in vuln_classes_found:
+            hyp_id = ledger.add(surface, vuln_class)
 
-        if strong_signal_lines:
             for sig in strong_signal_lines:
                 ledger.record_payload(hyp_id, sig.strip()[:200])
-            ledger.record_result(
-                hyp_id,
-                "testing",
-                "Auto-recorded from strong tool signal",
-            )
 
-        payload = ""
-        if tool_name == "send_request":
-            payload = str(args.get("body", ""))[:200]
-        elif tool_name == "terminal_execute":
-            payload = str(args.get("command", ""))[:200]
-        if payload:
-            ledger.record_payload(hyp_id, payload)
+            payload = ""
+            if tool_name == "send_request":
+                payload = str(args.get("body", ""))[:200]
+            elif tool_name == "terminal_execute":
+                payload = str(args.get("command", ""))[:200]
+            if payload:
+                ledger.record_payload(hyp_id, payload)
 
-        evidence_snip = ""
-        for line in observation_xml.split("\n"):
-            ll = line.lower()
-            if any(kw in ll for kw in ("vulnerable", "injectable", "confirmed")):
-                evidence_snip = line.strip()[:300]
-                break
-        if evidence_snip:
-            ledger.record_result(hyp_id, "testing", evidence_snip)
+            evidence_snip = ""
+            for line in observation_xml.split("\n"):
+                ll = line.lower()
+                if any(kw in ll for kw in ("vulnerable", "injectable", "confirmed")):
+                    evidence_snip = line.strip()[:300]
+                    break
+            if evidence_snip:
+                ledger.record_result(hyp_id, "testing", evidence_snip)
 
-        if coverage_tracker is not None:
-            try:
-                coverage_tracker.discover_surface(surface, "tool_surface", source=tool_name)
-                coverage_tracker.record_test(
-                    surface, "tool_surface", vuln_class, note=f"tool={tool_name}"
-                )
-                if any(x in obs_lower for x in ("403", "401", "forbidden", "rate limit", "waf")):
-                    coverage_tracker.record_failure(
-                        surface,
-                        "tool_surface",
-                        "ACCESS_OR_WAF_BLOCKED",
-                        vuln_class=vuln_class,
-                    )
-            except (ValueError, TypeError, KeyError, AttributeError) as exc:
-                _mark_tool_pipeline_issue(
-                    agent_state,
-                    "coverage_tracker_update_failed",
-                    f"coverage_tracker update failed for {tool_name}: {exc}",
-                )
-
-        should_correlate = bool(strong_signal_lines) or any(
-            kw in obs_lower
-            for kw in ("confirmed", "extracted", "authentication bypass", "accepted")
-        )
-        if correlation_engine is not None and vuln_class != "recon" and should_correlate:
-            try:
-                severity = "medium"
-                if vuln_class in {"rce", "auth_bypass", "sqli"}:
-                    severity = "high"
-                if vuln_class in {"scanner_finding"}:
-                    severity = "low"
-                correlation_engine.add_finding(
-                    vuln_class=vuln_class,
-                    surface=surface,
-                    severity=severity,
-                    details={"source": tool_name, "hypothesis_id": hyp_id},
-                )
-            except (ValueError, TypeError, KeyError, AttributeError) as exc:
-                _mark_tool_pipeline_issue(
-                    agent_state,
-                    "correlation_engine_update_failed",
-                    f"correlation_engine update failed for {tool_name}: {exc}",
-                )
-
-        if attack_graph is not None and vuln_class != "recon":
-            try:
-                from phantom.core.attack_graph import AttackEdgeType, AttackNodeType
-
-                vuln_hash = hashlib.md5(f"{surface}:{vuln_class}".encode("utf-8")).hexdigest()[:10]
-                vuln_node = f"V-{vuln_hash}"
-                target_node = f"A-{hashlib.md5(surface.encode('utf-8')).hexdigest()[:10]}"
-
-                if vuln_node not in attack_graph._nodes:
-                    attack_graph.add_vulnerability(
-                        vuln_id=vuln_node,
-                        title=f"{vuln_class.upper()} via {tool_name}",
-                        severity="high"
-                        if vuln_class in {"sqli", "rce", "auth_bypass"}
-                        else "medium",
-                        status="suspected",
-                        metadata={"surface": surface, "tool": tool_name, "hypothesis_id": hyp_id},
-                    )
-
-                belief = 0.5
-                confidence = 0.5
-                hypothesis_ref = ledger.get(hyp_id) if hasattr(ledger, "get") else None
-                if hypothesis_ref is not None:
-                    with suppress(Exception):
-                        belief = float(getattr(hypothesis_ref, "posterior_mean", 0.5))
-                    with suppress(Exception):
-                        confidence = (
-                            float(getattr(hypothesis_ref, "confidence_score", 50.0)) / 100.0
-                        )
-                    node_status = str(getattr(hypothesis_ref, "status", "testing") or "testing")
-                else:
-                    node_status = "testing"
-
-                belief = max(0.01, min(0.99, belief))
-                confidence = max(0.01, min(0.99, confidence))
-
-                node_metadata = (
-                    attack_graph._nodes[vuln_node].metadata
-                    if vuln_node in attack_graph._nodes
-                    else {}
-                )
-                node_metadata = dict(node_metadata or {})
-                node_metadata.update(
-                    {
-                        "surface": surface,
-                        "tool": tool_name,
-                        "hypothesis_id": hyp_id,
-                        "success_probability": round(belief, 4),
-                        "confidence": round(confidence, 4),
-                        "posterior_mean": round(belief, 4),
-                    }
-                )
-                if vuln_node in attack_graph._nodes:
-                    attack_graph._nodes[vuln_node].metadata = node_metadata
-                    attack_graph._nodes[vuln_node].status = node_status
-                    if hasattr(attack_graph, "_graph") and attack_graph._graph.has_node(vuln_node):
-                        attack_graph._graph.nodes[vuln_node].update(node_metadata)
-                        attack_graph._graph.nodes[vuln_node]["status"] = node_status
-
-                if target_node not in attack_graph._nodes:
-                    attack_graph.add_node(
-                        node_id=target_node,
-                        node_type=AttackNodeType.ASSET,
-                        label=surface[:80],
-                        metadata={"surface": surface},
-                    )
-                if not attack_graph._graph.has_edge(vuln_node, target_node):
-                    attack_graph.add_edge(
-                        vuln_node,
-                        target_node,
-                        AttackEdgeType.AFFECTS,
-                        metadata={
-                            "hypothesis_id": hyp_id,
-                            "source": tool_name,
-                            "success_probability": round(max(0.01, min(0.99, belief * 0.9)), 4),
-                            "confidence": round(confidence, 4),
-                            "cost": round(max(0.2, 1.2 - confidence), 3),
-                        },
-                    )
-                else:
-                    edge_data = (
-                        attack_graph._graph.get_edge_data(vuln_node, target_node, default={}) or {}
-                    )
-                    edge_type_raw = str(edge_data.get("type", AttackEdgeType.AFFECTS.value))
-                    try:
-                        edge_type = AttackEdgeType(edge_type_raw)
-                    except ValueError:
-                        edge_type = AttackEdgeType.AFFECTS
-                    edge_weight = float(edge_data.get("weight", 1.0) or 1.0)
-                    updated_metadata = {
-                        k: v for k, v in edge_data.items() if k not in {"type", "weight"}
-                    }
-                    updated_metadata.update(
-                        {
-                            "hypothesis_id": hyp_id,
-                            "source": tool_name,
-                            "success_probability": round(max(0.01, min(0.99, belief * 0.9)), 4),
-                            "confidence": round(confidence, 4),
-                            "cost": round(max(0.2, 1.2 - confidence), 3),
-                        }
-                    )
-                    attack_graph.add_edge(
-                        vuln_node,
-                        target_node,
-                        edge_type,
-                        weight=edge_weight,
-                        metadata=updated_metadata,
-                    )
-
-                ranked_plans = []
+            if coverage_tracker is not None:
                 try:
-                    ranked_plans = attack_graph.get_ranked_attack_plans(max_plans=3, cutoff=4)
-                except (ValueError, TypeError, KeyError):
-                    ranked_plans = []
-
-                planner_trace = None
-                if hasattr(attack_graph, "metadata"):
-                    planner_trace = attack_graph.metadata.get("last_planner_trace")
-
-                if planner_trace and hasattr(ledger, "_record_scheduler_event"):
-                    ledger._record_scheduler_event(
-                        {
-                            "event_type": "planner_trace",
-                            "hypothesis_id": hyp_id,
-                            "surface": surface,
-                            "tool": tool_name,
-                            "posterior_mean": round(belief, 4),
-                            "confidence": round(confidence, 4),
-                            "top_attack_plans": [plan.to_dict() for plan in ranked_plans[:3]],
-                            "planner_trace": planner_trace,
-                            "timestamp": datetime.now(UTC).isoformat(),
-                        }
+                    coverage_tracker.discover_surface(surface, "tool_surface", source=tool_name)
+                    coverage_tracker.record_test(
+                        surface, "tool_surface", vuln_class, note=f"tool={tool_name}"
                     )
-            except (ValueError, TypeError, KeyError, AttributeError) as exc:
-                _mark_tool_pipeline_issue(
-                    agent_state,
-                    "attack_graph_update_failed",
-                    f"attack_graph update failed for {tool_name}: {exc}",
-                )
+                    if any(x in obs_lower for x in ("403", "401", "forbidden", "rate limit", "waf")):
+                        coverage_tracker.record_failure(
+                            surface,
+                            "tool_surface",
+                            "ACCESS_OR_WAF_BLOCKED",
+                            vuln_class=vuln_class,
+                        )
+                except (ValueError, TypeError, KeyError, AttributeError) as exc:
+                    _mark_tool_pipeline_issue(
+                        agent_state,
+                        "coverage_tracker_update_failed",
+                        f"coverage_tracker update failed for {tool_name}: {exc}",
+                    )
 
     except (ValueError, TypeError, KeyError, AttributeError) as exc:  # noqa: BLE001
         # Never let auto-recording crash the tool pipeline.

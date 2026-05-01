@@ -95,11 +95,6 @@ def _get_active_ledger() -> HypothesisLedger | None:
     return get_ledger(current_agent_id or "default")
 
 
-def _get_active_correlation_engine() -> None:
-    """Correlation engine removed."""
-    return None
-
-
 @register_tool(sandbox_execution=False)
 def add_hypothesis(surface: str, vuln_class: str) -> dict[str, Any]:
     """
@@ -194,9 +189,9 @@ async def record_payload_test(
     
     # Add evidence
     if outcome == "success" and evidence:
-        _ledger.add_evidence_for(hypothesis_id, evidence, outcome)
+        _ledger.add_evidence_for(hypothesis_id, evidence)
     elif outcome == "failure" and evidence:
-        _ledger.add_evidence_against(hypothesis_id, evidence, outcome)
+        _ledger.add_evidence_against(hypothesis_id, evidence)
 
     # Get current status
     hyp = _ledger.get(hypothesis_id)
@@ -383,8 +378,7 @@ def get_hypothesis_summary() -> dict[str, Any]:
         "by_vuln_class": summary.get("by_class", {}),
         "top_confirmed": confirmed[:5],
         "top_open": open_hyps[:10],
-        "prioritized_summary": _ledger.get_prioritized_summary(top_n=10),
-        "scheduler_report": _ledger.get_scheduler_report(),
+        "prioritized_summary": _ledger.get_scored_hypotheses()[:10],
         "message": f"Ledger contains {summary.get('total', 0)} hypotheses",
     }
 

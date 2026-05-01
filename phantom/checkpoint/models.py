@@ -68,7 +68,3 @@ class CheckpointData(BaseModel):
     
     # Coverage tracker state (attack surfaces tested per vuln class)
     coverage_tracker_state: dict[str, Any] = Field(default_factory=dict)
-
-    # FIX 5: Attack graph state (vulnerability relationships and attack paths)
-    # Preserves multi-step attack chain analysis across checkpoint restarts.
-    attack_graph_state: dict[str, Any] = Field(default_factory=dict)

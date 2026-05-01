@@ -1,0 +1,66 @@
+\contentsline {chapter}{Contents}{iii}{chapter*.1}%
+\contentsline {chapter}{List of Tables}{vi}{chapter*.2}%
+\contentsline {chapter}{List of Tables}{vi}{chapter*.2}%
+\contentsline {chapter}{List of Acronyms}{vii}{chapter*.3}%
+\contentsline {chapter}{\numberline {1}Introduction}{1}{chapter.1}%
+\contentsline {section}{\numberline {1.1}Scientific and Societal Context}{1}{section.1.1}%
+\contentsline {section}{\numberline {1.2}The Automation Challenge}{1}{section.1.2}%
+\contentsline {section}{\numberline {1.3}The LLM Promise and Its Limits}{2}{section.1.3}%
+\contentsline {section}{\numberline {1.4}Research Problem Statement}{2}{section.1.4}%
+\contentsline {section}{\numberline {1.5}Research Questions}{2}{section.1.5}%
+\contentsline {section}{\numberline {1.6}Research Hypotheses}{3}{section.1.6}%
+\contentsline {section}{\numberline {1.7}Scope and Document Structure}{3}{section.1.7}%
+\contentsline {chapter}{\numberline {2}Theoretical Background}{4}{chapter.2}%
+\contentsline {section}{\numberline {2.1}Penetration Testing: Practice, Standards, and Cognitive Demands}{4}{section.2.1}%
+\contentsline {subsection}{\numberline {2.1.1}The Vulnerability Landscape and Its Detection Paradigms}{5}{subsection.2.1.1}%
+\contentsline {subsection}{\numberline {2.1.2}Vulnerability Chaining: The Expert Tester's Core Skill}{6}{subsection.2.1.2}%
+\contentsline {section}{\numberline {2.2}Large Language Models: Relevant Properties for Autonomous Agents}{7}{section.2.2}%
+\contentsline {subsection}{\numberline {2.2.1}Emergent Security Knowledge}{7}{subsection.2.2.1}%
+\contentsline {subsection}{\numberline {2.2.2}In-Context Learning and Adaptation}{8}{subsection.2.2.2}%
+\contentsline {subsection}{\numberline {2.2.3}The Context Window and the ``Lost in the Middle'' Problem}{8}{subsection.2.2.3}%
+\contentsline {section}{\numberline {2.3}The Decision-Making Nature of Penetration Testing}{8}{section.2.3}%
+\contentsline {chapter}{\numberline {3}State of the Art: Critical Comparative Analysis}{10}{chapter.3}%
+\contentsline {section}{\numberline {3.1}Comparison Framework}{10}{section.3.1}%
+\contentsline {section}{\numberline {3.2}First Generation: Traditional Automated Scanning}{11}{section.3.2}%
+\contentsline {subsection}{\numberline {3.2.1}Signature-Based Dynamic Testing}{11}{subsection.3.2.1}%
+\contentsline {subsection}{\numberline {3.2.2}Heuristic Active Scanning}{12}{subsection.3.2.2}%
+\contentsline {subsection}{\numberline {3.2.3}Domain-Specific Expert Tools: SQLMap as a Case Study}{13}{subsection.3.2.3}%
+\contentsline {subsection}{\numberline {3.2.4}Summary: Why the Template Ceiling Cannot Be Crossed from Within}{13}{subsection.3.2.4}%
+\contentsline {section}{\numberline {3.3}Second Generation: Rule-Based Automation and Expert Systems}{14}{section.3.3}%
+\contentsline {section}{\numberline {3.4}Third Generation: AI-Driven Autonomous Agents}{15}{section.3.4}%
+\contentsline {subsection}{\numberline {3.4.1}Demonstrated Capabilities: Establishing the Baseline}{15}{subsection.3.4.1}%
+\contentsline {subsection}{\numberline {3.4.2}LLM-Based Agent Reasoning Paradigms: A Deep Analysis}{15}{subsection.3.4.2}%
+\contentsline {subsubsection}{The ReAct Paradigm: Interleaved Reasoning and Action}{15}{subsubsection*.4}%
+\contentsline {subsubsection}{Chain-of-Thought: Deliberative Planning and Its Failures}{17}{subsubsection*.5}%
+\contentsline {subsubsection}{Tree of Thoughts: Exploratory Deliberation}{18}{subsubsection*.6}%
+\contentsline {subsubsection}{Tool-Augmented Inference: Capabilities and Their Costs}{18}{subsubsection*.7}%
+\contentsline {subsubsection}{The Planning Versus Reactive Execution Tension}{18}{subsubsection*.8}%
+\contentsline {subsection}{\numberline {3.4.3}Memory Mechanisms in LLM-Based Security Agents}{19}{subsection.3.4.3}%
+\contentsline {subsection}{\numberline {3.4.4}Critical Analysis of Deployed LLM Security Agents}{19}{subsection.3.4.4}%
+\contentsline {subsubsection}{PentestGPT}{19}{subsubsection*.9}%
+\contentsline {subsubsection}{HackingBuddyGPT}{20}{subsubsection*.10}%
+\contentsline {subsubsection}{AutoAttacker}{20}{subsubsection*.11}%
+\contentsline {subsection}{\numberline {3.4.5}Cross-Cutting Analysis: What the Convergence of Failures Reveals}{22}{subsection.3.4.5}%
+\contentsline {chapter}{\numberline {4}Synthesis: Causal Mechanisms of Convergent Failure}{23}{chapter.4}%
+\contentsline {section}{\numberline {4.1}Comprehensive Cross-Generational Comparison}{23}{section.4.1}%
+\contentsline {section}{\numberline {4.2}Causal Mechanism~1: The Information Bottleneck}{25}{section.4.2}%
+\contentsline {section}{\numberline {4.3}Causal Mechanism~2: Implicit State Representation}{26}{section.4.3}%
+\contentsline {section}{\numberline {4.4}Causal Mechanism~3: Unverified Inference Propagation}{27}{section.4.4}%
+\contentsline {section}{\numberline {4.5}Compound Degradation: How the Three Mechanisms Interact}{28}{section.4.5}%
+\contentsline {chapter}{\numberline {5}Research Gap Taxonomy}{29}{chapter.5}%
+\contentsline {section}{\numberline {5.1}Gap Taxonomy}{29}{section.5.1}%
+\contentsline {section}{\numberline {5.2}Gap Interactions and Compounding Effects}{33}{section.5.2}%
+\contentsline {chapter}{\numberline {6}Conceptual Perspective}{35}{chapter.6}%
+\contentsline {section}{\numberline {6.1}The External State Principle}{35}{section.6.1}%
+\contentsline {section}{\numberline {6.2}The Verified Evidence Principle}{36}{section.6.2}%
+\contentsline {section}{\numberline {6.3}The Hierarchical Decomposition Principle}{36}{section.6.3}%
+\contentsline {chapter}{\numberline {7}Discussion}{38}{chapter.7}%
+\contentsline {section}{\numberline {7.1}Implications for Cybersecurity Practice and Governance}{38}{section.7.1}%
+\contentsline {section}{\numberline {7.2}Limitations of This Analysis}{38}{section.7.2}%
+\contentsline {section}{\numberline {7.3}Open Challenges and Research Risks}{39}{section.7.3}%
+\contentsline {chapter}{\numberline {8}Conclusion}{40}{chapter.8}%
+\contentsline {section}{\numberline {8.1}Summary of Findings}{40}{section.8.1}%
+\contentsline {section}{\numberline {8.2}Evaluation of Research Hypotheses}{40}{section.8.2}%
+\contentsline {section}{\numberline {8.3}The Research Gap Taxonomy}{41}{section.8.3}%
+\contentsline {section}{\numberline {8.4}Research Agenda and Closing Remarks}{41}{section.8.4}%
+\contentsline {chapter}{Bibliography}{42}{chapter*.12}%

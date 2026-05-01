@@ -1,0 +1,102 @@
+<tools>
+  <tool name="session_login">
+    <description>Store an authenticated session (cookies, headers, tokens) so all agents can reuse it without re-logging in.</description>
+    <details>After performing a login via curl, browser, or python script, call this tool with the resulting
+credentials. This prevents every sub-agent from independently re-authenticating, which wastes API calls
+and risks rate-limiting or account lockouts.
+
+Cookies, headers, and tokens are each semicolon-separated key=value pairs:
+  cookies = "session=abc123; csrf=xyz"
+  headers = "Authorization=Bearer eyJ..."
+  tokens  = "access_token=abc; refresh_token=def"</details>
+    <parameters>
+      <parameter name="session_id" type="string" required="true">
+        <description>Unique label for this session (e.g. "admin_login", "user_alice", "api_auth")</description>
+      </parameter>
+      <parameter name="cookies" type="string" required="false">
+        <description>Semicolon-separated cookie key=value pairs (e.g. "session=abc123; csrf=xyz")</description>
+      </parameter>
+      <parameter name="headers" type="string" required="false">
+        <description>Semicolon-separated header key=value pairs (e.g. "Authorization=Bearer token")</description>
+      </parameter>
+      <parameter name="tokens" type="string" required="false">
+        <description>Semicolon-separated token key=value pairs (e.g. "access_token=abc; refresh_token=def")</description>
+      </parameter>
+      <parameter name="notes" type="string" required="false">
+        <description>Optional notes about this session (e.g. "admin user with all privileges")</description>
+      </parameter>
+    </parameters>
+    <returns type="Dict[str, Any]">
+      <description>Response containing: - success: Whether the session was stored - session_id: The session label - message: Human-readable status</description>
+    </returns>
+    <examples>
+  # Store an admin session after login
+  <function=session_login>
+  <parameter=session_id>admin_login</parameter>
+  <parameter=cookies>session=abc123def456; csrf_token=xyz789</parameter>
+  <parameter=notes>Admin user logged in via /api/auth/login</parameter>
+  </function>
+
+  # Store a Bearer token auth
+  <function=session_login>
+  <parameter=session_id>api_auth</parameter>
+  <parameter=headers>Authorization=Bearer eyJhbGciOiJIUzI1NiJ9.eyJ1c2VyIjoiYWRtaW4ifQ</parameter>
+  <parameter=tokens>access_token=eyJhbGc...; refresh_token=refresh_xyz</parameter>
+  </function>
+    </examples>
+  </tool>
+  <tool name="session_get">
+    <description>Retrieve a stored session to reuse its cookies, headers, and tokens in subsequent requests.</description>
+    <details>Call this BEFORE performing authenticated requests to check if a session is already stored.
+If found, extract the cookies/headers/tokens and include them in your curl/python/browser calls.
+If not found, perform a fresh login and call session_login to store it.</details>
+    <parameters>
+      <parameter name="session_id" type="string" required="true">
+        <description>The session label to retrieve (must match what was used in session_login)</description>
+      </parameter>
+    </parameters>
+    <returns type="Dict[str, Any]">
+      <description>Response containing: - found: True if session exists - session: Dict with cookies, headers, tokens, and metadata - message: Human-readable status if not found</description>
+    </returns>
+    <examples>
+  # Check for an existing admin session
+  <function=session_get>
+  <parameter=session_id>admin_login</parameter>
+  </function>
+    </examples>
+  </tool>
+  <tool name="session_refresh">
+    <description>Update an existing stored session with new credentials after a token refresh or re-login.</description>
+    <details>Use this when a session token has expired and you have obtained new credentials.
+The new values are merged with any existing ones (new values overwrite old ones per-key).
+If the session does not exist yet, it is created (equivalent to session_login).</details>
+    <parameters>
+      <parameter name="session_id" type="string" required="true">
+        <description>The session label to update</description>
+      </parameter>
+      <parameter name="cookies" type="string" required="false">
+        <description>New/updated semicolon-separated cookie key=value pairs</description>
+      </parameter>
+      <parameter name="headers" type="string" required="false">
+        <description>New/updated semicolon-separated header key=value pairs</description>
+      </parameter>
+      <parameter name="tokens" type="string" required="false">
+        <description>New/updated semicolon-separated token key=value pairs</description>
+      </parameter>
+      <parameter name="notes" type="string" required="false">
+        <description>Optional notes about the refresh (e.g. "refreshed after 401 on /api/data")</description>
+      </parameter>
+    </parameters>
+    <returns type="Dict[str, Any]">
+      <description>Response containing: - success: Whether the update succeeded - action: "updated" or "created" - message: Human-readable status</description>
+    </returns>
+    <examples>
+  # Refresh a session after getting a new token
+  <function=session_refresh>
+  <parameter=session_id>api_auth</parameter>
+  <parameter=tokens>access_token=newtoken123; refresh_token=newrefresh456</parameter>
+  <parameter=notes>Refreshed after 401 response on /api/admin/users</parameter>
+  </function>
+    </examples>
+  </tool>
+</tools>

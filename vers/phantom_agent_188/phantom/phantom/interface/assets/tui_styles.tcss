@@ -1,0 +1,589 @@
+Screen {
+    background: #050816;
+    color: #e6eef8;
+}
+
+.screen--selection {
+    background: #0b1220;
+    color: #f8fbff;
+}
+
+ToastRack {
+    dock: top;
+    align: right top;
+    margin-bottom: 0;
+    margin-top: 1;
+}
+
+Toast {
+    width: 36;
+    background: #0b1220;
+    border-left: outer #2dd4ff;
+}
+
+Toast.-information .toast--title {
+    color: #8ac6ff;
+}
+
+#splash_screen {
+    height: 100%;
+    width: 100%;
+    background: #050816;
+    color: #2dd4ff;
+    align: center middle;
+    content-align: center middle;
+    text-align: center;
+}
+
+#splash_content {
+    width: auto;
+    height: auto;
+    background: transparent;
+    text-align: center;
+    content-align: center middle;
+    padding: 2;
+}
+
+#main_container {
+    height: 100%;
+    padding: 1;
+    margin: 0;
+    background: #050816;
+}
+
+#content_container {
+    height: 1fr;
+    padding: 0;
+    background: transparent;
+}
+
+#sidebar {
+    width: 30%;
+    background: transparent;
+    margin-left: 0;
+}
+
+#sidebar.-hidden {
+    display: none;
+}
+
+#agents_tree,
+#chat_history,
+#vulnerabilities_panel,
+#stats_scroll,
+#chat_input_container,
+#agent_status_display {
+    background: #0b1220;
+    border: round #223452;
+}
+
+#agents_tree {
+    height: 1fr;
+    border-title-color: #8ac6ff;
+    border-title-style: bold;
+    padding: 1;
+    margin-bottom: 1;
+}
+
+#stats_scroll {
+    height: auto;
+    max-height: 15;
+    padding: 0;
+    margin: 0;
+    scrollbar-size: 0 0;
+}
+
+#stats_display {
+    height: auto;
+    background: transparent;
+    padding: 0 1;
+    margin: 0;
+}
+
+#vulnerabilities_panel {
+    height: auto;
+    max-height: 12;
+    padding: 0;
+    margin: 0;
+    overflow-y: auto;
+    scrollbar-background: #0b1220;
+    scrollbar-color: #2dd4ff;
+    scrollbar-corner-color: #0b1220;
+    scrollbar-size-vertical: 1;
+}
+
+#vulnerabilities_panel.hidden {
+    display: none;
+}
+
+.vuln-item {
+    height: auto;
+    width: 100%;
+    padding: 0 1;
+    background: transparent;
+    color: #e6eef8;
+}
+
+.vuln-item:hover {
+    background: #132036;
+    color: #ffffff;
+}
+
+VulnerabilityDetailScreen,
+StopAgentScreen,
+PauseAllScreen,
+QuitScreen,
+HelpScreen {
+    align: center middle;
+    background: #050816 88%;
+}
+
+#vuln_detail_dialog,
+#stop_agent_dialog,
+#pause_all_dialog,
+#quit_dialog,
+#dialog {
+    grid-size: 1;
+    grid-gutter: 1;
+    padding: 1 2;
+    background: #0b1220 98%;
+    border: round #223452;
+}
+
+#vuln_detail_dialog {
+    grid-rows: 1fr auto;
+    width: 88%;
+    max-width: 110;
+    height: 85%;
+    max-height: 45;
+}
+
+#stop_agent_dialog {
+    grid-rows: auto auto;
+    width: 30;
+}
+
+#pause_all_dialog {
+    grid-rows: auto auto auto;
+    width: 50;
+}
+
+#quit_dialog {
+    grid-rows: auto auto;
+    width: 40;
+}
+
+#dialog {
+    grid-rows: auto auto;
+    width: 42;
+    grid-gutter: 0 1;
+}
+
+#help_title,
+#stop_agent_title,
+#pause_all_title,
+#quit_title {
+    color: #2dd4ff;
+    text-style: bold;
+    text-align: center;
+    width: 100%;
+    margin-bottom: 0;
+}
+
+#quit_info {
+    color: #93a4bf;
+    text-align: center;
+    width: 100%;
+    margin-bottom: 1;
+    background: transparent;
+}
+
+#help_content,
+#pause_all_info {
+    color: #93a4bf;
+    text-align: left;
+    width: 100%;
+    margin-bottom: 1;
+    padding: 0;
+    background: transparent;
+    text-style: none;
+}
+
+#vuln_detail_scroll {
+    height: 1fr;
+    background: transparent;
+    scrollbar-background: #0b1220;
+    scrollbar-color: #2dd4ff;
+    scrollbar-corner-color: #0b1220;
+    scrollbar-size: 1 1;
+    padding-right: 1;
+}
+
+#vuln_detail_content {
+    width: 100%;
+    background: transparent;
+    padding: 0;
+}
+
+#vuln_detail_buttons,
+#stop_agent_buttons,
+#pause_all_buttons,
+#quit_buttons {
+    width: 100%;
+    height: 1;
+    align: center middle;
+}
+
+#vuln_detail_buttons {
+    padding-top: 1;
+    border-top: solid #223452;
+}
+
+#copy_vuln_detail,
+#close_vuln_detail,
+#stop_agent,
+#cancel_stop,
+#confirm_pause_all,
+#cancel_pause_all,
+#quit,
+#cancel {
+    width: auto;
+    height: auto;
+    background: transparent;
+    border: none;
+    text-style: bold;
+}
+
+#copy_vuln_detail,
+#cancel_stop,
+#cancel_pause_all,
+#cancel {
+    color: #8ac6ff;
+}
+
+#close_vuln_detail,
+#confirm_pause_all {
+    color: #2dd4ff;
+}
+
+#stop_agent,
+#quit {
+    color: #ff5d73;
+}
+
+#copy_vuln_detail:hover,
+#copy_vuln_detail:focus,
+#close_vuln_detail:hover,
+#close_vuln_detail:focus,
+#cancel_stop:hover,
+#cancel_stop:focus,
+#cancel_pause_all:hover,
+#cancel_pause_all:focus,
+#cancel:hover,
+#cancel:focus {
+    background: #132036;
+    color: #ffffff;
+}
+
+#stop_agent:hover,
+#stop_agent:focus,
+#quit:hover,
+#quit:focus {
+    background: #ff5d73;
+    color: #ffffff;
+}
+
+#confirm_pause_all:hover,
+#confirm_pause_all:focus {
+    background: #2dd4ff;
+    color: #050816;
+}
+
+#chat_area_container {
+    width: 70%;
+    background: transparent;
+}
+
+#chat_area_container.-full-width {
+    width: 100%;
+}
+
+#chat_history {
+    height: 1fr;
+    padding: 0;
+    margin-bottom: 0;
+    margin-right: 0;
+    scrollbar-background: #0b1220;
+    scrollbar-color: #2dd4ff;
+    scrollbar-corner-color: #0b1220;
+    scrollbar-size: 1 1;
+}
+
+#agent_status_display {
+    height: 1;
+    margin: 0;
+    padding: 0 1;
+}
+
+#agent_status_display.hidden {
+    display: none;
+}
+
+#status_text,
+#keymap_indicator {
+    height: 100%;
+    background: transparent;
+    text-style: none;
+    margin: 0;
+    padding: 0;
+}
+
+#status_text {
+    width: 1fr;
+    color: #dbe7ff;
+}
+
+#keymap_indicator {
+    width: auto;
+    color: #8ac6ff;
+    text-align: right;
+    content-align: right middle;
+}
+
+#chat_input_container {
+    height: 3;
+    padding: 0;
+    margin-right: 0;
+    layout: horizontal;
+    align-vertical: top;
+}
+
+#chat_input_container:focus-within {
+    border: round #2dd4ff;
+}
+
+#chat_input_container:focus-within #chat_prompt {
+    color: #2dd4ff;
+    text-style: bold;
+}
+
+#chat_prompt {
+    width: auto;
+    height: 100%;
+    padding: 0 0 0 1;
+    color: #8ac6ff;
+    content-align-vertical: top;
+}
+
+#chat_history:focus,
+Tree:focus {
+    border: round #2dd4ff;
+}
+
+#chat_input {
+    width: 1fr;
+    height: 100%;
+    background: transparent;
+    border: none;
+    color: #e6eef8;
+    padding: 0;
+    margin: 0;
+}
+
+#chat_input:focus {
+    border: none;
+}
+
+#chat_input .text-area--cursor-line,
+#chat_input:focus .text-area--cursor-line {
+    background: transparent;
+}
+
+#chat_input > .text-area--placeholder {
+    color: #7489a8;
+    text-style: italic;
+}
+
+#chat_input > .text-area--cursor {
+    color: #2dd4ff;
+    background: #2dd4ff;
+}
+
+.chat-placeholder {
+    width: 100%;
+    height: 100%;
+    content-align: center middle;
+    text-align: center;
+    color: #8ac6ff;
+    text-style: italic;
+}
+
+.chat-content {
+    margin: 0 !important;
+    margin-top: 0 !important;
+    margin-bottom: 0 !important;
+    padding: 0 1;
+    background: #0b1220;
+    width: 100%;
+}
+
+.chat-message {
+    margin-bottom: 0;
+    padding: 0;
+    background: transparent;
+    width: 100%;
+}
+
+.user-message {
+    color: #f8fbff;
+    border-left: thick #2dd4ff;
+    padding-left: 1;
+    margin-bottom: 1;
+}
+
+.tool-call {
+    margin-top: 1;
+    margin-bottom: 0;
+    padding: 0 1;
+    background: #0a1424;
+    border: none;
+    width: 100%;
+}
+
+.tool-call.status-completed { background: #10243a; }
+.tool-call.status-running { background: #132036; }
+.tool-call.status-failed,
+.tool-call.status-error { background: #2b1620; }
+
+.browser-tool,
+.terminal-tool,
+.python-tool,
+.agents-graph-tool,
+.file-edit-tool,
+.proxy-tool,
+.notes-tool,
+.thinking-tool,
+.web-search-tool,
+.scan-info-tool,
+.subagent-info-tool,
+.finish-tool,
+.reporting-tool,
+.todo-tool {
+    margin-top: 1;
+    margin-bottom: 0;
+    background: #0a1424;
+}
+
+.browser-tool.status-completed,
+.browser-tool.status-running,
+.terminal-tool.status-completed,
+.terminal-tool.status-running,
+.python-tool.status-completed,
+.python-tool.status-running,
+.agents-graph-tool.status-completed,
+.agents-graph-tool.status-running,
+.file-edit-tool.status-completed,
+.file-edit-tool.status-running,
+.proxy-tool.status-completed,
+.proxy-tool.status-running,
+.notes-tool.status-completed,
+.notes-tool.status-running,
+.thinking-tool.status-completed,
+.thinking-tool.status-running,
+.web-search-tool.status-completed,
+.web-search-tool.status-running,
+.scan-info-tool.status-completed,
+.scan-info-tool.status-running,
+.subagent-info-tool.status-completed,
+.subagent-info-tool.status-running,
+.finish-tool.status-completed,
+.finish-tool.status-running,
+.reporting-tool.status-completed,
+.reporting-tool.status-running,
+.todo-tool.status-completed,
+.todo-tool.status-running {
+    background: #10243a;
+    margin-top: 1;
+    margin-bottom: 0;
+}
+
+Tree {
+    color: #e6eef8;
+    scrollbar-background: #0b1220;
+    scrollbar-color: #2dd4ff;
+    scrollbar-corner-color: #0b1220;
+    scrollbar-size: 1 1;
+}
+
+Tree > .tree--label {
+    text-style: bold;
+    color: #2dd4ff;
+    background: #0a1424;
+    padding: 0 1;
+    margin-bottom: 1;
+    border-bottom: solid #223452;
+    text-align: center;
+}
+
+.tree--node {
+    height: 1;
+    padding: 0;
+    margin: 0;
+}
+
+.tree--node-label {
+    color: #dbe7ff;
+    background: transparent;
+    text-style: none;
+    padding: 0 1;
+    margin: 0 1;
+}
+
+.tree--node:hover .tree--node-label {
+    background: transparent;
+    color: #ffffff;
+    text-style: bold;
+    border-left: solid #2dd4ff;
+}
+
+.tree--node.-selected .tree--node-label {
+    background: transparent;
+    color: #ffffff;
+    text-style: bold;
+    border-left: heavy #8ac6ff;
+}
+
+.tree--node.-expanded .tree--node-label {
+    text-style: bold;
+    color: #ffffff;
+    background: transparent;
+    border-left: solid #2dd4ff;
+}
+
+Tree:focus > .tree--label {
+    color: #ffffff;
+    text-style: bold;
+    background: transparent;
+}
+
+.tree--node .tree--node .tree--node-label {
+    color: #aac2f7;
+    padding-left: 2;
+    border: none;
+    background: transparent;
+    margin-left: 1;
+}
+
+.tree--node .tree--node:hover .tree--node-label {
+    background: transparent;
+    color: #ffffff;
+}
+
+.tree--node .tree--node .tree--node .tree--node-label {
+    color: #90a7dc;
+    padding-left: 3;
+    text-style: none;
+    border: none;
+    background: transparent;
+    margin-left: 2;
+}

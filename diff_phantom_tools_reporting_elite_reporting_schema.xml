@@ -1,0 +1,444 @@
+diff --git a/phantom/tools/reporting/elite_reporting_schema.xml b/phantom/tools/reporting/elite_reporting_schema.xml
+deleted file mode 100644
+index b2e277c..0000000
+--- a/phantom/tools/reporting/elite_reporting_schema.xml
++++ /dev/null
+@@ -1,438 +0,0 @@
+-<?xml version="1.0" encoding="UTF-8"?>
+-<tools>
+-  <tool name="create_elite_report">
+-    <description>
+-      Create an elite penetration testing report with OWASP/CWE compliance mapping.
+-      
+-      Transforms basic vulnerability data into professional deliverables with:
+-      - **OWASP Top 10 2021 mapping** (A01-A10 categories)
+-      - **CWE Top 25 mapping** with SANS rankings
+-      - **Executive summary** (non-technical, for management)
+-      - **Business impact analysis** (regulatory, reputational, financial risks)
+-      - **Attack chain reconstruction** (from hypothesis ledger)
+-      - **Remediation timeline** (based on severity + complexity)
+-      
+-      WHEN TO USE:
+-      - After confirming a vulnerability and before reporting to client
+-      - When you need compliance framework mapping for enterprise clients
+-      - To generate professional deliverables for penetration test reports
+-      
+-      ELITE FEATURES:
+-      - Automatic OWASP Top 10 2021 classification
+-      - CWE mapping with SANS Top 25 ranking
+-      - Business impact tailored to vulnerability type
+-      - Attack chain reconstruction from hypothesis ledger
+-      - Remediation timeline recommendations (e.g., "Immediately (within 24 hours)" for CRITICAL+LOW complexity)
+-    </description>
+-    
+-    <parameters>
+-      <parameter name="title" type="string" required="true">
+-        <description>
+-          Vulnerability title (clear and specific).
+-          
+-          Examples:
+-          - "SQL Injection in Login Form"
+-          - "Path Traversal in Apache HTTP Server 2.4.49"
+-          - "Reflected XSS in Search Parameter"
+-        </description>
+-      </parameter>
+-      
+-      <parameter name="severity" type="string" required="true">
+-        <description>
+-          Severity level: CRITICAL, HIGH, MEDIUM, LOW
+-          
+-          Severity affects:
+-          - Business impact statement
+-          - Remediation timeline urgency
+-          - Report prioritization
+-        </description>
+-      </parameter>
+-      
+-      <parameter name="confidence" type="string" required="true">
+-        <description>
+-          Confidence level: VERIFIED, LIKELY, SUSPECTED
+-          
+-          - VERIFIED: Exploited successfully with PoC auto-replay
+-          - LIKELY: Validated with manual testing
+-          - SUSPECTED: Identified through reconnaissance
+-        </description>
+-      </parameter>
+-      
+-      <parameter name="vuln_class" type="string" required="true">
+-        <description>
+-          Phantom vulnerability class for OWASP/CWE mapping.
+-          
+-          Supported classes:
+-          - sqli, xss, rce, cmd_injection
+-          - path_traversal, lfi, rfi
+-          - ssrf, xxe, ssti
+-          - auth_bypass, authz_bypass
+-          - csrf, idor
+-          - deserialization, file_upload
+-          - logic_flaw, business_logic
+-          
+-          The vuln_class is automatically mapped to:
+-          - OWASP Top 10 2021 category (e.g., sqli ΓåÆ A03:2021 Injection)
+-          - CWE ID (e.g., sqli ΓåÆ CWE-89)
+-        </description>
+-      </parameter>
+-      
+-      <parameter name="target" type="string" required="true">
+-        <description>
+-          Target URL or system.
+-          
+-          Examples:
+-          - "https://example.com/login"
+-          - "https://api.example.com/v1/users"
+-          - "192.168.1.100:8080"
+-        </description>
+-      </parameter>
+-      
+-      <parameter name="technical_details" type="string" required="true">
+-        <description>
+-          Technical analysis and exploitation details.
+-          
+-          Should include:
+-          - How the vulnerability was discovered
+-          - Exploitation steps
+-          - Request/response examples
+-          - Why it's exploitable
+-          
+-          Example:
+-          "The login form at /login.php does not properly sanitize the 'username' parameter. 
+-          Injecting ' OR '1'='1 bypasses authentication and grants access to the admin panel."
+-        </description>
+-      </parameter>
+-      
+-      <parameter name="remediation" type="string" required="true">
+-        <description>
+-          Remediation recommendations (specific and actionable).
+-          
+-          Should include:
+-          - Immediate mitigation steps
+-          - Long-term fixes
+-          - Code examples if applicable
+-          
+-          Example:
+-          "1. Use parameterized queries instead of string concatenation
+-           2. Implement input validation with allowlists
+-           3. Apply principle of least privilege to database accounts"
+-        </description>
+-      </parameter>
+-      
+-      <parameter name="poc_code" type="string" required="false">
+-        <description>
+-          Proof-of-concept exploit code.
+-          
+-          Examples:
+-          - curl commands
+-          - Python scripts
+-          - SQL payloads
+-          
+-          This is included in the exported report for reproduction.
+-        </description>
+-      </parameter>
+-      
+-      <parameter name="cve_id" type="string" required="false">
+-        <description>
+-          Associated CVE identifier (if vulnerability matches known CVE).
+-          
+-          Format: CVE-YYYY-NNNNN
+-          Example: "CVE-2021-41773"
+-          
+-          If provided, will be prominently displayed in compliance mapping.
+-        </description>
+-      </parameter>
+-      
+-      <parameter name="cwe_id" type="string" required="false">
+-        <description>
+-          CWE identifier (optional, auto-mapped from vuln_class if not provided).
+-          
+-          Format: CWE-NNN
+-          Example: "CWE-89"
+-          
+-          Recommendation: Let the function auto-map unless you have specific CWE knowledge.
+-        </description>
+-      </parameter>
+-      
+-      <parameter name="cvss_score" type="float" required="false">
+-        <description>
+-          CVSS 3.1 base score (0.0-10.0).
+-          
+-          Example: 9.8
+-          
+-          If provided, displayed in compliance mapping section.
+-        </description>
+-      </parameter>
+-      
+-      <parameter name="successful_payloads" type="list" required="false">
+-        <description>
+-          List of payloads that successfully exploited the vulnerability.
+-          
+-          Example: ["' OR '1'='1", "admin' --", "' UNION SELECT NULL--"]
+-          
+-          These are displayed in the PoC section for reference.
+-        </description>
+-      </parameter>
+-      
+-      <parameter name="hypothesis_id" type="string" required="false">
+-        <description>
+-          Hypothesis ID for attack chain reconstruction.
+-          
+-          If provided (along with hypothesis_ledger), the function will:
+-          - Read all payloads tested from hypothesis ledger
+-          - Reconstruct the attack chain showing progression
+-          - Highlight successful payload in the chain
+-          
+-          Example: "H-0042"
+-        </description>
+-      </parameter>
+-      
+-      <parameter name="hypothesis_ledger" type="object" required="false">
+-        <description>
+-          HypothesisLedger instance for attack chain reconstruction.
+-          
+-          Must be provided along with hypothesis_id to enable attack chain reconstruction.
+-        </description>
+-      </parameter>
+-      
+-      <parameter name="screenshots" type="list" required="false">
+-        <description>
+-          List of screenshot evidence dictionaries.
+-          
+-          Format: [{"path": "/path/to/screenshot.png", "description": "Admin panel access"}]
+-          
+-          Screenshots are referenced in the Evidence section of the report.
+-        </description>
+-      </parameter>
+-      
+-      <parameter name="remediation_complexity" type="string" required="false" default="MEDIUM">
+-        <description>
+-          Remediation complexity: LOW, MEDIUM, HIGH
+-          
+-          Affects remediation timeline calculation:
+-          - LOW: Quick fix (code change, config update)
+-          - MEDIUM: Moderate effort (refactoring, testing required)
+-          - HIGH: Major effort (architectural changes, dependencies)
+-          
+-          Examples:
+-          - LOW: Add input validation
+-          - MEDIUM: Implement parameterized queries across codebase
+-          - HIGH: Redesign authentication system
+-        </description>
+-      </parameter>
+-    </parameters>
+-    
+-    <returns>
+-      <description>
+-        {
+-          "status": "success",
+-          "report": {
+-            "title": "SQL Injection in Login Form",
+-            "severity": "CRITICAL",
+-            "compliance": {
+-              "owasp_category": "A03:2021",
+-              "owasp_name": "Injection",
+-              "cwe_id": "CWE-89",
+-              "cwe_name": "SQL Injection",
+-              "cwe_rank": 3,
+-              "sans_top_25": true
+-            },
+-            "executive_summary": "A critical-severity SQL Injection vulnerability was confirmed...",
+-            "business_impact": "- Data Breach Risk: Unauthorized access to sensitive data...",
+-            "technical_details": "The login form at /login.php does not properly sanitize...",
+-            "attack_chain": [
+-              {"step": 1, "action": "Tested SQLi payload #1", "payload": "' OR '1'='1", "response": "Exploitation successful"}
+-            ],
+-            "remediation": "1. Use parameterized queries...",
+-            "remediation_timeline": "Immediately (within 24 hours)",
+-            "remediation_complexity": "MEDIUM",
+-            "poc_code": "curl -X POST https://example.com/login -d \"username=' OR '1'='1\"",
+-            "successful_payloads": ["' OR '1'='1"],
+-            "screenshots": [],
+-            "target": "https://example.com/login",
+-            "cve_id": null
+-          },
+-          "summary": "Elite report created for SQL Injection in Login Form (CRITICAL severity, A03:2021)",
+-          "compliance_summary": "A03:2021: Injection, CWE-89: SQL Injection",
+-          "metadata": {
+-            "owasp_mapped": true,
+-            "cwe_mapped": true,
+-            "sans_top_25": true,
+-            "attack_chain_steps": 1,
+-            "screenshots": 0
+-          }
+-        }
+-      </description>
+-    </returns>
+-    
+-    <example>
+-      <scenario>SQL Injection with CVE mapping</scenario>
+-      <input>
+-        title = "SQL Injection in Login Form"
+-        severity = "CRITICAL"
+-        confidence = "VERIFIED"
+-        vuln_class = "sqli"
+-        target = "https://example.com/login"
+-        technical_details = "The username parameter is vulnerable to SQL injection..."
+-        remediation = "Use parameterized queries"
+-        poc_code = "curl -X POST https://example.com/login -d \"username=' OR '1'='1\""
+-        successful_payloads = ["' OR '1'='1", "admin' --"]
+-      </input>
+-      <output>
+-        Compliance mapping: A03:2021 (Injection), CWE-89 (SQL Injection, Rank #3)
+-        Executive summary: "A critical-severity SQL Injection vulnerability was confirmed..."
+-        Business impact: Data breach risk, regulatory compliance violations
+-        Remediation timeline: "Immediately (within 24 hours)"
+-      </output>
+-    </example>
+-    
+-    <example>
+-      <scenario>XSS with attack chain reconstruction</scenario>
+-      <input>
+-        title = "Reflected XSS in Search Parameter"
+-        severity = "HIGH"
+-        confidence = "VERIFIED"
+-        vuln_class = "xss"
+-        target = "https://example.com/search"
+-        technical_details = "The search parameter reflects user input without encoding..."
+-        remediation = "Implement output encoding and Content Security Policy"
+-        hypothesis_id = "H-0023"
+-        hypothesis_ledger = ledger_instance
+-      </input>
+-      <output>
+-        Compliance mapping: A03:2021 (Injection), CWE-79 (XSS, Rank #1 in SANS Top 25)
+-        Attack chain reconstructed from hypothesis H-0023 (5 payloads tested)
+-        Timeline: "High priority (within 7 days)"
+-      </output>
+-    </example>
+-    
+-    <integration_notes>
+-      <note>Designed to be called AFTER confirming vulnerability with create_vulnerability_report()</note>
+-      <note>Use export_elite_report() to export to JSON/HTML/Markdown/CSV</note>
+-      <note>Attack chain reconstruction requires hypothesis_ledger integration</note>
+-      <note>OWASP/CWE mapping is automatic based on vuln_class</note>
+-    </integration_notes>
+-  </tool>
+-  
+-  <tool name="export_elite_report">
+-    <description>
+-      Export elite report to multiple formats (JSON, HTML, Markdown, CSV).
+-      
+-      Creates professional-grade report files suitable for:
+-      - **JSON**: Machine-readable, API integration
+-      - **HTML**: Client deliverables with styling
+-      - **Markdown**: Documentation, GitHub issues
+-      - **CSV**: Spreadsheet import, management dashboards
+-      
+-      WHEN TO USE:
+-      - After creating elite report with create_elite_report()
+-      - When delivering final penetration test reports to clients
+-      - For compliance documentation storage
+-    </description>
+-    
+-    <parameters>
+-      <parameter name="report" type="dict" required="true">
+-        <description>
+-          Elite report dictionary from create_elite_report().
+-          
+-          This is the full report object returned by create_elite_report()["report"].
+-        </description>
+-      </parameter>
+-      
+-      <parameter name="output_dir" type="string" required="true">
+-        <description>
+-          Output directory for exported files.
+-          
+-          Directory will be created if it doesn't exist.
+-          
+-          Examples:
+-          - "./reports"
+-          - "/var/phantom/scan_results"
+-          - "C:\\PentestReports\\Client_XYZ"
+-        </description>
+-      </parameter>
+-      
+-      <parameter name="formats" type="list" required="false" default='["json", "markdown", "html"]'>
+-        <description>
+-          List of export formats.
+-          
+-          Valid formats: "json", "markdown", "html", "csv"
+-          
+-          Default: ["json", "markdown", "html"]
+-          
+-          Examples:
+-          - ["json"] ΓåÆ JSON only
+-          - ["html", "markdown"] ΓåÆ HTML and Markdown
+-          - ["json", "markdown", "html", "csv"] ΓåÆ All formats
+-        </description>
+-      </parameter>
+-    </parameters>
+-    
+-    <returns>
+-      <description>
+-        {
+-          "status": "success",
+-          "exported_files": {
+-            "json": "/path/to/SQL_Injection_in_Login_Form_20260405_143022.json",
+-            "markdown": "/path/to/SQL_Injection_in_Login_Form_20260405_143022.md",
+-            "html": "/path/to/SQL_Injection_in_Login_Form_20260405_143022.html"
+-          },
+-          "summary": "Exported 3 report format(s)",
+-          "formats": ["json", "markdown", "html"]
+-        }
+-      </description>
+-    </returns>
+-    
+-    <example>
+-      <scenario>Export to all formats</scenario>
+-      <input>
+-        report = elite_report_data
+-        output_dir = "./reports"
+-        formats = ["json", "markdown", "html", "csv"]
+-      </input>
+-      <output>
+-        {
+-          "status": "success",
+-          "exported_files": {
+-            "json": "./reports/SQL_Injection_20260405_143022.json",
+-            "markdown": "./reports/SQL_Injection_20260405_143022.md",
+-            "html": "./reports/SQL_Injection_20260405_143022.html",
+-            "csv": "./reports/SQL_Injection_20260405_143022.csv"
+-          }
+-        }
+-      </output>
+-    </example>
+-    
+-    <format_details>
+-      <format name="JSON">
+-        Complete structured data, ideal for:
+-        - CI/CD pipeline integration
+-        - Vulnerability management systems
+-        - Custom report parsing
+-      </format>
+-      
+-      <format name="HTML">
+-        Styled professional report with:
+-        - Color-coded severity badges
+-        - Formatted code blocks
+-        - Compliance badges
+-        - Responsive design for viewing on any device
+-      </format>
+-      
+-      <format name="Markdown">
+-        GitHub-flavored markdown with:
+-        - Clean formatting for documentation
+-        - Easy diff viewing in version control
+-        - Portable across platforms
+-      </format>
+-      
+-      <format name="CSV">
+-        Findings summary table with:
+-        - All compliance mappings
+-        - Key metadata fields
+-        - Import into Excel/Google Sheets
+-      </format>
+-    </format_details>
+-  </tool>
+-</tools>

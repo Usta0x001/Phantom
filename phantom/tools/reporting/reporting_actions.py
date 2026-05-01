@@ -19,9 +19,12 @@ _CVSS_FIELDS = (
 )
 
 
+import threading
+
 _background_tasks: set[Any] = set()
 
 _TITLE_ATTEMPT_COUNTS: dict[str, int] = {}
+_TITLE_ATTEMPT_LOCK = threading.Lock()
 
 _MAX_ATTEMPTS_PER_TITLE = 3
 
@@ -711,8 +714,9 @@ def create_vulnerability_report(  # noqa: PLR0912
     if validation_errors:
         # Track failed attempts so the agent knows not to retry endlessly
         title_key = title.strip().lower()
-        _TITLE_ATTEMPT_COUNTS[title_key] = _TITLE_ATTEMPT_COUNTS.get(title_key, 0) + 1
-        attempt_count = _TITLE_ATTEMPT_COUNTS[title_key]
+        with _TITLE_ATTEMPT_LOCK:
+            _TITLE_ATTEMPT_COUNTS[title_key] = _TITLE_ATTEMPT_COUNTS.get(title_key, 0) + 1
+            attempt_count = _TITLE_ATTEMPT_COUNTS[title_key]
         if attempt_count >= _MAX_ATTEMPTS_PER_TITLE:
             return {
                 "success": False,
@@ -745,8 +749,9 @@ def create_vulnerability_report(  # noqa: PLR0912
     )
     if proof_errors:
         title_key = title.strip().lower()
-        _TITLE_ATTEMPT_COUNTS[title_key] = _TITLE_ATTEMPT_COUNTS.get(title_key, 0) + 1
-        attempt_count = _TITLE_ATTEMPT_COUNTS[title_key]
+        with _TITLE_ATTEMPT_LOCK:
+            _TITLE_ATTEMPT_COUNTS[title_key] = _TITLE_ATTEMPT_COUNTS.get(title_key, 0) + 1
+            attempt_count = _TITLE_ATTEMPT_COUNTS[title_key]
         if attempt_count >= _MAX_ATTEMPTS_PER_TITLE:
             return {
                 "success": False,
@@ -982,30 +987,10 @@ def create_vulnerability_report(  # noqa: PLR0912
             }
 
         title_key = title.strip().lower()
-        _TITLE_ATTEMPT_COUNTS.pop(title_key, None)
+        with _TITLE_ATTEMPT_LOCK:
+            _TITLE_ATTEMPT_COUNTS.pop(title_key, None)
 
         chain_suggestions = []
-        try:
-            from phantom.tools.hypothesis.hypothesis_actions import get_correlation_engine
-
-            correlation_engine = get_correlation_engine()
-            if correlation_engine is not None:
-                vuln_class = _extract_vuln_class_from_report(title, cwe, description)
-                if vuln_class:
-                    result = correlation_engine.add_finding(
-                        vuln_class=vuln_class,
-                        surface=endpoint or target,
-                        severity=cvss_severity.lower(),
-                        details={
-                            "report_id": report_id,
-                            "title": title,
-                            "cvss_score": cvss_score,
-                            "confidence": confidence,
-                        }
-                    )
-                    chain_suggestions = result.get("new_suggestions", [])
-        except Exception:  # noqa: BLE001
-            pass
 
         response = {
             "success": True,
@@ -1025,7 +1010,7 @@ def create_vulnerability_report(  # noqa: PLR0912
 
         return response
 
-    except (ImportError, AttributeError) as e:
+    except (ImportError, AttributeError, RuntimeError) as e:
         return {"success": False, "message": f"Failed to create vulnerability report: {e!s}"}
 
 

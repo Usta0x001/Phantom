@@ -1,0 +1,42 @@
+<tool name="fetch_js_files">
+        <description>Fetch all JavaScript files from a webpage.
+            
+            Extracts both external JS file references and inline script content.
+            This is the first step in JavaScript reconnaissance - gathering all
+            JS assets for analysis.
+            
+            Use Cases:            
+            Next Steps After This Tool:</description>
+        <parameters>
+            <parameter name="url" type="string" required="true">
+                Target webpage URL (e.g., "https://example.com")
+            </parameter>
+            <parameter name="use_browser" type="boolean" required="false" default="false">
+                Use Playwright for dynamic JS extraction (slower but captures dynamically loaded scripts)
+            </parameter>
+            <parameter name="include_inline" type="boolean" required="false" default="true">
+                Include inline &lt;script&gt; content in results
+            </parameter>
+            <parameter name="max_files" type="integer" required="false" default="50">
+                Maximum number of external JS files to fetch
+            </parameter>
+            <parameter name="timeout" type="number" required="false" default="30.0">
+                Timeout per HTTP request in seconds
+            </parameter>
+        </parameters>
+        <returns>
+            Dictionary with:
+            - success: Whether fetch succeeded
+            - url: The target URL
+            - js_files: List of JS file objects (url, content, size)
+            - js_file_count: Number of external JS files
+            - inline_scripts: List of inline script contents
+            - inline_count: Number of inline scripts
+            - total_size_kb: Total JS content size in KB
+            - errors: Any fetch errors encountered
+        </returns>
+        <example>
+            fetch_js_files(url="https://spa.example.com")
+            → Returns all JS files and inline scripts from the page
+        </example>
+    </tool>

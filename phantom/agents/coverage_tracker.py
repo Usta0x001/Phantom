@@ -36,18 +36,27 @@ class TestedItem:
     failure_reasons: list[str] = field(
         default_factory=list
     )  # e.g. ["WAF_BLOCKED", "403_FORBIDDEN", "RATE_LIMITED"]
+    # Preserved from DiscoveredSurface when promoted; helps the LLM remember why
+    # a surface was interesting in the first place.
+    source: str = "manual"
+    priority_hints: list[str] = field(default_factory=list)
+    metadata: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
+        # Return copies of mutable containers to prevent external corruption.
         return {
             "id": self.id,
             "surface": self.surface,
             "surface_type": self.surface_type,
-            "vuln_classes_tested": self.vuln_classes_tested,
+            "vuln_classes_tested": list(self.vuln_classes_tested),
             "test_count": self.test_count,
             "last_tested": self.last_tested,
-            "notes": self.notes,
+            "notes": list(self.notes),
             "discovered_at": self.discovered_at,
-            "failure_reasons": self.failure_reasons,  # FEAT-002
+            "failure_reasons": list(self.failure_reasons),
+            "source": self.source,
+            "priority_hints": list(self.priority_hints),
+            "metadata": dict(self.metadata),
         }
 
     @classmethod
@@ -66,21 +75,33 @@ class DiscoveredSurface:
     priority_hints: list[str] = field(default_factory=list)  # Hints for AI (not commands)
     discovered_at: str = field(default_factory=lambda: datetime.now(UTC).isoformat())
     metadata: dict[str, Any] = field(default_factory=dict)  # Extra info about the surface
+    notes: list[str] = field(default_factory=list)  # Failure notes for discovered-but-blocked surfaces
 
     def to_dict(self) -> dict[str, Any]:
+        # Return copies of mutable containers to prevent external corruption.
         return {
             "id": self.id,
             "surface": self.surface,
             "surface_type": self.surface_type,
             "source": self.source,
-            "priority_hints": self.priority_hints,
+            "priority_hints": list(self.priority_hints),
             "discovered_at": self.discovered_at,
-            "metadata": self.metadata,
+            "metadata": dict(self.metadata),
+            "notes": list(self.notes),
         }
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> "DiscoveredSurface":
         return cls(**{k: v for k, v in d.items() if k in cls.__dataclass_fields__})
+
+
+def _make_surface_id(surface: str, surface_type: str) -> str:
+    """Generate a deterministic surface ID from surface + type.
+
+    Case-normalised so '/Login' and '/login' map to the same ID.
+    """
+    surface_key = f"{surface_type}:{surface}".lower()
+    return f"S-{hashlib.md5(surface_key.encode()).hexdigest()[:8].upper()}"
 
 
 class CoverageTracker:
@@ -94,32 +115,11 @@ class CoverageTracker:
     - Serializable via to_dict/from_dict
     """
 
-    # Common vulnerability classes for coverage tracking
-    COMMON_VULN_CLASSES = frozenset(
-        {
-            "sqli",
-            "xss",
-            "ssrf",
-            "lfi",
-            "rfi",
-            "rce",
-            "idor",
-            "auth_bypass",
-            "injection",
-            "xxe",
-            "ssti",
-            "csrf",
-            "open_redirect",
-            "path_traversal",
-            "info_disclosure",
-        }
-    )
-
     def __init__(self) -> None:
         self._lock = threading.RLock()
         self._tested: dict[str, TestedItem] = {}
         self._discovered: dict[str, DiscoveredSurface] = {}
-        self._counter: int = 0
+        self._failure_only: dict[str, dict] = {}
 
     # ── Surface Discovery ─────────────────────────────────────────────────────
 
@@ -142,9 +142,7 @@ class CoverageTracker:
             metadata: Additional context about the surface
         """
         with self._lock:
-            # Generate deterministic ID from surface + type
-            surface_key = f"{surface_type}:{surface}"
-            surface_id = f"S-{hashlib.md5(surface_key.encode()).hexdigest()[:8].upper()}"
+            surface_id = _make_surface_id(surface, surface_type)
 
             # Check if already discovered
             if surface_id in self._discovered:
@@ -190,8 +188,7 @@ class CoverageTracker:
         # FIX B13: normalise case once at entry
         vuln_class = vuln_class.lower()
         with self._lock:
-            surface_key = f"{surface_type}:{surface}"
-            surface_id = f"S-{hashlib.md5(surface_key.encode()).hexdigest()[:8].upper()}"
+            surface_id = _make_surface_id(surface, surface_type)
 
             # Promote from discovered to tested if needed
             if surface_id in self._discovered:
@@ -201,6 +198,9 @@ class CoverageTracker:
                     surface=discovered.surface,
                     surface_type=discovered.surface_type,
                     discovered_at=discovered.discovered_at,
+                    source=discovered.source,
+                    priority_hints=list(discovered.priority_hints),
+                    metadata=dict(discovered.metadata),
                 )
 
             # Create new tested item if not exists
@@ -248,49 +248,28 @@ class CoverageTracker:
         Returns the surface ID.
         """
         with self._lock:
-            surface_key = f"{surface_type}:{surface}"
-            surface_id = f"S-{hashlib.md5(surface_key.encode()).hexdigest()[:8].upper()}"
+            surface_id = _make_surface_id(surface, surface_type)
 
-            # FIX B-D: Only push to _tested if already there (i.e. was actually tested
-            # before the failure).  If it was purely a failure, keep it in _failure_only
-            # so it never appears as a successfully-tested surface.
-            if surface_id in self._tested:
-                # Surface was already tested: annotate the existing entry
-                target = self._tested[surface_id]
-            elif surface_id in self._discovered:
-                # Surface was discovered but never fully tested: record failure there
-                self._discovered[surface_id].notes = (
-                    getattr(self._discovered[surface_id], "notes", None) or []
-                )
-                self._discovered[surface_id].notes.append(f"FAILURE: {failure_reason}")
-                return surface_id
-            else:
-                # Pure failure entry: use a lightweight failure-only store
-                if not hasattr(self, "_failure_only"):
-                    self._failure_only: dict[str, dict] = {}
-                entry = self._failure_only.setdefault(
-                    surface_id,
-                    {
-                        "surface": surface,
-                        "surface_type": surface_type,
-                        "failure_reasons": [],
-                    },
-                )
-                reason_with_class = (
-                    f"[{vuln_class}] {failure_reason}" if vuln_class else failure_reason
-                )
-                if reason_with_class not in entry["failure_reasons"]:
-                    entry["failure_reasons"].append(reason_with_class)
-                return surface_id
-
-            # Record the failure reason on the already-tested item
+            # FIX B-D: Only annotate _tested if already there. For discovered or
+            # unknown surfaces, record in _failure_only so blocked surfaces are tracked.
             reason_with_class = f"[{vuln_class}] {failure_reason}" if vuln_class else failure_reason
-            if reason_with_class not in target.failure_reasons:
-                target.failure_reasons.append(reason_with_class)
-                if len(target.failure_reasons) > 10:
-                    target.failure_reasons = target.failure_reasons[-10:]
 
-            target.last_tested = datetime.now(UTC).isoformat()
+            if surface_id in self._tested:
+                target = self._tested[surface_id]
+                if reason_with_class not in target.failure_reasons:
+                    target.failure_reasons.append(reason_with_class)
+                    if len(target.failure_reasons) > 10:
+                        target.failure_reasons = target.failure_reasons[-10:]
+                target.last_tested = datetime.now(UTC).isoformat()
+                return surface_id
+
+            # Ensure the surface is visible as blocked
+            entry = self._failure_only.setdefault(
+                surface_id,
+                {"surface": surface, "surface_type": surface_type, "failure_reasons": []},
+            )
+            if reason_with_class not in entry["failure_reasons"]:
+                entry["failure_reasons"].append(reason_with_class)
             return surface_id
 
     def get_blocked_surfaces(self) -> list[dict[str, Any]]:
@@ -308,19 +287,16 @@ class CoverageTracker:
                         {
                             "surface": item.surface,
                             "surface_type": item.surface_type,
-                            "failure_reasons": item.failure_reasons,
+                            "failure_reasons": list(item.failure_reasons),
                             "test_count": item.test_count,
                         }
                     )
-            # FIX: Include _failure_only surfaces (pure failures, never tested).
-            # Previously these were invisible to the LLM, causing wasted retries.
-            failure_only = getattr(self, "_failure_only", {})
-            for item in failure_only.values():
+            for item in self._failure_only.values():
                 blocked.append(
                     {
                         "surface": item["surface"],
                         "surface_type": item["surface_type"],
-                        "failure_reasons": item["failure_reasons"],
+                        "failure_reasons": list(item["failure_reasons"]),
                         "test_count": 0,
                     }
                 )
@@ -331,106 +307,14 @@ class CoverageTracker:
     def get_untested_surfaces(self) -> list[DiscoveredSurface]:
         """Return surfaces that have been discovered but not tested."""
         with self._lock:
-            return list(self._discovered.values())
+            # Return deep copies so callers cannot corrupt internal state.
+            return [DiscoveredSurface.from_dict(v.to_dict()) for v in self._discovered.values()]
 
     def get_tested_surfaces(self) -> list[TestedItem]:
         """Return all surfaces that have been tested."""
         with self._lock:
-            return list(self._tested.values())
-
-    def get_discovered_surfaces(self) -> list[DiscoveredSurface]:
-        """Backward-compatible alias for discovered untested surfaces."""
-        return self.get_untested_surfaces()
-
-    def get_coverage_by_vuln_class(self, vuln_class: str) -> dict[str, Any]:
-        """
-        Return coverage statistics for a specific vulnerability class.
-
-        Returns FACTS:
-        - surfaces_tested: How many surfaces tested for this vuln class
-        - surfaces_not_tested: Surfaces known but not tested for this class
-        - total_tests: Total test attempts for this class
-        """
-        with self._lock:
-            tested_for_class = []
-            not_tested_for_class = []
-
-            for item in self._tested.values():
-                if vuln_class in item.vuln_classes_tested:
-                    tested_for_class.append(item.surface)
-                else:
-                    not_tested_for_class.append(item.surface)
-
-            # Discovered but never tested at all
-            for item in self._discovered.values():
-                not_tested_for_class.append(item.surface)
-
-            return {
-                "vuln_class": vuln_class,
-                "surfaces_tested": tested_for_class,
-                "surfaces_not_tested": not_tested_for_class,
-                "tested_count": len(tested_for_class),
-                "not_tested_count": len(not_tested_for_class),
-            }
-
-    def get_coverage_matrix(self) -> dict[str, Any]:
-        """
-        Return a coverage matrix showing which surfaces have been tested for which vuln classes.
-
-        This is pure DATA for the LLM to analyze and decide priorities.
-        """
-        with self._lock:
-            matrix: dict[str, dict[str, bool]] = {}
-            all_vuln_classes: set[str] = set()
-
-            for item in self._tested.values():
-                matrix[item.surface] = {}
-                for vc in item.vuln_classes_tested:
-                    matrix[item.surface][vc] = True
-                    all_vuln_classes.add(vc)
-
-            # Add discovered but untested surfaces
-            for item in self._discovered.values():
-                matrix[item.surface] = {}
-
-            return {
-                "surfaces": list(matrix.keys()),
-                "vuln_classes_observed": list(all_vuln_classes),
-                "matrix": matrix,
-                "total_surfaces": len(matrix),
-                "total_tested": len(self._tested),
-                "total_untested": len(self._discovered),
-            }
-
-    def get_coverage_gaps(self, required_vuln_classes: list[str] | None = None) -> dict[str, Any]:
-        """
-        Identify coverage gaps - surfaces that haven't been tested for certain vuln classes.
-
-        Args:
-            required_vuln_classes: Vuln classes to check coverage for (default: COMMON_VULN_CLASSES)
-
-        Returns FACTS about gaps (LLM decides what to do with this info).
-        """
-        vuln_classes = required_vuln_classes or list(self.COMMON_VULN_CLASSES)
-
-        with self._lock:
-            gaps: dict[str, list[str]] = {}  # surface -> missing vuln classes
-
-            for item in self._tested.values():
-                missing = [vc for vc in vuln_classes if vc not in item.vuln_classes_tested]
-                if missing:
-                    gaps[item.surface] = missing
-
-            # All vuln classes are gaps for untested surfaces
-            for item in self._discovered.values():
-                gaps[item.surface] = vuln_classes.copy()
-
-            return {
-                "gaps": gaps,
-                "total_gaps": sum(len(v) for v in gaps.values()),
-                "surfaces_with_gaps": len(gaps),
-                "checked_vuln_classes": vuln_classes,
-            }
+            # Return deep copies so callers cannot corrupt internal state.
+            return [TestedItem.from_dict(v.to_dict()) for v in self._tested.values()]
 
     def has_been_tested(
         self,
@@ -445,14 +329,12 @@ class CoverageTracker:
         attempted and should not be retried blindly.
         """
         with self._lock:
-            surface_key = f"{surface_type}:{surface}"
-            surface_id = f"S-{hashlib.md5(surface_key.encode()).hexdigest()[:8].upper()}"
+            surface_id = _make_surface_id(surface, surface_type)
 
             if surface_id not in self._tested:
-                # FIX: A blocked surface in _failure_only was attempted and failed;
+                # A blocked surface in _failure_only was attempted and failed;
                 # return True so the agent doesn't waste retries.
-                failure_only = getattr(self, "_failure_only", {})
-                return surface_id in failure_only
+                return surface_id in self._failure_only
 
             if vuln_class is None:
                 return True
@@ -463,64 +345,88 @@ class CoverageTracker:
     # ── Prompt Summary (for LLM context injection) ────────────────────────────
 
     def to_prompt_summary(self, max_items: int = 15) -> str:
-        """
-        Return a compact text summary safe to inject into LLM context.
+        """Return a compact, actionable summary for LLM context injection.
 
-        Reports FACTS about coverage state - no recommendations or commands.
+        Blocked surfaces are listed first (most actionable), then untested
+        high-priority surfaces, then recently tested surfaces.
         """
         with self._lock:
-            tested_list = list(self._tested.values())
-            discovered_list = list(self._discovered.values())
+            tested_list = [
+                TestedItem.from_dict(v.to_dict()) for v in self._tested.values()
+            ]
+            discovered_list = [
+                DiscoveredSurface.from_dict(v.to_dict())
+                for v in self._discovered.values()
+            ]
+            blocked_only = {
+                sid for sid in self._failure_only if sid not in self._discovered
+            }
+            blocked_count = len(blocked_only)
+            # Build lookups while holding the lock to avoid races.
+            tested_failures = {
+                sid: list(item.failure_reasons)
+                for sid, item in self._tested.items()
+                if item.failure_reasons
+            }
+            failure_only_copy = {
+                sid: dict(entry) for sid, entry in self._failure_only.items()
+            }
 
-        if not tested_list and not discovered_list:
+        if not tested_list and not discovered_list and not blocked_count:
             return ""
 
-        lines = ["[COVERAGE TRACKER — attack surface coverage state]"]
+        lines = ["[COVERAGE — what has been tested and what is blocked]"]
 
-        # FIX: Include blocked surfaces in summary so LLM knows what failed.
-        failure_only = getattr(self, "_failure_only", {})
-        blocked_count = len(failure_only)
+        # ── BLOCKED SURFACES (most actionable — do NOT waste time here) ──
+        all_blocked = blocked_only | {
+            item.id for item in tested_list if item.failure_reasons
+        }
+        if all_blocked:
+            lines.append(f"BLOCKED ({len(all_blocked)}) — do not retry:")
+            shown = 0
+            # Show failure-only surfaces first
+            for sid in list(blocked_only):
+                if shown >= max_items // 3:
+                    break
+                entry = failure_only_copy.get(sid, {})
+                reasons = ", ".join(entry.get("failure_reasons", [])[:2])
+                lines.append(f"  {entry.get('surface', '')[:45]} | {reasons}")
+                shown += 1
+            # Then show tested surfaces that later got blocked
+            for item in tested_list:
+                if shown >= max_items // 3:
+                    break
+                if item.id in all_blocked and item.id not in blocked_only:
+                    reasons = ", ".join(item.failure_reasons[:2])
+                    lines.append(f"  {item.surface[:45]} | {reasons}")
+                    shown += 1
 
-        # Summary stats
-        total_surfaces = len(tested_list) + len(discovered_list) + blocked_count
-        lines.append(
-            f"  Surfaces: {total_surfaces} total, {len(tested_list)} tested, {len(discovered_list)} untested, {blocked_count} blocked"
-        )
-
-        # Count unique vuln classes tested
-        all_vuln_classes: set[str] = set()
-        for item in tested_list:
-            all_vuln_classes.update(item.vuln_classes_tested)
-        lines.append(
-            f"  Vuln classes tested: {len(all_vuln_classes)} ({', '.join(sorted(all_vuln_classes)[:5])}{'...' if len(all_vuln_classes) > 5 else ''})"
-        )
-
-        # Recently tested (most recent first)
-        if tested_list:
-            lines.append("  Recently tested:")
-            sorted_tested = sorted(tested_list, key=lambda x: x.last_tested, reverse=True)[
-                : max_items // 2
-            ]
-            for item in sorted_tested:
-                vc_str = ",".join(item.vuln_classes_tested[:3])
-                if len(item.vuln_classes_tested) > 3:
-                    vc_str += f"+{len(item.vuln_classes_tested) - 3}"
-                lines.append(
-                    f"    {item.surface[:40]:40s} | {item.surface_type:12s} | tests={item.test_count} | {vc_str}"
-                )
-
-        # Untested surfaces
+        # ── UNTESTED SURFACES (highest priority first) ──
         if discovered_list:
-            lines.append("  Untested surfaces:")
-            sorted_discovered = sorted(
-                discovered_list, key=lambda x: x.discovered_at, reverse=True
-            )[: max_items // 2]
-            for item in sorted_discovered:
-                hints_str = (
-                    f" hints=[{','.join(item.priority_hints[:2])}]" if item.priority_hints else ""
-                )
+            hinted = [s for s in discovered_list if s.priority_hints]
+            no_hints = [s for s in discovered_list if not s.priority_hints]
+            to_show = (hinted + no_hints)[: max_items // 3]
+            if to_show:
+                lines.append(f"UNTESTED ({len(discovered_list)}):")
+                for item in to_show:
+                    hint = f" | priority: {item.priority_hints[0]}" if item.priority_hints else ""
+                    lines.append(
+                        f"  {item.surface[:45]}{hint}"
+                    )
+
+        # ── RECENTLY TESTED (last tests performed) ──
+        if tested_list:
+            recent = sorted(tested_list, key=lambda x: x.last_tested, reverse=True)[
+                : max_items // 3
+            ]
+            lines.append(f"RECENTLY TESTED ({len(tested_list)} total):")
+            for item in recent:
+                vc = ",".join(item.vuln_classes_tested[:2])
+                fail = ""
+                if item.id in tested_failures:
+                    fail = f" | blocked: {tested_failures[item.id][0]}"
                 lines.append(
-                    f"    {item.surface[:40]:40s} | {item.surface_type:12s} | src={item.source}{hints_str}"
+                    f"  {item.surface[:40]} | {vc}{fail}"
                 )
 
         lines.append("[END COVERAGE]")
@@ -531,29 +437,23 @@ class CoverageTracker:
     def to_dict(self) -> dict[str, Any]:
         """Serialize for checkpointing/persistence."""
         with self._lock:
-            result = {
-                "counter": self._counter,
+            return {
                 "tested": {k: v.to_dict() for k, v in self._tested.items()},
                 "discovered": {k: v.to_dict() for k, v in self._discovered.items()},
+                "failure_only": dict(self._failure_only),
             }
-            if hasattr(self, "_failure_only") and self._failure_only:
-                result["failure_only"] = dict(self._failure_only)
-            return result
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> "CoverageTracker":
         """Restore from serialized state."""
         tracker = cls()
-        tracker._counter = d.get("counter", 0)
         for k, v in d.get("tested", {}).items():
             tracker._tested[k] = TestedItem.from_dict(v)
         for k, v in d.get("discovered", {}).items():
             tracker._discovered[k] = DiscoveredSurface.from_dict(v)
-        failure_data = d.get("failure_only", {})
-        if failure_data:
-            tracker._failure_only = dict(failure_data)
+        tracker._failure_only = dict(d.get("failure_only", {}))
         return tracker
 
     def __len__(self) -> int:
         with self._lock:
-            return len(self._tested) + len(self._discovered)
+            return len(self._tested) + len(self._discovered) + len(self._failure_only)

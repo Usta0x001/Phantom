@@ -1,0 +1,475 @@
+"""CheckpointManager — atomic file-based checkpoint writes with crash safety."""
+
+from __future__ import annotations
+
+import base64
+import json
+import hashlib
+import hmac
+import logging
+import os
+import threading
+from pathlib import Path
+from typing import TYPE_CHECKING, Any
+
+try:
+    from cryptography.fernet import Fernet
+    CRYPTO_AVAILABLE = True
+except ImportError:
+    CRYPTO_AVAILABLE = False
+
+from pydantic import ValidationError
+
+from .models import CheckpointData
+
+if TYPE_CHECKING:
+    from phantom.agents.state import AgentState
+    from phantom.telemetry.tracer import Tracer
+
+logger = logging.getLogger(__name__)
+
+CHECKPOINT_FILE = "checkpoint.json"
+CHECKPOINT_HMAC_FILE = "checkpoint.json.hmac"
+CHECKPOINT_INTERVAL = 5   # persist every N agent iterations
+
+# FIX 1: Max checkpoint size (10 MB)
+MAX_CHECKPOINT_SIZE_BYTES = 10 * 1024 * 1024
+
+# Current version for validation
+CURRENT_VERSION = "1"
+
+# FIX 4: Encryption key environment variable
+ENCRYPTION_KEY_ENV = "PHANTOM_CHECKPOINT_ENCRYPTION_KEY"
+
+
+def _get_encryption_key() -> bytes | None:
+    """Get encryption key from environment or derive from HMAC key.
+    
+    Fernet requires a 32-byte key that is base64-encoded.
+    If env key is provided, we hash it to get 32 bytes and then base64 encode.
+    """
+    key = os.getenv(ENCRYPTION_KEY_ENV, "")
+    if key:
+        # Hash the user-provided key to get 32 bytes
+        hashed = hashlib.sha256(key.encode("utf-8")).digest()
+        return base64.urlsafe_b64encode(hashed)
+    if CRYPTO_AVAILABLE:
+        # Derive from HMAC key - same process
+        hmac_key = _get_hmac_key()
+        hashed = hashlib.sha256(hmac_key).digest()
+        return base64.urlsafe_b64encode(hashed)
+    return None
+
+
+def _sanitize_run_dir(run_dir: Path) -> Path:
+    """Strip ``..`` path-traversal components from a CheckpointManager run_dir.
+
+    Only strips ``..`` segments so that absolute paths supplied by internal code
+    (e.g. pytest ``tmp_path``) are preserved as-is.  User-supplied run names from
+    the CLI **must** be sanitised with :func:`sanitize_run_name` *before* the
+    ``Path("phantom_runs") / name`` join so that the resulting path is always
+    relative and cannot escape ``phantom_runs/``.
+
+    Examples::
+
+        Path("phantom_runs") / "../../evil"   ->  Path("phantom_runs/evil")
+        Path("phantom_runs") / "myScan-01"    ->  unchanged
+        Path("/tmp/pytest-123/test_foo")      ->  unchanged  (absolute OK from code)
+    """
+    parts = run_dir.parts
+    safe_parts = [p for p in parts if p != ".."]
+    if not safe_parts:
+        return Path("phantom_runs") / "unnamed"
+    result = Path(safe_parts[0])
+    for part in safe_parts[1:]:
+        result = result / part
+    return result
+
+
+def sanitize_run_name(name: str) -> str:
+    """Sanitize a **user-supplied** run name before building a ``Path``.
+
+    Call this at the CLI/TUI boundary (``tui.py``) before
+    ``Path("phantom_runs") / name`` to prevent H-11 absolute-root bypass::
+
+        # Attack: Path("phantom_runs") / "/etc/passwd"  →  Path("/etc/passwd")
+        # Fix:    Path("phantom_runs") / sanitize_run_name("/etc/passwd")
+        #         → Path("phantom_runs/etc/passwd")
+
+    Strips:
+    * Windows drive letter prefix (``C:``, ``D:``, …)
+    * Leading forward and back slashes (POSIX / Windows root)
+    * Windows UNC prefixes (``\\\\server``, ``//server``)
+    * ``..`` components (path traversal)
+    * Empty components
+
+    Returns ``"unnamed"`` when the name reduces to nothing.
+    """
+    import re
+
+    # Strip null bytes (\x00 is invalid in filesystem paths on POSIX and Windows)
+    name = name.replace("\x00", "")
+    # Cap length — filesystem names are typically limited to 255 bytes
+    name = name[:128]
+    # Strip Windows drive letter (C:, D:, …)
+    name = re.sub(r"^[A-Za-z]:", "", name)
+    # Strip leading slashes / backslashes (POSIX root, Windows root, UNC)
+    name = name.lstrip("/\\")
+    # Split on both separators, drop empty parts and '..' segments
+    parts = [p for p in re.split(r"[/\\]", name) if p and p != ".."]
+    return "/".join(parts) if parts else "unnamed"
+
+
+def _get_hmac_key() -> bytes:
+    """Derive an HMAC key from a machine-local secret or a stable fallback."""
+    key = os.getenv("PHANTOM_CHECKPOINT_KEY", "")
+    if key:
+        return key.encode("utf-8")
+    # Fallback: use a host-local stable identifier
+    return hashlib.sha256(
+        f"phantom-checkpoint-{os.getuid() if hasattr(os, 'getuid') else 'win'}".encode()
+    ).digest()
+
+
+class CheckpointManager:
+    """
+    Saves/loads scan state so scans can be resumed after a crash or Ctrl+C.
+
+    Write strategy: write to a .tmp file first, then atomically rename to .json.
+    On POSIX this rename is atomic; on Windows it's best-effort (os.replace).
+    If the process is killed mid-write the .tmp is left behind and the old
+    checkpoint survives intact.
+
+    Integrity: an HMAC-SHA256 signature file is written alongside the checkpoint.
+    On load, the signature is verified to detect tampering.
+    """
+
+    def __init__(self, run_dir: Path, interval: int = CHECKPOINT_INTERVAL) -> None:
+        run_dir = _sanitize_run_dir(run_dir)  # H-11: strip path traversal
+        self.run_dir = run_dir
+        self.checkpoint_file = run_dir / CHECKPOINT_FILE
+        self._hmac_file = run_dir / CHECKPOINT_HMAC_FILE
+        self._lock = threading.Lock()
+        self._interval = interval
+        logger.info("Checkpoint interval: %d iterations (run_dir=%s)", self._interval, self.run_dir)
+
+    # ── Public API ────────────────────────────────────────────────────────────
+
+    def should_save(self, iteration: int) -> bool:
+        """True when it's time to write a checkpoint (iteration must be > 0).
+        
+        Saves at intervals: 5, 10, 15, 20... (not at iteration 1).
+        FIX 5: Added lock to prevent race condition with concurrent saves.
+        """
+        with self._lock:
+            return iteration > 0 and iteration % self._interval == 0
+
+    def _compute_hmac(self, data: bytes) -> str:
+        """FIX 3: Use constant-time comparison via hmac.compare_digest"""
+        return hmac.new(_get_hmac_key(), data, hashlib.sha256).hexdigest()
+    
+    def _verify_hmac_constant_time(self, data: bytes, expected_sig: str) -> bool:
+        """FIX 3: Verify HMAC using constant-time comparison to prevent timing attacks"""
+        actual_sig = self._compute_hmac(data)
+        return hmac.compare_digest(actual_sig, expected_sig)
+
+    def _validate_version(self, version: str) -> bool:
+        """FIX 2: Validate checkpoint version to reject incompatible formats"""
+        if version != CURRENT_VERSION:
+            logger.warning(
+                "Checkpoint version mismatch: expected %s, got %s",
+                CURRENT_VERSION,
+                version,
+            )
+            return False
+        return True
+
+    def _encrypt_data(self, data: bytes) -> bytes:
+        """FIX 4: Encrypt data using Fernet if key is available"""
+        key = _get_encryption_key()
+        if not key or not CRYPTO_AVAILABLE:
+            return data
+        try:
+            f = Fernet(key)
+            return f.encrypt(data)
+        except Exception:
+            logger.warning("Encryption failed, saving plaintext", exc_info=True)
+            return data
+
+    def _decrypt_data(self, data: bytes) -> bytes:
+        """FIX 4: Decrypt data using Fernet if key is available"""
+        key = _get_encryption_key()
+        if not key or not CRYPTO_AVAILABLE:
+            return data
+        try:
+            f = Fernet(key)
+            return f.decrypt(data)
+        except Exception:
+            return data  # Not encrypted or wrong key, return as-is
+
+    def save(self, data: CheckpointData) -> None:
+        """Atomically persist checkpoint data to disk with HMAC integrity."""
+        with self._lock:
+            try:
+                self.run_dir.mkdir(parents=True, exist_ok=True)
+                json_bytes = data.model_dump_json(indent=2).encode("utf-8")
+                # FIX 1: Check size before saving
+                if len(json_bytes) > MAX_CHECKPOINT_SIZE_BYTES:
+                    logger.warning(
+                        "Checkpoint too large (%d bytes > %d bytes), skipping save",
+                        len(json_bytes),
+                        MAX_CHECKPOINT_SIZE_BYTES,
+                    )
+                    return
+                # FIX 4: Compute HMAC before encryption (on plaintext)
+                # This ensures HMAC can be verified after decryption
+                sig = self._compute_hmac(json_bytes)
+                # Encrypt data before writing
+                if _get_encryption_key() and CRYPTO_AVAILABLE:
+                    json_bytes = self._encrypt_data(json_bytes)
+                # Write data
+                tmp = self.checkpoint_file.with_suffix(".tmp")
+                tmp.write_bytes(json_bytes)
+                tmp.replace(self.checkpoint_file)   # atomic on POSIX, best-effort on Windows
+                # Write HMAC signature
+                hmac_tmp = self._hmac_file.with_suffix(".tmp")
+                hmac_tmp.write_text(sig, encoding="utf-8")
+                hmac_tmp.replace(self._hmac_file)
+                logger.debug(
+                    "Checkpoint saved at iteration %d (%d vulns)",
+                    data.iteration,
+                    len(data.vulnerability_reports),
+                )
+            except OSError:
+                logger.warning("Failed to save checkpoint", exc_info=True)
+
+    def load(self) -> CheckpointData | None:
+        """Load a checkpoint from disk. Returns None if absent, corrupt, or tampered."""
+        if not self.checkpoint_file.exists():
+            return None
+        try:
+            raw_bytes = self.checkpoint_file.read_bytes()
+            if not raw_bytes.strip():
+                logger.debug("Empty checkpoint file — ignoring (%s)", self.checkpoint_file)
+                return None
+            # Verify HMAC integrity if signature file exists
+            # HMAC is on plaintext, so verify before decrypting
+            if self._hmac_file.exists():
+                stored_sig = self._hmac_file.read_text(encoding="utf-8").strip()
+                # If encrypted, compute HMAC on encrypted data (same as save)
+                # If not encrypted, compute on plaintext (will work because raw_bytes is plaintext)
+                # We need to check if data is encrypted by trying to parse as JSON
+                is_encrypted = False
+                try:
+                    import json
+                    json.loads(raw_bytes)
+                except json.JSONDecodeError:
+                    is_encrypted = True
+                
+                if is_encrypted and _get_encryption_key() and CRYPTO_AVAILABLE:
+                    # Data is encrypted, decrypt first then compute HMAC
+                    decrypted = self._decrypt_data(raw_bytes)
+                    computed_sig = self._compute_hmac(decrypted)
+                else:
+                    # Data is plaintext
+                    computed_sig = self._compute_hmac(raw_bytes)
+                
+                if not hmac.compare_digest(stored_sig, computed_sig):
+                    logger.warning(
+                        "Checkpoint HMAC mismatch — file may have been tampered with. Ignoring."
+                    )
+                    return None
+            # FIX 4: Decrypt AFTER HMAC verification
+            if _get_encryption_key() and CRYPTO_AVAILABLE:
+                # Check if data is encrypted
+                try:
+                    import json
+                    json.loads(raw_bytes)
+                    # Not encrypted, try to decrypt anyway (will pass through)
+                except json.JSONDecodeError:
+                    raw_bytes = self._decrypt_data(raw_bytes)
+            raw = raw_bytes.decode("utf-8")
+            try:
+                # FIX 2: Validate version before full parsing
+                parsed = json.loads(raw)
+                if isinstance(parsed, dict) and "version" in parsed:
+                    if not self._validate_version(parsed["version"]):
+                        return None
+                return CheckpointData.model_validate_json(raw)
+            except ValidationError:
+                payload = json.loads(raw)
+                if isinstance(payload, dict):
+                    migrated = self._migrate_legacy_payload(payload)
+                    return CheckpointData.model_validate(migrated)
+                logger.debug("Non-dict checkpoint payload — ignoring (%s)", self.checkpoint_file)
+                return None
+        except (json.JSONDecodeError, OSError, UnicodeDecodeError, ValidationError):
+            logger.debug("Checkpoint file unreadable/corrupt — ignoring (%s)", self.checkpoint_file)
+            return None
+
+    def _migrate_legacy_payload(self, payload: dict[str, Any]) -> dict[str, Any]:
+        migrated = dict(payload)
+        run_name = migrated.get("run_name")
+        if not isinstance(run_name, str) or not run_name.strip():
+            scan_id = migrated.get("scan_id")
+            if isinstance(scan_id, str) and scan_id.strip():
+                migrated["run_name"] = scan_id
+            else:
+                migrated["run_name"] = self.run_dir.name
+        return migrated
+
+    def exists(self) -> bool:
+        return self.checkpoint_file.exists()
+
+    def mark_completed(self) -> None:
+        cp = self.load()
+        if cp:
+            cp.status = "completed"
+            self.save(cp)
+
+    # ── Helpers to build CheckpointData from live objects ────────────────────
+
+    @staticmethod
+    def build(
+        run_name: str,
+        state: "AgentState",
+        tracer: "Tracer | None",
+        scan_config: dict[str, Any],
+        status: str = "in_progress",
+        interruption_reason: str | None = None,
+        hypothesis_ledger: Any = None,  # P4: Add hypothesis ledger parameter
+        coverage_tracker: Any = None,   # P4: Add coverage tracker parameter
+        correlation_engine: Any = None,  # P4: Add correlation engine parameter
+        attack_graph: Any = None,  # FIX 5: Add attack graph parameter
+        active_sub_agents: dict[str, Any] | None = None,  # FIX ISSUE#6: Sub-agent states
+    ) -> CheckpointData:
+        vulns: list[dict[str, Any]] = []
+        llm_stats: dict[str, Any] = {}
+        per_model: dict[str, dict[str, Any]] = {}
+        compression_calls = 0
+        agent_calls = 0
+        error_calls = 0
+
+        if tracer:
+            vulns = list(tracer.vulnerability_reports)
+            llm_stats = tracer.get_total_llm_stats()
+            per_model = tracer.get_per_model_stats()
+            compression_calls = tracer.compression_calls
+            agent_calls = tracer.agent_calls
+            error_calls = tracer.error_calls
+
+        # Redact sensitive runtime fields before persisting to disk.
+        # sandbox_token and sandbox_id are ephemeral — they are invalidated
+        # when the container is stopped, so restoring them from a checkpoint
+        # would fail anyway.  Storing them exposes secrets at rest.
+        raw_state = state.model_dump()
+        raw_state["sandbox_token"] = None
+        raw_state["sandbox_id"] = None
+        raw_state["sandbox_info"] = None
+
+        # S-05: Build conversation summary for post-mortem debugging.
+        # Store last 20 messages with role + truncated content (max 200 chars each).
+        _conv_summary: list[dict[str, str]] = []
+        _messages = raw_state.get("messages", [])
+        for msg in _messages[-20:]:
+            role = msg.get("role", "?")
+            content = str(msg.get("content", ""))[:200]
+            tool_calls = msg.get("tool_calls")
+            entry: dict[str, str] = {"role": role, "content": content}
+            if tool_calls:
+                fn_names = [tc.get("function", {}).get("name", "?") for tc in tool_calls[:5]]
+                entry["tool_calls"] = ", ".join(fn_names)
+            _conv_summary.append(entry)
+
+        import datetime
+        _saved_at = datetime.datetime.now(tz=datetime.timezone.utc).isoformat()
+        
+        # P4: Serialize hypothesis ledger, coverage tracker, and correlation engine state
+        hypothesis_ledger_state: dict[str, dict[str, Any]] = {}
+        coverage_tracker_state: dict[str, Any] = {}
+        correlation_engine_state: dict[str, Any] = {}
+        
+        if hypothesis_ledger:
+            # Hypothesis ledger has get_all() returning dict[str, Hypothesis]
+            # Each Hypothesis has a to_dict() method
+            try:
+                hypothesis_ledger_state = {
+                    hyp_id: hyp.to_dict()
+                    for hyp_id, hyp in hypothesis_ledger.get_all().items()
+                }
+            except Exception:
+                logger.debug("Failed to serialize hypothesis ledger state", exc_info=True)
+        
+        if coverage_tracker:
+            # Coverage tracker should have a method to export state
+            try:
+                coverage_tracker_state = coverage_tracker.to_dict() if hasattr(coverage_tracker, 'to_dict') else {}
+            except Exception:
+                logger.debug("Failed to serialize coverage tracker state", exc_info=True)
+        
+        if correlation_engine is not None:
+            # Correlation engine should have a method to export state
+            try:
+                correlation_engine_state = correlation_engine.to_dict() if hasattr(correlation_engine, 'to_dict') else {}
+            except Exception:
+                logger.debug("Failed to serialize correlation engine state", exc_info=True)
+
+        # FIX 5: Serialize attack graph state for vulnerability chain visualization
+        attack_graph_state: dict[str, Any] = {}
+        if attack_graph:
+            try:
+                attack_graph_state = attack_graph.to_dict()
+                logger.debug("Serialized attack graph with %d nodes", len(attack_graph_state.get("nodes", [])))
+            except Exception:
+                logger.debug("Failed to serialize attack graph state", exc_info=True)
+
+        # FIX ISSUE#6: Capture active sub-agent states
+        # This allows resuming scans without losing sub-agent work
+        sub_agent_states_dict: dict[str, dict[str, Any]] = {}
+        if active_sub_agents:
+            try:
+                for agent_id, agent_info in active_sub_agents.items():
+                    # agent_info should contain: {state: AgentState, status: str, parent_id: str}
+                    if isinstance(agent_info, dict) and "state" in agent_info:
+                        agent_state_obj = agent_info["state"]
+                        # Serialize the agent state
+                        serialized_state = agent_state_obj.model_dump() if hasattr(agent_state_obj, "model_dump") else {}
+                        # Redact sensitive fields from sub-agents too
+                        serialized_state["sandbox_token"] = None
+                        serialized_state["sandbox_id"] = None
+                        serialized_state["sandbox_info"] = None
+                        sub_agent_states_dict[agent_id] = {
+                            "state": serialized_state,
+                            "status": agent_info.get("status", "active"),
+                            "parent_id": agent_info.get("parent_id", state.agent_id),
+                        }
+                logger.debug("Captured %d sub-agent states for checkpoint", len(sub_agent_states_dict))
+            except Exception:
+                logger.warning("Failed to serialize sub-agent states", exc_info=True)
+
+        return CheckpointData(
+            run_name=run_name,
+            status=status,
+            interruption_reason=interruption_reason,
+            iteration=state.iteration,
+            task_description=state.task,
+            scan_config=scan_config,
+            root_agent_state=raw_state,
+            vulnerability_reports=vulns,
+            final_result=state.final_result,
+            llm_stats_at_checkpoint=llm_stats,
+            per_model_stats=per_model,
+            compression_calls=compression_calls,
+            agent_calls=agent_calls,
+            error_calls=error_calls,
+            conversation_summary=_conv_summary,
+            saved_at=_saved_at,
+            # P4: Include hypothesis ledger, coverage tracker, and correlation engine state
+            hypothesis_ledger_state=hypothesis_ledger_state,
+            coverage_tracker_state=coverage_tracker_state,
+            correlation_engine_state=correlation_engine_state,
+            # FIX 5: Include attack graph state for vulnerability chain analysis
+            attack_graph_state=attack_graph_state,
+            # FIX ISSUE#6: Include sub-agent states to avoid losing work on resume
+            sub_agent_states=sub_agent_states_dict,
+        )

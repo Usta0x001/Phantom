@@ -1,14 +1,3 @@
-"""
-Fuzzer Tool — AI-guided parallel fuzzing for web applications.
-
-This tool allows the LLM to generate payloads and execute them in parallel.
-NO STATIC PAYLOAD LISTS - LLM creates all payloads.
-"""
-
-from .fuzzer_actions import (
-    execute_fuzz_batch,
-)
-
-__all__ = [
-    "execute_fuzz_batch",
-]
+# Fuzzer module disabled — @register_tool removed pending container rebuild.
+# execute_fuzz_batch code exists in fuzzer_actions.py but is not exported.
+__all__: list[str] = []

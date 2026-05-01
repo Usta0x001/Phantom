@@ -39,6 +39,7 @@ def _filter_notes(
     return filtered_notes
 
 
+@register_tool(sandbox_execution=False)
 def create_note(
     title: str,
     content: str,
@@ -84,6 +85,7 @@ def create_note(
         }
 
 
+@register_tool(sandbox_execution=False)
 def list_notes(
     category: str | None = None,
     tags: list[str] | None = None,

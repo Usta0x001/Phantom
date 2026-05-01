@@ -1,0 +1,347 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<tools>
+  <tool name="auto_queue_cve_exploits">
+    <description>
+      Automatically queue CVE-based exploitation hypotheses from fingerprinted tech stack.
+      
+      This is the MAIN INTEGRATION FUNCTION that bridges:
+      - Tech stack detection (identify_tech_stack)
+      - CVE lookup (version_to_cves)
+      - Hypothesis queueing (hypothesis_ledger)
+      
+      WORKFLOW:
+      1. Parse tech_stack dictionary for products with versions
+      2. Call version_to_cves() for each technology
+      3. Map CVEs to vulnerability classes (sqli, xss, rce, path_traversal, etc.)
+      4. Generate attack surfaces based on product/CVE combination
+      5. Queue hypotheses in hypothesis ledger
+      6. Return prioritized exploitation plan
+      
+      WHEN TO USE:
+      - After calling identify_tech_stack() and finding versioned software
+      - When you want to automatically discover and queue CVE exploits
+      - To transform fingerprinting results into actionable attacks
+      
+      ELITE FEATURE:
+      - Automatically prioritizes CVEs with available exploits (Metasploit, PoC)
+      - Generates product-specific attack surfaces (e.g., Apache path traversal endpoints)
+      - Recommends tailored payloads based on CVE descriptions
+      - Prevents hypothesis flooding with max_hypotheses limit
+    </description>
+    
+    <parameters>
+      <parameter name="tech_stack" type="dict" required="true">
+        <description>
+          Tech stack dictionary from identify_tech_stack().
+          
+          Expected format:
+          {
+            "web_servers": [{"name": "Apache", "version": "2.4.49", "confidence": "high"}],
+            "languages": [{"name": "PHP", "version": "7.4.3"}],
+            "frameworks": [{"name": "Laravel", "version": "8.0"}],
+            "cms": [{"name": "WordPress", "version": "5.8.2"}],
+            "databases": [{"name": "MySQL", "version": "8.0.26"}]
+          }
+          
+          The function extracts all technologies WITH versions and queries CVE databases.
+        </description>
+      </parameter>
+      
+      <parameter name="base_url" type="string" required="true">
+        <description>
+          Target base URL for generating attack surfaces.
+          
+          Examples:
+          - "https://example.com"
+          - "http://192.168.1.100:8080"
+          - "https://api.target.com"
+          
+          Attack surfaces are built relative to this URL
+          (e.g., "https://example.com/cgi-bin/.%2e/.%2e/etc/passwd" for Apache path traversal)
+        </description>
+      </parameter>
+      
+      <parameter name="hypothesis_ledger" type="object" required="false">
+        <description>
+          HypothesisLedger instance for direct integration.
+          
+          If provided, hypotheses are queued directly via hypothesis_ledger.add().
+          If not provided, falls back to calling add_hypothesis() tool.
+          
+          Recommended: Pass the ledger instance for better performance.
+        </description>
+      </parameter>
+      
+      <parameter name="min_severity" type="string" required="false" default="MEDIUM">
+        <description>
+          Minimum CVE severity to queue.
+          
+          Valid values: CRITICAL, HIGH, MEDIUM, LOW
+          
+          Examples:
+          - "CRITICAL" → Only queue critical CVEs (CVSS 9.0+)
+          - "HIGH" → Queue critical and high CVEs (CVSS 7.0+)
+          - "MEDIUM" → Queue medium+ severity (CVSS 4.0+)
+          
+          Recommendation: Use "MEDIUM" for comprehensive testing, "HIGH" for targeted attacks.
+        </description>
+      </parameter>
+      
+      <parameter name="prioritize_exploits" type="boolean" required="false" default="true">
+        <description>
+          If true, prioritize CVEs with available exploits (Metasploit, PoC).
+          
+          Exploitation plan will list CVEs with exploits first, regardless of severity.
+          This is recommended for penetration testing where exploitability matters more than theoretical severity.
+        </description>
+      </parameter>
+      
+      <parameter name="max_hypotheses" type="integer" required="false" default="20">
+        <description>
+          Maximum number of hypotheses to queue.
+          
+          Prevents hypothesis flooding when many CVEs are found.
+          Only the top-priority hypotheses (by severity + exploit availability) are queued.
+          
+          Recommended values:
+          - 20 → Balanced testing
+          - 10 → Focused on highest-priority CVEs only
+          - 50 → Comprehensive testing (may take longer)
+        </description>
+      </parameter>
+    </parameters>
+    
+    <returns>
+      <description>
+        Dictionary with exploitation plan and queuing summary:
+        {
+          "hypotheses_queued": 5,
+          "cves_found": 12,
+          "exploitation_plan": [
+            {
+              "priority": 1,
+              "cve_id": "CVE-2021-41773",
+              "product": "Apache/2.4.49",
+              "severity": "CRITICAL",
+              "vuln_class": "path_traversal",
+              "hypothesis_id": "H-0042",
+              "attack_surface": "https://example.com/cgi-bin/.%2e/.%2e/etc/passwd",
+              "exploit_available": true,
+              "exploit_type": "metasploit",
+              "exploit_url": "https://www.exploit-db.com/exploits/50383",
+              "confidence": "HIGH",
+              "recommended_payloads": ["../.../../etc/passwd", ".%2e/.%2e/etc/passwd"],
+              "recommended_action": "Deploy Metasploit module immediately - CRITICAL severity RCE"
+            },
+            ...
+          ],
+          "summary": "Queued 5 CVE exploits: 2 CRITICAL, 3 HIGH",
+          "status": "success"
+        }
+      </description>
+      
+      <status_codes>
+        <code value="success">Hypotheses successfully queued</code>
+        <code value="no_cves_found">No CVEs found matching criteria</code>
+        <code value="error">CVE auto-integration failed</code>
+      </status_codes>
+    </returns>
+    
+    <example>
+      <scenario>Apache 2.4.49 with known path traversal CVE</scenario>
+      <input>
+        tech_stack = {
+          "web_servers": [
+            {"name": "Apache", "version": "2.4.49", "confidence": "high"}
+          ]
+        }
+        base_url = "https://target.com"
+        min_severity = "HIGH"
+      </input>
+      <output>
+        {
+          "hypotheses_queued": 2,
+          "cves_found": 2,
+          "exploitation_plan": [
+            {
+              "priority": 1,
+              "cve_id": "CVE-2021-41773",
+              "severity": "CRITICAL",
+              "vuln_class": "path_traversal",
+              "attack_surface": "https://target.com/cgi-bin/.%2e/.%2e/etc/passwd",
+              "exploit_available": true,
+              "exploit_type": "metasploit"
+            }
+          ]
+        }
+      </output>
+    </example>
+    
+    <example>
+      <scenario>WordPress 5.8.2 with multiple CVEs</scenario>
+      <input>
+        tech_stack = {
+          "cms": [
+            {"name": "WordPress", "version": "5.8.2"}
+          ]
+        }
+        base_url = "https://blog.example.com"
+        min_severity = "MEDIUM"
+        max_hypotheses = 10
+      </input>
+      <output>
+        {
+          "hypotheses_queued": 10,
+          "cves_found": 15,
+          "summary": "Queued 10 CVE exploits: 1 CRITICAL, 4 HIGH, 5 MEDIUM"
+        }
+      </output>
+    </example>
+    
+    <security_notes>
+      <note>This function ONLY queries public CVE databases - no interaction with target</note>
+      <note>Hypothesis queueing is local - does not send payloads to target</note>
+      <note>Rate limiting applied to NVD/ExploitDB queries (inherited from version_to_cves)</note>
+    </security_notes>
+    
+    <integration_notes>
+      <note>Designed to be called immediately after identify_tech_stack()</note>
+      <note>Works seamlessly with existing hypothesis_ledger and payload generation</note>
+      <note>Exploitation plan can be fed directly to agent's attack loop</note>
+    </integration_notes>
+  </tool>
+  
+  <tool name="enrich_hypothesis_with_cve">
+    <description>
+      Enrich an existing hypothesis with CVE metadata.
+      
+      Useful when CVEs are discovered AFTER hypothesis creation (e.g., manual research).
+      Fetches full CVE details from NVD and stores them in hypothesis metadata.
+      
+      WHEN TO USE:
+      - You've created a hypothesis and later discovered a relevant CVE
+      - You want to add CVE context to manual hypotheses
+      - You need CVE details for reporting confirmed vulnerabilities
+    </description>
+    
+    <parameters>
+      <parameter name="hypothesis_id" type="string" required="true">
+        <description>
+          Hypothesis ID to enrich (e.g., "H-0042").
+          
+          Must be an existing hypothesis in the ledger.
+        </description>
+      </parameter>
+      
+      <parameter name="cve_id" type="string" required="true">
+        <description>
+          CVE identifier (e.g., "CVE-2021-41773").
+          
+          Must be valid CVE format: CVE-YYYY-NNNNN
+        </description>
+      </parameter>
+      
+      <parameter name="hypothesis_ledger" type="object" required="false">
+        <description>
+          HypothesisLedger instance.
+          
+          If provided, CVE data is stored directly in hypothesis.metadata.
+        </description>
+      </parameter>
+    </parameters>
+    
+    <returns>
+      <description>
+        {
+          "status": "success",
+          "hypothesis_id": "H-0042",
+          "cve_id": "CVE-2021-41773",
+          "enriched_data": {
+            "description": "Path traversal in Apache HTTP Server 2.4.49...",
+            "cvss_score": 7.5,
+            "severity": "HIGH",
+            "references": [...]
+          },
+          "summary": "Hypothesis H-0042 enriched with CVE-2021-41773"
+        }
+      </description>
+    </returns>
+    
+    <example>
+      <input>
+        hypothesis_id = "H-0042"
+        cve_id = "CVE-2021-41773"
+      </input>
+      <output>
+        {
+          "status": "success",
+          "hypothesis_id": "H-0042",
+          "cve_id": "CVE-2021-41773",
+          "summary": "Hypothesis H-0042 enriched with CVE-2021-41773"
+        }
+      </output>
+    </example>
+  </tool>
+  
+  <tool name="get_cve_exploitation_status">
+    <description>
+      Check if a CVE has been tested and get exploitation status.
+      
+      Searches hypothesis ledger for hypotheses linked to a specific CVE.
+      Returns whether the CVE is exploitable, testing in progress, or not tested.
+      
+      WHEN TO USE:
+      - Before queueing a CVE exploit (check if already tested)
+      - For reporting exploitation success rates
+      - To avoid redundant CVE testing
+    </description>
+    
+    <parameters>
+      <parameter name="cve_id" type="string" required="true">
+        <description>
+          CVE identifier (e.g., "CVE-2021-41773")
+        </description>
+      </parameter>
+      
+      <parameter name="hypothesis_ledger" type="object" required="false">
+        <description>
+          HypothesisLedger instance to search
+        </description>
+      </parameter>
+    </parameters>
+    
+    <returns>
+      <description>
+        {
+          "cve_id": "CVE-2021-41773",
+          "tested": true,
+          "confirmed": true,
+          "hypotheses": ["H-0042", "H-0043"],
+          "status": "EXPLOITABLE",
+          "summary": "CVE-2021-41773 is exploitable"
+        }
+        
+        Status values:
+        - "EXPLOITABLE" → CVE confirmed exploitable
+        - "TESTING_IN_PROGRESS" → Hypotheses exist but not confirmed
+        - "NOT_TESTED" → No hypotheses found
+        - "ERROR" → Failed to check status
+      </description>
+    </returns>
+    
+    <example>
+      <input>
+        cve_id = "CVE-2021-41773"
+      </input>
+      <output>
+        {
+          "cve_id": "CVE-2021-41773",
+          "tested": true,
+          "confirmed": true,
+          "status": "EXPLOITABLE",
+          "hypotheses": ["H-0042"]
+        }
+      </output>
+    </example>
+  </tool>
+</tools>

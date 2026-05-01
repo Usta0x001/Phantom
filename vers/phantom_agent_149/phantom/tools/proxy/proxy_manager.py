@@ -1,0 +1,1206 @@
+import base64
+import ipaddress
+import logging
+import os
+import re
+import socket
+import time
+from typing import TYPE_CHECKING, Any
+from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
+
+import requests
+from requests.exceptions import ProxyError, RequestException, Timeout
+
+logger = logging.getLogger(__name__)
+
+try:
+    from gql import Client, gql
+    from gql.transport.exceptions import TransportQueryError
+    from gql.transport.requests import RequestsHTTPTransport
+
+    _GQL_AVAILABLE = True
+except ImportError:
+    Client = None  # type: ignore[assignment]
+    gql = None  # type: ignore[assignment,misc]
+    TransportQueryError = Exception  # type: ignore[assignment,misc]
+    RequestsHTTPTransport = None  # type: ignore[assignment]
+    _GQL_AVAILABLE = False
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
+
+CAIDO_PORT = 48080  # Fixed port inside container
+
+# ══════════════════════════════════════════════════════════════════════════════
+# SECURITY REC MED-4: DNS Pinning for SSRF TOCTOU Prevention
+# ══════════════════════════════════════════════════════════════════════════════
+# Cache DNS resolutions and verify they match on subsequent requests to the same
+# hostname. This prevents time-of-check-time-of-use attacks where an attacker
+# controls DNS and changes the resolution between validation and request.
+#
+# Example attack without pinning:
+#   1. Agent validates evil.com → 1.2.3.4 (public IP, passes check)
+#   2. Attacker changes DNS: evil.com → 127.0.0.1
+#   3. Agent sends request → SSRF bypass
+#
+# With pinning, step 3 detects the resolution changed and blocks the request.
+
+_DNS_PIN_CACHE: dict[str, tuple[set[str], float]] = {}  # hostname -> (ips, timestamp)
+_DNS_PIN_TTL = 300.0  # 5 minutes — balance between security and DNS changes
+
+def pin_dns_resolution(hostname: str) -> set[str] | None:
+    """Resolve and cache DNS for a hostname.
+    
+    Returns:
+        Set of resolved IP addresses, or None if resolution failed
+    """
+    hostname_lower = _normalize_ssrf_host(hostname)
+    if not hostname_lower:
+        return None
+    
+    # Check cache
+    now = time.time()
+    if hostname_lower in _DNS_PIN_CACHE:
+        ips, cached_at = _DNS_PIN_CACHE[hostname_lower]
+        if now - cached_at < _DNS_PIN_TTL:
+            return ips
+    
+    # Resolve DNS
+    try:
+        infos = socket.getaddrinfo(hostname_lower, None, socket.AF_UNSPEC, socket.SOCK_STREAM)
+        ips = {sockaddr[0] for _family, _type, _proto, _canon, sockaddr in infos}
+        _DNS_PIN_CACHE[hostname_lower] = (ips, now)
+        return ips
+    except (socket.gaierror, OSError):
+        return None
+
+def verify_dns_pinning(hostname: str) -> bool:
+    """Verify that a hostname still resolves to the same IPs as when pinned.
+    
+    Returns:
+        True if resolution matches pin (or no pin exists), False if changed
+    """
+    hostname_lower = _normalize_ssrf_host(hostname)
+    if not hostname_lower or hostname_lower not in _DNS_PIN_CACHE:
+        # No pin exists - allow but log warning
+        return True
+    
+    pinned_ips, _ = _DNS_PIN_CACHE[hostname_lower]
+    current_ips = pin_dns_resolution(hostname_lower)
+    
+    if current_ips is None:
+        # Resolution failed - suspicious, block
+        return False
+    
+    # Allow if current IPs are subset of pinned IPs (handles A/AAAA record removal)
+    # Block if new IPs appear (potential attack)
+    new_ips = current_ips - pinned_ips
+    return len(new_ips) == 0
+
+# ──────────────────────────────────────────────────────────────────────────────
+
+# ── SSRF protection ──────────────────────────────────────────────────────────
+# Scan targets must be registered here via allow_ssrf_host() before requests
+# are sent so that private-network addresses used as targets are permitted.
+_ALLOWED_SSRF_HOSTS: set[str] = set()
+
+# These literals are always blocked regardless of registration.
+_ALWAYS_BLOCKED = frozenset({"localhost", "0.0.0.0", "[::]", "::1"})
+
+
+def _normalize_ssrf_host(hostname: str) -> str:
+    host = (hostname or "").strip().lower()
+    if not host:
+        return ""
+    if host.startswith("[") and host.endswith("]"):
+        host = host[1:-1]
+    if ":" in host and not host.count(":") > 1:
+        host = host.split(":", 1)[0]
+    return host
+
+
+def _ssrf_host_aliases(hostname: str) -> set[str]:
+    host = _normalize_ssrf_host(hostname)
+    if not host:
+        return set()
+
+    aliases = {host}
+    if host in {"localhost", "127.0.0.1", "::1", "host.docker.internal"}:
+        aliases.update({"localhost", "127.0.0.1", "::1", "host.docker.internal"})
+    return aliases
+
+
+def allow_ssrf_host(hostname: str) -> None:
+    """Register a hostname as an allowed SSRF destination (the scan target).
+    
+    Also pins the DNS resolution for TOCTOU protection.
+    """
+    _ALLOWED_SSRF_HOSTS.update(_ssrf_host_aliases(hostname))
+    # Pin DNS resolution for registered scan targets
+    pin_dns_resolution(hostname)
+
+
+def _is_registered_ssrf_host(hostname: str) -> bool:
+    if not _ALLOWED_SSRF_HOSTS:
+        return False
+    return bool(_ssrf_host_aliases(hostname) & _ALLOWED_SSRF_HOSTS)
+
+
+def _is_ssrf_safe(url: str) -> bool:
+    """Return True if *url* is safe to forward; False if it targets a private/internal address."""
+    try:
+        parsed = urlparse(url)
+        host = parsed.hostname or ""
+        if not host:
+            return False
+
+        if parsed.username or parsed.password:
+            return False
+
+        host_lower = _normalize_ssrf_host(host)
+
+        # Explicitly registered scan targets bypass further checks.
+        if _is_registered_ssrf_host(host_lower):
+            return True
+
+        # Hard-blocked literals (unless explicitly registered scan targets).
+        if host_lower in _ALWAYS_BLOCKED:
+            return False
+
+        # SSRF-NEW-4 FIX: Check for hex IP addresses (e.g., 0xa9fea9fe = 169.254.169.254)
+        # SSRF-NEW-5 FIX: Check for decimal and octal IP addresses
+        # Browsers/curl parse these formats but Python's ipaddress doesn't
+        
+        # Case 1: Pure decimal IP (e.g., 2130706433 = 127.0.0.1)
+        if host_lower.isdigit():
+            try:
+                decimal_value = int(host_lower)
+                if 0 <= decimal_value <= 0xFFFFFFFF:
+                    ip_obj = ipaddress.ip_address(decimal_value)
+                    if ip_obj.is_private or ip_obj.is_loopback or ip_obj.is_link_local:
+                        return False
+            except (ValueError, OverflowError):
+                pass
+        
+        # Case 1b: Pure octal IP (e.g., 017700000001 = 127.0.0.1 in octal)
+        # This is an 11-digit number starting with 0 that looks like octal
+        if host_lower.startswith("0") and len(host_lower) > 1 and len(host_lower) <= 12:
+            try:
+                octal_value = int(host_lower, 8)
+                if 0 <= octal_value <= 0xFFFFFFFF:
+                    ip_obj = ipaddress.ip_address(octal_value)
+                    if ip_obj.is_private or ip_obj.is_loopback or ip_obj.is_link_local:
+                        return False
+            except (ValueError, OverflowError):
+                pass
+        
+        # Case 2: Pure hex IP (e.g., 0x0100007f = 127.0.0.1, 0xa9fea9fe = 169.254.169.254)
+        # Check for 0x prefix + valid hex, or pure 8-char hex
+        if host_lower.startswith("0x") and len(host_lower) <= 10:
+            try:
+                hex_value = int(host_lower, 16)
+                if 0 <= hex_value <= 0xFFFFFFFF:
+                    ip_obj = ipaddress.ip_address(hex_value)
+                    if ip_obj.is_private or ip_obj.is_loopback or ip_obj.is_link_local:
+                        return False
+            except (ValueError, OverflowError):
+                pass
+        
+        # Case 2b: Pure 8-char hex (no 0x prefix) e.g., 0100007f = 127.0.0.1
+        if len(host_lower) == 8 and all(c in '0123456789abcdef' for c in host_lower):
+            try:
+                hex_value = int(host_lower, 16)
+                if 0 <= hex_value <= 0xFFFFFFFF:
+                    ip_obj = ipaddress.ip_address(hex_value)
+                    if ip_obj.is_private or ip_obj.is_loopback or ip_obj.is_link_local:
+                        return False
+            except (ValueError, OverflowError):
+                pass
+        
+        # Case 3: Dotted notation with octal/hex octets (e.g., 0177.0.0.01, 0x7f.0x01)
+        if "." in host_lower:
+            octets = host_lower.split(".")
+            if len(octets) == 4:
+                try:
+                    normalized_octets = []
+                    for octet in octets:
+                        if octet.startswith("0x") and len(octet) <= 4:
+                            # Hex octet (e.g., 0x7f or 0x01)
+                            normalized_octets.append(int(octet, 16))
+                        elif octet.startswith("0") and len(octet) > 1 and octet.isdigit():
+                            # Octal octet
+                            normalized_octets.append(int(octet, 8))
+                        elif octet.isdigit():
+                            # Decimal octet - also handle shorthand like "1" = "0.0.0.1"
+                            normalized_octets.append(int(octet))
+                        else:
+                            raise ValueError("Not a valid IP octet")
+                    
+                    # Validate all octets are in range
+                    if all(0 <= o <= 255 for o in normalized_octets):
+                        normalized_ip = ".".join(str(o) for o in normalized_octets)
+                        ip_obj = ipaddress.ip_address(normalized_ip)
+                        if ip_obj.is_private or ip_obj.is_loopback or ip_obj.is_link_local:
+                            return False
+                except (ValueError, OverflowError):
+                    pass
+        
+        # Case 4: Dotted shorthand (e.g., 127.1 = 127.0.0.1, 10.0 = 10.0.0.0)
+        if "." in host_lower:
+            octets = host_lower.split(".")
+            if 2 <= len(octets) <= 4:
+                try:
+                    normalized_octets = []
+                    for octet in octets:
+                        if not octet.isdigit():
+                            raise ValueError("Non-digit in shorthand IP")
+                        normalized_octets.append(int(octet))
+                    
+                    # Pad to 4 octets (shorthand notation)
+                    while len(normalized_octets) < 4:
+                        normalized_octets.append(0)
+                    
+                    # Validate all octets are in range
+                    if all(0 <= o <= 255 for o in normalized_octets):
+                        normalized_ip = ".".join(str(o) for o in normalized_octets)
+                        ip_obj = ipaddress.ip_address(normalized_ip)
+                        if ip_obj.is_private or ip_obj.is_loopback or ip_obj.is_link_local:
+                            return False
+                except (ValueError, OverflowError):
+                    pass
+
+        # ════════════════════════════════════════════════════════════════════════
+        # SECURITY REC MED-3: IPv6 SSRF Protection
+        # ════════════════════════════════════════════════════════════════════════
+        # Direct IP address check (handles both IPv4 and IPv6)
+        try:
+            addr = ipaddress.ip_address(host_lower)
+            
+            # IPv6-specific checks
+            if isinstance(addr, ipaddress.IPv6Address):
+                # Block IPv6 loopback (::1)
+                if addr.is_loopback:
+                    return False
+                # Block link-local addresses (fe80::/10)
+                if addr.is_link_local:
+                    return False
+                # Block unique local addresses (fc00::/7) - IPv6 equivalent of RFC1918
+                if addr.is_private:
+                    return False
+                # Block site-local addresses (deprecated but still dangerous: fec0::/10)
+                if addr.is_site_local:
+                    return False
+                # Block multicast (ff00::/8)
+                if addr.is_multicast:
+                    return False
+                # Block IPv4-mapped IPv6 addresses (::ffff:0:0/96) to prevent IPv4 bypass
+                # Example: ::ffff:127.0.0.1 = IPv6-wrapped localhost
+                if addr.ipv4_mapped:
+                    ipv4_addr = addr.ipv4_mapped
+                    if ipv4_addr.is_private or ipv4_addr.is_loopback or ipv4_addr.is_link_local:
+                        return False
+                # Block 6to4 addresses (2002::/16) to prevent tunneling attacks
+                if addr.packed[:2] == b'\x20\x02':
+                    return False
+                # Block Teredo tunneling (2001::/32)
+                if addr.packed[:4] == b'\x20\x01\x00\x00':
+                    return False
+            
+            # IPv4 and IPv6: Only allow globally routable unicast addresses.
+            return addr.is_global and not addr.is_private and not addr.is_loopback and not addr.is_link_local
+        except ValueError:
+            pass  # hostname, not an IP literal
+        # ────────────────────────────────────────────────────────────────────────
+
+        # Resolve hostname and block if any resolved address is non-public.
+        # Check both IPv4 and IPv6 resolutions to prevent bypasses via AAAA records.
+        # ════════════════════════════════════════════════════════════════════════
+        # SECURITY REC MED-4: DNS Pinning TOCTOU Protection
+        # ════════════════════════════════════════════════════════════════════════
+        # Verify DNS resolution matches previous pin to prevent DNS rebinding attacks
+        if not verify_dns_pinning(host_lower):
+            return False  # DNS resolution changed - potential attack
+        # ────────────────────────────────────────────────────────────────────────
+        
+        try:
+            infos = socket.getaddrinfo(host_lower, None, socket.AF_UNSPEC, socket.SOCK_STREAM)
+            for _family, _type, _proto, _canon, sockaddr in infos:
+                ip_str = sockaddr[0]
+                addr = ipaddress.ip_address(ip_str)
+                
+                # Block private/internal addresses (IPv4 and IPv6)
+                if addr.is_private or addr.is_loopback or addr.is_link_local or addr.is_reserved:
+                    return False
+                
+                # IPv6-specific checks on DNS resolution
+                if isinstance(addr, ipaddress.IPv6Address):
+                    if addr.is_site_local or addr.is_multicast:
+                        return False
+                    # Block IPv4-mapped IPv6 in DNS responses
+                    if addr.ipv4_mapped:
+                        ipv4 = addr.ipv4_mapped
+                        if ipv4.is_private or ipv4.is_loopback or ipv4.is_link_local:
+                            return False
+        except (socket.gaierror, OSError):
+            # Unresolvable .local-style hosts are blocked; unresolved public hosts
+            # are allowed to avoid false negatives in restricted DNS environments.
+            return not host_lower.endswith(".local")
+
+        return True
+    except Exception:  # noqa: BLE001
+        return False
+
+
+class ProxyManager:
+    def __init__(self, auth_token: str | None = None):
+        host = "127.0.0.1"
+        self.base_url = f"http://{host}:{CAIDO_PORT}/graphql"
+        self.proxies = {
+            "http": f"http://{host}:{CAIDO_PORT}",
+            "https": f"http://{host}:{CAIDO_PORT}",
+        }
+        self.auth_token = auth_token or os.getenv("CAIDO_API_TOKEN")
+
+    def _get_client(self) -> Client:
+        if not _GQL_AVAILABLE or RequestsHTTPTransport is None or Client is None:
+            raise RuntimeError(
+                "Proxy GraphQL client requires the gql package (available in Docker sandbox)"
+            )
+        transport = RequestsHTTPTransport(
+            url=self.base_url, headers={"Authorization": f"Bearer {self.auth_token}"}
+        )
+        return Client(transport=transport, fetch_schema_from_transport=False)
+
+    def list_requests(
+        self,
+        httpql_filter: str | None = None,
+        start_page: int = 1,
+        end_page: int = 1,
+        page_size: int = 50,
+        sort_by: str = "timestamp",
+        sort_order: str = "desc",
+        scope_id: str | None = None,
+    ) -> dict[str, Any]:
+        if not _GQL_AVAILABLE or gql is None:
+            return {
+                "error": "Proxy request listing requires the gql package (only available in Docker sandbox)"
+            }
+        offset = (start_page - 1) * page_size
+        limit = (end_page - start_page + 1) * page_size
+
+        sort_mapping = {
+            "timestamp": "CREATED_AT",
+            "host": "HOST",
+            "method": "METHOD",
+            "path": "PATH",
+            "status_code": "RESP_STATUS_CODE",
+            "response_time": "RESP_ROUNDTRIP_TIME",
+            "response_size": "RESP_LENGTH",
+            "source": "SOURCE",
+        }
+
+        query = gql("""
+            query GetRequests(
+                $limit: Int, $offset: Int, $filter: HTTPQL,
+                $order: RequestResponseOrderInput, $scopeId: ID
+            ) {
+                requestsByOffset(
+                    limit: $limit, offset: $offset, filter: $filter,
+                    order: $order, scopeId: $scopeId
+                ) {
+                    edges {
+                        node {
+                            id method host path query createdAt length isTls port
+                            source alteration fileExtension
+                            response { id statusCode length roundtripTime createdAt }
+                        }
+                    }
+                    count { value }
+                }
+            }
+        """)
+
+        variables = {
+            "limit": limit,
+            "offset": offset,
+            "filter": httpql_filter,
+            "order": {
+                "by": sort_mapping.get(sort_by, "CREATED_AT"),
+                "ordering": sort_order.upper(),
+            },
+            "scopeId": scope_id,
+        }
+
+        try:
+            result = self._get_client().execute(query, variable_values=variables)
+            data = result.get("requestsByOffset", {})
+            nodes = [edge["node"] for edge in data.get("edges", [])]
+
+            count_data = data.get("count") or {}
+            return {
+                "requests": nodes,
+                "total_count": count_data.get("value", 0),
+                "start_page": start_page,
+                "end_page": end_page,
+                "page_size": page_size,
+                "offset": offset,
+                "returned_count": len(nodes),
+                "sort_by": sort_by,
+                "sort_order": sort_order,
+            }
+        except Exception as e:  # noqa: BLE001
+            return {"requests": [], "total_count": 0, "error": f"Error fetching requests: {e}"}
+
+    def view_request(
+        self,
+        request_id: str,
+        part: str = "request",
+        search_pattern: str | None = None,
+        page: int = 1,
+        page_size: int = 50,
+    ) -> dict[str, Any]:
+        queries = {
+            "request": """query GetRequest($id: ID!) {
+                request(id: $id) {
+                    id method host path query createdAt length isTls port
+                    source alteration edited raw
+                }
+            }""",
+            "response": """query GetRequest($id: ID!) {
+                request(id: $id) {
+                    id response {
+                        id statusCode length roundtripTime createdAt raw
+                    }
+                }
+            }""",
+        }
+
+        if part not in queries:
+            return {"error": f"Invalid part '{part}'. Use 'request' or 'response'"}
+
+        try:
+            result = self._get_client().execute(
+                gql(queries[part]), variable_values={"id": request_id}
+            )
+            request_data = result.get("request", {})
+
+            if not request_data:
+                return {"error": f"Request {request_id} not found"}
+
+            if part == "request":
+                raw_content = request_data.get("raw")
+            else:
+                response_data = request_data.get("response") or {}
+                raw_content = response_data.get("raw")
+
+            if not raw_content:
+                return {"error": "No content available"}
+
+            content = base64.b64decode(raw_content).decode("utf-8", errors="replace")
+
+            if part == "response":
+                request_data["response"]["raw"] = content
+            else:
+                request_data["raw"] = content
+
+            return (
+                self._search_content(request_data, content, search_pattern)
+                if search_pattern
+                else self._paginate_content(request_data, content, page, page_size)
+            )
+
+        except Exception as e:  # noqa: BLE001
+            return {"error": f"Failed to view request: {e}"}
+
+    def _search_content(
+        self, request_data: dict[str, Any], content: str, pattern: str
+    ) -> dict[str, Any]:
+        try:
+            regex = re.compile(pattern, re.IGNORECASE | re.MULTILINE | re.DOTALL)
+            matches = []
+
+            for match in regex.finditer(content):
+                start, end = match.start(), match.end()
+                context_size = 120
+
+                before = re.sub(r"\s+", " ", content[max(0, start - context_size) : start].strip())[
+                    -100:
+                ]
+                after = re.sub(r"\s+", " ", content[end : end + context_size].strip())[:100]
+
+                matches.append(
+                    {"match": match.group(), "before": before, "after": after, "position": start}
+                )
+
+                if len(matches) >= 20:
+                    break
+
+            return {
+                "id": request_data.get("id"),
+                "matches": matches,
+                "total_matches": len(matches),
+                "search_pattern": pattern,
+                "truncated": len(matches) >= 20,
+            }
+        except re.error as e:
+            return {"error": f"Invalid regex: {e}"}
+
+    def _paginate_content(
+        self, request_data: dict[str, Any], content: str, page: int, page_size: int
+    ) -> dict[str, Any]:
+        display_lines = []
+        for line in content.split("\n"):
+            if len(line) <= 80:
+                display_lines.append(line)
+            else:
+                display_lines.extend(
+                    [
+                        line[i : i + 80] + (" \\" if i + 80 < len(line) else "")
+                        for i in range(0, len(line), 80)
+                    ]
+                )
+
+        total_lines = len(display_lines)
+        total_pages = (total_lines + page_size - 1) // page_size
+        page = max(1, min(page, total_pages))
+
+        start_line = (page - 1) * page_size
+        end_line = min(total_lines, start_line + page_size)
+
+        return {
+            "id": request_data.get("id"),
+            "content": "\n".join(display_lines[start_line:end_line]),
+            "page": page,
+            "total_pages": total_pages,
+            "showing_lines": f"{start_line + 1}-{end_line} of {total_lines}",
+            "has_more": page < total_pages,
+        }
+
+    def send_simple_request(
+        self,
+        method: str,
+        url: str,
+        headers: dict[str, str] | None = None,
+        body: str = "",
+        timeout: int = 30,
+    ) -> dict[str, Any]:
+        if headers is None:
+            headers = {}
+        if not _is_ssrf_safe(url):
+            return {"error": f"Blocked: URL targets a private/internal address: {url}"}
+        
+        # FIX 1-2: Try proxy first, fallback to direct on failure
+        proxy_error = None
+        try:
+            start_time = time.time()
+            response = requests.request(
+                method=method,
+                url=url,
+                headers=headers,
+                data=body or None,
+                proxies=self.proxies,
+                timeout=timeout,
+                verify=False,
+            )
+            response_time = int((time.time() - start_time) * 1000)
+
+            body_content = response.text
+            if len(body_content) > 10000:
+                body_content = body_content[:10000] + "\n... [truncated]"
+
+            return {
+                "status_code": response.status_code,
+                "headers": dict(response.headers),
+                "body": body_content,
+                "response_time_ms": response_time,
+                "url": response.url,
+                "message": (
+                    "Request sent through proxy - check list_requests() for captured traffic"
+                ),
+            }
+        except (ProxyError, ConnectionError) as e:
+            # Proxy connection failed - try direct fallback
+            proxy_error = f"{type(e).__name__}: {str(e)}"
+            logger.warning(f"Caido proxy unavailable ({proxy_error}), falling back to direct HTTP")
+        except (RequestException, Timeout) as e:
+            # Other request errors - return immediately (not proxy-related)
+            return {"error": f"Request failed: {type(e).__name__}", "details": str(e), "url": url}
+        
+        # FALLBACK: Send request directly without proxy
+        try:
+            start_time = time.time()
+            response = requests.request(
+                method=method,
+                url=url,
+                headers=headers,
+                data=body or None,
+                proxies=None,  # No proxy
+                timeout=timeout,
+                verify=False,
+            )
+            response_time = int((time.time() - start_time) * 1000)
+
+            body_content = response.text
+            if len(body_content) > 10000:
+                body_content = body_content[:10000] + "\n... [truncated]"
+
+            return {
+                "status_code": response.status_code,
+                "headers": dict(response.headers),
+                "body": body_content,
+                "response_time_ms": response_time,
+                "url": response.url,
+                "message": (
+                    f"Request sent DIRECTLY (proxy unavailable: {proxy_error}). "
+                    "Traffic NOT captured in Caido. Consider starting Caido proxy."
+                ),
+                "used_fallback": True,
+                "proxy_error": proxy_error,
+            }
+        except (RequestException, Timeout) as e:
+            return {
+                "error": f"Request failed (both proxy and direct): {type(e).__name__}",
+                "details": str(e),
+                "url": url,
+                "proxy_error": proxy_error
+            }
+
+    def repeat_request(
+        self, request_id: str, modifications: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
+        if modifications is None:
+            modifications = {}
+
+        original = self.view_request(request_id, "request")
+        if "error" in original:
+            return {"error": f"Could not retrieve original request: {original['error']}"}
+
+        raw_content = original.get("content", "")
+        if not raw_content:
+            return {"error": "No raw request content found"}
+
+        request_components = self._parse_http_request(raw_content)
+        if "error" in request_components:
+            return request_components
+
+        full_url = self._build_full_url(request_components, modifications)
+        if "error" in full_url:
+            return full_url
+
+        modified_request = self._apply_modifications(
+            request_components, modifications, full_url["url"]
+        )
+
+        return self._send_modified_request(modified_request, request_id, modifications)
+
+    def _parse_http_request(self, raw_content: str) -> dict[str, Any]:
+        lines = raw_content.split("\n")
+        request_line = lines[0].strip().split(" ")
+        if len(request_line) < 2:
+            return {"error": "Invalid request line format"}
+
+        method, url_path = request_line[0], request_line[1]
+
+        headers = {}
+        body_start = 0
+        for i, line in enumerate(lines[1:], 1):
+            if line.strip() == "":
+                body_start = i + 1
+                break
+            if ":" in line:
+                key, value = line.split(":", 1)
+                headers[key.strip()] = value.strip()
+
+        body = "\n".join(lines[body_start:]).strip() if body_start < len(lines) else ""
+
+        return {"method": method, "url_path": url_path, "headers": headers, "body": body}
+
+    def _build_full_url(
+        self, components: dict[str, Any], modifications: dict[str, Any]
+    ) -> dict[str, Any]:
+        headers = components["headers"]
+        host = headers.get("Host", "")
+        if not host:
+            return {"error": "No Host header found"}
+
+        protocol = (
+            "https" if ":443" in host or "https" in headers.get("Referer", "").lower() else "http"
+        )
+        full_url = f"{protocol}://{host}{components['url_path']}"
+
+        if "url" in modifications:
+            full_url = modifications["url"]
+
+        return {"url": full_url}
+
+    def _apply_modifications(
+        self, components: dict[str, Any], modifications: dict[str, Any], full_url: str
+    ) -> dict[str, Any]:
+        headers = components["headers"].copy()
+        body = components["body"]
+        final_url = full_url
+
+        if "params" in modifications:
+            parsed = urlparse(final_url)
+            params = {k: v[0] if v else "" for k, v in parse_qs(parsed.query).items()}
+            params.update(modifications["params"])
+            final_url = urlunparse(parsed._replace(query=urlencode(params)))
+
+        if "headers" in modifications:
+            headers.update(modifications["headers"])
+
+        if "body" in modifications:
+            body = modifications["body"]
+
+        if "cookies" in modifications:
+            cookies = {}
+            if headers.get("Cookie"):
+                for cookie in headers["Cookie"].split(";"):
+                    if "=" in cookie:
+                        k, v = cookie.split("=", 1)
+                        cookies[k.strip()] = v.strip()
+            cookies.update(modifications["cookies"])
+            headers["Cookie"] = "; ".join([f"{k}={v}" for k, v in cookies.items()])
+
+        return {
+            "method": components["method"],
+            "url": final_url,
+            "headers": headers,
+            "body": body,
+        }
+
+    def _send_modified_request(
+        self, request_data: dict[str, Any], request_id: str, modifications: dict[str, Any]
+    ) -> dict[str, Any]:
+        target_url = request_data.get("url", "")
+        if not _is_ssrf_safe(target_url):
+            return {
+                "error": f"Blocked: URL targets a private/internal address: {target_url}",
+                "original_request_id": request_id,
+            }
+        try:
+            start_time = time.time()
+            response = requests.request(
+                method=request_data["method"],
+                url=request_data["url"],
+                headers=request_data["headers"],
+                data=request_data["body"] or None,
+                proxies=self.proxies,
+                timeout=30,
+                verify=False,
+            )
+            response_time = int((time.time() - start_time) * 1000)
+
+            response_body = response.text
+            truncated = len(response_body) > 10000
+            if truncated:
+                response_body = response_body[:10000] + "\n... [truncated]"
+
+            return {
+                "status_code": response.status_code,
+                "status_text": response.reason,
+                "headers": {
+                    k: v
+                    for k, v in response.headers.items()
+                    if k.lower()
+                    in ["content-type", "content-length", "server", "set-cookie", "location"]
+                },
+                "body": response_body,
+                "body_truncated": truncated,
+                "body_size": len(response.content),
+                "response_time_ms": response_time,
+                "url": response.url,
+                "original_request_id": request_id,
+                "modifications_applied": modifications,
+                "request": {
+                    "method": request_data["method"],
+                    "url": request_data["url"],
+                    "headers": request_data["headers"],
+                    "has_body": bool(request_data["body"]),
+                },
+            }
+
+        except ProxyError as e:
+            return {
+                "error": "Proxy connection failed - is Caido running?",
+                "details": str(e),
+                "original_request_id": request_id,
+            }
+        except (RequestException, Timeout) as e:
+            return {
+                "error": f"Failed to repeat request: {type(e).__name__}",
+                "details": str(e),
+                "original_request_id": request_id,
+            }
+
+    def _handle_scope_list(self) -> dict[str, Any]:
+        result = self._get_client().execute(
+            gql("query { scopes { id name allowlist denylist indexed } }")
+        )
+        scopes = result.get("scopes", [])
+        return {"scopes": scopes, "count": len(scopes)}
+
+    def _handle_scope_get(self, scope_id: str | None) -> dict[str, Any]:
+        if not scope_id:
+            return self._handle_scope_list()
+
+        result = self._get_client().execute(
+            gql(
+                "query GetScope($id: ID!) { scope(id: $id) { id name allowlist denylist indexed } }"
+            ),
+            variable_values={"id": scope_id},
+        )
+        scope = result.get("scope")
+        if not scope:
+            return {"error": f"Scope {scope_id} not found"}
+        return {"scope": scope}
+
+    def _handle_scope_create(
+        self, scope_name: str, allowlist: list[str] | None, denylist: list[str] | None
+    ) -> dict[str, Any]:
+        if not scope_name:
+            return {"error": "scope_name required for create"}
+
+        mutation = gql("""
+            mutation CreateScope($input: CreateScopeInput!) {
+                createScope(input: $input) {
+                    scope { id name allowlist denylist indexed }
+                    error {
+                        ... on InvalidGlobTermsUserError { code terms }
+                        ... on OtherUserError { code }
+                    }
+                }
+            }
+        """)
+
+        result = self._get_client().execute(
+            mutation,
+            variable_values={
+                "input": {
+                    "name": scope_name,
+                    "allowlist": allowlist or [],
+                    "denylist": denylist or [],
+                }
+            },
+        )
+
+        payload = result.get("createScope", {})
+        if payload.get("error"):
+            error = payload["error"]
+            return {"error": f"Invalid glob patterns: {error.get('terms', error.get('code'))}"}
+
+        return {"scope": payload.get("scope"), "message": "Scope created successfully"}
+
+    def _handle_scope_update(
+        self,
+        scope_id: str,
+        scope_name: str,
+        allowlist: list[str] | None,
+        denylist: list[str] | None,
+    ) -> dict[str, Any]:
+        if not scope_id or not scope_name:
+            return {"error": "scope_id and scope_name required"}
+
+        mutation = gql("""
+            mutation UpdateScope($id: ID!, $input: UpdateScopeInput!) {
+                updateScope(id: $id, input: $input) {
+                    scope { id name allowlist denylist indexed }
+                    error {
+                        ... on InvalidGlobTermsUserError { code terms }
+                        ... on OtherUserError { code }
+                    }
+                }
+            }
+        """)
+
+        result = self._get_client().execute(
+            mutation,
+            variable_values={
+                "id": scope_id,
+                "input": {
+                    "name": scope_name,
+                    "allowlist": allowlist or [],
+                    "denylist": denylist or [],
+                },
+            },
+        )
+
+        payload = result.get("updateScope", {})
+        if payload.get("error"):
+            error = payload["error"]
+            return {"error": f"Invalid glob patterns: {error.get('terms', error.get('code'))}"}
+
+        return {"scope": payload.get("scope"), "message": "Scope updated successfully"}
+
+    def _handle_scope_delete(self, scope_id: str) -> dict[str, Any]:
+        if not scope_id:
+            return {"error": "scope_id required for delete"}
+
+        result = self._get_client().execute(
+            gql("mutation DeleteScope($id: ID!) { deleteScope(id: $id) { deletedId } }"),
+            variable_values={"id": scope_id},
+        )
+
+        payload = result.get("deleteScope", {})
+        if not payload.get("deletedId"):
+            return {"error": f"Failed to delete scope {scope_id}"}
+        return {"message": f"Scope {scope_id} deleted", "deletedId": payload["deletedId"]}
+
+    def scope_rules(
+        self,
+        action: str,
+        allowlist: list[str] | None = None,
+        denylist: list[str] | None = None,
+        scope_id: str | None = None,
+        scope_name: str | None = None,
+    ) -> dict[str, Any]:
+        if not _GQL_AVAILABLE or gql is None:
+            return {
+                "error": "Scope management requires the gql package (only available in Docker sandbox)",
+                "error_type": "dependency_unavailable",
+            }
+        handlers: dict[str, Callable[[], dict[str, Any]]] = {
+            "list": self._handle_scope_list,
+            "get": lambda: self._handle_scope_get(scope_id),
+            "create": lambda: (
+                {"error": "scope_name required for create"}
+                if not scope_name
+                else self._handle_scope_create(scope_name, allowlist, denylist)
+            ),
+            "update": lambda: (
+                {"error": "scope_id and scope_name required"}
+                if not scope_id or not scope_name
+                else self._handle_scope_update(scope_id, scope_name, allowlist, denylist)
+            ),
+            "delete": lambda: (
+                {"error": "scope_id required for delete"}
+                if not scope_id
+                else self._handle_scope_delete(scope_id)
+            ),
+        }
+
+        handler = handlers.get(action)
+        if not handler:
+            return {
+                "error": f"Unsupported action: {action}. Use 'get', 'list', 'create', "
+                f"'update', or 'delete'"
+            }
+
+        try:
+            result = handler()
+        except RuntimeError as e:
+            return {
+                "error": str(e),
+                "error_type": "dependency_unavailable",
+            }
+        except Exception as e:  # noqa: BLE001
+            return {
+                "error": f"Scope operation failed: {e}",
+                "error_type": "scope_operation_failed",
+            }
+        else:
+            return result
+
+    def list_sitemap(
+        self,
+        scope_id: str | None = None,
+        parent_id: str | None = None,
+        depth: str = "DIRECT",
+        page: int = 1,
+        page_size: int = 30,
+    ) -> dict[str, Any]:
+        try:
+            skip_count = (page - 1) * page_size
+
+            if parent_id:
+                query = gql("""
+                    query GetSitemapDescendants($parentId: ID!, $depth: SitemapDescendantsDepth!) {
+                        sitemapDescendantEntries(parentId: $parentId, depth: $depth) {
+                            edges {
+                                node {
+                                    id kind label hasDescendants
+                                    request { method path response { statusCode } }
+                                }
+                            }
+                            count { value }
+                        }
+                    }
+                """)
+                result = self._get_client().execute(
+                    query, variable_values={"parentId": parent_id, "depth": depth}
+                )
+                data = result.get("sitemapDescendantEntries", {})
+            else:
+                query = gql("""
+                    query GetSitemapRoots($scopeId: ID) {
+                        sitemapRootEntries(scopeId: $scopeId) {
+                            edges { node {
+                                id kind label hasDescendants
+                                metadata { ... on SitemapEntryMetadataDomain { isTls port } }
+                                request { method path response { statusCode } }
+                            } }
+                            count { value }
+                        }
+                    }
+                """)
+                result = self._get_client().execute(query, variable_values={"scopeId": scope_id})
+                data = result.get("sitemapRootEntries", {})
+
+            all_nodes = [edge["node"] for edge in data.get("edges", [])]
+            count_data = data.get("count") or {}
+            total_count = count_data.get("value", 0)
+
+            paginated_nodes = all_nodes[skip_count : skip_count + page_size]
+            cleaned_nodes = []
+
+            for node in paginated_nodes:
+                cleaned = {
+                    "id": node["id"],
+                    "kind": node["kind"],
+                    "label": node["label"],
+                    "hasDescendants": node["hasDescendants"],
+                }
+
+                if node.get("metadata") and (
+                    node["metadata"].get("isTls") is not None or node["metadata"].get("port")
+                ):
+                    cleaned["metadata"] = node["metadata"]
+
+                if node.get("request"):
+                    req = node["request"]
+                    cleaned_req = {}
+                    if req.get("method"):
+                        cleaned_req["method"] = req["method"]
+                    if req.get("path"):
+                        cleaned_req["path"] = req["path"]
+                    response_data = req.get("response") or {}
+                    if response_data.get("statusCode"):
+                        cleaned_req["status"] = response_data["statusCode"]
+                    if cleaned_req:
+                        cleaned["request"] = cleaned_req
+
+                cleaned_nodes.append(cleaned)
+
+            total_pages = (total_count + page_size - 1) // page_size
+
+            return {
+                "entries": cleaned_nodes,
+                "page": page,
+                "page_size": page_size,
+                "total_pages": total_pages,
+                "total_count": total_count,
+                "has_more": page < total_pages,
+                "showing": (
+                    f"{skip_count + 1}-{min(skip_count + page_size, total_count)} of {total_count}"
+                ),
+            }
+
+        except Exception as e:  # noqa: BLE001
+            return {"error": f"Failed to fetch sitemap: {e}"}
+
+    def _process_sitemap_metadata(self, node: dict[str, Any]) -> dict[str, Any]:
+        cleaned = {
+            "id": node["id"],
+            "kind": node["kind"],
+            "label": node["label"],
+            "hasDescendants": node["hasDescendants"],
+        }
+
+        if node.get("metadata") and (
+            node["metadata"].get("isTls") is not None or node["metadata"].get("port")
+        ):
+            cleaned["metadata"] = node["metadata"]
+
+        return cleaned
+
+    def _process_sitemap_request(self, req: dict[str, Any]) -> dict[str, Any] | None:
+        cleaned_req = {}
+        if req.get("method"):
+            cleaned_req["method"] = req["method"]
+        if req.get("path"):
+            cleaned_req["path"] = req["path"]
+        response_data = req.get("response") or {}
+        if response_data.get("statusCode"):
+            cleaned_req["status"] = response_data["statusCode"]
+        return cleaned_req if cleaned_req else None
+
+    def _process_sitemap_response(self, resp: dict[str, Any]) -> dict[str, Any]:
+        cleaned_resp = {}
+        if resp.get("statusCode"):
+            cleaned_resp["status"] = resp["statusCode"]
+        if resp.get("length"):
+            cleaned_resp["size"] = resp["length"]
+        if resp.get("roundtripTime"):
+            cleaned_resp["time_ms"] = resp["roundtripTime"]
+        return cleaned_resp
+
+    def view_sitemap_entry(self, entry_id: str) -> dict[str, Any]:
+        try:
+            query = gql("""
+                query GetSitemapEntry($id: ID!) {
+                    sitemapEntry(id: $id) {
+                        id kind label hasDescendants
+                        metadata { ... on SitemapEntryMetadataDomain { isTls port } }
+                        request { method path response { statusCode length roundtripTime } }
+                        requests(first: 30, order: {by: CREATED_AT, ordering: DESC}) {
+                            edges { node { method path response { statusCode length } } }
+                            count { value }
+                        }
+                    }
+                }
+            """)
+
+            result = self._get_client().execute(query, variable_values={"id": entry_id})
+            entry = result.get("sitemapEntry")
+
+            if not entry:
+                return {"error": f"Sitemap entry {entry_id} not found"}
+
+            cleaned = self._process_sitemap_metadata(entry)
+
+            if entry.get("request"):
+                req = entry["request"]
+                cleaned_req = {}
+                if req.get("method"):
+                    cleaned_req["method"] = req["method"]
+                if req.get("path"):
+                    cleaned_req["path"] = req["path"]
+                if req.get("response"):
+                    cleaned_req["response"] = self._process_sitemap_response(req["response"])
+                if cleaned_req:
+                    cleaned["request"] = cleaned_req
+
+            requests_data = entry.get("requests", {})
+            request_nodes = [edge["node"] for edge in requests_data.get("edges", [])]
+
+            cleaned_requests = [
+                req
+                for req in (self._process_sitemap_request(node) for node in request_nodes)
+                if req is not None
+            ]
+
+            count_data = requests_data.get("count") or {}
+            cleaned["related_requests"] = {
+                "requests": cleaned_requests,
+                "total_count": count_data.get("value", 0),
+                "showing": f"Latest {len(cleaned_requests)} requests",
+            }
+
+            return {"entry": cleaned} if cleaned else {"error": "Failed to process sitemap entry"}  # noqa: TRY300
+
+        except Exception as e:  # noqa: BLE001
+            return {"error": f"Failed to fetch sitemap entry: {e}"}
+
+    def close(self) -> None:
+        pass
+
+
+_PROXY_MANAGER: ProxyManager | None = None
+
+
+def get_proxy_manager() -> ProxyManager:
+    global _PROXY_MANAGER  # noqa: PLW0603
+    if _PROXY_MANAGER is None:
+        _PROXY_MANAGER = ProxyManager()
+    return _PROXY_MANAGER

@@ -1,0 +1,64 @@
+<tools>
+  <tool name="add_hypothesis">
+    <description>Add a new vulnerability hypothesis for an attack surface.</description>
+    <parameters>
+      <parameter name="surface" type="string" required="true">
+        <description>Surface identifier, usually "endpoint::parameter".</description>
+      </parameter>
+      <parameter name="vuln_class" type="string" required="true">
+        <description>Vulnerability class such as sqli, xss, ssrf, idor.</description>
+      </parameter>
+    </parameters>
+  </tool>
+
+  <tool name="record_payload_test">
+    <description>Record a payload test outcome for a hypothesis.</description>
+    <parameters>
+      <parameter name="hypothesis_id" type="string" required="true" />
+      <parameter name="payload" type="string" required="true" />
+      <parameter name="outcome" type="string" required="true">
+        <description>success or failure</description>
+      </parameter>
+      <parameter name="evidence" type="string" required="false" />
+    </parameters>
+  </tool>
+
+  <tool name="confirm_hypothesis">
+    <description>Mark a hypothesis as confirmed with evidence.</description>
+    <parameters>
+      <parameter name="hypothesis_id" type="string" required="true" />
+      <parameter name="evidence" type="string" required="true" />
+    </parameters>
+  </tool>
+
+  <tool name="reject_hypothesis">
+    <description>Mark a hypothesis as rejected with a reason.</description>
+    <parameters>
+      <parameter name="hypothesis_id" type="string" required="true" />
+      <parameter name="reason" type="string" required="true" />
+    </parameters>
+  </tool>
+
+  <tool name="query_hypotheses">
+    <description>Query hypotheses by status and/or class.</description>
+    <parameters>
+      <parameter name="status" type="string" required="false" />
+      <parameter name="vuln_class" type="string" required="false" />
+      <parameter name="limit" type="integer" required="false" />
+    </parameters>
+  </tool>
+
+  <tool name="get_hypothesis_summary">
+    <description>Get a summary of hypothesis ledger state and priorities.</description>
+    <parameters />
+  </tool>
+
+  <tool name="has_tested_payload">
+    <description>Check whether a payload was already tested for surface/class.</description>
+    <parameters>
+      <parameter name="surface" type="string" required="true" />
+      <parameter name="vuln_class" type="string" required="true" />
+      <parameter name="payload" type="string" required="true" />
+    </parameters>
+  </tool>
+</tools>

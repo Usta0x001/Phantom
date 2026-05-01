@@ -1,0 +1,762 @@
+Screen {
+    background: #0b1020;
+    color: #dbe7ff;
+}
+
+.screen--selection {
+    background: #1a2645;
+    color: #eef4ff;
+}
+
+ToastRack {
+    dock: top;
+    align: right top;
+    margin-bottom: 0;
+    margin-top: 1;
+}
+
+Toast {
+    width: 32;
+    background: #101a33;
+    border-left: outer #4f7cff;
+}
+
+Toast.-information .toast--title {
+    color: #7aa2ff;
+}
+
+#splash_screen {
+    height: 100%;
+    width: 100%;
+    background: #0b1020;
+    color: #7aa2ff;
+    align: center middle;
+    content-align: center middle;
+    text-align: center;
+}
+
+#splash_content {
+    width: auto;
+    height: auto;
+    background: transparent;
+    text-align: center;
+    content-align: center middle;
+    padding: 2;
+}
+
+#main_container {
+    height: 100%;
+    padding: 1;
+    margin: 0;
+    background: #0b1020;
+}
+
+#content_container {
+    height: 1fr;
+    padding: 0;
+    background: transparent;
+}
+
+#sidebar {
+    width: 28%;
+    background: transparent;
+    margin-left: 0;
+}
+
+#sidebar.-hidden {
+    display: none;
+}
+
+#agents_tree {
+    height: 1fr;
+    background: #101a33;
+    border: round #2e416f;
+    border-title-color: #8fb0ff;
+    border-title-style: bold;
+    padding: 1;
+    margin-bottom: 1;
+}
+
+#stats_scroll {
+    height: auto;
+    max-height: 15;
+    background: #101a33;
+    padding: 0;
+    margin: 0;
+    border: round #2e416f;
+    scrollbar-size: 0 0;
+}
+
+#stats_display {
+    height: auto;
+    background: transparent;
+    padding: 0 1;
+    margin: 0;
+}
+
+#vulnerabilities_panel {
+    height: auto;
+    max-height: 12;
+    background: #101a33;
+    padding: 0;
+    margin: 0;
+    border: round #2e416f;
+    overflow-y: auto;
+    scrollbar-background: #101a33;
+    scrollbar-color: #39558f;
+    scrollbar-corner-color: #101a33;
+    scrollbar-size-vertical: 1;
+}
+
+#vulnerabilities_panel.hidden {
+    display: none;
+}
+
+.vuln-item {
+    height: auto;
+    width: 100%;
+    padding: 0 1;
+    background: transparent;
+    color: #dbe7ff;
+}
+
+.vuln-item:hover {
+    background: #1c2b50;
+    color: #ffffff;
+}
+
+VulnerabilityDetailScreen {
+    align: center middle;
+    background: #0b1020 80%;
+}
+
+#vuln_detail_dialog {
+    grid-size: 1;
+    grid-gutter: 1;
+    grid-rows: 1fr auto;
+    padding: 2 3;
+    width: 85%;
+    max-width: 110;
+    height: 85%;
+    max-height: 45;
+    border: solid #2e416f;
+    background: #101a33;
+}
+
+#vuln_detail_scroll {
+    height: 1fr;
+    background: transparent;
+    scrollbar-background: #101a33;
+    scrollbar-color: #39558f;
+    scrollbar-corner-color: #101a33;
+    scrollbar-size: 1 1;
+    padding-right: 1;
+}
+
+#vuln_detail_content {
+    width: 100%;
+    background: transparent;
+    padding: 0;
+}
+
+#vuln_detail_buttons {
+    width: 100%;
+    height: auto;
+    align: right middle;
+    padding-top: 1;
+    margin: 0;
+    border-top: solid #1a1a1a;
+}
+
+#copy_vuln_detail {
+    width: auto;
+    min-width: 12;
+    height: auto;
+    background: transparent;
+    color: #8fb0ff;
+    border: none;
+    text-style: none;
+    margin: 0 1;
+    padding: 0 2;
+}
+
+#close_vuln_detail {
+    width: auto;
+    min-width: 10;
+    height: auto;
+    background: transparent;
+    color: #dbe7ff;
+    border: none;
+    text-style: none;
+    margin: 0;
+    padding: 0 2;
+}
+
+#copy_vuln_detail:hover, #copy_vuln_detail:focus {
+    background: transparent;
+    color: #7aa2ff;
+    border: none;
+}
+
+#close_vuln_detail:hover, #close_vuln_detail:focus {
+    background: transparent;
+    color: #ffffff;
+    border: none;
+}
+
+#chat_area_container {
+    width: 72%;
+    background: transparent;
+}
+
+#chat_area_container.-full-width {
+    width: 100%;
+}
+
+#chat_history {
+    height: 1fr;
+    background: #101a33;
+    border: round #2e416f;
+    padding: 0;
+    margin-bottom: 0;
+    margin-right: 0;
+    scrollbar-background: #101a33;
+    scrollbar-color: #39558f;
+    scrollbar-corner-color: #101a33;
+    scrollbar-size: 1 1;
+}
+
+#agent_status_display {
+    height: 1;
+    background: #101a33;
+    margin: 0;
+    padding: 0 1;
+}
+
+#agent_status_display.hidden {
+    display: none;
+}
+
+#status_text {
+    width: 1fr;
+    height: 100%;
+    background: transparent;
+    color: #b9d1ff;
+    text-align: left;
+    content-align: left middle;
+    text-style: none;
+    margin: 0;
+    padding: 0;
+}
+
+#keymap_indicator {
+    width: auto;
+    height: 100%;
+    background: transparent;
+    color: #8fb0ff;
+    text-align: right;
+    content-align: right middle;
+    text-style: none;
+    margin: 0;
+    padding: 0;
+}
+
+#chat_input_container {
+    height: 3;
+    background: #101a33;
+    border: round #2e416f;
+    margin-right: 0;
+    padding: 0;
+    layout: horizontal;
+    align-vertical: top;
+}
+
+#chat_input_container:focus-within {
+    border: round #4f7cff;
+}
+
+#chat_input_container:focus-within #chat_prompt {
+    color: #7aa2ff;
+    text-style: bold;
+}
+
+#chat_prompt {
+    width: auto;
+    height: 100%;
+    padding: 0 0 0 1;
+    color: #8fb0ff;
+    content-align-vertical: top;
+}
+
+#chat_history:focus {
+    border: round #4f7cff;
+}
+
+#chat_input {
+    width: 1fr;
+    height: 100%;
+    background: transparent;
+    border: none;
+    color: #eaf1ff;
+    padding: 0;
+    margin: 0;
+}
+
+#chat_input:focus {
+    border: none;
+}
+
+#chat_input .text-area--cursor-line {
+    background: transparent;
+}
+
+#chat_input:focus .text-area--cursor-line {
+    background: transparent;
+}
+
+#chat_input > .text-area--placeholder {
+    color: #6f8fcc;
+    text-style: italic;
+}
+
+#chat_input > .text-area--cursor {
+    color: #7aa2ff;
+    background: #7aa2ff;
+}
+
+.chat-placeholder {
+    width: 100%;
+    height: 100%;
+    content-align: center middle;
+    text-align: center;
+    color: #8fb0ff;
+    text-style: italic;
+}
+
+.chat-content {
+    margin: 0 !important;
+    margin-top: 0 !important;
+    margin-bottom: 0 !important;
+    padding: 0 1;
+    background: #101a33;
+    width: 100%;
+}
+
+.chat-message {
+    margin-bottom: 0;
+    padding: 0;
+    background: transparent;
+    width: 100%;
+}
+
+.user-message {
+    color: #eef4ff;
+    border-left: thick #4f7cff;
+    padding-left: 1;
+    margin-bottom: 1;
+}
+
+.tool-call {
+    margin-top: 1;
+    margin-bottom: 0;
+    padding: 0 1;
+    background: #0f1a34;
+    border: none;
+    width: 100%;
+}
+
+.tool-call.status-completed {
+    background: #10243f;
+    margin-top: 1;
+    margin-bottom: 0;
+}
+
+.tool-call.status-running {
+    background: #1d2b4f;
+    margin-top: 1;
+    margin-bottom: 0;
+}
+
+.tool-call.status-failed,
+.tool-call.status-error {
+    background: #3b1d2b;
+    margin-top: 1;
+    margin-bottom: 0;
+}
+
+.browser-tool,
+.terminal-tool,
+.python-tool,
+.agents-graph-tool,
+.file-edit-tool,
+.proxy-tool,
+.notes-tool,
+.thinking-tool,
+.web-search-tool,
+.scan-info-tool,
+.subagent-info-tool {
+    margin-top: 1;
+    margin-bottom: 0;
+    background: #0f1a34;
+}
+
+.finish-tool,
+.reporting-tool {
+    margin-top: 1;
+    margin-bottom: 0;
+    background: #0f1a34;
+}
+
+.browser-tool.status-completed,
+.browser-tool.status-running,
+.terminal-tool.status-completed,
+.terminal-tool.status-running,
+.python-tool.status-completed,
+.python-tool.status-running,
+.agents-graph-tool.status-completed,
+.agents-graph-tool.status-running,
+.file-edit-tool.status-completed,
+.file-edit-tool.status-running,
+.proxy-tool.status-completed,
+.proxy-tool.status-running,
+.notes-tool.status-completed,
+.notes-tool.status-running,
+.thinking-tool.status-completed,
+.thinking-tool.status-running,
+.web-search-tool.status-completed,
+.web-search-tool.status-running,
+.scan-info-tool.status-completed,
+.scan-info-tool.status-running,
+.subagent-info-tool.status-completed,
+.subagent-info-tool.status-running {
+    background: #10243f;
+    margin-top: 1;
+    margin-bottom: 0;
+}
+
+.finish-tool.status-completed,
+.finish-tool.status-running,
+.reporting-tool.status-completed,
+.reporting-tool.status-running {
+    background: #10243f;
+    margin-top: 1;
+    margin-bottom: 0;
+}
+
+Tree {
+    background: #101a33;
+    color: #dbe7ff;
+    scrollbar-background: #101a33;
+    scrollbar-color: #39558f;
+    scrollbar-corner-color: #101a33;
+    scrollbar-size: 1 1;
+}
+
+Tree > .tree--label {
+    text-style: bold;
+    color: #8fb0ff;
+    background: #0f1a34;
+    padding: 0 1;
+    margin-bottom: 1;
+    border-bottom: solid #2e416f;
+    text-align: center;
+}
+
+.tree--node {
+    height: 1;
+    padding: 0;
+    margin: 0;
+}
+
+.tree--node-label {
+    color: #dbe7ff;
+    background: transparent;
+    text-style: none;
+    padding: 0 1;
+    margin: 0 1;
+}
+
+.tree--node:hover .tree--node-label {
+    background: transparent;
+    color: #ffffff;
+    text-style: bold;
+    border-left: solid #8fb0ff;
+}
+
+.tree--node.-selected .tree--node-label {
+    background: transparent;
+    color: #ffffff;
+    text-style: bold;
+    border-left: heavy #4f7cff;
+}
+
+.tree--node.-expanded .tree--node-label {
+    text-style: bold;
+    color: #ffffff;
+    background: transparent;
+    border-left: solid #5673b8;
+}
+
+Tree:focus {
+    border: round #4f7cff;
+}
+
+Tree:focus > .tree--label {
+    color: #ffffff;
+    text-style: bold;
+    background: transparent;
+}
+
+.tree--node .tree--node .tree--node-label {
+    color: #aac2f7;
+    padding-left: 2;
+    border: none;
+    background: transparent;
+    margin-left: 1;
+}
+
+.tree--node .tree--node:hover .tree--node-label {
+    background: transparent;
+    color: #ffffff;
+}
+
+.tree--node .tree--node .tree--node .tree--node-label {
+    color: #90a7dc;
+    padding-left: 3;
+    text-style: none;
+    border: none;
+    background: transparent;
+    margin-left: 2;
+}
+
+StopAgentScreen {
+    align: center middle;
+    background: $background 0%;
+}
+
+#stop_agent_dialog {
+    grid-size: 1;
+    grid-gutter: 1;
+    grid-rows: auto auto;
+    padding: 1;
+    width: 30;
+    height: auto;
+    border: round #2e416f;
+    background: #101a33 98%;
+}
+
+#stop_agent_title {
+    color: #dbe7ff;
+    text-style: bold;
+    text-align: center;
+    width: 100%;
+    margin-bottom: 0;
+}
+
+#stop_agent_buttons {
+    grid-size: 2;
+    grid-gutter: 1;
+    grid-columns: 1fr 1fr;
+    width: 100%;
+    height: 1;
+}
+
+#stop_agent_buttons Button {
+    height: 1;
+    min-height: 1;
+    border: none;
+    text-style: bold;
+}
+
+#stop_agent {
+    background: transparent;
+    color: #ef4444;
+    border: none;
+}
+
+#stop_agent:hover, #stop_agent:focus {
+    background: #ef4444;
+    color: #ffffff;
+    border: none;
+}
+
+#cancel_stop {
+    background: transparent;
+    color: #8fb0ff;
+    border: none;
+}
+
+#cancel_stop:hover, #cancel_stop:focus {
+    background:#253a6b;
+    color: #ffffff;
+    border: none;
+}
+
+/* ── PauseAllScreen ─────────────────────────────────────────────── */
+
+PauseAllScreen {
+    align: center middle;
+    background: $background 0%;
+}
+
+#pause_all_dialog {
+    grid-size: 1;
+    grid-gutter: 1;
+    grid-rows: auto auto auto;
+    padding: 1 2;
+    width: 50;
+    height: auto;
+    border: round #4f7cff;
+    background: #101a33 98%;
+}
+
+#pause_all_title {
+    color: #7aa2ff;
+    text-style: bold;
+    text-align: center;
+    width: 100%;
+    margin-bottom: 0;
+}
+
+#pause_all_info {
+    color: #b9d1ff;
+    text-align: center;
+    width: 100%;
+    margin-bottom: 1;
+}
+
+#pause_all_buttons {
+    grid-size: 2;
+    grid-gutter: 1;
+    grid-columns: 1fr 1fr;
+    width: 100%;
+    height: 1;
+}
+
+#pause_all_buttons Button {
+    height: 1;
+    min-height: 1;
+    border: none;
+    text-style: bold;
+}
+
+#confirm_pause_all {
+    background: transparent;
+    color: #7aa2ff;
+    border: none;
+}
+
+#confirm_pause_all:hover, #confirm_pause_all:focus {
+    background: #4f7cff;
+    color: #ffffff;
+    border: none;
+}
+
+#cancel_pause_all {
+    background: transparent;
+    color: #8fb0ff;
+    border: none;
+}
+
+#cancel_pause_all:hover, #cancel_pause_all:focus {
+    background: #253a6b;
+    color: #ffffff;
+    border: none;
+}
+
+QuitScreen {
+    align: center middle;
+    background: $background 0%;
+}
+
+#quit_dialog {
+    grid-size: 1;
+    grid-gutter: 1;
+    grid-rows: auto auto;
+    padding: 1;
+    width: 24;
+    height: auto;
+    border: round #2e416f;
+    background: #101a33 98%;
+}
+
+#quit_title {
+    color: #dbe7ff;
+    text-style: bold;
+    text-align: center;
+    width: 100%;
+    margin-bottom: 0;
+}
+
+#quit_buttons {
+    grid-size: 2;
+    grid-gutter: 1;
+    grid-columns: 1fr 1fr;
+    width: 100%;
+    height: 1;
+}
+
+#quit_buttons Button {
+    height: 1;
+    min-height: 1;
+    border: none;
+    text-style: bold;
+}
+
+#quit {
+    background: transparent;
+    color: #ef4444;
+    border: none;
+}
+
+#quit:hover, #quit:focus {
+    background: #ef4444;
+    color: #ffffff;
+    border: none;
+}
+
+#cancel {
+    background: transparent;
+    color: #8fb0ff;
+    border: none;
+}
+
+#cancel:hover, #cancel:focus {
+    background:#253a6b;
+    color: #ffffff;
+    border: none;
+}
+
+HelpScreen {
+    align: center middle;
+    background: $background 0%;
+}
+
+#dialog {
+    grid-size: 1;
+    grid-gutter: 0 1;
+    grid-rows: auto auto;
+    padding: 1 2;
+    width: 40;
+    height: auto;
+    border: round #4f7cff;
+    background: #101a33 98%;
+}
+
+#help_title {
+    color: #7aa2ff;
+    text-style: bold;
+    text-align: center;
+    width: 100%;
+    margin-bottom: 1;
+}
+
+#help_content {
+    color: #dbe7ff;
+    text-align: left;
+    width: 100%;
+    margin-bottom: 1;
+    padding: 0;
+    background: transparent;
+    text-style: none;
+}

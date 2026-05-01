@@ -1,0 +1,28 @@
+diff --git a/phantom/tools/scan_status/scan_status_actions_schema.xml b/phantom/tools/scan_status/scan_status_actions_schema.xml
+index d50ea25..fa2e449 100644
+--- a/phantom/tools/scan_status/scan_status_actions_schema.xml
++++ b/phantom/tools/scan_status/scan_status_actions_schema.xml
+@@ -1,13 +1,20 @@
+ <tools>
+   <tool name="get_scan_status">
+-    <description>Return compressed scan state, progress, findings, and next-action recommendation.</description>
++    <description>Get a compressed real-time dashboard of the current scan: hypothesis states, coverage gaps, confirmed findings, cost, iteration count, and recommended next action. Call at the start of major decisions, before reporting, or when context feels stale.</description>
+     <parameters>
+       <parameter name="include_recommendations" type="boolean" required="false">
+-        <description>Whether to include suggested next action.</description>
++        <description>Whether to include a suggested next action (default: true).</description>
+       </parameter>
+       <parameter name="agent_id" type="string" required="false">
+-        <description>Optional explicit agent ID; omitted value auto-resolves from current runtime agent context.</description>
++        <description>Optional agent ID. Omit to auto-resolve from current runtime context.</description>
+       </parameter>
+     </parameters>
++    <returns type="Dict[str, Any]">
++      <description>Phase, iteration, hypotheses counts, coverage, cost_usd, and recommended_next action.</description>
++    </returns>
++    <examples>
++      <function=get_scan_status>
++      </function>
++    </examples>
+   </tool>
+ </tools>

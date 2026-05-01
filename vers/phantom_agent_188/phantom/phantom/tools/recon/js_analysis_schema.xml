@@ -1,0 +1,266 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<tool_schemas>
+    <tool name="fetch_js_files">
+        <description>
+            Fetch all JavaScript files from a webpage.
+            
+            Extracts both external JS file references and inline script content.
+            This is the first step in JavaScript reconnaissance - gathering all
+            JS assets for analysis.
+            
+            Use Cases:
+            - Enumerate all JavaScript loaded by a web application
+            - Prepare for endpoint extraction and secret scanning
+            - Understand the client-side attack surface
+            
+            Next Steps After This Tool:
+            - Use extract_endpoints to find API calls
+            - Use extract_secrets to find credentials
+            - Use analyze_js_frameworks to understand the tech stack
+        </description>
+        <parameters>
+            <parameter name="url" type="string" required="true">
+                Target webpage URL (e.g., "https://example.com")
+            </parameter>
+            <parameter name="use_browser" type="boolean" required="false" default="false">
+                Use Playwright for dynamic JS extraction (slower but captures dynamically loaded scripts)
+            </parameter>
+            <parameter name="include_inline" type="boolean" required="false" default="true">
+                Include inline &lt;script&gt; content in results
+            </parameter>
+            <parameter name="max_files" type="integer" required="false" default="50">
+                Maximum number of external JS files to fetch
+            </parameter>
+            <parameter name="timeout" type="number" required="false" default="30.0">
+                Timeout per HTTP request in seconds
+            </parameter>
+        </parameters>
+        <returns>
+            Dictionary with:
+            - success: Whether fetch succeeded
+            - url: The target URL
+            - js_files: List of JS file objects (url, content, size)
+            - js_file_count: Number of external JS files
+            - inline_scripts: List of inline script contents
+            - inline_count: Number of inline scripts
+            - total_size_kb: Total JS content size in KB
+            - errors: Any fetch errors encountered
+        </returns>
+        <example>
+            fetch_js_files(url="https://spa.example.com")
+            → Returns all JS files and inline scripts from the page
+        </example>
+    </tool>
+
+    <tool name="extract_endpoints">
+        <description>
+            Extract API endpoints from JavaScript content.
+            
+            Parses JavaScript for REST API calls (fetch, axios, XMLHttpRequest),
+            GraphQL endpoints, WebSocket URLs, and other backend communication patterns.
+            
+            This is a CRITICAL reconnaissance step - discovered endpoints become
+            attack surfaces for fuzzing, injection testing, and IDOR discovery.
+            
+            Patterns Detected:
+            - fetch() and axios calls
+            - XMLHttpRequest.open() calls
+            - jQuery $.ajax(), $.get(), $.post()
+            - Express/Koa route definitions
+            - URL constants and path patterns
+            - WebSocket connections
+            - GraphQL endpoints
+            
+            Use Cases:
+            - Discover hidden API endpoints not in documentation
+            - Find authenticated endpoints for access control testing
+            - Enumerate parameters for fuzzing
+            - Identify GraphQL schemas for introspection attacks
+        </description>
+        <parameters>
+            <parameter name="content" type="string" required="false">
+                JavaScript content to analyze (provide this OR url)
+            </parameter>
+            <parameter name="url" type="string" required="false">
+                URL to fetch and analyze (if content not provided)
+            </parameter>
+            <parameter name="include_parameters" type="boolean" required="false" default="true">
+                Also extract parameter names from requests
+            </parameter>
+            <parameter name="include_auth_patterns" type="boolean" required="false" default="true">
+                Detect authentication headers and patterns
+            </parameter>
+        </parameters>
+        <returns>
+            Dictionary with:
+            - success: Whether extraction succeeded
+            - endpoints: List of endpoints (url, method, source_pattern, parameters, is_authenticated)
+            - endpoint_count: Number of endpoints found
+            - parameters: List of discovered parameter names
+            - auth_patterns: Detected authentication patterns
+        </returns>
+        <example>
+            extract_endpoints(url="https://example.com/app.bundle.js")
+            → Returns endpoints like /api/users, /api/admin/settings, /graphql
+        </example>
+    </tool>
+
+    <tool name="analyze_secrets">
+        <description>
+            Detect potential secrets, API keys, and credentials in JavaScript.
+            
+            Scans for known secret patterns including:
+            - AWS Access Keys and Secret Keys
+            - Google API Keys and OAuth tokens
+            - GitHub tokens
+            - Stripe API keys
+            - Slack tokens and webhooks
+            - JWT tokens
+            - Generic API keys and passwords
+            - Base64 encoded secrets
+            - Private key material
+            
+            SECURITY WARNING: This tool may expose sensitive information.
+            Handle results carefully and report responsibly.
+            
+            Use Cases:
+            - Find hardcoded credentials for privilege escalation
+            - Discover API keys for third-party service abuse
+            - Identify JWT tokens for signature bypass attacks
+            - Find private keys for authentication bypass
+            
+            Severity Levels:
+            - high: Known credential formats (AWS, Stripe, etc.)
+            - medium: Generic secrets and API keys
+            - low: Potential secrets in test/example contexts
+        </description>
+        <parameters>
+            <parameter name="content" type="string" required="false">
+                JavaScript content to analyze (provide this OR url)
+            </parameter>
+            <parameter name="url" type="string" required="false">
+                URL to fetch and analyze
+            </parameter>
+            <parameter name="severity_filter" type="string" required="false">
+                Filter results by severity: "high", "medium", or "low"
+            </parameter>
+        </parameters>
+        <returns>
+            Dictionary with:
+            - success: Whether scan completed
+            - secrets: List of secrets (type, description, value_preview, severity)
+            - secret_count: Total number of secrets found
+            - high_count: Number of high-severity findings
+            - severity_breakdown: Count by severity level
+        </returns>
+        <example>
+            analyze_secrets(url="https://example.com/config.js", severity_filter="high")
+            → Returns high-severity secrets like AWS keys, Stripe keys
+        </example>
+    </tool>
+
+    <tool name="analyze_js_frameworks">
+        <description>
+            Detect frontend frameworks and extract routing patterns.
+            
+            Identifies JavaScript frameworks and libraries:
+            - React (including React Router, hooks)
+            - Angular (routing, HttpClient)
+            - Vue.js (Vue Router)
+            - Next.js (pages, API routes)
+            - Nuxt.js
+            - jQuery
+            - Axios
+            - GraphQL (Apollo, etc.)
+            
+            Also extracts:
+            - Frontend routes (for testing access control)
+            - API patterns specific to framework conventions
+            
+            Use Cases:
+            - Understand the application architecture
+            - Find framework-specific vulnerabilities
+            - Discover hidden frontend routes
+            - Identify API conventions to predict endpoints
+        </description>
+        <parameters>
+            <parameter name="content" type="string" required="false">
+                JavaScript content to analyze (provide this OR url)
+            </parameter>
+            <parameter name="url" type="string" required="false">
+                URL to fetch and analyze
+            </parameter>
+        </parameters>
+        <returns>
+            Dictionary with:
+            - success: Whether analysis completed
+            - frameworks: List of detected frameworks (name, confidence, routes)
+            - primary_framework: Most likely primary framework
+            - routes: All extracted frontend routes
+            - api_patterns: Framework-specific API patterns
+        </returns>
+        <example>
+            analyze_js_frameworks(url="https://spa.example.com/bundle.js")
+            → Returns {frameworks: [{name: "react_router", confidence: 0.8, routes: ["/admin", "/users/:id"]}]}
+        </example>
+    </tool>
+
+    <tool name="comprehensive_js_analysis">
+        <description>
+            Perform comprehensive JavaScript analysis on a target URL.
+            
+            This is the RECOMMENDED entry point for JS reconnaissance.
+            It orchestrates the full pipeline:
+            
+            1. Fetch all JS files (external and inline)
+            2. Extract API endpoints for fuzzing
+            3. Detect secrets and credentials
+            4. Identify frameworks and routing
+            5. Extract parameters for injection testing
+            
+            Use This When:
+            - Starting reconnaissance on a web application
+            - You need a complete picture of the JS attack surface
+            - You want to feed endpoints into the hypothesis ledger
+            - You're looking for quick wins (secrets, hidden endpoints)
+            
+            After This Tool:
+            - Add discovered endpoints to coverage tracker
+            - Create hypotheses for interesting endpoints
+            - Fuzz parameters with injection payloads
+            - Test authentication on protected endpoints
+        </description>
+        <parameters>
+            <parameter name="url" type="string" required="true">
+                Target webpage URL (e.g., "https://spa.example.com")
+            </parameter>
+            <parameter name="include_inline" type="boolean" required="false" default="true">
+                Include inline scripts in analysis
+            </parameter>
+            <parameter name="max_files" type="integer" required="false" default="30">
+                Maximum external JS files to fetch
+            </parameter>
+            <parameter name="include_secrets" type="boolean" required="false" default="true">
+                Scan for secrets (may expose sensitive data)
+            </parameter>
+            <parameter name="timeout" type="number" required="false" default="30.0">
+                Timeout per HTTP request
+            </parameter>
+        </parameters>
+        <returns>
+            Comprehensive results including:
+            - js_files_found: Number of JS files analyzed
+            - endpoints: All extracted API endpoints
+            - parameters: All discovered parameters
+            - auth_patterns: Authentication patterns found
+            - frameworks: Detected frameworks
+            - routes: Frontend routes
+            - secrets: Potential secrets (if include_secrets=true)
+            - high_severity_secrets: Count of critical findings
+        </returns>
+        <example>
+            comprehensive_js_analysis(url="https://banking-app.example.com")
+            → Complete JS reconnaissance including endpoints, secrets, and framework info
+        </example>
+    </tool>
+</tool_schemas>

@@ -1,0 +1,168 @@
+<tools>
+  <tool name="cve_search">
+    <description>Search the NVD (National Vulnerability Database) for CVEs.
+    
+    This is a PASSIVE reconnaissance tool - it queries public CVE databases,
+    NOT the target. Use this to find known vulnerabilities for detected software.
+    
+    CRITICAL: Use this immediately after fingerprinting to find exploitable CVEs.</description>
+    <parameters>
+      <parameter name="product" type="string" required="true">
+        <description>Product name to search (e.g., "nginx", "apache", "openssh", "wordpress")</description>
+      </parameter>
+      <parameter name="version" type="string" required="false">
+        <description>Version number (e.g., "1.19.0", "2.4.49"). More specific = better results.</description>
+      </parameter>
+      <parameter name="vendor" type="string" required="false">
+        <description>Vendor name (e.g., "apache", "microsoft", "oracle")</description>
+      </parameter>
+      <parameter name="severity" type="string" required="false">
+        <description>Filter by severity: "CRITICAL", "HIGH", "MEDIUM", "LOW"</description>
+      </parameter>
+      <parameter name="max_results" type="integer" required="false">
+        <description>Maximum CVEs to return (default: 25)</description>
+      </parameter>
+    </parameters>
+    <returns type="Dict[str, Any]">
+      <description>Response containing:
+        - 'cves': List of CVE details with CVSS scores, descriptions, references
+        - 'critical_count': Number of CRITICAL severity CVEs
+        - 'high_count': Number of HIGH severity CVEs
+        - 'total_results': Total CVEs matching criteria</description>
+    </returns>
+    <examples>
+  # Search for Apache vulnerabilities
+  <function=cve_search>
+  <parameter=product>apache</parameter>
+  <parameter=version>2.4.49</parameter>
+  </function>
+
+  # Find critical nginx CVEs
+  <function=cve_search>
+  <parameter=product>nginx</parameter>
+  <parameter=severity>CRITICAL</parameter>
+  </function>
+    </examples>
+  </tool>
+
+  <tool name="exploit_search">
+    <description>Search for available exploits in public databases (ExploitDB, Vulners).
+    
+    This is a PASSIVE reconnaissance tool - it searches exploit databases,
+    NOT the target. Use this to find working exploits for identified CVEs.
+    
+    Returns Metasploit modules, PoC code, and exploitation techniques.</description>
+    <parameters>
+      <parameter name="cve_id" type="string" required="false">
+        <description>CVE ID to search for (e.g., "CVE-2021-44228")</description>
+      </parameter>
+      <parameter name="product" type="string" required="false">
+        <description>Product name to search (e.g., "apache", "wordpress")</description>
+      </parameter>
+      <parameter name="exploit_type" type="string" required="false">
+        <description>Filter by type: "remote", "local", "webapps", "dos"</description>
+      </parameter>
+      <parameter name="max_results" type="integer" required="false">
+        <description>Maximum exploits to return (default: 20)</description>
+      </parameter>
+    </parameters>
+    <returns type="Dict[str, Any]">
+      <description>Response containing:
+        - 'exploits': List of exploit details with URLs and descriptions
+        - 'has_metasploit': Whether Metasploit modules exist
+        - 'has_poc': Whether proof-of-concept code exists
+        - 'total_count': Total exploits found</description>
+    </returns>
+    <notes>
+  At least one of 'cve_id' or 'product' must be provided.
+  Set VULNERS_API_KEY for better results.
+    </notes>
+    <examples>
+  # Find exploits for a specific CVE
+  <function=exploit_search>
+  <parameter=cve_id>CVE-2024-XXXXX</parameter>
+  </function>
+
+  # Search for WordPress exploits
+  <function=exploit_search>
+  <parameter=product>wordpress</parameter>
+  <parameter=exploit_type>webapps</parameter>
+  </function>
+    </examples>
+  </tool>
+
+  <tool name="version_to_cves">
+    <description>Map a technology version string to known CVEs and exploits.
+    
+    This is the KEY tool for turning fingerprint data into actionable exploits.
+    Parses version strings, queries CVE databases, and returns risk assessment.
+    
+    Use immediately after identifying software versions!</description>
+    <parameters>
+      <parameter name="version_string" type="string" required="true">
+        <description>Version string from fingerprinting. Common formats:
+        - "nginx/1.19.0"
+        - "Apache/2.4.49"
+        - "PHP/7.4.3"
+        - "OpenSSH_8.2p1"
+        - "Microsoft-IIS/10.0"</description>
+      </parameter>
+      <parameter name="include_exploits" type="boolean" required="false">
+        <description>Also search for available exploits (default: true)</description>
+      </parameter>
+    </parameters>
+    <returns type="Dict[str, Any]">
+      <description>Response containing:
+        - 'product': Detected product name
+        - 'version': Detected version number
+        - 'cves': List of matching CVEs
+        - 'exploits': Available exploits (if include_exploits=true)
+        - 'risk_level': Overall risk assessment (CRITICAL/HIGH/MEDIUM/LOW)
+        - 'recommendations': Suggested next actions</description>
+    </returns>
+    <examples>
+  # Map Apache version to CVEs
+  <function=version_to_cves>
+  <parameter=version_string>Apache/2.4.49</parameter>
+  </function>
+
+  # Check PHP version for vulnerabilities
+  <function=version_to_cves>
+  <parameter=version_string>PHP/7.4.3</parameter>
+  <parameter=include_exploits>true</parameter>
+  </function>
+    </examples>
+  </tool>
+
+  <tool name="get_cve_details">
+    <description>Get detailed information about a specific CVE.
+    
+    Use this to get full vulnerability details including:
+    - Complete description
+    - CVSS vector breakdown
+    - Affected product versions
+    - All references and advisories
+    - Weakness (CWE) identifiers</description>
+    <parameters>
+      <parameter name="cve_id" type="string" required="true">
+        <description>CVE identifier (e.g., "CVE-2024-XXXXX")</description>
+      </parameter>
+    </parameters>
+    <returns type="Dict[str, Any]">
+      <description>Response containing:
+        - 'description': Full vulnerability description
+        - 'cvss_score': CVSS score
+        - 'cvss_vector': Full CVSS vector string
+        - 'severity': Severity level
+        - 'affected_products': List of affected CPE configurations
+        - 'references': List of reference URLs
+        - 'weaknesses': CWE identifiers</description>
+    </returns>
+    <examples>
+  # Get details for a specific CVE
+  <function=get_cve_details>
+  <parameter=cve_id>CVE-2024-XXXXX</parameter>
+  </function>
+    </examples>
+  </tool>
+</tools>

@@ -100,11 +100,10 @@ async def run_cli(args: Any) -> None:  # noqa: PLR0912, PLR0915
         # creates a fresh container instead of trying to connect to a dead one.
         restored_state.clear_sandbox()
         
-        # P1.2 CRITICAL FIX: Restore hypothesis ledger, coverage tracker, and attack graph
+        # P1.2 CRITICAL FIX: Restore hypothesis ledger and coverage tracker
         # Without this, resumed scans lose all testing progress
         restored_hypothesis_ledger = None
         restored_coverage_tracker = None
-        restored_attack_graph = None
 
         if cp.hypothesis_ledger_state:
             try:
@@ -125,19 +124,9 @@ async def run_cli(args: Any) -> None:  # noqa: PLR0912, PLR0915
             except Exception as e:
                 logger.warning("Failed to restore coverage tracker: %s", e)
 
-        # FIX: Restore attack graph state if present
-        if cp.attack_graph_state:
-            try:
-                from phantom.core.attack_graph import AttackGraph
-                restored_attack_graph = AttackGraph.from_dict(cp.attack_graph_state)
-                logger.info("Restored attack graph from checkpoint")
-            except Exception as e:
-                logger.warning("Failed to restore attack graph: %s", e)
-
         # Store restored components in args to pass to agent config
         args._restored_hypothesis_ledger = restored_hypothesis_ledger  # type: ignore[attr-defined]
         args._restored_coverage_tracker = restored_coverage_tracker  # type: ignore[attr-defined]
-        args._restored_attack_graph = restored_attack_graph  # type: ignore[attr-defined]
 
         # FIX ISSUE#6: Restore sub-agent states from checkpoint
         # Sub-agents are ephemeral by default, but if they were active at checkpoint time,
@@ -248,8 +237,6 @@ async def run_cli(args: Any) -> None:  # noqa: PLR0912, PLR0915
         agent_config["hypothesis_ledger"] = args._restored_hypothesis_ledger
     if getattr(args, "_restored_coverage_tracker", None):
         agent_config["coverage_tracker"] = args._restored_coverage_tracker
-    if getattr(args, "_restored_attack_graph", None):
-        agent_config["attack_graph"] = args._restored_attack_graph
 
     # FIX ISSUE#6: Pass restored sub-agent states to agent config
     # This allows the agent tree to be properly resumed
@@ -305,6 +292,7 @@ async def run_cli(args: Any) -> None:  # noqa: PLR0912, PLR0915
 
     # Mutable containers so signal handler closure can access the live agent ref
     _agent_holder: list[Any] = [None]
+    _scan_failed: list[bool] = [False]
 
     def _save_interrupt_checkpoint(reason: str) -> None:
         agent = _agent_holder[0]
@@ -322,7 +310,6 @@ async def run_cli(args: Any) -> None:  # noqa: PLR0912, PLR0915
                 interruption_reason=reason,
                 hypothesis_ledger=getattr(agent, "hypothesis_ledger", None),
                 coverage_tracker=getattr(agent, "coverage_tracker", None),
-                attack_graph=getattr(agent, "attack_graph", None),
                 active_sub_agents=getattr(agent, "_collect_active_sub_agent_states", lambda: {})(),
             )
             checkpoint_mgr.save(cp_data)
@@ -333,12 +320,23 @@ async def run_cli(args: Any) -> None:  # noqa: PLR0912, PLR0915
     def cleanup_on_exit() -> None:
         from phantom.runtime import cleanup_runtime
 
-        tracer.cleanup()
+        # FIX: Don't mark scan as "completed" in telemetry when it actually failed.
+        # tracer.cleanup() calls save_run_data(mark_complete=True) which emits
+        # run.completed — this was masking failures as successful completions.
+        if not _scan_failed[0]:
+            tracer.cleanup()
+        else:
+            # Save data for debugging but do NOT emit run.completed.
+            tracer.save_run_data(mark_complete=False)
         cleanup_runtime()
 
     def signal_handler(_signum: int, _frame: Any) -> None:
+        _scan_failed[0] = True
         _save_interrupt_checkpoint("SIGINT/SIGTERM")
-        tracer.cleanup()
+        # Mark interrupted so scan_stats.json shows the truth, not "completed"
+        tracer.run_metadata["status"] = "interrupted"
+        tracer.run_metadata["interruption_reason"] = "User interrupted (Ctrl+C)"
+        tracer.save_run_data(mark_complete=False)
         # BUG FIX: Use blocking cleanup to ensure containers are stopped before exit
         from phantom.runtime import cleanup_runtime
         cleanup_runtime(wait=True)
@@ -378,6 +376,7 @@ async def run_cli(args: Any) -> None:  # noqa: PLR0912, PLR0915
             result = await agent.execute_scan(scan_config)
             
             if isinstance(result, dict) and not result.get("success", True):
+                _scan_failed[0] = True
                 error_msg = result.get("error", "Unknown error")
                 if not json_mode:
                     console.print(f"Error: {error_msg}")
@@ -411,6 +410,7 @@ async def run_cli(args: Any) -> None:  # noqa: PLR0912, PLR0915
                     result = await agent.execute_scan(scan_config)
 
                     if isinstance(result, dict) and not result.get("success", True):
+                        _scan_failed[0] = True
                         error_msg = result.get("error", "Unknown error")
                         error_details = result.get("details")
                         console.print()
@@ -428,6 +428,7 @@ async def run_cli(args: Any) -> None:  # noqa: PLR0912, PLR0915
                     update_thread.join(timeout=1)
 
     except Exception as e:
+        _scan_failed[0] = True
         console.print(f"[bold red]Error during penetration test:[/] {e}")
         raise
 

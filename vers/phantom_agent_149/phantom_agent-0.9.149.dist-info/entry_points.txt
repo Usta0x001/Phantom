@@ -1,0 +1,3 @@
+[console_scripts]
+phantom=phantom.interface.cli_app:app
+
